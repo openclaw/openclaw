@@ -3,6 +3,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
@@ -293,17 +294,28 @@ export function createFindToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-            const rl = createInterface({ input: child.stdout });
-            let stderr = "";
-            let stderrDroppedBytes = 0;
-            const lines: string[] = [];
-
-            stopChild = () => {
+            const stop = () => {
               if (!child.nodeChildProcess.killed) {
                 child.kill();
               }
             };
+            stopChild = stop;
+            if (child.pid === undefined) {
+              await waitForCommandSpawn(child);
+            }
+            if (settled) {
+              stop();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+            if (!child.stdout) {
+              const result = await child;
+              throw result instanceof Error ? result : new Error("fd stdout is unavailable");
+            }
+            const rl = createInterface({ input: child.stdout });
+            let stderr = "";
+            let stderrDroppedBytes = 0;
+            const lines: string[] = [];
 
             const cleanup = () => {
               rl.close();

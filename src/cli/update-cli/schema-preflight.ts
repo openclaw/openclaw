@@ -76,8 +76,7 @@ export async function captureTargetDatabaseSchemaContext(
   env: NodeJS.ProcessEnv,
   options?: { legacyConfigPlan?: LegacyConfigUpdatePlan },
 ) {
-  // Do not load plugins, recover config, record observations, or change the
-  // caller's environment just to discover the stores selected by this config.
+  // Discover stores without plugins, recovery, observations, or caller environment changes.
   const inspectionEnv = cloneEnvWithPlatformSemantics(env);
   const readEnv = cloneEnvWithPlatformSemantics(env);
   const { snapshot, writeOptions } = await createConfigIO({
@@ -117,9 +116,9 @@ export async function captureTargetDatabaseSchemaContext(
   }
   if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
     throw new UpdatePreMutationError(
-      "database-schema-preflight",
+      "invalid-config",
       [
-        `Update refused: could not inspect configured database paths from ${snapshot.path}.`,
+        `Update refused: configuration is invalid or unreadable at ${snapshot.path}.`,
         ...formatConfigIssueLines(
           // Validator messages can contain config values, including misplaced secrets.
           snapshot.issues.map(({ path: issuePath, pathSegments }) => ({

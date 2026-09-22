@@ -60,7 +60,7 @@ suite.define(() => {
         urlUnchanged: true,
       });
 
-      const accepted = await page.locator("section.card.chat").evaluate((element) => {
+      const accepted = await page.locator("section.chat").evaluate((element) => {
         const transfer = new DataTransfer();
         transfer.items.add(
           new File(["accepted drop"], "accepted-drop.txt", { type: "text/plain" }),

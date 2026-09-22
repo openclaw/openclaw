@@ -26,6 +26,7 @@ public struct OpenClawChatWindowShell: View {
     @State private var isPresentingNewSessionOptions = false
     @State private var renameSessionTarget: OpenClawChatSessionTarget?
     @State private var renameText = ""
+    private let attentionRequests: [OpenClawChatAttentionRequest]
     private let userAccent: Color?
     private let displayOptions: OpenClawChatDisplayOptions
     private let emptyAssistantIntro: String?
@@ -39,6 +40,7 @@ public struct OpenClawChatWindowShell: View {
     public init(
         viewModel: OpenClawChatViewModel,
         userAccent: Color? = nil,
+        attentionRequests: [OpenClawChatAttentionRequest] = [],
         displayOptions: OpenClawChatDisplayOptions? = nil,
         showsAssistantTrace: Bool = false,
         emptyAssistantIntro: String? = nil,
@@ -49,6 +51,7 @@ public struct OpenClawChatWindowShell: View {
         mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
+        self.attentionRequests = attentionRequests
         self.userAccent = userAccent
         self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
         self.emptyAssistantIntro = emptyAssistantIntro
@@ -63,7 +66,8 @@ public struct OpenClawChatWindowShell: View {
         NavigationSplitView {
             ChatSessionSidebar(
                 viewModel: self.viewModel,
-                query: self.$sessionQuery)
+                query: self.$sessionQuery,
+                additionalAttentionRequests: self.attentionRequests)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
             OpenClawChatView(
@@ -146,7 +150,7 @@ public struct OpenClawChatWindowShell: View {
                 Text("New Thread")
                     .font(OpenClawChatTypography.body)
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             .focusable(false)
 
             Button {
@@ -295,7 +299,7 @@ public struct OpenClawChatWindowShell: View {
             } label: {
                 chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Button {
                 self.isPresentingNewSessionOptions = true

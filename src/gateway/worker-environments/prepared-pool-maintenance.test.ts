@@ -10,9 +10,9 @@ describe("prepared pool retention and source admission", () => {
   const fixture = usePreparedPoolFixture();
 
   it("does not read source admission while ready capacity is full after restart", async () => {
-    fixture.attach(fixture.ready(fixture.seed("source")));
-    const reserve = fixture.ready(fixture.seed("reserve", { reserve: true }));
-    fixture.reopenStore();
+    await fixture.attach(await fixture.ready(await fixture.seed("source")));
+    const reserve = await fixture.ready(await fixture.seed("reserve", { reserve: true }));
+    await fixture.reopenStore();
     const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async () => ({
       providerId: fixture.provider.id,
       profileSnapshot: fixture.profile(),
@@ -30,10 +30,10 @@ describe("prepared pool retention and source admission", () => {
   });
 
   it("starts expired reserve cleanup before awaiting unrelated source admission", async () => {
-    const expired = fixture.ready(fixture.seed("expired", { reserve: true }));
+    const expired = await fixture.ready(await fixture.seed("expired", { reserve: true }));
     fixture.nowMs = 1_500;
     const projectKey = "1".repeat(64);
-    fixture.attach(fixture.ready(fixture.seed("source", { projectKey })));
+    await fixture.attach(await fixture.ready(await fixture.seed("source", { projectKey })));
     fixture.nowMs = 2_000;
     const entered = createDeferred();
     const release = createDeferred();

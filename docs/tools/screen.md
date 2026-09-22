@@ -25,16 +25,33 @@ absent rather than failing at call time.
 
 ## Actions
 
-| Action                            | Effect                                     | Optional inputs                                |
-| --------------------------------- | ------------------------------------------ | ---------------------------------------------- |
-| `split_right`                     | Split the target session pane to the right | `sessionKey` (defaults to the current session) |
-| `split_down`                      | Split the target session pane downward     | `sessionKey` (defaults to the current session) |
-| `close_pane`                      | Close the target session pane              | `sessionKey` (defaults to the current session) |
-| `focus`                           | Focus the target session pane              | `sessionKey` (defaults to the current session) |
-| `navigate`                        | Open the target session                    | `sessionKey` (defaults to the current session) |
-| `sidebar_show` / `sidebar_hide`   | Show or hide the main sidebar              | -                                              |
-| `terminal_show` / `terminal_hide` | Show or hide the operator terminal panel   | `dock` (`bottom` or `right`) when showing      |
-| `browser_show` / `browser_hide`   | Show or hide the browser panel             | `dock` (`bottom` or `right`) when showing      |
+| Action                            | Effect                                     | Optional inputs                                         |
+| --------------------------------- | ------------------------------------------ | ------------------------------------------------------- |
+| `split_right`                     | Split the target session pane to the right | `sessionKey` (defaults to the current session)          |
+| `split_down`                      | Split the target session pane downward     | `sessionKey` (defaults to the current session)          |
+| `close_pane`                      | Close the target session pane              | `sessionKey` (defaults to the current session)          |
+| `focus`                           | Focus the target session pane              | `sessionKey` (defaults to the current session)          |
+| `navigate`                        | Open the target session                    | `sessionKey` (defaults to the current session)          |
+| `sidebar_show` / `sidebar_hide`   | Show or hide the main sidebar              | -                                                       |
+| `terminal_show` / `terminal_hide` | Show or hide the operator terminal panel   | `dock` (`bottom` or `right`) when showing               |
+| `browser_show` / `browser_hide`   | Show or hide the browser panel             | `dock` (`bottom` or `right`) when showing               |
+| `desktop_show` / `desktop_hide`   | Show or hide a remote desktop              | `environmentId`, `sessionKey`, `dock` (default `right`) |
+| `portal_show` / `portal_hide`     | Show or hide a web application portal      | `portalId`, `sessionKey`, `dock` (default `right`)      |
+
+For a native application running on an attached environment, use `desktop_show`
+with its `environmentId`. For a web application, open a portal for the server's
+port, then use `portal_show` with the returned `portalId`. The selected view opens
+in that conversation's side panel. Hiding a view does not stop its application,
+close the portal, or release the environment.
+
+The desktop panel and computer tools address the same environment. `screen`
+only presents it; computer tools perform clicks, typing, and screenshots.
+
+An environment can appear before provisioning finishes. Desktop shows startup
+progress and connects when that exact machine becomes available. `portal_show`
+can take `environmentId` while its application is starting; replace it with the
+application's `portalId` when ready. A pending Portal never opens another
+application from the portal list.
 
 A successful command returns `{ "ok": true }` after the Gateway sends
 the typed `ui.command` event to the requesting browser.

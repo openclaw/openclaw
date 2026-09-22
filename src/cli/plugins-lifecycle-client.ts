@@ -10,6 +10,7 @@ import type {
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
+import { sleep } from "../utils/sleep.js";
 
 /** Capture the local client before a Claw batch takes any package or plugin lease. */
 export async function resolvePluginBatchReload(): Promise<PluginInstallBatchReload | undefined> {
@@ -43,49 +44,77 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
   if (!owner) {
     return null;
   }
-  const { callGateway } = await import("../gateway/call.js");
-  const request = <T>(method: string, params: Record<string, unknown>) =>
-    callGateway<T>({
-      method,
-      params,
-      localPortOverride: owner.port,
-      ignoreEnvUrlOverride: true,
-      requiredMethods: [...new Set([method, "plugins.reload"])],
-      timeoutMs: 600_000,
-      scopes: ["operator.admin"],
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
+  const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
+  const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+    const deadline = Date.now() + 600_000;
+    for (;;) {
+      try {
+        return await callGateway<T>({
+          method,
+          params,
+          localPortOverride: owner.port,
+          ignoreEnvUrlOverride: true,
+          requiredMethods: [...new Set([method, "plugins.reload"])],
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          scopes: ["operator.admin"],
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        });
+      } catch (error) {
+        // Lifecycle admission rejects before writes so a config reload can drain
+        // the request. Honor that response outside the Gateway's admission scope.
+        if (
+          !isGatewayClientRequestError(error) ||
+          error.gatewayCode !== "UNAVAILABLE" ||
+          !error.retryable ||
+          error.retryAfterMs === undefined ||
+          error.retryAfterMs >= deadline - Date.now()
+        ) {
+          throw error;
+        }
+        await sleep(error.retryAfterMs);
+        if (Date.now() >= deadline) {
+          throw error;
+        }
+      }
+    }
+  };
   return async <T>(
     method: string,
     params: Record<string, unknown>,
     onCapabilityConsent?: PluginCapabilityConsentHandler,
   ) => {
-    try {
-      return await request<T>(method, params);
-    } catch (error) {
-      const consent = readCapabilityConsentErrorDetails(
-        error instanceof Error && "details" in error ? error.details : undefined,
-      );
-      if (!consent || !onCapabilityConsent) {
-        throw error;
+    const reviewedPluginIds = new Set<string>();
+    let requestParams = params;
+    for (;;) {
+      try {
+        return await request<T>(method, requestParams);
+      } catch (error) {
+        const consent = readCapabilityConsentErrorDetails(
+          error instanceof Error && "details" in error ? error.details : undefined,
+        );
+        if (!consent || !onCapabilityConsent || reviewedPluginIds.has(consent.pluginId)) {
+          throw error;
+        }
+        const { plugin, ...inspection } = await request<PluginsInspectResult>("plugins.inspect", {
+          pluginId: consent.pluginId,
+        });
+        const acknowledgeCapabilities = await onCapabilityConsent({
+          ...inspection,
+          pluginId: plugin.id,
+          name: plugin.name,
+          ...(plugin.version ? { version: plugin.version } : {}),
+          ...(consent.widened ? { widened: consent.widened } : {}),
+          ...(consent.acceptedAt ? { acceptedAt: consent.acceptedAt } : {}),
+        });
+        if (!acknowledgeCapabilities) {
+          throw error;
+        }
+        // A batch can need consent for each package. Never retry a transport failure
+        // or a repeated rejection after acknowledging the same plugin.
+        reviewedPluginIds.add(consent.pluginId);
+        requestParams = { ...params, acknowledgeCapabilities };
       }
-      const { plugin, ...inspection } = await request<PluginsInspectResult>("plugins.inspect", {
-        pluginId: consent.pluginId,
-      });
-      const acknowledgeCapabilities = await onCapabilityConsent({
-        ...inspection,
-        pluginId: plugin.id,
-        name: plugin.name,
-        ...(plugin.version ? { version: plugin.version } : {}),
-        ...(consent.widened ? { widened: consent.widened } : {}),
-        ...(consent.acceptedAt ? { acceptedAt: consent.acceptedAt } : {}),
-      });
-      if (!acknowledgeCapabilities) {
-        throw error;
-      }
-      // Only consent rejection is retryable. Connection failure is never proof of offline state.
-      return await request<T>(method, { ...params, acknowledgeCapabilities });
     }
   };
 }

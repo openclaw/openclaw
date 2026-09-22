@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 const databases: MemoryIndexDatabase[] = [];
@@ -62,7 +64,9 @@ function replacement(
 }
 
 function write(database: MemoryIndexDatabase, value: MemorySourceIndexReplacement) {
-  return runSqliteImmediateTransactionSync(database.db, () => database.sourceIndex.replace(value));
+  return runSqliteImmediateTransactionSync(database.db, () =>
+    new MemorySourceIndexKernel(database.db, database).replace(value),
+  );
 }
 
 function snapshot(db: DatabaseSync) {
@@ -84,6 +88,32 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory source index native kernel", () => {
+  it.each([0, 4, 2048])("bounds statement preparations for %s chunks", async (chunks) => {
+    const database = await createDatabase();
+    const tables = [
+      "memory_index_chunks",
+      "memory_index_chunk_recall_metadata",
+      "memory_index_chunk_provenance",
+      "memory_index_chunks_fts",
+    ];
+    const prepare = vi.spyOn(database.db, "prepare");
+    try {
+      write(database, replacement("memory/current.md", "original", chunks));
+      const prepared = prepare.mock.calls.flatMap(([sql]) => {
+        const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
+        return table && tables.includes(table) ? [table] : [];
+      });
+      for (const table of tables) {
+        expect(
+          prepared.filter((value) => value === table),
+          table,
+        ).toHaveLength(chunks && table !== "memory_index_chunks_fts" ? 1 : 0);
+      }
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+
   it("uses native vector point lookups for sparse replacement and source deletion", async () => {
     const database = await createDatabase();
     const pathname = "memory/current.md";
@@ -106,7 +136,7 @@ describe("memory source index native kernel", () => {
           write(database, replacement(pathname, "updated", 3));
         } else {
           runSqliteImmediateTransactionSync(database.db, () =>
-            database.sourceIndex.deleteIfCurrent({
+            new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
               path: pathname,
               source: "memory",
               expectedHash: "updated",
@@ -139,6 +169,13 @@ describe("memory source index native kernel", () => {
           .prepare("SELECT id FROM memory_index_chunks WHERE hash = 'original' ORDER BY id")
           .all(),
       ).toEqual(siblings);
+      expect(
+        database.db.prepare("SELECT rowid, id FROM memory_index_chunks_fts ORDER BY rowid").all(),
+      ).toEqual(
+        database.db
+          .prepare("SELECT chunk_rowid AS rowid, id FROM memory_index_chunks ORDER BY chunk_rowid")
+          .all(),
+      );
     }
   });
 
@@ -199,7 +236,7 @@ describe("memory source index native kernel", () => {
     try {
       expect(
         runSqliteImmediateTransactionSync(db, () =>
-          database.sourceIndex.deleteIfCurrent({
+          new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
             path: pathname,
             source: "memory",
             expectedHash: "original",
@@ -270,7 +307,7 @@ describe("memory source index native kernel", () => {
       try {
         const remove = () =>
           runSqliteImmediateTransactionSync(db, () =>
-            database.sourceIndex.deleteIfCurrent({
+            new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
               path: pathname,
               source: "memory",
               expectedHash: "original",
@@ -358,7 +395,7 @@ describe("memory source index native kernel", () => {
             start_line: chunk.startLine,
             end_line: chunk.endLine,
             text: chunk.text,
-            embedding: JSON.stringify(embedding),
+            embedding: encodeMemoryEmbedding(embedding),
             importance: chunk.importance,
             triggers: chunk.triggers,
             project_key: chunk.projectKey,
@@ -398,7 +435,7 @@ describe("memory source index native kernel", () => {
     const before = snapshot(database.db);
     const remove = (expectedHash: string) =>
       runSqliteImmediateTransactionSync(database.db, () =>
-        database.sourceIndex.deleteIfCurrent({
+        new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
           path: "memory/current.md",
           source: "memory",
           expectedHash,

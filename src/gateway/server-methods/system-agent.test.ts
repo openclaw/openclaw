@@ -319,7 +319,6 @@ describe("openclaw.chat", () => {
           {
             detectInferenceBackends: async () => [],
             resolveManifestProviderAuthChoices: () => [],
-            probeLocalCommand: async (command) => ({ command, found: false }),
           },
           params?.agentId,
         ),
@@ -615,12 +614,32 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "What about this page?",
-      context: { page: "  /settings/channels  ", source: "client" },
+      context: {
+        page: "  /settings/channels  ",
+        source: "client",
+        plugin: {
+          id: "example",
+          name: "Example",
+          config: { apiKey: "never forwarded" },
+          setting: {
+            path: ["accounts", "name.with.dots"],
+            label: "Account",
+            value: "never forwarded",
+          },
+        },
+      },
     });
 
     expect(call.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("What about this page?", {
-      uiContext: { page: "/settings/channels" },
+      uiContext: {
+        page: "/settings/channels",
+        plugin: {
+          id: "example",
+          name: "Example",
+          setting: { path: ["accounts", "name.with.dots"], label: "Account" },
+        },
+      },
     });
   });
 
@@ -643,6 +662,45 @@ describe("openclaw.chat", () => {
 
     expect(call.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("Status please.");
+  });
+
+  it.each([
+    { id: "bad?id", name: "Example" },
+    { id: "example", name: "n".repeat(97) },
+  ])("drops an invalid plugin reference while keeping the human turn", async (plugin) => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle").mockResolvedValue({ text: "Ready.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "Help with this",
+      context: { page: "plugin-settings", plugin },
+    });
+    expect(call.ok).toBe(true);
+    expect(handle).toHaveBeenCalledWith("Help with this", {
+      uiContext: { page: "plugin-settings" },
+    });
+  });
+
+  it("bounds escaped plugin reference data before forwarding it", async () => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle").mockResolvedValue({ text: "Ready.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+    await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "Help with this",
+      context: {
+        page: "plugin-settings",
+        plugin: {
+          id: "example",
+          name: "Example",
+          setting: { path: Array(16).fill("\u0000".repeat(64)), label: "Large" },
+        },
+      },
+    });
+    expect(handle).toHaveBeenCalledWith("Help with this", {
+      uiContext: { page: "plugin-settings", plugin: { id: "example", name: "Example" } },
+    });
   });
 
   it("does not pass UI context to welcome-only turns", async () => {
@@ -670,7 +728,7 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "How is this machine doing?",
-      context: { page: "dashboard" },
+      context: { page: "dashboard", plugin: { id: "example", name: "Example", installed: false } },
     });
 
     expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
@@ -683,8 +741,8 @@ describe("openclaw.chat", () => {
       2,
       expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
     );
-    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toContain(
-      "ui-context",
+    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toMatch(
+      /ui-context|plugin-reference|Example/,
     );
   });
 

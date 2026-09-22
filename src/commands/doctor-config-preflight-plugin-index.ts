@@ -7,7 +7,10 @@ import {
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import type {
+  MigrationCheckpointIdentity,
+  StartupMigrationLease,
+} from "../infra/startup-migration-checkpoint.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
@@ -15,6 +18,7 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveMigrationCheckpointIdentity } from "./doctor-config-preflight-checkpoint.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
@@ -138,7 +142,7 @@ export async function readDoctorConfigPreflightSnapshot(params: {
     }
     const readOptions = {
       ...sharedOptions,
-      ...(deferred?.length ? { deferredPluginMigrations: deferred } : {}),
+      deferredPluginMigrations: deferred,
     };
     return withDeferredPluginDoctorMigrations(
       deferred?.map((entry) => entry.pluginId) ?? [],
@@ -182,7 +186,11 @@ export async function persistRefreshedPluginIndex(params: {
   readPersistedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   lease: StartupMigrationLease | undefined;
-}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  expectedIdentity: MigrationCheckpointIdentity | null;
+}): Promise<{
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  checkpointIdentity: MigrationCheckpointIdentity;
+}> {
   const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadataSnapshot;
   if (!derivedPluginMetadataSnapshot || !params.snapshotRead.pluginMigrationFingerprint) {
     throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
@@ -219,5 +227,25 @@ export async function persistRefreshedPluginIndex(params: {
       'Stop plugin package changes, run "openclaw plugins registry --refresh", then retry.',
     );
   }
-  return persistedSnapshotRead;
+  const persistedBaseConfig =
+    persistedSnapshotRead.snapshot.sourceConfig ?? persistedSnapshotRead.snapshot.config ?? {};
+  const persistedIdentity = resolveMigrationCheckpointIdentity({
+    snapshot: persistedSnapshotRead.snapshot,
+    baseConfig: persistedBaseConfig,
+    pluginMigrationFingerprint: persistedSnapshotRead.pluginMigrationFingerprint,
+  });
+  if (
+    !params.expectedIdentity ||
+    !persistedIdentity ||
+    params.expectedIdentity.effectiveConfigFingerprint !==
+      persistedIdentity.effectiveConfigFingerprint ||
+    params.expectedIdentity.pluginDoctorConfigFingerprint !==
+      persistedIdentity.pluginDoctorConfigFingerprint
+  ) {
+    throw new Error(
+      'OpenClaw config identity changed while persisting the refreshed plugin registry; refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.',
+    );
+  }
+  // The durable reread supplies both the accepted inventory and its checkpoint identity.
+  return { snapshotRead: persistedSnapshotRead, checkpointIdentity: persistedIdentity };
 }

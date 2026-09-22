@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -22,6 +23,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -36,6 +38,8 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  /** Prepared current-turn identity supplied only by the Gateway-launched run owner. */
+  requesterModel?: ProviderModelRef;
   modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
@@ -62,6 +66,8 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  /** Host-minted search exclusion; independent of coding-tool authority in toolsAllow. */
+  webSearchDisabled?: true;
   /** Canonical observed native authority; null awaits this turn's initialization. */
   nativeCronCreatorToolAllowlist?: string[] | null;
   skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
@@ -123,6 +129,16 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  /** Trusted source-turn authority retained only by the host. */
+  messageActionTurnCapability?: string;
+  /** Original native creator scope, kept outside all child-visible context. */
+  cronRequesterGrantIssuer?: (
+    authority: AgentRunDelegatedAuthority,
+    signal?: AbortSignal,
+    isCurrent?: () => boolean,
+  ) => CronCreatorAuthorityGrant;
+  /** Retained Cron permission, independent of this grant's other tool authority. */
+  cronAuthorityCheck?: () => boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
@@ -239,6 +255,9 @@ export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
+  messageActionTurnCapability?: string;
+  cronRequesterGrantIssuer?: StoredMcpLoopbackClientGrant["cronRequesterGrantIssuer"];
+  cronAuthorityCheck?: () => boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   bindQuestionAnswerAuthority?: StoredMcpLoopbackClientGrant["bindQuestionAnswerAuthority"];
@@ -259,6 +278,13 @@ export function mintMcpLoopbackClientGrant(params: {
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    ...(params.messageActionTurnCapability
+      ? { messageActionTurnCapability: params.messageActionTurnCapability }
+      : {}),
+    ...(params.cronRequesterGrantIssuer
+      ? { cronRequesterGrantIssuer: params.cronRequesterGrantIssuer }
+      : {}),
+    ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
@@ -455,6 +481,9 @@ export function resolveMcpLoopbackClientGrant(params: {
       context: McpLoopbackRequestContext;
       captureKey: string;
       admittedRunContext: AdmittedRunContext;
+      messageActionTurnCapability?: string;
+      mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
+      cronAuthorityCheck?: () => boolean;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       rootedExecution?: PreparedRootedExecutionCapability;
@@ -487,12 +516,27 @@ export function resolveMcpLoopbackClientGrant(params: {
       throw new Error("question creator MCP grant is no longer active");
     }
   });
+  const issueCronRequesterGrant = grant.cronRequesterGrantIssuer;
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
     admittedRunContext,
+    ...(grant.messageActionTurnCapability
+      ? { messageActionTurnCapability: grant.messageActionTurnCapability }
+      : {}),
+    ...(grant.cronAuthorityCheck ? { cronAuthorityCheck: grant.cronAuthorityCheck } : {}),
+    ...(issueCronRequesterGrant
+      ? {
+          mintCronRequesterGrant: (signal?: AbortSignal) => {
+            if (!isCurrent()) {
+              throw new Error("cron requester MCP grant is no longer active");
+            }
+            return issueCronRequesterGrant(delegatedAuthority, signal, isCurrent);
+          },
+        }
+      : {}),
     questionAnswerAuthority,
     ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
     isCurrent,

@@ -30,10 +30,6 @@ const overrides = new Map<string, string>([
     }`,
   ],
   [
-    source("./update-command-repair-service.ts"),
-    `export async function repairUpdateService(p) { return p.result; }`,
-  ],
-  [
     source("../../infra/tmp-openclaw-dir.ts"),
     process.env.OPENCLAW_TEST_LEGACY_TEMP_FALLBACK === "1"
       ? `import {resolvePreferredOpenClawTmpDir as actual} from ${JSON.stringify(source("../../infra/tmp-openclaw-dir.ts") + "?fixture-original")};
@@ -67,6 +63,12 @@ const overrides = new Map<string, string>([
       p.assertCurrent();
       const fs=await import("node:fs");
       if(fs.readFileSync(${JSON.stringify(scratch + "/native-effect")},"utf8")!=="restarted") throw new Error("Native completion missing");
+      if(process.env.OPENCLAW_TEST_COMPLETED_TERMINAL==="1") {
+        const ledger=await import(${JSON.stringify(source("../../infra/update-run-ledger.ts"))});
+        const run=p.opts.run;
+        ledger.recordUpdateRunVerification(run.runId, {serviceRunning:true,versionMatch:true,channelsReady:true,readyz:true,settled:true,runningVersion:p.result.after?.version,runningBuildId:p.result.after?.buildId,pluginErrors:[]}, {env:run.env});
+        ledger.finishUpdateRun(run.runId, {status:"succeeded",after:p.result.after}, {env:run.env});
+      }
       return {ok:true};
     }`,
   ],
@@ -76,6 +78,32 @@ const overrides = new Map<string, string>([
     export async function tryWriteCompletionCache() { return false; }`,
   ],
 ]);
+if (process.env.OPENCLAW_TEST_COMPLETED_TERMINAL === "1") {
+  overrides.set(
+    source("./update-command-terminal.ts"),
+    `import {withUpdateCommandTerminalResult as actual} from ${JSON.stringify(source("./update-command-terminal.ts") + "?fixture-original")};
+     export function withUpdateCommandTerminalResult(operation, options) {
+       return actual(async registerRun => {
+         const result = await operation(registerRun);
+         globalThis.syntheticUpdateExecutorSettled = true;
+         return result;
+       }, options);
+     }`,
+  );
+  overrides.set(
+    source("../../infra/sqlite-snapshot-source.ts"),
+    `import {prepareSqliteReadOnlyLocationSync as actual} from ${JSON.stringify(source("../../infra/sqlite-snapshot-source.ts") + "?fixture-original")};
+     export function prepareSqliteReadOnlyLocationSync(...args) {
+       if(globalThis.syntheticUpdateExecutorSettled) throw new Error("live database changed after migrated executor settlement");
+       return actual(...args);
+     }`,
+  );
+}
+// These modules export only the function already replaced by this fixture.
+const completeOverrides = new Set([
+  source("./update-command-convergence.ts"),
+  source("./update-command-restart-context.ts"),
+]);
 registerHooks({
   load(url, context, nextLoad) {
     const replacement = overrides.get(url);
@@ -83,7 +111,9 @@ registerHooks({
       ? nextLoad(url, context)
       : {
           format: "module",
-          source: `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
+          source: completeOverrides.has(url)
+            ? replacement
+            : `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
           shortCircuit: true,
         };
   },

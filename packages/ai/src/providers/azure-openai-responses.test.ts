@@ -183,6 +183,12 @@ describe("azure-openai-responses", () => {
       effort: "xhigh",
       temperature: undefined,
     },
+    {
+      reasoning: "max",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      effort: "max",
+      temperature: 0.5,
+    },
   ])(
     "preserves Azure deployment capabilities for $reasoning with compat=$compat",
     async ({ reasoning, compat, effort, temperature }) => {

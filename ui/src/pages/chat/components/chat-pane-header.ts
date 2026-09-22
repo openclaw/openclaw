@@ -174,6 +174,9 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
       @keydown=${(event: KeyboardEvent) => {
+        if (event.isComposing || event.keyCode === 229) {
+          return;
+        }
         if (event.key === "Enter") {
           event.preventDefault();
           props.onCommitRename();
@@ -303,6 +306,9 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   return html`
     <div
       class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      role="group"
+      aria-label=${props.title}
+      tabindex="-1"
       @mousedown=${beginNativeWindowDrag}
     >
       <div class="chat-pane__header-leading">

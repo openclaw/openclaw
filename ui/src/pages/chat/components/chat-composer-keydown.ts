@@ -53,6 +53,10 @@ export function createComposerKeyDownHandler({
       return;
     }
 
+    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+      return;
+    }
+
     if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
       return;
     }
@@ -169,6 +173,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
+      if (goalComposer.activateDraft(target.value, true)) {
+        return;
+      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
       void props.onSend(followUpModeOverride, event);

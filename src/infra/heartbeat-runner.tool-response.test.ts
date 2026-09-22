@@ -628,6 +628,25 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
+  it("provides text fallback instructions and suppresses a quiet text result", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedTelegramSession(storePath, cfg);
+      replySpy.mockResolvedValue({ text: SILENT_REPLY_TOKEN });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+
+      expect(result.status).toBe("ran");
+      expect(replyContext(replySpy).Body).toContain(
+        `${SILENT_REPLY_TOKEN} when nothing needs the user's attention`,
+      );
+      expect(replyContext(replySpy).Body).toContain("only the alert text");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
     // One direction proves prompt recalculation after isolation. Reciprocal
     // runtime precedence is covered directly by thinking-runtime.test.ts.

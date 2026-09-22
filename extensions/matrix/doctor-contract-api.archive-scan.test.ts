@@ -153,7 +153,7 @@ describe("matrix doctor archive scan boundaries", () => {
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(activeRoots.length * 2);
     for (const [index, storageRootDir] of activeRoots.entries()) {
-      const store = new SqliteBackedMatrixSyncStore(storageRootDir);
+      const store = await SqliteBackedMatrixSyncStore.create(storageRootDir);
       await expect(store.getSavedSyncToken()).resolves.toBe(`legacy-token-${index}`);
       expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
       expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json.migrated"))).toBe(true);

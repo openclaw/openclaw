@@ -178,8 +178,9 @@ async function expectUnsafeArchive(
 
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
+    const largeContent = "a".repeat(300_017);
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt", "nested", ".root-note", ".hidden"],
+      entries: ["ok.txt", "nested", ".root-note", ".hidden", "empty.bin", "large.bin"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
         await fs.mkdir(path.join(sourceDir, "nested"));
@@ -187,6 +188,8 @@ describe("dir.fetch archive extraction", () => {
         await fs.writeFile(path.join(sourceDir, ".root-note"), "hidden root");
         await fs.mkdir(path.join(sourceDir, ".hidden"));
         await fs.writeFile(path.join(sourceDir, ".hidden", "note.txt"), "hidden member");
+        await fs.writeFile(path.join(sourceDir, "empty.bin"), "");
+        await fs.writeFile(path.join(sourceDir, "large.bin"), largeContent);
       },
     });
     prepareArchive(tarBuffer);
@@ -200,15 +203,16 @@ describe("dir.fetch archive extraction", () => {
     expect.soft(modelText).toContain(".root-note");
 
     expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
+      content: [{ type: "text", text: expect.stringContaining("Fetched 6 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 4,
+        fileCount: 6,
       },
     });
-    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
-      .files;
-    expect(files).toHaveLength(4);
+    const files = (
+      result.details as { files: Array<{ relPath: string; localPath: string; sha256: string }> }
+    ).files;
+    expect(files).toHaveLength(6);
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -224,14 +228,21 @@ describe("dir.fetch archive extraction", () => {
       ]),
     );
     const visible = readSavedContent(result.content);
-    expect(visible.fileCount).toBe(4);
-    expect(visible.files).toHaveLength(4);
+    expect(visible.fileCount).toBe(6);
+    expect(visible.files).toHaveLength(6);
     const expectedContents = new Map([
       ["ok.txt", "ok"],
       [path.join("nested", "also-ok.txt"), "also ok"],
       [".root-note", "hidden root"],
       [path.join(".hidden", "note.txt"), "hidden member"],
+      ["empty.bin", ""],
+      ["large.bin", largeContent],
     ]);
+    for (const file of files) {
+      expect(file.sha256).toBe(
+        crypto.createHash("sha256").update(expectedContents.get(file.relPath)!).digest("hex"),
+      );
+    }
     for (const file of visible.files) {
       const bytes = await fs.readFile(path.join(visible.rootDir, file.relPath));
       expect(bytes.toString()).toBe(expectedContents.get(file.relPath));
@@ -267,7 +278,26 @@ describe("dir.fetch archive extraction", () => {
     });
     // Remote metadata need not fit in text; the exact local root identifies the saved tree.
     const { archivePath } = prepareArchive(tarBuffer, "media", "/" + "雪".repeat(10000));
-    const result = await executeDirFetch();
+    const stringify = JSON.stringify;
+    let encodedRecords = 0;
+    const encoding = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value: unknown, replacer, space) => {
+        if (typeof value === "object" && value !== null) {
+          if ("files" in value && Array.isArray(value.files)) {
+            encodedRecords += value.files.length;
+          } else if ("relPath" in value && "size" in value && Object.keys(value).length === 2) {
+            encodedRecords += 1;
+          }
+        }
+        return stringify(value, replacer, space);
+      });
+    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    try {
+      result = await executeDirFetch();
+    } finally {
+      encoding.mockRestore();
+    }
     const visible = readSavedContent(result.content);
     expect(visible.fileCount).toBe(relPaths.length);
     expect(visible.displayedCount).toBeGreaterThan(0);
@@ -335,6 +365,16 @@ describe("dir.fetch archive extraction", () => {
       files: expectedFiles,
       media: { mediaUrls: [...images, ...others].slice(0, 25).map((file) => file.localPath) },
     });
+    expect(visible.text.split("\n").find((line) => line.startsWith("{"))).toBe(
+      JSON.stringify({
+        rootDir,
+        fileCount: relPaths.length,
+        displayedCount: visible.displayedCount,
+        files: visible.files,
+      }),
+    );
+    expect(encodedRecords).toBeGreaterThan(0);
+    expect(encodedRecords).toBeLessThanOrEqual(visible.displayedCount + 1);
   });
 
   it.each(["empty", "long paths", "reserved name", "reserved root"] as const)(

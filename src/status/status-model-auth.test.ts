@@ -70,6 +70,7 @@ function statusAuth(
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries: [entry], routeVariants: [entry] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Status must not execute a model");

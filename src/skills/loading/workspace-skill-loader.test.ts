@@ -1,4 +1,3 @@
-// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -13,10 +12,12 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
+// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
+import { buildPluginMetadataProviderFacts } from "../../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -27,7 +28,6 @@ import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
-  loadBundledSkillEntryByName,
   loadVisibleSkills,
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
@@ -106,11 +106,12 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
         manifestRegistry: { plugins: [], diagnostics: [] },
       }),
     };
-    const resolve = async () => {
+    const resolve = async (assertCurrent?: () => void) => {
       const entries =
         caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(workspaceDir, options)).eligible
-          : await prepareWorkspaceSkills(workspaceDir, options);
+          ? (await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent }))
+              .eligible
+          : await prepareWorkspaceSkills(workspaceDir, options, assertCurrent);
       return entries.map((entry) => entry.skill.name);
     };
     return { binDir, config, eligibility, resolve };
@@ -152,7 +153,7 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
     config.skills = { allowBundled: ["other"], entries: { disabled: { enabled: false } } };
     degrade("secret");
     const access = vi.spyOn(fs, "access");
-    expect(await resolve()).toEqual(["always"]);
+    expect(await Promise.all([resolve(), resolve()])).toEqual([["always"], ["always"]]);
     expect(access.mock.calls.map(([file]) => path.basename(String(file))).toSorted()).toEqual([
       "installed-tool",
       "missing-tool",
@@ -168,6 +169,44 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
     expect(await resolve()).toEqual(["always", "ordinary"]);
     expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
       "missing-tool",
+    ]);
+  });
+
+  it("keeps concurrent binary preparations independent when one caller is canceled", async () => {
+    const { binDir, resolve } = await fixture([
+      { name: "ordinary", metadata: { requires: { bins: ["installed-tool"] } } },
+    ]);
+    const executable = path.join(binDir, "installed-tool");
+    await fs.writeFile(executable, "fixture", { mode: 0o755 });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const actualAccess = fs.access;
+    vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (args[0] === executable) {
+        entered.resolve();
+        await release.promise;
+      }
+      return actualAccess(...args);
+    });
+    const cancellation = new Error("fixture caller retired");
+    let canceled = false;
+    const results = Promise.allSettled([
+      resolve(() => {
+        if (canceled) {
+          throw cancellation;
+        }
+      }),
+      resolve(),
+    ]);
+    try {
+      await entered.promise;
+      canceled = true;
+    } finally {
+      release.resolve();
+    }
+    expect(await results).toEqual([
+      { status: "rejected", reason: cancellation },
+      { status: "fulfilled", value: ["ordinary"] },
     ]);
   });
 
@@ -317,6 +356,8 @@ function createWorkspacePluginMetadataSnapshot(params: {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: buildPluginMetadataProviderFacts(params.manifestRegistry.plugins)
+      .providerAuthContributions,
     modelIdNormalizationPolicies: new Map(),
   };
   const index: PluginMetadataSnapshot["index"] = {
@@ -457,7 +498,9 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
     });
     const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
-    const bundledControlUi = loadBundledSkillEntryByName("control-ui", {
+    const [bundledControlUi] = await prepareWorkspaceSkills(workspaceDir, {
+      bundledSkillName: "control-ui",
+      eligibility: {},
       config: {},
       bundledSkillsDir,
     });
@@ -562,6 +605,32 @@ describe("loadWorkspaceSkills", () => {
     } finally {
       directoryReads.mockRestore();
     }
+  });
+
+  it("reconciles incoming plugin metadata before caching a changed watch generation", async () => {
+    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
+    const config = { plugins: { entries: { "workspace-skills": { enabled: true } } } };
+    const options = { config, managedSkillsDir: managedDir };
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name),
+    ).toContain("drafting");
+    const version = getSkillsSnapshotVersion(workspaceDir);
+    const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch-targets",
+      refreshInputs: { sourceScope: {}, config, pluginMetadataSnapshot },
+    });
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, { ...options, pluginMetadataSnapshot }).map(
+        (entry) => entry.skill.name,
+      ),
+    ).not.toContain("drafting");
   });
 
   it("filters plugin-shipped skills through plugin config", async () => {

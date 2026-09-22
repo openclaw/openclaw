@@ -10,7 +10,11 @@ import {
   AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
 } from "../../agents/harness/errors.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+  createSessionPlacementSettlementClosedAbortError,
+} from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -254,6 +258,43 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
+  it("returns a visible failure when settlement closes without supersession", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:closed-terminal",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    const error = createSessionPlacementSettlementClosedAbortError();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    try {
+      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      expect(result.outcome.kind).toBe("rejected");
+      if (result.outcome.kind === "rejected") {
+        expect(result.outcome.payload.text).toBeTruthy();
+        expect(result.outcome.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      }
+      expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      const terminals = emitAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === result.runId &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]?.data.phase).toBe("error");
+      expect(terminals[0]?.data.stopReason).not.toBe("superseded");
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
   it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
     { reason: "user", code: "aborted_by_user", phase: "error", stopReason: "aborted" },
@@ -264,9 +305,24 @@ describe("executeAgentTurn: terminal failures", () => {
       phase: "error",
       stopReason: "superseded",
     },
+    {
+      reason: "superseded",
+      code: "aborted_for_supersession",
+      phase: "error",
+      stopReason: "superseded",
+      restartError: true,
+    },
+    {
+      reason: "user",
+      code: "aborted_by_user",
+      phase: "error",
+      stopReason: "timeout",
+      supersededError: true,
+    },
   ] as const)(
-    "records one $stopReason abort terminal event without returning a reply",
-    async ({ reason, code, phase, stopReason }) => {
+    "records one $stopReason abort terminal event without returning a reply ($restartError)",
+    async (testCase) => {
+      const { reason, code, phase, stopReason } = testCase;
       const agentEvents = await import("../../infra/agent-events.js");
       const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
       const upstreamAbort = new AbortController();
@@ -290,13 +346,22 @@ describe("executeAgentTurn: terminal failures", () => {
                 : new Error("caller cancelled");
           upstreamAbort.abort(abortReason);
         }
+        if ("restartError" in testCase) {
+          throw createAgentRunRestartAbortError();
+        }
+        if ("supersededError" in testCase) {
+          throw createAgentRunSupersededAbortError();
+        }
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       });
 
       try {
         const { executeAgentTurn } = await import("./agent-runner-execution.js");
         const result = await executeAgentTurn({
-          ...createMinimalRunAgentTurnParams({ replyOperation }),
+          ...createMinimalRunAgentTurnParams({
+            replyOperation: "supersededError" in testCase ? undefined : replyOperation,
+          }),
+          opts: { abortSignal: upstreamAbort.signal },
           isRestartRecoveryArmed: () => true,
         });
 

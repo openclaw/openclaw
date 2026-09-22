@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
 import { isSessionProfileDependentMethod } from "../session-method-policy.js";
-import { listCoreGatewayMethodNames } from "./core-descriptors.js";
+import { listCoreGatewayMethodNames } from "./core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -144,6 +144,8 @@ describe("gateway method registry", () => {
     // talk.config projects the caller's profile accent; a pending GitHub
     // identity sync must complete before the handler runs.
     expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
     for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
       expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
     }

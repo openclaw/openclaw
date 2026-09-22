@@ -32,7 +32,11 @@ it("releases closed shared database wrappers after path and global retirement", 
       owner = undefined;
       return ref;
     }
-    const refs = [retire(true), retire(false)];
+    // WeakRef targets stay live through the task that creates them. Finish that
+    // task before forcing collection so the check measures cache ownership.
+    const refs = await new Promise(resolve =>
+      setImmediate(() => resolve([retire(true), retire(false)]))
+    );
     for (let i = 0; i < 30; i++) {
       await new Promise(setImmediate);
       globalThis.gc();

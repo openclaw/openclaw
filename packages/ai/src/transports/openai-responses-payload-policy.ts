@@ -40,6 +40,7 @@ type OpenAIResponsesEndpointClass =
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
@@ -231,20 +232,27 @@ export function resolveOpenAIResponsesServerCompactionPlan(
   };
 }
 
-/** Resolve the manual Responses compact-endpoint gate for one route. */
+/** Resolve the Responses compact-endpoint gate for one route and compaction purpose. */
 export function resolveOpenAIResponsesCompactEndpointPlan(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
+  purpose: "manual" | "budget" = "manual",
 ): { enabled: boolean } {
   const configured = extraParams?.responsesCompactEndpoint;
   const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  const api = normalizeOptionalLowercaseString(model.api);
+  const endpointClass = resolveOpenAIResponsesEndpointClass(model.baseUrl);
+  const enabledByDefault =
+    ((provider === "xai" || provider === "x-ai") && endpointClass === "xai-native") ||
+    (purpose === "budget" &&
+      provider === "openai" &&
+      api === "openai-responses" &&
+      endpointClass === "openai-public");
   return {
     enabled:
-      isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api)) &&
-      (configured === true ||
-        (configured !== false &&
-          (provider === "xai" || provider === "x-ai") &&
-          resolveOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
+      isOpenAIResponsesApi(api) &&
+      configured !== false &&
+      (configured === true || enabledByDefault),
   };
 }
 
@@ -303,7 +311,11 @@ export function resolveOpenAIResponsesPayloadPolicy(
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
-    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
+    // Custom endpoints need an explicit capability; model-name hints describe native routes.
+    !supportsOpenAIReasoningEffort(
+      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      "none",
+    );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
   // such as `status` on replayed input items. Strip them for non-native routes.
   const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
@@ -320,6 +332,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    // Managed proxies inherit their provider default; explicit none is a separate capability.
+    defaultManagedReasoningEffort:
+      capabilities.usesKnownNativeOpenAIRoute &&
+      !shouldStripDisabledReasoningPayload &&
+      model.provider !== "github-copilot"
+        ? "none"
+        : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,

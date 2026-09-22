@@ -99,17 +99,13 @@ function durableOwnership(params: SessionTabParams): DurableOwnership | undefine
 
 function deleteInvalidRecord(key: string, onWarn?: (message: string) => void): void {
   try {
-    const deleted = deleteBrowserSessionTabIf(key, (current) => {
+    deleteBrowserSessionTabIf(key, (current) => {
       if (parseBrowserDashboardStopIntent(key, current)) {
         return false;
       }
       const record = parseBrowserSessionTabRecord(current);
       return !record || browserSessionTabStorageKey(record) !== key;
     });
-    if (deleted) {
-      clearDurableTabAliases(key);
-      activeDurableStorageKeys().delete(key);
-    }
   } catch (error) {
     onWarn?.(`failed to delete invalid browser session tab record: ${String(error)}`);
     return;
@@ -217,15 +213,10 @@ function upsertVolatile(
 }
 
 function deleteDurableCandidate(tab: DurableTab): boolean {
-  const deleted = deleteBrowserSessionTabIf(tab.storageKey, (current) => {
+  return deleteBrowserSessionTabIf(tab.storageKey, (current) => {
     const record = parseBrowserSessionTabRecord(current);
     return Boolean(record && sameBrowserSessionTabRecord(record, tab));
   });
-  if (deleted) {
-    clearDurableTabAliases(tab.storageKey);
-    activeDurableStorageKeys().delete(tab.storageKey);
-  }
-  return deleted;
 }
 
 function clearDurableForVolatile(identity: InteractionIdentity): boolean {

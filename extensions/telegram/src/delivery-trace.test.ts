@@ -177,7 +177,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       code: "TRACE",
       created: false,
     })) as unknown as TelegramBotDeps["upsertChannelPairingRequest"],
-    enqueueSystemEvent: (async () => {}) as unknown as TelegramBotDeps["enqueueSystemEvent"],
+    enqueueRoutedSystemEvent: () => false,
     dispatchReplyWithBufferedBlockDispatcher: (() => {
       throw new Error("trace dispatch bypassed the core runtime mock");
     }) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
@@ -191,10 +191,10 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],
     wasSentByBot: (() => false) as TelegramBotDeps["wasSentByBot"],
-    deliverInboundReplyWithMessageSendContext: (async () => ({
+    deliverStructuredInboundReplyWithMessageSendContext: async () => ({
       status: "unsupported",
       reason: "missing_outbound_handler",
-    })) as unknown as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
+    }),
     emitTelegramMessageSentHooks: (() => {}) as TelegramBotDeps["emitTelegramMessageSentHooks"],
     recordOutboundMessageForPromptContext: (async () =>
       true) as TelegramBotDeps["recordOutboundMessageForPromptContext"],

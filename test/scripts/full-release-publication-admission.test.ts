@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  constants as fsConstants,
   cpSync,
   existsSync,
   mkdirSync,
@@ -10,11 +11,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   normalizePublicationIntent,
@@ -32,6 +33,8 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let toolingTemplate: { loose: string; packed: string } | undefined;
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
 const workflowPath = ".github/workflows/full-release-validation.yml";
@@ -59,6 +62,7 @@ const toolingPaths = [
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/frozen-target-compat.sh",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
@@ -265,7 +269,7 @@ console.log('{"status":"identical"}');
       for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
         const output = join(root, `${step.id}.out`);
         const env: Record<string, string> = {
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
           HOME: root,
           GITHUB_REPOSITORY: "openclaw/openclaw",
           GITHUB_OUTPUT: output,
@@ -407,7 +411,7 @@ function fixture(
   const tooling = join(root, "workflow");
   let target = join(root, "target");
   const temporary = join(root, "tmp");
-  for (const directory of [tooling, target, temporary]) {
+  for (const directory of [target, temporary]) {
     mkdirSync(directory);
   }
   const write = (directory: string, path: string, bytes: string | Buffer) => {
@@ -420,6 +424,10 @@ function fixture(
       "git",
       [
         "--no-lazy-fetch",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
         "-c",
         "core.hooksPath=/dev/null",
         "-c",
@@ -517,10 +525,31 @@ function fixture(
     git(target, "commit", "-qm", "non-utf8 fixture");
     targetSha = git(target, "rev-parse", "HEAD");
   }
-  git(tooling, "init", "-q", "-b", "main");
-  for (const path of toolingPaths) {
-    write(tooling, path, readFileSync(join(repo, path)));
+  if (!toolingTemplate) {
+    const prepared = templateDirs.make("frv-publication-tooling-template-");
+    git(prepared, "init", "-q", "-b", "main");
+    for (const path of [...toolingPaths, "scripts/lib/release-publish-children.sh"]) {
+      write(prepared, path, readFileSync(join(repo, path)));
+    }
+    for (const directory of [
+      ".github/workflows",
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+    ]) {
+      cpSync(join(repo, directory), join(prepared, directory), { recursive: true });
+    }
+    commit(prepared);
+    const packed = templateDirs.make("frv-publication-packed-tooling-template-");
+    cpSync(prepared, packed, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+    git(packed, "repack", "-ad");
+    toolingTemplate = { loose: prepared, packed };
   }
+  // These faults delete individual loose blobs; other cases copy compact packed history.
+  const template = ["tooling-object", "platform-helper-object", "worker-object"].includes(
+    options.fault ?? "",
+  )
+    ? toolingTemplate.loose
+    : toolingTemplate.packed;
+  cpSync(template, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   const registryCalls = join(root, "registry-calls.jsonl");
   {
     // This is committed trusted fixture code, not a candidate preload or a
@@ -674,14 +703,6 @@ globalThis.fetch = async (input, init = {}) => {
 };
 `,
     );
-  }
-  write(
-    tooling,
-    "scripts/lib/release-publish-children.sh",
-    readFileSync(join(repo, "scripts/lib/release-publish-children.sh")),
-  );
-  for (const directory of [".github/workflows", "scripts/e2e/lib/upgrade-survivor/config-recipe"]) {
-    cpSync(join(repo, directory), join(tooling, directory), { recursive: true });
   }
   if (options.legacyPlatforms) {
     write(
@@ -1000,7 +1021,7 @@ process.stdout.write(${JSON.stringify(
     }
     const output = join(temporary, `output-${effects.length}`);
     const env: Record<string, string> = {
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
       HOME: root,
       LANG: "C.UTF-8",
       GIT_CONFIG_GLOBAL: "/dev/null",

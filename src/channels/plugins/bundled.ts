@@ -19,7 +19,6 @@ import {
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import { pluginCacheRealpathSync } from "../../plugins/plugin-cache-files.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../../plugins/plugin-cache.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
@@ -80,33 +79,8 @@ type BundledChannelArtifactLoadParams = {
 
 const log = createSubsystemLogger("channels");
 
-function isSourceModulePath(modulePath: string): boolean {
-  return /\.(?:c|m)?tsx?$/iu.test(modulePath);
-}
-
 function resolveCanonicalPathOrAbsolute(targetPath: string): string {
   return pluginCacheRealpathSync(targetPath, true) ?? path.resolve(targetPath);
-}
-
-function isPathInsideCanonicalRoot(rootPath: string, targetPath: string): boolean {
-  return isPathInside(
-    resolveCanonicalPathOrAbsolute(rootPath),
-    resolveCanonicalPathOrAbsolute(targetPath),
-  );
-}
-
-function isPackageLocalBundledDistModulePath(params: {
-  rootScope: BundledChannelRootScope;
-  metadata: BundledChannelPluginMetadata;
-  modulePath: string;
-}): boolean {
-  const distRoots = [
-    ...(params.rootScope.pluginsDir
-      ? [path.join(params.rootScope.pluginsDir, params.metadata.dirName, "dist")]
-      : []),
-    path.join(params.rootScope.packageRoot, "extensions", params.metadata.dirName, "dist"),
-  ];
-  return distRoots.some((root) => isPathInsideCanonicalRoot(root, params.modulePath));
 }
 
 function resolveBundledChannelModuleEntry<TKind extends BundledChannelEntryKind>(
@@ -221,37 +195,13 @@ function loadGeneratedBundledChannelModule(params: {
     metadata: params.metadata,
     modulePath,
   });
-  try {
-    return loadChannelPluginModule({
-      modulePath,
-      rootDir: boundaryRoot,
-    });
-  } catch (error) {
-    const canRetryWithCachedLoader =
-      isSourceModulePath(modulePath) ||
-      (isPackageLocalBundledDistModulePath({
-        rootScope: params.rootScope,
-        metadata: params.metadata,
-        modulePath,
-      }) &&
-        findMissingModuleCodeInChain(error) !== undefined);
-    if (!canRetryWithCachedLoader) {
-      throw error;
-    }
-    const loader = getCachedPluginModuleLoader({
-      modulePath,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      cacheScopeKey: "bundled-channel-entry",
-    });
-    return loader(modulePath);
-  }
+  return loadChannelPluginModule({
+    modulePath,
+    rootDir: boundaryRoot,
+  });
 }
 
-// Walk the `.cause` chain looking for a Node-style "module not found" code.
-// Native-require failures inside `module-loader.ts` rewrap the original Node
-// error in a new Error with `{ cause }`, so the missing-module code lives on
-// the cause rather than the top-level error.
+// Module loaders can wrap missing-dependency errors in a cause chain.
 function findMissingModuleCodeInChain(error: unknown): string | undefined {
   const seen = new Set<unknown>();
   let current: unknown = error;

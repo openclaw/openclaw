@@ -25,7 +25,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -35,7 +35,10 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
-import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../completion/subagent-completion-instructions.js";
+import {
+  SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+} from "../completion/subagent-completion-instructions.js";
 import {
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -47,6 +50,7 @@ import {
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -68,7 +72,6 @@ import {
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
   readSubagentTimeoutProgress,
-  type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
 import {
@@ -79,22 +82,6 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 
-type SubagentAnnounceDeps = {
-  callGateway: typeof callSubagentLifecycleGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
-};
-
-const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
-  callGateway: callSubagentLifecycleGateway,
-  dispatchGatewayMethodInProcess,
-  getRuntimeConfig,
-  loadSubagentRegistryRuntime,
-};
-
-let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
-
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("../registry/subagent-registry-runtime.js"),
 );
@@ -104,7 +91,6 @@ function loadSubagentRegistryRuntime() {
 }
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
-export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
 type SubagentAnnounceType = "subagent task" | "cron job";
 export type SubagentAnnounceFlowOutcome =
@@ -126,7 +112,7 @@ function buildAnnounceReplyInstruction(params: {
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.completionTarget === "parent") {
-    return `Process this result privately. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Your final reply stays internal. If the original request requires a user-facing update, send it through an available, permitted messaging tool; do not rely on your final reply for delivery. Reply ONLY: ${SILENT_REPLY_TOKEN} when no further work or user-facing update is owed, or after sending that update.`;
+    return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
   }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
@@ -298,7 +284,7 @@ async function runSubagentAnnounceFlowBound(
       reply = undefined;
     }
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
-      cfg: subagentAnnounceDeps.getRuntimeConfig(),
+      cfg: getRuntimeConfig(),
       agentId: targetRequesterAgentId,
     });
     const requesterIsInternalSession = () =>
@@ -310,7 +296,7 @@ async function runSubagentAnnounceFlowBound(
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
     try {
-      subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
+      subagentRegistryRuntime = await loadSubagentRegistryRuntime();
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
@@ -373,9 +359,9 @@ async function runSubagentAnnounceFlowBound(
         hasUsableSessionEntry,
         resolveGatewayContext: params.resolveGatewayContext,
         deps: {
-          callGateway: subagentAnnounceDeps.callGateway,
-          dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,
-          getRuntimeConfig: subagentAnnounceDeps.getRuntimeConfig,
+          callGateway: callSubagentLifecycleGateway,
+          dispatchGatewayMethodInProcess,
+          getRuntimeConfig,
           replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteer,
         },
         signal: params.signal,
@@ -553,7 +539,7 @@ async function runSubagentAnnounceFlowBound(
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
-            cfg: subagentAnnounceDeps.getRuntimeConfig(),
+            cfg: getRuntimeConfig(),
             agentId: targetRequesterAgentId,
           });
           requesterIsSubagent = requesterIsInternalSession();
@@ -671,11 +657,6 @@ async function runSubagentAnnounceFlowBound(
       delivery.reason === "requester_turn_pending"
         ? "requester_turn_pending"
         : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
-    if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.log(
-        `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
-      );
-    }
   } catch (err) {
     shouldDeleteChildSession = false;
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
@@ -689,7 +670,7 @@ async function runSubagentAnnounceFlowBound(
       (params.onBeforeDeleteChildSession?.() ?? true)
     ) {
       await deleteSubagentSessionForCleanup({
-        callGateway: subagentAnnounceDeps.callGateway,
+        callGateway: callSubagentLifecycleGateway,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
@@ -700,33 +681,3 @@ async function runSubagentAnnounceFlowBound(
   }
   return announceOutcome;
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides?: Partial<SubagentAnnounceDeps> & {
-      callGateway?: typeof callSubagentLifecycleGateway;
-    },
-  ) {
-    const callGatewayOverride = overrides?.callGateway;
-    const dispatchGatewayMethodInProcessOverride =
-      overrides?.dispatchGatewayMethodInProcess ??
-      (callGatewayOverride
-        ? ((async (method, agentParams, options) =>
-            await callGatewayOverride({
-              method,
-              params: agentParams,
-              expectFinal: options?.expectFinal,
-              timeoutMs: options?.timeoutMs,
-            })) satisfies typeof dispatchGatewayMethodInProcess)
-        : undefined);
-    subagentAnnounceDeps = overrides
-      ? {
-          ...defaultSubagentAnnounceDeps,
-          ...overrides,
-          ...(dispatchGatewayMethodInProcessOverride
-            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
-            : {}),
-        }
-      : defaultSubagentAnnounceDeps;
-  },
-};

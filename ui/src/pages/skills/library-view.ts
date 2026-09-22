@@ -3,18 +3,18 @@ import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/modal-dialog.ts";
 import {
   renderSettingsEmpty,
   renderSettingsSection,
   renderSettingsSegmented,
-  renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
 import { renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
+import { renderSkillLibraryStatus } from "./skill-status.ts";
 
 export function renderSkillLibrary(library: SkillLibraryController) {
   const list = library.list;
@@ -167,12 +167,7 @@ export function renderSkillLibrary(library: SkillLibraryController) {
                               >
                             </button>
                             <div class="settings-row__control">
-                              ${renderSettingsStatus({
-                                kind: entry.enabled ? "ok" : "muted",
-                                label: t(
-                                  entry.enabled ? "skillsPage.enabled" : "skillsPage.disabled",
-                                ),
-                              })}
+                              ${renderSkillLibraryStatus(entry.enabled)}
                             </div>
                           </div>`,
                         ),

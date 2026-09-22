@@ -1,3 +1,7 @@
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
@@ -20,6 +24,7 @@ import {
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
@@ -29,11 +34,8 @@ import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  loadGatewaySessionLifecycleSnapshot,
-} from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const {
   parentKey,
@@ -43,7 +45,6 @@ const {
   listChildren,
   spawnCollectors,
   createQueuedReservation,
-  observeLifecycle,
 } = useQueuedCollectorFixture();
 
 async function expectUnstartedChildHistory(
@@ -86,108 +87,117 @@ describe("queued collector session projection", () => {
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
-    observeLifecycle(
-      createLifecycleEventBroadcastHandler({
-        broadcastToConnIds: broadcast,
-        sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-        chatAbortControllers: context.chatAbortControllers,
-      }),
-    );
-    const results = await spawnCollectors();
-    const first = expectDefined(results[0], "first collector");
-    const second = expectDefined(results[1], "second collector");
-    expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-    await vi.waitFor(() => expect(launchedRunIds).toEqual([first.runId]));
+    const publications: Promise<void>[] = [];
+    const publishLifecycle = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds: broadcast,
+      sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
+      chatAbortControllers: context.chatAbortControllers,
+      getSessionRowProjection: () => getSessionRowProjection(context),
+    });
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      publications.push(publishLifecycle(event));
+    });
     try {
-      const rows = (await listChildren(context)).sessions;
-      expect(rows.map((row) => row.key).toSorted()).toEqual(
-        results
-          .map((result) => expectDefined(result.childSessionKey, "accepted child key"))
-          .toSorted(),
-      );
-      for (const [index, result] of results.entries()) {
-        const row = expectDefined(
-          rows.find((candidate) => candidate.key === result.childSessionKey),
-          "collector session row",
+      const results = await spawnCollectors();
+      const first = expectDefined(results[0], "first collector");
+      const second = expectDefined(results[1], "second collector");
+      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+      await vi.waitFor(() => expect(launchedRunIds).toEqual([first.runId]));
+      try {
+        const rows = (await listChildren(context)).sessions;
+        expect(rows.map((row) => row.key).toSorted()).toEqual(
+          results
+            .map((result) => expectDefined(result.childSessionKey, "accepted child key"))
+            .toSorted(),
         );
-        expect.soft(row).toMatchObject({
-          label: index === 0 ? "Collector A" : "Collector B",
+        for (const [index, result] of results.entries()) {
+          const row = expectDefined(
+            rows.find((candidate) => candidate.key === result.childSessionKey),
+            "collector session row",
+          );
+          expect.soft(row).toMatchObject({
+            label: index === 0 ? "Collector A" : "Collector B",
+            swarmGroupId: `swarm:${parentKey}:parent-turn`,
+            subagentRunState: "active",
+            hasActiveRun: true,
+            status: index === 0 ? "running" : "queued",
+          });
+        }
+        const queued = expectDefined(
+          rows.find((row) => row.key === second.childSessionKey),
+          "queued child",
+        );
+        expect.soft(queued.startedAt).toBeUndefined();
+        expect.soft(queued.runtimeMs).toBeUndefined();
+        expect(queued.activeRunIds).toEqual([second.runId]);
+        await expectUnstartedChildHistory(context, queued.key, [second.runId!]);
+        await Promise.all(publications);
+        const created = broadcast.mock.calls.find(
+          ([, event]) => event.sessionKey === second.childSessionKey && event.reason === "create",
+        )?.[1];
+        expect.soft(created).toMatchObject({
+          label: "Collector B",
           swarmGroupId: `swarm:${parentKey}:parent-turn`,
           subagentRunState: "active",
           hasActiveRun: true,
-          status: index === 0 ? "running" : "queued",
+          status: "queued",
         });
-      }
-      const queued = expectDefined(
-        rows.find((row) => row.key === second.childSessionKey),
-        "queued child",
-      );
-      expect.soft(queued.startedAt).toBeUndefined();
-      expect.soft(queued.runtimeMs).toBeUndefined();
-      expect(queued.activeRunIds).toEqual([second.runId]);
-      await expectUnstartedChildHistory(context, queued.key, [second.runId!]);
-      const created = broadcast.mock.calls.find(
-        ([, event]) => event.sessionKey === second.childSessionKey && event.reason === "create",
-      )?.[1];
-      expect.soft(created).toMatchObject({
-        label: "Collector B",
-        swarmGroupId: `swarm:${parentKey}:parent-turn`,
-        subagentRunState: "active",
-        hasActiveRun: true,
-        status: "queued",
-      });
-      expect.soft(created?.startedAt).toBeUndefined();
-      expect.soft(created?.runtimeMs).toBeNull();
-      expect
-        .soft(rows.filter((row) => row.swarmGroupId === queued.swarmGroupId && row.hasActiveRun))
-        .toHaveLength(2);
+        expect.soft(created?.startedAt).toBeUndefined();
+        expect.soft(created?.runtimeMs).toBeNull();
+        expect
+          .soft(rows.filter((row) => row.swarmGroupId === queued.swarmGroupId && row.hasActiveRun))
+          .toHaveLength(2);
 
-      const stopResponse = vi.fn();
-      await expectDefined(
-        sessionAbortHandlers["sessions.abort"],
-        "sessions.abort handler",
-      )({
-        req: { type: "req", id: "stop-queued-child", method: "sessions.abort" },
-        params: { key: second.childSessionKey, agentId: "main", clearQueued: true },
-        client: operatorClient(),
-        isWebchatConnect: () => false,
-        context,
-        respond: stopResponse,
-      });
-      expect(stopResponse).toHaveBeenCalledWith(
-        true,
-        { ok: true, status: "aborted", abortedRunId: second.runId },
-        undefined,
-        undefined,
-      );
-      releaseSwarmRun(first.runId!);
-      const stopped = (await listChildren(context)).sessions.find(
-        (row) => row.key === second.childSessionKey,
-      );
-      expect(stopped).toMatchObject({
-        label: "Collector B",
-        status: "killed",
-        hasActiveRun: false,
-      });
-      expect(stopped?.startedAt).toBeUndefined();
-      expect(stopped?.runtimeMs).toBeUndefined();
-      await expectUnstartedChildHistory(context, queued.key, []);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: queued.key,
-          reason: "abort",
+        const stopResponse = vi.fn();
+        await expectDefined(
+          sessionAbortHandlers["sessions.abort"],
+          "sessions.abort handler",
+        )({
+          req: { type: "req", id: "stop-queued-child", method: "sessions.abort" },
+          params: { key: second.childSessionKey, agentId: "main", clearQueued: true },
+          client: operatorClient(),
+          isWebchatConnect: () => false,
+          context,
+          respond: stopResponse,
+        });
+        expect(stopResponse).toHaveBeenCalledWith(
+          true,
+          { ok: true, status: "aborted", abortedRunId: second.runId },
+          undefined,
+          undefined,
+        );
+        releaseSwarmRun(first.runId!);
+        const stopped = (await listChildren(context)).sessions.find(
+          (row) => row.key === second.childSessionKey,
+        );
+        expect(stopped).toMatchObject({
+          label: "Collector B",
           status: "killed",
           hasActiveRun: false,
-          activeRunIds: [],
-        }),
-        new Set(["observer"]),
-        expect.any(Object),
-      );
-      expect(launchedRunIds).toEqual([first.runId]);
+        });
+        expect(stopped?.startedAt).toBeUndefined();
+        expect(stopped?.runtimeMs).toBeUndefined();
+        await expectUnstartedChildHistory(context, queued.key, []);
+        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            sessionKey: queued.key,
+            reason: "abort",
+            status: "killed",
+            hasActiveRun: false,
+            activeRunIds: [],
+          }),
+          new Set(["observer"]),
+          expect.any(Object),
+        );
+        expect(launchedRunIds).toEqual([first.runId]);
+      } finally {
+        removeQueuedSwarmRun(second.runId!);
+        releaseSwarmRun(first.runId!);
+      }
     } finally {
-      removeQueuedSwarmRun(second.runId!);
-      releaseSwarmRun(first.runId!);
+      unsubscribe();
+      await Promise.all(publications);
     }
   });
 
@@ -311,12 +321,15 @@ describe("queued collector session projection", () => {
       { sessionId: "parent-session", updatedAt: Date.now() },
     );
     const afterStaleGrace = Date.now() + 3 * 60 * 60_000;
-    const exactChild = () =>
-      loadGatewaySessionLifecycleSnapshot(entry.childSessionKey, { now: afterStaleGrace }).row;
-    const exactParent = () =>
-      loadGatewaySessionLifecycleSnapshot(parentKey, { now: afterStaleGrace }).row;
-    expect(exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
-    expect(exactParent()?.hasActiveSubagentRun).toBe(true);
+    const projection = expectDefined(getSessionRowProjection(requestContext()), "queued row owner");
+    const read = async (key: string) => {
+      await projection.ensureMaterialized();
+      return projection.snapshot({ key, agentId: "main" }, { now: afterStaleGrace }).row;
+    };
+    const exactChild = () => read(entry.childSessionKey);
+    const exactParent = () => read(parentKey);
+    expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
+    expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
       loadSubagentSessionListRunsFromSqlite().get(entry.runId),
       "compact queued record",
@@ -331,8 +344,8 @@ describe("queued collector session projection", () => {
     expect(replacement).not.toBe(entry);
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(isSubagentRunQueued(replacement)).toBe(false);
-    expect(exactChild()?.hasActiveSubagentRun).toBe(false);
-    expect(exactParent()?.hasActiveSubagentRun).not.toBe(true);
+    expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
+    expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
     expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
 
     removeQueuedSwarmRun(entry.runId);
@@ -345,12 +358,12 @@ describe("queued collector session projection", () => {
     registerSubagentRun(registration);
     const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
     expect(isSubagentRunQueued(current)).toBe(true);
-    expect(exactChild()?.hasActiveSubagentRun).toBe(true);
-    expect(exactParent()?.hasActiveSubagentRun).toBe(true);
+    expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
+    expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     schedulerTesting.reset();
     expect(isSubagentRunQueued(current)).toBe(false);
-    expect(exactChild()?.hasActiveSubagentRun).toBe(false);
-    expect(exactParent()?.hasActiveSubagentRun).not.toBe(true);
+    expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
+    expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
     expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
   });
 

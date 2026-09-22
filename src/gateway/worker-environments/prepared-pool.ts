@@ -96,6 +96,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     return settings;
   };
   const runPass = async () => {
+    await store.ready();
     current();
     const inventory = store.list();
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
@@ -189,6 +190,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     };
     const reconcile = async (record: WorkerEnvironmentRecord) => {
       current();
+      let retirementReason: "expired" | "invalidated" | undefined;
+      let retirement: ReturnType<typeof retire>;
       const beforeReconcile = () => {
         current();
         const owned = store.get(record.environmentId);
@@ -202,7 +205,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const key = groupKey(owned);
         const generation = key ? eligible.get(key) : undefined;
         if (owned.preparation.expiresAtMs <= now()) {
-          retire(owned, "expired");
+          retirementReason = "expired";
         } else if (
           !generation?.retention ||
           generation.preparationKey !== owned.preparation.key ||
@@ -211,7 +214,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             ...policy(owned),
           })
         ) {
-          retire(owned, "invalidated");
+          retirementReason = "invalidated";
         } else {
           try {
             assertGenerationCurrent(generation);
@@ -219,11 +222,26 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             current();
             // Queued allocation may already own a lease. Preserve its cleanup
             // obligation even when local policy or admission changed while waiting.
-            retire(owned, "invalidated");
+            retirementReason = "invalidated";
           }
         }
+        if (retirementReason) {
+          retirement ??= retire(owned, retirementReason);
+          // Queue before lifecycle cleanup writes; the operation is joined on unwind below.
+          void retirement?.catch(() => {});
+          throw new Error("Prepared worker no longer satisfies its maintenance policy");
+        }
       };
-      beforeReconcile();
+      try {
+        beforeReconcile();
+      } catch (error) {
+        if (!retirementReason) {
+          throw error;
+        }
+        await retirement;
+        retirement = undefined;
+        retirementReason = undefined;
+      }
       const latest = store.get(record.environmentId);
       if (latest?.preparation?.consumedAtMs === null) {
         const controller = new AbortController();
@@ -234,8 +252,17 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             AbortSignal.any([signal, controller.signal]),
             beforeReconcile,
           );
+        } catch (error) {
+          if (retirement) {
+            const retiring = await retirement;
+            if (retiring) {
+              await options.reconcile(retiring, signal, current);
+            }
+          }
+          throw error;
         } finally {
           preparations.delete(record.environmentId);
+          await retirement;
         }
       }
     };
@@ -252,7 +279,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         },
       });
     const cleaned = new Set<string>();
-    const retain = (requireRetention: boolean) => {
+    const retain = async (requireRetention: boolean) => {
       const kept = new Map<string, number>();
       let totalKept = 0;
       const cleanup: WorkerEnvironmentRecord[] = [];
@@ -283,7 +310,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             count < limits.target) &&
           totalKept < limits.maxTotal;
         if (record.destroyRequestedAtMs === null && !valid) {
-          retire(record, expired ? "expired" : "invalidated");
+          await retire(record, expired ? "expired" : "invalidated");
         } else if (record.destroyRequestedAtMs === null && key) {
           kept.set(key, count + 1);
           totalKept += 1;
@@ -302,7 +329,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     };
     // Expiry and disabled/surplus capacity need no source or artifact admission.
     // Drain that cleanup first so unrelated GitHub latency cannot hold its owner.
-    await reconcileAll(retain(false).cleanup);
+    await reconcileAll((await retain(false)).cleanup);
     for (const [key, generation] of eligible) {
       try {
         generation.retention = await options.prepareRetention(generation.source, signal);
@@ -318,7 +345,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         );
       }
     }
-    await reconcileAll(retain(true).cleanup);
+    await reconcileAll((await retain(true)).cleanup);
     let plannedTotal = 0;
     for (const [key, generation] of eligible) {
       current();
@@ -371,7 +398,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         );
       }
     }
-    const retained = retain(true);
+    const retained = await retain(true);
     await reconcileAll(retained.cleanup);
     const work = retained.work;
     for (const generation of eligible.values()) {
@@ -383,7 +410,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       const project = readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
       for (let index = 0; index < generation.slots!; index += 1) {
         current();
-        const admitted = store.ensurePreparedIntent({
+        const admitted = await store.ensurePreparedIntent({
           intent: {
             ...deriveEnvironmentIntent(`prepared:${randomUUID()}`),
             providerId: intent.providerId,
@@ -507,12 +534,14 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       return false;
     }
   };
-  const cancelPreparation = (environmentId: string) => {
+  const cancelPreparation = async (environmentId: string) => {
+    await store.ready();
     const record = store.get(environmentId);
-    if (record?.preparation && retire(record, "invalidated")) {
+    const controller = preparations.get(environmentId);
+    if (record?.preparation && (await retire(record, "invalidated"))) {
       // The durable cancellation fences readiness; the lifecycle retains provider
       // custody until its aborted operation and physical cleanup actually settle.
-      preparations.get(environmentId)?.abort();
+      controller?.abort();
     }
   };
   return { schedule, noteDemand, candidates, maintain, canPruneDemand, cancelPreparation };

@@ -20,6 +20,7 @@ import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
+  createPluginSdkApiDiffSet,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -382,8 +383,10 @@ async function main(): Promise<void> {
     process.stdout.write(report);
     if (args.jsonPath) {
       const diff = args.bases
-        ? Object.fromEntries(
-            comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+        ? createPluginSdkApiDiffSet(
+            Object.fromEntries(
+              comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+            ),
           )
         : primary.diff;
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);

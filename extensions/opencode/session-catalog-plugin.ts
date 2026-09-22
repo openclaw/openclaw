@@ -211,6 +211,7 @@ function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
     terminalCommand: OPENCODE_TERMINAL_RESUME_COMMAND,
     sessionIdPattern: SESSION_ID_PATTERN,
     executable: "opencode",
+    hasActiveWork: () => false,
     args: (threadId) => ["--session", threadId],
     listAvailable: available,
     terminalAvailable: available,

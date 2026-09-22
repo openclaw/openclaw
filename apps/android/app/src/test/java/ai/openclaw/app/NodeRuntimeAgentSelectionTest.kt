@@ -8,10 +8,12 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -476,6 +478,101 @@ class NodeRuntimeAgentSelectionTest {
   }
 
   @Test
+  fun reconnectKeepsSelectedAgentBeforeTheAgentListReturns() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseList = CompletableDeferred<Unit>()
+      try {
+        val agentRefreshes = answerAgentList(runtime, "main", "scout", beforeAnswer = { releaseList.await() })
+        runtime.selectChatAgent("scout")
+
+        reconnectOperator(runtime, disconnectCallbacks = 2)
+        val refresh = withTimeout(2_000) { agentRefreshes.receive() }
+        // Talk can start as soon as hello publishes connection readiness, before metadata returns.
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+
+        releaseList.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseList.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun lateAgentListCannotEraseANewerPickerChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseList = CompletableDeferred<Unit>()
+      try {
+        val agentRefreshes = answerAgentList(runtime, "main", "scout", beforeAnswer = { releaseList.await() })
+        runtime.selectChatAgent("scout")
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { agentRefreshes.receive() }
+
+        runtime.selectChatAgent("ops")
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        releaseList.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+
+        val current = answerAgentList(runtime, "main", "scout", "ops")
+        reconnectOperator(runtime)
+        awaitAgentRefresh(current)
+        assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseList.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun removedAgentFallsBackToGatewayDefaultAfterReconnect() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        answerAgentList(runtime, "main", "scout")
+        runtime.selectChatAgent("scout")
+
+        val withoutScout = answerAgentList(runtime, "main")
+        reconnectOperator(runtime)
+        awaitAgentRefresh(withoutScout)
+        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // The fallback forgets the removed choice instead of resurrecting it later.
+        val withScout = answerAgentList(runtime, "main", "scout")
+        reconnectOperator(runtime)
+        runtime.refreshAgents()
+        awaitAgentRefresh(withScout)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun switchingGatewayRetiresThePreviousAgentChoice() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        answerAgentList(runtime, "main", "scout")
+        runtime.selectChatAgent("scout")
+        runtime.prepareForGatewaySetup()
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18790))
+
+        reconnectOperator(runtime)
+        assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun currentChatHydrationPreservesSelectionPublishedWhileItWaits() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -832,6 +929,8 @@ class NodeRuntimeAgentSelectionTest {
     val archiveRequested = CompletableDeferred<Unit>()
     val releaseArchive = CompletableDeferred<Unit>()
     val lookupStarted = AtomicReference<CompletableDeferred<Job>?>(null)
+    val mainAdoptionStarted = AtomicReference<CompletableDeferred<Job>?>(null)
+    val releaseInitialAdoption = CompletableDeferred<Unit>()
     val preservesChoice = archiveAckOrder !in setOf(ArchiveAckOrder.Active, ArchiveAckOrder.AfterAgentSwitch)
     val archiveSessionId = if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) "replacement-$chosenKey" else "session-$chosenKey"
     var exactLookups = 0
@@ -874,6 +973,7 @@ class NodeRuntimeAgentSelectionTest {
             assertEquals(JsonPrimitive("scout"), request["agentId"])
             assertEquals(JsonPrimitive(archiveSessionId), request["expectedSessionId"])
             assertEquals(JsonPrimitive(true), request["archived"])
+            assertEquals("session-$chosenKey", runtime.chatSessionId.value)
             description.set(RememberedSessionState.ArchivedAck)
             archiveRequested.complete(Unit)
             releaseArchive.await()
@@ -883,6 +983,10 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.describe" -> {
+            mainAdoptionStarted.get()?.complete(currentCoroutineContext().job)
+            if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) {
+              releaseInitialAdoption.await()
+            }
             check(request.keys.all { it in setOf("key", "includeDerivedTitles", "includeLastMessage") })
             val key = request.getValue("key").jsonPrimitive.content
             val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
@@ -939,19 +1043,44 @@ class NodeRuntimeAgentSelectionTest {
       }
       installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
 
-      suspend fun selectAgentAndWait(agentId: String) {
+      suspend fun selectAgentAndWait(
+        agentId: String,
+        verifyDelayedAdoption: Boolean = false,
+      ) {
         val started = CompletableDeferred<Job>()
+        val mainAdoption = CompletableDeferred<Job>()
         lookupStarted.set(started)
+        mainAdoptionStarted.set(mainAdoption)
         runtime.selectChatAgent(agentId)
         withTimeout(2_000) {
-          started.await().join()
-          runtime.chatSessionId.first { it != null }
-          runtime.chatHistoryLoading.first { !it }
+          suspend fun awaitSelection() {
+            started.await().join()
+            // Main adoption can refresh the selected chat after the selector has finished.
+            mainAdoption.await().join()
+            runtime.chatSessionId.first { it != null }
+            runtime.chatHistoryLoading.first { !it }
+          }
+
+          if (verifyDelayedAdoption) {
+            val adoption = mainAdoption.await()
+            started.await().join()
+            runtime.chatSessionId.first { it == "session-$chosenKey" }
+            runtime.chatHistoryLoading.first { !it }
+            assertFalse(adoption.isCompleted)
+            // The old waits are already satisfied; run inline to prove adoption still blocks completion.
+            val selection = async(start = CoroutineStart.UNDISPATCHED) { awaitSelection() }
+            assertFalse("Selection must wait for the held main adoption", selection.isCompleted)
+            releaseInitialAdoption.complete(Unit)
+            selection.await()
+          } else {
+            awaitSelection()
+          }
         }
         lookupStarted.compareAndSet(started, null)
+        mainAdoptionStarted.compareAndSet(mainAdoption, null)
       }
 
-      selectAgentAndWait("scout")
+      selectAgentAndWait("scout", verifyDelayedAdoption = archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity)
       assertEquals(chosenKey, runtime.chatSessionKey.value)
 
       runtime.switchChatSession(chosenKey, "scout")
@@ -1065,6 +1194,7 @@ class NodeRuntimeAgentSelectionTest {
         }
       }
     } finally {
+      releaseInitialAdoption.complete(Unit)
       releaseArchive.complete(Unit)
       closeNodeRuntimeTestFixture(runtime)
     }
@@ -1404,6 +1534,62 @@ class NodeRuntimeAgentSelectionTest {
       }
     }
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", request)
+  }
+
+  // Report the refresh coroutine so the assertion can distinguish hello from metadata settlement.
+  private fun answerAgentList(
+    runtime: NodeRuntime,
+    vararg agentIds: String,
+    beforeAnswer: suspend () -> Unit = {},
+  ): Channel<Job> {
+    val agents = agentIds.joinToString(",") { """{"id":"$it"}""" }
+    val refreshes = Channel<Job>(Channel.UNLIMITED)
+    runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+      when (method) {
+        "agents.list" -> {
+          refreshes.send(currentCoroutineContext().job)
+          beforeAnswer()
+          """{"defaultId":"main","mainKey":"main","agents":[$agents]}"""
+        }
+
+        "models.list" -> {
+          """{"models":[]}"""
+        }
+
+        "models.authStatus" -> {
+          """{"providers":[]}"""
+        }
+
+        else -> {
+          "{}"
+        }
+      }
+    }
+    return refreshes
+  }
+
+  private suspend fun awaitAgentRefresh(refreshes: Channel<Job>) {
+    withTimeout(2_000) { refreshes.receive().join() }
+  }
+
+  // Drives the operator session's own callbacks, as a gateway restart does.
+  private fun reconnectOperator(
+    runtime: NodeRuntime,
+    disconnectCallbacks: Int = 1,
+  ) {
+    val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
+    repeat(disconnectCallbacks) { onDisconnected("Gateway closed") }
+    ReflectionHelpers.getField<(GatewayHelloSummary) -> Unit>(session, "onConnected")(
+      GatewayHelloSummary(
+        serverName = "Test gateway",
+        remoteAddress = "127.0.0.1:18789",
+        serverVersion = null,
+        mainSessionKey = "agent:main:main",
+        updateAvailable = null,
+        authScopes = listOf("operator.read"),
+      ),
+    )
   }
 
   private fun createConnectedRuntime(): NodeRuntime {

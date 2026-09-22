@@ -345,7 +345,7 @@ async function runBoundaryVerification(params: {
 async function runBoundaryControl(params: {
   launcherPath: string;
   identityFilePath: string;
-  signal: "SIGCONT" | "SIGUSR1" | "SIGUSR2";
+  signal: "SIGCONT" | "SIGUSR2" | "SIGQUIT";
 }) {
   await runBoundaryLauncherCommand({
     args: ["--signal", params.signal, params.identityFilePath],
@@ -721,7 +721,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
 
   const signal = async (
     identity: QaGatewayVerifiedProcessIdentity,
-    signalName: "SIGCONT" | "SIGUSR1" | "SIGUSR2",
+    signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
   ) => {
     await runBoundaryControl({
       launcherPath: params.launcherPath,

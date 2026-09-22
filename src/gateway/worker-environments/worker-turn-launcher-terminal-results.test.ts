@@ -7,10 +7,8 @@ import {
   type WorkerLiveEventParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import {
-  buildAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
-} from "../../agents/agent-run-terminal-reply.js";
+import { buildAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
@@ -65,15 +63,15 @@ import {
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("revalidates a credential replaced during synchronous live publication before terminal ACK", async () => {
+  it("revalidates a credential replaced during live publication before terminal ACK", async () => {
     const { apply, liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-live-reentrant-credential",
       "session-live-reentrant-credential",
       { liveEvents },
     );
     apply.mockImplementationOnce(async () => {
-      support.testState.store.renewCredential({
+      await support.testState.store.renewCredential({
         environmentId: identity.environmentId,
         expectedOwnerEpoch: identity.ownerEpoch,
         sessionId: identity.sessionId,
@@ -133,7 +131,7 @@ describe("worker turn launcher terminal results", () => {
       });
       const service = createWorkerEnvironmentService({
         store: {
-          ...createWorkerEnvironmentStore({ database }),
+          ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: ENVIRONMENT_ID,
@@ -303,7 +301,7 @@ describe("worker turn launcher terminal results", () => {
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
       };
@@ -522,7 +520,7 @@ describe("worker turn launcher terminal results", () => {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
@@ -632,7 +630,7 @@ describe("worker turn launcher terminal results", () => {
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => ({
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,

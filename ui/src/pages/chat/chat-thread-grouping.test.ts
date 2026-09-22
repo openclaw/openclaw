@@ -194,6 +194,25 @@ describe("forwarded source-session grouping", () => {
     ]);
   });
 
+  it("keeps distinct automation labels on identical reports from the same source session", () => {
+    const groups = cachedGroups(
+      ["Daily report", "Renamed report"].map((label) =>
+        Object.assign(forwardedMessage("agent:main:cron:daily:run:first"), {
+          senderSession: { sessionKey: "agent:main:cron:daily:run:first", agentId: "main", label },
+        }),
+      ),
+    );
+
+    expect(groups.map((group) => group.senderSession?.label)).toEqual([
+      "Daily report",
+      "Renamed report",
+    ]);
+    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
   it.each([
     { senderSession: { sessionKey: "agent:main:main", agentId: "main" } },
     { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
@@ -220,6 +239,7 @@ describe("forwarded source-session grouping", () => {
   it.each([
     { sessionKey: "agent:main:dashboard:other", agentId: "main" },
     { sessionKey: "agent:main:main", agentId: "updated" },
+    { sessionKey: "agent:main:main", agentId: "main", label: "Automation name" },
   ])("refreshes cached attribution when the source changes to %o", (senderSession) => {
     const message = forwardedMessage("agent:main:main");
     const initial = cachedGroups([message]);
@@ -230,6 +250,29 @@ describe("forwarded source-session grouping", () => {
     expect(refreshed[0]?.senderSession).toEqual(senderSession);
     expect(refreshed[0]).not.toBe(initial[0]);
   });
+
+  it.each(["Renamed report", undefined])(
+    "refreshes the displayed automation label after a rename or removal: %s",
+    (label) => {
+      const senderSession: { sessionKey: string; agentId: string; label?: string } = {
+        sessionKey: "agent:main:cron:daily:run:first",
+        agentId: "main",
+        label: "Daily report",
+      };
+      const message = {
+        ...forwardedMessage("agent:main:cron:daily:run:first"),
+        senderSession,
+      };
+      const initial = cachedGroups([message]);
+      expect(initial[0]?.senderSession?.label).toBe("Daily report");
+
+      message.senderSession.label = label;
+      const refreshed = cachedGroups([message]);
+
+      expect(refreshed[0]?.senderSession?.label).toBe(label);
+      expect(refreshed[0]).not.toBe(initial[0]);
+    },
+  );
 });
 
 describe("cached group content classification", () => {
@@ -451,7 +494,7 @@ describe("explicit answer visibility across continuations", () => {
           ownership === "independent-run" ? [messages[1]] : [messages[1], ...messages.slice(3)],
         );
         if (ownership === "independent-run") {
-          expect(work[0]?.durationMs).toBe(2);
+          expect(work[0]?.durationMs).toBeNull();
         }
         const activity = items.filter((item) => item.kind === "activity-run");
         expect(
@@ -508,7 +551,7 @@ describe("explicit answer visibility across continuations", () => {
         item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
       ),
     ).toEqual([[messages[1], messages[3], messages[5], messages[6]], [messages[8]]]);
-    expect(work[0]?.durationMs).toBe(6);
+    expect(work[0]?.durationMs).toBeNull();
     expect(
       items
         .filter((item) => item.kind === "group")

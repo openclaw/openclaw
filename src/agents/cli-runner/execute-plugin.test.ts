@@ -746,6 +746,13 @@ describe("plugin-owned CLI execution host boundary", () => {
       error: "without a terminal result",
     },
     {
+      name: "an interim result without its continuation final",
+      async *execute() {
+        yield { ...SUCCESS_RESULT, openclaw_interim_result: true };
+      },
+      error: "without a terminal result",
+    },
+    {
       name: "a plugin failure after an otherwise successful result",
       async *execute() {
         yield SUCCESS_RESULT;

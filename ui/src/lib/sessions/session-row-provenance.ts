@@ -16,6 +16,7 @@ export type SessionRowFieldSelector = (
 type FieldSource = Readonly<{
   revision: number;
   updatedAt: number | null;
+  snapshotAt?: number;
   event?: true;
   readCutoff?: number;
 }>;
@@ -29,6 +30,7 @@ export function createSessionWriteObservation(
   revision: number,
   updatedAt: number | null,
   readCutoff?: number,
+  snapshotAt?: number,
 ): FieldObservation {
   return {
     source: {
@@ -36,11 +38,21 @@ export function createSessionWriteObservation(
       updatedAt,
       event: true,
       ...(readCutoff !== undefined ? { readCutoff } : {}),
+      ...(snapshotAt !== undefined ? { snapshotAt } : {}),
     },
   };
 }
 
 function isNewerSource(candidate: FieldSource, current: FieldSource) {
+  // Event snapshots and cached list pages share the Gateway's sampling clock.
+  // Request/delivery order and persisted updatedAt cannot order runtime-only changes.
+  if (
+    candidate.snapshotAt !== undefined &&
+    current.snapshotAt !== undefined &&
+    candidate.snapshotAt !== current.snapshotAt
+  ) {
+    return candidate.snapshotAt > current.snapshotAt;
+  }
   if (
     (candidate.event || current.event) &&
     candidate.updatedAt !== null &&
@@ -96,6 +108,7 @@ const identityFields = new Set(["key", "sessionId", "agentId"]);
 /** Field receipts follow row copies without retaining another store of row values. */
 export function createSessionRowProvenance() {
   let observationsByRow = new WeakMap<GatewaySessionRow, RowObservation>();
+  const completedSelfMerges = new WeakSet<RowObservation>();
   const owner = (row: GatewaySessionRow, agentId?: string | null) => {
     const resolved =
       parseAgentSessionKey(row.key)?.agentId ??
@@ -175,7 +188,9 @@ export function createSessionRowProvenance() {
     }
     const readAgentId =
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId?.trim() ?? agentId?.trim();
-    const read: FieldObservation = { source: { revision, updatedAt: row.updatedAt ?? null } };
+    const read: FieldObservation = {
+      source: { revision, updatedAt: row.updatedAt ?? null, snapshotAt: row.snapshotAt },
+    };
     for (const [name, writer] of writers) {
       const source = (fields.get(name) ?? read).source;
       if (isNewerSource(source, writer)) {
@@ -219,12 +234,16 @@ export function createSessionRowProvenance() {
     offered: GatewaySessionRow,
     agentId?: string | null,
   ): GatewaySessionRow => {
+    const observed = current === offered ? observationsByRow.get(current) : undefined;
+    if (observed && completedSelfMerges.has(observed)) {
+      return current;
+    }
     const key = identity(current, agentId);
     if (!key || key !== identity(offered, agentId)) {
       return current;
     }
-    const currentMetadata = metadata(current, agentId);
-    if (current === offered && observationsByRow.has(current)) {
+    const currentMetadata = observed ?? metadata(current, agentId);
+    if (observed) {
       // Self-projection can admit event writers without changing any row values.
       let fields: Map<string, FieldObservation> | undefined;
       for (const [field, observation] of currentMetadata.fields) {
@@ -234,12 +253,17 @@ export function createSessionRowProvenance() {
           fields.set(field, merged);
         }
       }
+      const settled = fields ? { ...currentMetadata, fields } : currentMetadata;
       if (fields) {
-        observationsByRow.set(current, { ...currentMetadata, fields });
+        observationsByRow.set(current, settled);
       }
+      // Only completed, valid self-merges are reusable; every receipt writer replaces this record.
+      completedSelfMerges.add(settled);
       return current;
     }
     const offeredMetadata = metadata(offered, agentId);
+    // Keep the request high-water mark for late-descriptor admission even when
+    // individual fields retain facts from a newer-sampled, earlier-issued read.
     const offeredReadIsNewer =
       offeredMetadata.read.source.revision > currentMetadata.read.source.revision;
     const base = offeredReadIsNewer ? offered : current;

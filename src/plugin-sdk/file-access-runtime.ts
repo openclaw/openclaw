@@ -16,14 +16,26 @@ export {
   readLocalFileFromRoots,
   readRegularFile,
   readRegularFileSync,
+  readSecureFile,
   root,
   statRegularFile,
   statRegularFileSync,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-export { assertNoSymlinkParents, assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
+export {
+  assertNoSymlinkParents,
+  assertNoSymlinkParentsSync,
+  readFileHandleBounded,
+  resolvePathPrefixSync,
+  tempFile,
+} from "../infra/fs-safe-advanced.js";
+export { readFileWindowFully } from "../infra/file-read.js";
+export { inspectPathPermissions } from "../infra/permissions.js";
+export { writeFileWindowFully } from "../infra/file-descriptor.js";
+export { openRootFile } from "../infra/boundary-file-read.js";
 export {
   ensureDurableDirectory,
+  sha256File,
   syncDirectory,
   type DirectorySyncOutcome,
 } from "../infra/directory-durability.js";

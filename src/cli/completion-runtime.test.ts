@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { expectInstalledCompletionProfile } from "./completion-profile.test-support.js";
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
@@ -111,7 +112,11 @@ describe("completion-runtime", () => {
 
         const profilePath = path.join(configDir, testCase.profileName);
         expect(resolveCompletionProfilePath(testCase.shell)).toBe(profilePath);
-        await expect(fs.readFile(profilePath, "utf-8")).resolves.toContain(cachePath);
+        expectInstalledCompletionProfile(
+          await fs.readFile(profilePath, "utf-8"),
+          testCase.shell,
+          cachePath,
+        );
         await expect(isCompletionInstalled(testCase.shell, "openclaw")).resolves.toBe(true);
 
         if (testCase.shell === "zsh") {
@@ -735,9 +740,12 @@ describe("completion-runtime", () => {
     },
   );
 
-  it("quotes Fish reload profile paths containing spaces", () => {
+  it("quotes Fish reload profile paths containing spaces and backslashes", () => {
     expect(formatCompletionReloadCommand("fish", "/tmp/Ada's !42 Lovelace/config.fish")).toBe(
       "source '/tmp/Ada\\'s !42 Lovelace/config.fish'",
+    );
+    expect(formatCompletionReloadCommand("fish", String.raw`C:\Users\Ada's !42\config.fish`)).toBe(
+      String.raw`source 'C:\\Users\\Ada\'s !42\\config.fish'`,
     );
   });
 

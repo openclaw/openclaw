@@ -101,6 +101,7 @@ describe("persistent session roster", () => {
       status: "running",
       runtimeMs: 30,
       runtimeSampledAt: 40,
+      snapshotAt: 50,
       agentStatus: undefined,
       observerDigest: undefined,
       swarmPhase: "working",
@@ -116,7 +117,7 @@ describe("persistent session roster", () => {
     persistSessionRoster(source);
     await flushSessionRosters();
     expect(writes).toHaveBeenCalledOnce();
-    expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel/u);
+    expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel|snapshotAt/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
     expect(saved).toMatchObject({
       groups: ["Work"],
@@ -143,9 +144,10 @@ describe("persistent session roster", () => {
       },
     });
     expect(JSON.stringify(saved)).not.toMatch(
-      /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
+      /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|snapshotAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
     );
     expect(row.hasActiveRun).toBe(true);
+    expect(row.snapshotAt).toBe(50);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
     await putRaw(source);
     const oldWriter = await sessionRosterCache.read(source.scope, expected);
@@ -155,6 +157,7 @@ describe("persistent session roster", () => {
     });
     expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModel");
     expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModelProvider");
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("snapshotAt");
   });
 
   it("never persists Incognito rows and drops them from an older stored record", async () => {

@@ -71,6 +71,8 @@ describe("devices exec approvals rendering", () => {
     expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
     expect(ask?.value).toBe("on-miss");
     expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
+    expect(section.textContent).not.toContain("Using default");
+    expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
   });
 
   it("offers only nodes that support both reading and writing approval policy", () => {

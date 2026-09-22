@@ -32,7 +32,7 @@ import { createChatRunState, createSessionMessageSubscriberRegistry } from "./se
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type * as GatewayMethodTypes from "./server-methods/types.js";
-import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -1139,17 +1139,5 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("does not split surrogate pairs at the length limit", () => {
     const prefix = "x".repeat(63);
     expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
-  });
-});
-
-describe("formatError", () => {
-  test("prefers message for Error", () => {
-    expect(formatError(new Error("boom"))).toBe("boom");
-  });
-
-  test("handles status/code", () => {
-    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
-    expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
-    expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });
 });

@@ -286,14 +286,14 @@ describe("qa scenario catalog channel contracts", () => {
     const compactionFlow = JSON.stringify(compaction.execution.flow);
 
     expect(semanticFlow).toContain(
-      "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
+      "readTelegramMessages().slice(startIndex).some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
     );
     expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
     expect(semanticFlow).not.toContain('"set":"expectedNormalized"');
-    expect(semanticFlow).toContain("qaImport('node:util')");
-    expect(semanticFlow).toContain(
-      "isDeepStrictEqual(structuredClone(actual), structuredClone(fixture.expectedChunks))",
-    );
+    expect(semanticFlow).toContain("actual.length === fixture.expectedChunks.length");
+    expect(semanticFlow).toContain("entity.type['@type'] === expectedEntity.type['@type']");
+    expect(semanticFlow).toContain("entity.type.url === expectedEntity.type.url");
+    expect(semanticFlow).toContain("entity.type.language === expectedEntity.type.language");
     expect(semanticFlow).not.toContain("JSON.stringify(actual) === JSON.stringify");
     expect(compactionFlow).toContain('"minimumPreviewEvents":2');
     expect(compactionFlow).toContain("progress: { commentary: true, toolProgress: true }");

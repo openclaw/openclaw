@@ -14,6 +14,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
@@ -33,6 +34,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 type SessionsUsageCacheKeyParams = {
   configRef: object;
   visibilityIdentity?: string;
+  creatorKey?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -58,6 +60,8 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    params.creatorKey,
+    readUserProfileVersion(),
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }

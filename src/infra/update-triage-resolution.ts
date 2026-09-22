@@ -1,15 +1,23 @@
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-health-probe.js";
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrations,
+} from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
+import { compareSemverStrings } from "./update-check.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
 import type { UpdateRepairValidation } from "./update-repair-protocol.js";
-import { findActiveUpdateRun, getUpdateRun, listUpdateRuns } from "./update-run-reader.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import {
+  findActiveUpdateRun,
+  getUpdateRun,
+  readUpdateRunResolutionHistory,
+} from "./update-run-reader.js";
+import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
 
 function matchesIdentity(
   expected: UpdateRunRecord["after"],
@@ -46,7 +54,7 @@ const failureFamilies = {
     "head-verification-failed",
     "target-sha-mismatch",
   ],
-  schema: ["database-schema-preflight"],
+  schema: ["database-schema-preflight", "invalid-config"],
   doctor: [
     "post-update-failed",
     "doctor-failed",
@@ -70,76 +78,21 @@ const failureFamilies = {
 };
 
 const nextUpdate = "Next step: run `openclaw update status --json`, then retry `openclaw update`.";
+const nextRepair = "Next step: run `openclaw update status --json`, then `openclaw update repair`.";
 
-function unresolved(message: string, stop = true): UpdateRepairValidation {
-  const summary = `${message} ${nextUpdate}`;
+function unresolved(message: string, stop = true, nextStep = nextUpdate): UpdateRepairValidation {
+  // Triage bounds displayed diagnostics; retain the next action before long findings.
+  const summary = `${nextStep} ${message}`;
   return { ok: false, score: -1, summary, ...(stop ? { stopReason: summary } : {}) };
 }
 
-type FailureStep = {
-  step: string;
-  failureFacts?: UpdateRunRecord["steps"][number]["failureFacts"];
-  configWriteRefusal?: UpdateRunRecord["steps"][number]["configWriteRefusal"];
-};
-
-function doctorStep(step: FailureStep): boolean {
-  if (step.configWriteRefusal) {
-    return false;
-  }
-  const facts = step.failureFacts ?? [];
-  const doctorFacts = facts.every(
-    (fact) =>
-      (fact.code === "doctor-failed" && fact.check !== "package-install") ||
-      fact.code === "post-plugin-doctor-invalid-config" ||
-      (fact.check === "doctor" && fact.code === "finalization-failed"),
+function validateTriagePendingMigrations(
+  env: NodeJS.ProcessEnv,
+): UpdateRepairValidation | undefined {
+  const warnings = readDeferredPluginMigrations({ env }).map((pending) =>
+    formatDeferredPluginMigration(pending, env),
   );
-  return (
-    doctorFacts &&
-    (["doctor", "openclaw doctor", "candidate doctor", "finalize:doctor"].includes(step.step) ||
-      (step.step === "finalize:targetConfigConvergence" && facts.length > 0))
-  );
-}
-
-function phaseMarker(step: FailureStep): boolean {
-  return (
-    !step.failureFacts?.length &&
-    !step.configWriteRefusal &&
-    (UPDATE_RUN_PHASES.some((phase) => phase === step.step) ||
-      step.step === "post-update verification")
-  );
-}
-
-function doctorFailure(failure: TriageUpdateFailure, run: UpdateRunRecord): boolean {
-  if (
-    !("result" in failure) ||
-    run.status !== "failed" ||
-    !failureFamilies.doctor.includes(failure.result.reason ?? run.reason ?? "") ||
-    (run.reason !== null && !failureFamilies.doctor.includes(run.reason))
-  ) {
-    return false;
-  }
-  const plugins = failure.result.postUpdate?.plugins;
-  if (
-    plugins?.status === "error" &&
-    (!failureFamilies.doctor.includes(plugins.reason ?? "") ||
-      plugins.sync?.errors.length ||
-      plugins.npm?.outcomes.some((outcome) => outcome.status === "error") ||
-      plugins.integrityDrifts?.length ||
-      plugins.warnings?.some((warning) => !failureFamilies.doctor.includes(warning.reason)))
-  ) {
-    return false;
-  }
-  const steps = run.steps.filter((step) => step.status === "failed" && !phaseMarker(step));
-  return (
-    steps.length > 0 &&
-    steps.every(doctorStep) &&
-    failure.result.steps
-      .filter((step) => step.exitCode !== 0 && !step.advisory)
-      .every(
-        (step) =>
-          doctorStep({ ...step, step: step.name }) || phaseMarker({ ...step, step: step.name }),
-      )
-  );
+  return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
 }
 
 async function readGitHead(params: {
@@ -166,7 +119,8 @@ async function readGitHead(params: {
 
 /** Resolve the attributed blocker without rewriting the updater's historical outcome. */
 export async function validateTriageUpdateResolution(params: {
-  failure: TriageUpdateFailure;
+  failure?: TriageUpdateFailure;
+  implicit?: boolean;
   installRoot: string;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
@@ -174,49 +128,62 @@ export async function validateTriageUpdateResolution(params: {
 }): Promise<UpdateRepairValidation> {
   const { failure, installRoot, env, signal } = params;
   signal.throwIfAborted();
-  const runId = "result" in failure ? failure.result.runId : undefined;
-  const options = { env };
-  const original = runId ? getUpdateRun(runId, options) : undefined;
-  const target = original?.target;
-  if (!original || !target?.kind || !(target.version || (target.kind === "git" && target.sha))) {
-    return unresolved("Cannot establish the update target.");
+  const migrationFailure = validateTriagePendingMigrations(env);
+  if (migrationFailure) {
+    return migrationFailure;
   }
-  const completion = listUpdateRuns({ limit: 1 }, options)[0];
+  const runId = failure && "result" in failure ? failure.result.runId : undefined;
+  const options = { env };
+  let history: ReturnType<typeof readUpdateRunResolutionHistory>;
+  try {
+    history = readUpdateRunResolutionHistory(options);
+  } catch (error) {
+    return unresolved(`Update history is unavailable: ${String(error)}`, true, nextRepair);
+  }
+  const original =
+    (params.implicit ? history.failure : undefined) ??
+    (runId ? getUpdateRun(runId, options) : undefined);
+  const ownerChanged = () =>
+    findActiveUpdateRun(options) ||
+    readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId;
+  const validateDoctor = async () => {
+    const doctor = await params.validateDoctor();
+    signal.throwIfAborted();
+    return ownerChanged()
+      ? unresolved("The update owner changed during verification.")
+      : (validateTriagePendingMigrations(env) ?? doctor);
+  };
   if (findActiveUpdateRun(options)) {
     return unresolved("An update is still running; wait for its owner to finish.");
   }
-  if (completion && doctorFailure(failure, original)) {
-    const identityMatches = async () =>
-      (!target.version || (await readPackageVersion(installRoot)) === target.version) &&
-      (!target.sha || (target.kind === "git" && (await readGitHead(params)) === target.sha));
-    if (!(await identityMatches())) {
-      return unresolved("The installed identity does not match the recorded Doctor repair target.");
-    }
-    const doctor = await params.validateDoctor();
-    signal.throwIfAborted();
-    if (!(await identityMatches())) {
-      return unresolved("The installed identity changed during Doctor verification.");
-    }
-    signal.throwIfAborted();
-    if (
-      findActiveUpdateRun(options) ||
-      listUpdateRuns({ limit: 1 }, options)[0]?.runId !== completion.runId
-    ) {
-      return unresolved("The update owner changed during Doctor verification.");
-    }
-    return doctor.ok
-      ? {
-          ok: true,
-          score: 0,
-          summary: `Doctor/config blocker resolved${target.version ? `; installed version ${target.version} verified` : ""}${target.sha ? `; Git commit ${target.sha} verified` : ""}.`,
-        }
-      : { ...doctor, summary: `${doctor.summary} ${nextUpdate}` };
+  if ((!failure && !original) || (original && isAcknowledgedAbandonedUpdateRun(original))) {
+    return await validateDoctor();
   }
-  const reason = "result" in failure ? failure.result.reason : undefined;
+  let target = original?.target;
+  if (!original || !target?.kind || !(target.version || (target.kind === "git" && target.sha))) {
+    return unresolved("Cannot establish the update target.", true, nextRepair);
+  }
+  const completion = history.outcome;
+  const rolledBack = completion?.status === "rolled-back";
+  const superseded =
+    params.implicit &&
+    completion &&
+    (completion.status === "succeeded" || rolledBack) &&
+    completion.finishedAtMs !== null &&
+    completion.createdAtMs >= original.createdAtMs &&
+    completion.target.kind &&
+    (completion.target.version || completion.target.sha) &&
+    (matchesIdentity(target, completion.after) ||
+      (compareSemverStrings(completion.after.version ?? null, target.version ?? null) ?? -1) >= 0);
+  if (superseded) {
+    target = completion.target;
+  }
+  const reason =
+    original.reason ?? (failure && "result" in failure ? failure.result.reason : undefined);
   const family = Object.entries(failureFamilies).find(
     ([, reasons]) => reason !== undefined && reasons.includes(reason),
   )?.[0];
-  if (!family) {
+  if (!family && !superseded) {
     return unresolved(
       `No resolution predicate for update failure ${reason ?? "without a recorded reason"}.`,
     );
@@ -233,15 +200,20 @@ export async function validateTriageUpdateResolution(params: {
   ) {
     return unresolved(
       `The updater has not recorded a completed resolution of the ${family} failure for ${target.sha ?? target.version}.`,
+      true,
+      family === "doctor" ? nextRepair : nextUpdate,
     );
   }
-  const rolledBack = completion.status === "rolled-back";
   const expected = rolledBack
-    ? original.before
-    : {
-        version: target.version ?? completion.after.version,
-        sha: target.sha ?? completion.after.sha,
-      };
+    ? superseded
+      ? completion.before
+      : original.before
+    : superseded
+      ? completion.after
+      : {
+          version: target.version ?? completion.after.version,
+          sha: target.sha ?? completion.after.sha,
+        };
   if (
     !(expected.version || expected.sha) ||
     !matchesIdentity(expected, completion.after) ||
@@ -262,8 +234,7 @@ export async function validateTriageUpdateResolution(params: {
       `Expected installed version ${expected.version ?? "from the verified checkout"}; found ${installedVersion ?? "no installed version"}.`,
     );
   }
-  const doctor = await params.validateDoctor();
-  signal.throwIfAborted();
+  const doctor = await validateDoctor();
   if (!doctor.ok) {
     return { ...doctor, summary: `${doctor.summary} ${nextUpdate}` };
   }
@@ -302,7 +273,7 @@ export async function validateTriageUpdateResolution(params: {
     requirePluginHealth:
       reason === "plugin-errors" ||
       reason === "post-update-plugins" ||
-      ("result" in failure && failure.result.postUpdate?.plugins?.status === "error"),
+      (failure && "result" in failure && failure.result.postUpdate?.plugins?.status === "error"),
   });
   signal.throwIfAborted();
   if (!serviceVerified) {
@@ -314,15 +285,14 @@ export async function validateTriageUpdateResolution(params: {
     return unresolved("The installed version changed during verification.");
   }
   signal.throwIfAborted();
-  if (
-    findActiveUpdateRun(options) ||
-    listUpdateRuns({ limit: 1 }, options)[0]?.runId !== completion.runId
-  ) {
+  if (ownerChanged()) {
     return unresolved("The update owner changed during verification.");
   }
-  return {
-    ok: true,
-    score: 0,
-    summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
-  };
+  return (
+    validateTriagePendingMigrations(env) ?? {
+      ok: true,
+      score: 0,
+      summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
+    }
+  );
 }

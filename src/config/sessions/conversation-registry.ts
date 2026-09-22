@@ -200,6 +200,7 @@ function selectConversationRows(
     limit?: number;
     primarySession?: { sessionId: string; sessionKey: string };
     currentBindingOnly?: boolean;
+    currentSession?: { sessionKey: string; sessionId: string };
   } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
@@ -250,6 +251,11 @@ function selectConversationRows(
         "=",
         normalizeConversationRef(options.conversationRef),
       );
+    }
+    if (options.currentSession) {
+      query = query
+        .where("sn.session_key", "=", options.currentSession.sessionKey)
+        .where("s.session_id", "=", options.currentSession.sessionId);
     }
     if (options.primarySession) {
       // The window's primary pointer, not address recency, owns this route.
@@ -380,10 +386,12 @@ export function resolveConversation(
 export function resolveCurrentConversationSession(
   scope: ConversationRegistryScope,
   conversationRef: string,
+  currentSession?: { sessionKey: string; sessionId: string },
 ): { sessionKey: string; sessionId: string } | undefined {
   const [conversation] = selectConversationRows(scope, {
     conversationRef: normalizeConversationRef(conversationRef),
     currentBindingOnly: true,
+    currentSession,
     limit: 1,
   });
   return conversation?.sessionKey && conversation.sessionId

@@ -44,7 +44,8 @@ export function openWorkspaceItem<T>(
     },
   } as const;
   const preview = openSessionWorkspacePreview(state, itemId, request.fileTab.label, request);
-  workspace.activeId = itemId;
+  const selectionId = preview.canonicalKey ?? itemId;
+  workspace.activeId = selectionId;
   if (options.line != null) {
     preview.navigation = { line: options.line };
     workspace.navigationOrder = (workspace.navigationOrder ?? 0) + 1;
@@ -108,6 +109,9 @@ export function openWorkspaceItem<T>(
         return;
       }
       if (isCurrent()) {
+        if (workspace.activeId === selectionId && canonicalKey) {
+          workspace.activeId = canonicalKey;
+        }
         const canonical = canonicalKey
           ? workspace.previews.find(
               (entry) => entry !== preview && entry.canonicalKey === canonicalKey,

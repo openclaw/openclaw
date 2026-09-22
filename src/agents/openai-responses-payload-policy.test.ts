@@ -210,27 +210,40 @@ describe("openai responses payload policy", () => {
     });
   });
 
-  it("strips disabled reasoning payloads for proxy-like OpenAI responses routes", () => {
-    const payload = {
-      reasoning: {
-        effort: "none",
-      },
-    } satisfies Record<string, unknown>;
-
-    applyOpenAIResponsesPayloadPolicy(
-      payload,
-      resolveOpenAIResponsesPayloadPolicy(
-        {
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://proxy.example.com/v1",
+  it.each([
+    { compat: undefined, keepsNone: false },
+    { compat: { supportedReasoningEfforts: ["none", "low", "high"] }, keepsNone: true },
+    { compat: { supportedReasoningEfforts: [] }, keepsNone: false },
+    {
+      compat: { supportsReasoningEffort: false, supportedReasoningEfforts: ["none"] },
+      keepsNone: false,
+    },
+  ])(
+    "uses explicit proxy effort capabilities to retain none=$keepsNone",
+    ({ compat, keepsNone }) => {
+      const payload = {
+        reasoning: {
+          effort: "none",
         },
-        { storeMode: "disable" },
-      ),
-    );
+      } satisfies Record<string, unknown>;
 
-    expect(payload).not.toHaveProperty("reasoning");
-  });
+      applyOpenAIResponsesPayloadPolicy(
+        payload,
+        resolveOpenAIResponsesPayloadPolicy(
+          {
+            api: "openai-responses",
+            provider: "openai",
+            id: "gpt-5.6-luna",
+            baseUrl: "https://proxy.example.com/v1",
+            compat,
+          },
+          { storeMode: "disable" },
+        ),
+      );
+
+      expect(payload.reasoning).toEqual(keepsNone ? { effort: "none" } : undefined);
+    },
+  );
 
   it("emits store false for native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(

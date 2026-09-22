@@ -389,6 +389,7 @@ async function runBoundTurn(params: {
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
           client,
+          requestTimeoutMs: runtime.requestTimeoutMs,
           threadId,
           turnId: activeTurnId,
         });

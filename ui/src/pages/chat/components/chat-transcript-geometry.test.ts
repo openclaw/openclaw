@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { VirtualizerController } from "@tanstack/lit-virtual";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { measureConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -23,6 +25,74 @@ describe("chat transcript geometry", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
+  it("measures fractional layout height instead of a containing transform", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.innerHTML =
+      '<div class="chat-virtual-row" data-index="0" style="height: 100.375px"></div>';
+    const row = expectDefined(container.firstElementChild, "measured row");
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
+    const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      },
+      {
+        count: 1,
+        estimateSize: () => 100,
+        getScrollElement: () => container,
+        getItemKey: () => "fractional",
+        observeElementRect: (_, callback) => {
+          callback({ width: 800, height: 600 });
+        },
+        observeElementOffset: (_, callback) => {
+          callback(0, false);
+        },
+        scrollToFn: (offset) => {
+          container.scrollTop = offset;
+        },
+      },
+    );
+    controller.hostConnected();
+    controller.hostUpdated();
+    const virtualizer = controller.getVirtualizer();
+    virtualizer.getVirtualItems();
+    try {
+      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(true);
+      expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
+      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(false);
+    } finally {
+      controller.hostDisconnected();
+    }
+  });
+
+  it("keeps fractional observer sizes as the sole skipped-row sizing input", async () => {
+    const rows = Array.from({ length: 4 }, (_, index) => ({
+      kind: "content" as const,
+      key: `fractional:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, transcript, renderRows } = await mountTestTranscript(
+      "fractional-rows",
+      rows,
+    );
+    try {
+      for (const observer of resizeObservers) {
+        for (const row of transcriptRows(container)) {
+          observer.emitTarget(row, 800, 100.375);
+        }
+      }
+      renderRows(rows);
+      expect(transcriptSize(container)).toBe(401.5);
+      for (const row of transcriptRows(container)) {
+        expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
+      }
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
   it.each([false, true])(
     "coalesces end geometry across commits and retires disconnected work=%s",
     async (disconnect) => {
@@ -36,6 +106,8 @@ describe("chat transcript geometry", () => {
           scrollHeight: { configurable: true, value: 1200 },
         });
         container.scrollTop = 600;
+        // JSDOM does not emit the browser's scroll read-back that settles initial compensation.
+        container.dispatchEvent(new Event("scroll"));
         flushFrames();
         transcript.hostUpdated();
         flushFrames();

@@ -1370,6 +1370,10 @@ describe("openshell fs bridges", () => {
       if (!bridge) {
         throw new Error("Expected an OpenShell filesystem bridge");
       }
+      expect(bridge.pathMappings).toContainEqual({
+        hostRoot: path.resolve(workspaceDir),
+        containerRoot: "/sandbox",
+      });
       expect(bridge.resolvePath({ filePath: "owner.txt" })).toEqual({
         ...(mode === "mirror" ? { hostPath: path.join(workspaceDir, "owner.txt") } : {}),
         relativePath: "owner.txt",
@@ -1684,21 +1688,29 @@ describe("openshell fs bridges", () => {
     });
   });
 
-  it("removes recursive local mirror directories without raw path deletion", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    await fs.mkdir(path.join(workspaceDir, "nested", "child"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "nested", "child", "target.txt"), "payload", "utf8");
-    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
-    await bridge.remove({ filePath: "nested", recursive: true, force: true });
+  it.each(["nested", "."])(
+    "removes deep local mirror trees at %s while retaining the mounted root",
+    async (filePath) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      const rootIdentity = await fs.stat(workspaceDir, { bigint: true });
+      const deepestDir = path.join(workspaceDir, "nested", ...Array<string>(65).fill("d"));
+      await fs.mkdir(deepestDir, { recursive: true });
+      await fs.writeFile(path.join(deepestDir, "target.txt"), "payload", "utf8");
+      const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
+      await bridge.remove({ filePath, recursive: true, force: true });
 
-    await expectPathMissing(path.join(workspaceDir, "nested"));
-    expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/nested", {
-      recursive: true,
-      signal: undefined,
-      ignoreMissing: true,
-    });
-  });
+      await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+      await expect(fs.stat(workspaceDir, { bigint: true })).resolves.toMatchObject({
+        dev: rootIdentity.dev,
+        ino: rootIdentity.ino,
+      });
+      expect(backend["removeRemotePath"]).toHaveBeenCalledWith(
+        filePath === "." ? "/sandbox" : "/sandbox/nested",
+        { recursive: true, signal: undefined, ignoreMissing: true },
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "removes recursive local mirror directories containing symlink leaves without following them",
@@ -1711,6 +1723,8 @@ describe("openshell fs bridges", () => {
       await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "nested", "link.txt"));
+      await fs.symlink(outsideDir, path.join(workspaceDir, "nested", "directory-link"));
+      await fs.symlink("missing", path.join(workspaceDir, "nested", "dangling-link"));
       const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
       await bridge.remove({ filePath: "nested", recursive: true, force: true });
 
@@ -1719,9 +1733,9 @@ describe("openshell fs bridges", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "removes local mirror symlink leaves when force is false",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "removes local mirror symlink leaves when force is false and recursive is %s",
+    async (recursive) => {
       await using workspace = await createOpenShellTestWorkspace("fs");
       const workspaceDir = workspace.dir;
       await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
@@ -1730,15 +1744,28 @@ describe("openshell fs bridges", () => {
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "link.txt"));
       const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
-      await bridge.remove({ filePath: "link.txt", force: false });
+      await bridge.remove({ filePath: "link.txt", force: false, recursive });
 
       await expectPathMissing(path.join(workspaceDir, "link.txt"));
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
       expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/link.txt", {
-        recursive: false,
+        recursive,
         signal: undefined,
         ignoreMissing: false,
       });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves missing local mirror path handling when recursive is %s",
+    async (recursive) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+
+      await expect(
+        bridge.remove({ filePath: "missing", recursive, force: false }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(bridge.remove({ filePath: "missing", recursive })).resolves.toBeUndefined();
     },
   );
 
@@ -2058,7 +2085,7 @@ describe("openshell fs bridges", () => {
     await using agentWorkspace = await createOpenShellTestWorkspace("agent");
     const agentWorkspaceDir = agentWorkspace.dir;
     await fs.writeFile(path.join(agentWorkspaceDir, "note.txt"), "agent", "utf8");
-    const backend = createMirrorBackendMock();
+    const backend = { ...createMirrorBackendMock(), remoteAgentWorkspaceDir: "/native-agent-root" };
     const sandbox = createSandboxTestContext({
       overrides: {
         backendId: "openshell",
@@ -2071,10 +2098,16 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const resolved = bridge.resolvePath({ filePath: "/agent/note.txt" });
+    expect(bridge.pathMappings).toContainEqual({
+      hostRoot: path.resolve(agentWorkspaceDir),
+      containerRoot: "/native-agent-root",
+    });
+    const resolved = bridge.resolvePath({ filePath: "/native-agent-root/note.txt" });
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
-    expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
-    await expect(bridge.readDirectory({ filePath: "/agent" })).resolves.toEqual([
+    expect(await bridge.readFile({ filePath: "/native-agent-root/note.txt" })).toEqual(
+      Buffer.from("agent"),
+    );
+    await expect(bridge.readDirectory({ filePath: "/native-agent-root" })).resolves.toEqual([
       { name: "note.txt", isDirectory: false },
     ]);
   });

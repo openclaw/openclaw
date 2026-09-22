@@ -9,8 +9,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -851,6 +853,8 @@ describe("resolveAuthProfileOrder", () => {
       expect(lastUsed).toBeGreaterThanOrEqual(beforeSuccess);
       expect(lastUsed).toBeLessThanOrEqual(afterSuccess);
     } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+      await closeOpenClawAgentDatabasesAsync(agentDir);
       await rm(agentDir, { force: true, recursive: true });
     }
   });

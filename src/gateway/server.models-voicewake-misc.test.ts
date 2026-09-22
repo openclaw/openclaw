@@ -5,19 +5,19 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
-import { testing as startupTesting } from "./server-startup-post-attach.js";
+import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   agentDiscoveryMock,
@@ -101,7 +101,7 @@ type ModelCatalogRpcEntry = {
 type AgentCatalogFixtureEntry = {
   id: string;
   provider: string;
-  name?: string;
+  name: string;
   contextWindow?: number;
 };
 
@@ -111,7 +111,7 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
 };
 
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
-  { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+  { id: "gpt-test-z", name: "", provider: "openai", contextWindow: 0 },
   {
     id: "gpt-test-a",
     name: "A-Model",
@@ -514,6 +514,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list all view returns model catalog", async () => {
     await withModelsConfig(fullCatalogProviderConfig(), async () => {
       await seedAgentModelCatalog();
+      const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
 
       const res1 = await listModels({ view: "all", preparedOnly: true });
       const res2 = await listModels({ view: "all", preparedOnly: true });
@@ -524,7 +525,7 @@ describe("gateway server models + voicewake", () => {
       const models = res1.payload?.models ?? [];
       expect(models).toEqual(expectedSortedCatalog());
 
-      expect(agentDiscoveryMock.discoverCalls).toBe(0);
+      expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
     });
   });
 
@@ -616,9 +617,8 @@ describe("gateway server models + voicewake", () => {
       agentDiscoveryMock.enabled = true;
       agentDiscoveryMock.models = startupModels;
       const { getRuntimeConfig } = await import("../config/io.js");
-      await startupTesting.publishStartupModelRuntime({
+      await publishConfiguredModelRuntimeSnapshots({
         cfg: getRuntimeConfig(),
-        log: { warn: () => {} },
       });
     };
     const readMethods = [
@@ -1010,14 +1010,14 @@ describe("gateway server misc", () => {
   });
 
   test("releases port after close", async () => {
-    const releasePort = await getGatewayTestPort();
+    const releasePort = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const releaseServer = await startTestGatewayServer(releasePort);
     await releaseServer.close();
 
     const probe = createServer();
     await new Promise<void>((resolve, reject) => {
       probe.once("error", reject);
-      probe.listen(releasePort, "127.0.0.1", () => resolve());
+      probe.listen(releasePort.port, "127.0.0.1", () => resolve());
     });
     expect(probe.listening).toBe(true);
     await new Promise<void>((resolve, reject) => {

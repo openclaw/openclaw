@@ -250,6 +250,14 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
+const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
+
+export const APP_SIDEBAR_ELEMENT = {
+  tagName: APP_SIDEBAR_TAG,
+  label: APP_SIDEBAR_TAG,
+  loadModule: () => import("../components/app-sidebar.ts"),
+} satisfies OptionalCustomElement;
+
 const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
 
 export const MACOS_TITLEBAR_ELEMENT = {
@@ -280,6 +288,14 @@ export const DESKTOP_PANEL_ELEMENT = {
   tagName: "openclaw-desktop-panel",
   label: "desktop panel",
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
+} satisfies OptionalCustomElement;
+
+export const LINK_READER_PANEL_ELEMENT = {
+  tagName: "openclaw-link-reader-panel",
+  get label() {
+    return t("linkReader.title");
+  },
+  loadModule: () => import("../components/link-reader-panel.ts"),
 } satisfies OptionalCustomElement;
 
 export const DASHBOARD_DOCUMENT_ELEMENT = {

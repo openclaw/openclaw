@@ -150,6 +150,16 @@ export function newestTaskSnapshot(
   if (current.status === "queued" && lookup.status === "running") {
     return preserveTaskPrompt(lookup, current, lookup);
   }
+  // Execution observations can advance while the durable lifecycle clock stays fixed.
+  const currentActivityAt = taskTimestampMs(current.execution?.lastActivityAt);
+  const lookupActivityAt = taskTimestampMs(lookup.execution?.lastActivityAt);
+  if (lookupActivityAt !== currentActivityAt) {
+    return preserveTaskPrompt(
+      lookupActivityAt > currentActivityAt ? lookup : current,
+      current,
+      lookup,
+    );
+  }
   const currentToolCount = current.toolUseCount ?? 0;
   const lookupToolCount = lookup.toolUseCount ?? 0;
   if (currentToolCount > lookupToolCount) {
@@ -163,7 +173,16 @@ export function newestTaskSnapshot(
 
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {
   return tasks.toSorted((left, right) => {
-    const timeDelta = taskTimestampMs(right.updatedAt) - taskTimestampMs(left.updatedAt);
+    // Activity keeps live work visible without changing snapshot lifecycle authority.
+    const leftAt = Math.max(
+      taskTimestampMs(left.updatedAt),
+      isActiveTask(left) ? taskTimestampMs(left.execution?.lastActivityAt) : 0,
+    );
+    const rightAt = Math.max(
+      taskTimestampMs(right.updatedAt),
+      isActiveTask(right) ? taskTimestampMs(right.execution?.lastActivityAt) : 0,
+    );
+    const timeDelta = rightAt - leftAt;
     if (timeDelta !== 0) {
       return timeDelta;
     }

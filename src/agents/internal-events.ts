@@ -151,7 +151,15 @@ function formatGeneratedMediaDirectiveLines(
   if (mediaUrls.length === 0) {
     return [];
   }
-  return [label, ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+  return [
+    label,
+    ...mediaUrls.map((mediaUrl) => {
+      // Delimit literal quotes and suffixes that the unquoted parser treats as serialized output.
+      const reference =
+        mediaUrl.includes('"') || /[`'\\})\],]$/u.test(mediaUrl) ? `"${mediaUrl}"` : mediaUrl;
+      return `MEDIA:${reference}`;
+    }),
+  ];
 }
 
 function formatTaskCompletionEvent(

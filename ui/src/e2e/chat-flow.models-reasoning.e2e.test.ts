@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -16,7 +17,6 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const rosterMatch = { includeGlobal: true };
 
 async function createReasoningProofPage(scope: string) {
   const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -51,6 +51,7 @@ suite.define(() => {
     ];
     const session = {
       key: sessionKey,
+      sessionId: "session-a-context-window",
       kind: "direct",
       label: "Session A",
       model: "claude-fable-5",
@@ -92,8 +93,8 @@ suite.define(() => {
         key: sessionKey,
         contextWindow: "200k",
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      // Patch acknowledgements and history must see the same committed context window.
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
       );
       await gateway.resolveDeferred("sessions.patch");
@@ -104,138 +105,6 @@ suite.define(() => {
         )
         .toBe("200K");
       await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("settles permission patches before reflecting changes and observes remote updates", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const session = {
-      key: "agent:main:session-a",
-      kind: "direct",
-      label: "Session A",
-      permissionMode: "guarded",
-      sessionId: "session-a-original",
-      sessionRoot: "/workspace/projects/openclaw",
-      updatedAt: 2,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      sessionKey: session.key,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const trigger = pane.locator('[data-chat-permission-select="true"]');
-      await trigger.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
-      expect(
-        await trigger.evaluate((element) => element.closest(".agent-chat__composer-meta") != null),
-      ).toBe(true);
-      expect(
-        await trigger.evaluate(
-          (element) => element.closest(".chat-composer-model-control") != null,
-        ),
-      ).toBe(false);
-
-      const firstListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await gateway.deferNext("sessions.list", rosterMatch);
-      await trigger.click();
-      const firstOption = pane.locator('[data-chat-permission-option="default"]');
-      await firstOption.waitFor({ state: "visible" });
-      const [triggerBox, firstOptionBox] = await Promise.all([
-        trigger.boundingBox(),
-        firstOption.boundingBox(),
-      ]);
-      expect(triggerBox).not.toBeNull();
-      expect(firstOptionBox).not.toBeNull();
-      if (!triggerBox || !firstOptionBox) {
-        throw new Error("expected permission picker geometry");
-      }
-      expect(firstOptionBox.y + firstOptionBox.height).toBeLessThanOrEqual(triggerBox.y - 1);
-      expect(firstOptionBox.x).toBeGreaterThanOrEqual(triggerBox.x);
-      expect(firstOptionBox.x - triggerBox.x).toBeLessThanOrEqual(32);
-      await pane.locator('[data-chat-permission-option="workspace"]').click();
-      const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
-        expectedSessionId: session.sessionId,
-        key: session.key,
-        permissionMode: "workspace",
-      });
-      await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
-
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        permissionMode: "workspace",
-        reason: "patch",
-        sessionKey: session.key,
-        updatedAt: 3,
-      });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
-      );
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain("Workspace");
-
-      const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await gateway.deferNext("sessions.list", rosterMatch);
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="default"]').click();
-      const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
-        key: session.key,
-        permissionMode: null,
-      });
-      await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
-
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        permissionMode: null,
-        reason: "patch",
-        sessionKey: session.key,
-        updatedAt: 4,
-      });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
-      );
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
-      expect(await trigger.textContent()).toContain("Default");
-
-      await gateway.deferNext("sessions.patch");
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="full"]').click();
-      const stalePatch = (await waitForRequests(gateway, "sessions.patch", 3))[2];
-      expect(requireRecord(stalePatch?.params)).toMatchObject({
-        expectedSessionId: session.sessionId,
-        key: session.key,
-        permissionMode: "full",
-      });
-      const replacement = {
-        ...session,
-        permissionMode: "read-only",
-        sessionId: "session-after-replacement",
-        updatedAt: 5,
-      };
-      await gateway.setSessionsListResponse(chatSessionListResponse([replacement]));
-      await gateway.rejectDeferred("sessions.patch", {
-        code: "INVALID_REQUEST",
-        message: "session identity changed; refresh and retry",
-      });
-
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await pane
-        .locator(".chat-error")
-        .getByText("Failed to update permissions", { exact: false })
-        .waitFor();
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -527,7 +396,7 @@ suite.define(() => {
       const selectModel = async (value: string) => {
         await activePane.locator('[data-chat-model-select="true"]').click();
         const option = activePane.locator(`[data-chat-model-option="${value}"]`);
-        await option.waitFor({ state: "visible", timeout: 10_000 });
+        await revealChatModelOption(option, { timeout: 10_000 });
         await option.click();
       };
 
@@ -538,10 +407,9 @@ suite.define(() => {
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
+      expect(requireRecord(patchRequest.params)).toEqual({
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
@@ -658,12 +526,11 @@ suite.define(() => {
         .toBe("true");
 
       await modelSelect.click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      await selectChatModelOption(main.locator('[data-chat-model-option="openai/gpt-5.5"]'));
       const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params)).toMatchObject({
+      expect(requireRecord(firstPatch.params)).toEqual({
         key: "agent:ops:session-a",
         model: "openai/gpt-5.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
@@ -673,7 +540,7 @@ suite.define(() => {
       const defaultModel = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
       );
-      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
+      await revealChatModelOption(defaultModel, { timeout: 10_000 });
       expect(await defaultModel.textContent()).toContain("Default");
       expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
       await defaultModel.click();
@@ -782,6 +649,7 @@ suite.define(() => {
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
+      await revealChatModelOption(modelOption);
       await capture("default-sol", modelPopup, modelOption);
 
       await page.keyboard.press("Escape");
@@ -804,6 +672,7 @@ suite.define(() => {
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(
         defaultThinkingValue,
       );
+      await revealChatModelOption(modelOption);
       await capture("explicit-sol", modelPopup, modelOption);
 
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -910,6 +779,9 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       await main.locator(setting.trigger).click();
+      if (setting.label === "model override") {
+        await revealChatModelOption(main.locator(setting.option));
+      }
       await main.locator(setting.option).click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

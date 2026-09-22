@@ -8,19 +8,31 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
-import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  prepareSessionEntryPresenceRead,
+  withSessionHistoryWorkerDatabase,
+} from "../config/sessions/session-transcript-worker-runtime.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseRegistration } from "../state/openclaw-agent-db-registry-listing.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -42,8 +54,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     ...actual,
     Worker: class extends actual.Worker {
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
+        const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
         if (
-          asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind === "history-page" &&
+          (kind === "history-page" || kind === "session-row-presence") &&
           !observed.workers.includes(this)
         ) {
           observed.workers.push(this);
@@ -82,6 +95,90 @@ afterEach(() => {
   }
 });
 
+it.each([false, true])(
+  "reads exact row presence without creating a database (incognito=%s)",
+  async (incognito) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-presence"
+          : "agent:main:dashboard:presence",
+        storePath: path.join(state.agentDir(), "presence.sqlite"),
+        env: state.env,
+      };
+      const databasePath = incognito
+        ? resolveIncognitoOpenClawAgentSqlitePath(target)
+        : target.storePath;
+      const { read } = prepareSessionEntryPresenceRead(target);
+      const workersBefore = observed.workers.length;
+      expect(await read()).toBe(false);
+      expect(fs.existsSync(databasePath)).toBe(false);
+      await replaceSessionEntry(target, { sessionId: "metadata-without-transcript", updatedAt: 1 });
+      expect(await read()).toBe(true);
+      expect(
+        await prepareSessionEntryPresenceRead({
+          ...target,
+          sessionKey: target.sessionKey.toUpperCase(),
+        }).read(),
+      ).toBe(true);
+      expect(
+        await prepareSessionEntryPresenceRead({
+          ...target,
+          sessionKey: `${target.sessionKey}-sibling`,
+        }).read(),
+      ).toBe(false);
+      if (incognito) {
+        expect(observed.workers).toHaveLength(workersBefore);
+        expect(fs.existsSync(databasePath)).toBe(false);
+      } else {
+        expect(observed.workers.length).toBeGreaterThan(workersBefore);
+      }
+    });
+  },
+);
+
+it("retains the prepared metadata target when caller scope and environment change", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:captured-presence",
+      storePath: path.join(state.agentDir(), "captured.sqlite"),
+      env: { ...state.env },
+    };
+    await replaceSessionEntry(target, { sessionId: "captured-row", updatedAt: 1 });
+    const { read } = prepareSessionEntryPresenceRead(target);
+    target.storePath = path.join(state.agentDir(), "replacement.sqlite");
+    target.env.OPENCLAW_STATE_DIR = state.path("different-state");
+    expect(await read()).toBe(true);
+    expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+    expect(fs.existsSync(target.storePath)).toBe(false);
+  });
+});
+
+it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:revoked-presence",
+      storePath: path.join(state.agentDir(), "revoked.sqlite"),
+      env: state.env,
+    };
+    await replaceSessionEntry(target, { sessionId: "revoked-row", updatedAt: 1 });
+    let closing: Promise<boolean> | undefined;
+    observed.dispatch = (message) => {
+      if (asOptionalRecord(asOptionalRecord(message)?.input)?.kind === "session-row-presence") {
+        observed.dispatch = undefined;
+        closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
+      }
+    };
+    await expect(prepareSessionEntryPresenceRead(target).read()).rejects.toThrow("revoked");
+    expect(closing).toBeDefined();
+    await closing;
+    expect(observed.workers.at(-1)?.threadId).toBe(-1);
+  });
+});
+
 async function seed(state: OpenClawTestState, agentId: string, sessionId: string) {
   const target = {
     agentId,
@@ -90,7 +187,12 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
   };
   const entry = { sessionId, updatedAt: 1 };
-  await replaceSessionEntry(target, entry);
+  // Seed reader lifecycle fixtures without queueing unrelated automatic maintenance.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry: true,
+    skipMaintenance: true,
+  });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
     {
@@ -120,12 +222,88 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
+it.each(["no-commit", "metadata-refresh"] as const)(
+  "keeps history readable across unchanged sibling registration (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = await seed(state, "main", "registration-a");
+      const b = await seed(state, "other", "registration-b");
+      await a.read();
+      await b.read();
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
+        if (params?.sessionId !== "registration-a") {
+          return;
+        }
+        observed.dispatch = undefined;
+        dispatched = true;
+        const registration = captureOpenClawAgentDatabaseRegistration({
+          agentId: "other",
+          agentPath: b.path,
+          admission: captureOpenClawStateDatabaseReadAdmission(openOpenClawStateDatabase().path),
+        });
+        registration.begin();
+        if (mode === "metadata-refresh") {
+          registerOpenClawAgentDatabase(
+            { agentId: "other", path: b.path, env: state.env },
+            (receipt) => registration.recordCommitted(receipt),
+          );
+        }
+        registration.finish();
+      };
+      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "registration-a-message",
+      ]);
+      expect(dispatched).toBe(true);
+    });
+  },
+);
+
+it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
+  "rejects history when sibling discovery changes (%s)",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = await seed(state, "main", "topology-a");
+      const b = await seed(state, "other", "topology-b");
+      await a.read();
+      await b.read();
+      await closeOpenClawAgentDatabaseByPathAsync(b.path, "other");
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
+        if (params?.sessionId !== "topology-a") {
+          return;
+        }
+        observed.dispatch = undefined;
+        dispatched = true;
+        if (change === "physical-replacement") {
+          fs.copyFileSync(b.path, `${b.path}.replacement`);
+          fs.renameSync(b.path, `${b.path}.previous`);
+          fs.renameSync(`${b.path}.replacement`, b.path);
+        }
+        registerOpenClawAgentDatabase({
+          agentId: change === "new-agent" ? "added" : "other",
+          path: change === "new-path" ? `${b.path}.different` : b.path,
+          env: state.env,
+          ...(change === "schema" ? { schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1 } : {}),
+        });
+      };
+      await expect(a.read()).rejects.toThrow("Session store changed while preparing its metadata");
+      expect(dispatched).toBe(true);
+    });
+  },
+);
+
 it("closes A through native exit while active and queued B pages survive, then reopens replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
     await a.read();
+    await b.read();
     const oldWorker = observed.workers.at(-1)!;
     let closing: Promise<boolean> | undefined;
     observed.dispatch = (message) => {
@@ -150,6 +328,40 @@ it("closes A through native exit while active and queued B pages survive, then r
     fs.renameSync(`${a.path}.replacement`, a.path);
     expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
+  });
+});
+
+it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const targets = [];
+    for (let index = 0; index < 65; index++) {
+      targets.push(await seed(state, `retained-${index}`, `history-${index}`));
+    }
+    for (const target of targets.slice(0, 64)) {
+      await target.read();
+    }
+    await targets[0]!.read();
+    const worker = observed.workers.at(-1)!;
+    const threadId = worker.threadId;
+    for (let index = 0; index < 65; index++) {
+      const target = {
+        agentId: `missing-${index}`,
+        sessionKey: `agent:missing-${index}:absent`,
+        storePath: state.statePath(`missing-${index}.sqlite`),
+        env: state.env,
+      };
+      expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+      expect(fs.existsSync(target.storePath)).toBe(false);
+    }
+    await targets[64]!.read();
+    // Only the confirmed eviction releases custody without retiring this worker.
+    await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
+    expect(worker.threadId).toBe(threadId);
+    await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
+    expect(worker.threadId).toBe(-1);
+    expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "history-64-message",
+    ]);
   });
 });
 
@@ -302,20 +514,52 @@ it("leaves the unrelated warm worker running when admission rejects a request be
   });
 });
 
-it("joins the history worker and releases database custody when its 30-minute idle timer fires", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const a = await seed(state, "main", "idle-a");
-    await a.read();
-    const worker = observed.workers.at(-1)!;
-    const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
-    expect(index).toBeGreaterThanOrEqual(0);
-    const [expire] = observed.timers.mock.calls[index]!;
-    const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
-    expect(timer.hasRef()).toBe(false);
-    clearTimeout(timer);
-    expire();
-    await expect.poll(() => worker.threadId).toBe(-1);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
-    expect(observed.workers.at(-1)).not.toBe(worker);
-  });
-});
+it.each([false, true])(
+  "joins the history worker when its 30-minute idle timer fires (missing=%s)",
+  async (missing) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = missing
+        ? prepareSessionEntryPresenceRead({
+            agentId: "main",
+            sessionKey: "agent:main:idle-missing",
+            storePath: state.statePath("idle-missing.sqlite"),
+            env: state.env,
+          })
+        : await seed(state, "main", "idle-a");
+      const beforeRead = observed.timers.mock.calls.length;
+      await a.read();
+      const worker = observed.workers.at(-1)!;
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      expect(index).toBeGreaterThanOrEqual(beforeRead);
+      const [expire] = observed.timers.mock.calls[index]!;
+      const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
+      expect(timer.hasRef()).toBe(false);
+      clearTimeout(timer);
+      expire();
+      await expect.poll(() => worker.threadId).toBe(-1);
+      const reopened = await a.read();
+      if (typeof reopened === "boolean") {
+        expect(reopened).toBe(false);
+      } else {
+        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
+      }
+      expect(observed.workers.at(-1)).not.toBe(worker);
+      if (missing) {
+        // No database resource exists to close; the reopened empty worker owns only its idle timer.
+        const emptyWorker = observed.workers.at(-1)!;
+        const nextIndex = observed.timers.mock.calls.findLastIndex(
+          (call) => call[1] === 30 * 60_000,
+        );
+        expect(nextIndex).toBeGreaterThan(index);
+        clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
+        observed.timers.mock.calls[nextIndex]![0]();
+        await expect.poll(() => emptyWorker.threadId).toBe(-1);
+        expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
+          observed.timers.mock.calls
+            .slice(0, nextIndex + 1)
+            .filter((call) => call[1] === 30 * 60_000).length,
+        );
+      }
+    });
+  },
+);

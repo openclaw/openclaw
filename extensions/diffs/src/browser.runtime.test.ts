@@ -456,6 +456,9 @@ function createRegistrationHarness(params: {
   });
   registerDiffsPlugin(api);
   const registration = expectDefined(registered.tool, "registered diffs tool");
+  if (typeof registration !== "function" && "contextVersion" in registration) {
+    throw new Error("expected legacy diffs registration");
+  }
   const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
 
   return {

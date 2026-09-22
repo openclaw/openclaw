@@ -21,16 +21,14 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { withPluginStateDatabaseReadOnly } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   pluginStateEntriesInKeyRange,
 } from "./plugin-state-store.js";
-import {
-  closePluginStateDatabase,
-  withPluginStateDatabaseReadOnly,
-} from "./plugin-state-store.sqlite.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {

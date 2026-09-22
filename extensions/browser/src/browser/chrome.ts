@@ -10,7 +10,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   getFileLockProcessStartTime,
   isPidAlive,
@@ -46,7 +45,6 @@ import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
-  openCdpWebSocket,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -828,36 +826,17 @@ async function canOpenWebSocket(
   lookup?: ChromeCdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  signal?.throwIfAborted();
-  return new Promise<boolean>((resolve, reject) => {
-    const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs, lookup });
-    let settled = false;
-    const finish = (ready: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      ws.close();
-      resolve(ready);
-    };
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      ws.terminate();
-      reject(toStringifiedError(signal?.reason));
-    };
-    ws.once("open", () => finish(true));
-    ws.once("error", () => finish(false));
-    ws.once("close", () => finish(false));
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) {
-      onAbort();
-    }
-  });
+  try {
+    return await withCdpSocket(url, async () => true, {
+      handshakeTimeoutMs: timeoutMs,
+      handshakeRetries: 0,
+      lookup,
+      signal,
+    });
+  } catch {
+    signal?.throwIfAborted();
+    return false;
+  }
 }
 
 /** Return true when a Chrome CDP endpoint is reachable over HTTP. */

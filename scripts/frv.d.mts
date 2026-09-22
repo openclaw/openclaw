@@ -62,7 +62,7 @@ export function preflightContinuation(
   rootRunId: string,
   client: Pick<
     FrvClient,
-    "getJobLog" | "getParentJobs" | "getRunAttempt" | "getReleaseEvidenceClient"
+    "getJobLog" | "getParentJobs" | "getRunAttempt" | "getReleaseEvidenceClient" | "getRun"
   >,
   repository?: string,
 ): Promise<Record<string, unknown>>;

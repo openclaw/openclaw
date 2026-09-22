@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, readFile, readdir, stat as fsStat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, stat as fsStat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { desktopGatewayReadiness } from "./desktop-readiness-proof.mts";
 
 export const desktopResizeStages = [
   "02-panel",
@@ -101,6 +102,271 @@ function desktopSocketCloses(value: unknown) {
   });
 }
 
+const nodeStreamCloseTriggers = [
+  "owner-abort",
+  "target-close",
+  "target-error",
+  "websocket-close",
+  "websocket-error",
+  "send-error",
+  "invalid-frame",
+  "splice-unavailable",
+  "startup-error",
+] as const;
+
+function desktopNodeStreamCloses(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new Error("Invalid desktop node stream diagnostics");
+  }
+  return value.map((event) => {
+    const trigger = nodeStreamCloseTriggers.find(
+      (candidate) => isRecord(event) && candidate === event.trigger,
+    );
+    if (!isRecord(event) || !trigger) {
+      throw new Error("Invalid desktop node stream diagnostic");
+    }
+    return { trigger, closeCode: reportInteger(event.closeCode, 65_535) };
+  });
+}
+
+/** Read at most 1 MiB, including when a live fixture log grows after admission. */
+async function readDesktopProofLog(file: string) {
+  try {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+      return null;
+    }
+    const handle = await open(file, "r");
+    let text: string;
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.ino !== stat.ino || opened.dev !== stat.dev) {
+        return null;
+      }
+      const buffer = Buffer.alloc(1024 * 1024);
+      let bytes = 0;
+      while (bytes < buffer.length) {
+        const result = await handle.read(buffer, bytes, buffer.length - bytes, null);
+        if (result.bytesRead === 0) {
+          break;
+        }
+        bytes += result.bytesRead;
+      }
+      if ((await handle.stat()).size > buffer.length) {
+        return null;
+      }
+      text = buffer.toString("utf8", 0, bytes);
+    } finally {
+      await handle.close();
+    }
+    return text.split("\n").flatMap((line): unknown[] => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        // An in-progress final write is not a completed lifecycle record.
+        return [];
+      }
+    });
+  } catch {
+    // Diagnostic collection must not replace the framebuffer assertion failure.
+    return null;
+  }
+}
+
+/** Preserve the existing node projection while sharing the actual-byte read bound. */
+export async function readDesktopProofNodeStreamCloses(file: string) {
+  const records = await readDesktopProofLog(file);
+  if (!records) {
+    return null;
+  }
+  try {
+    return desktopNodeStreamCloses(
+      records
+        .flatMap((record) =>
+          isRecord(record) &&
+          record["0"] === '{"subsystem":"node-host/stream"}' &&
+          record["2"] === "node stream closed" &&
+          isRecord(record["1"]) &&
+          record["1"].streamKind === "desktop"
+            ? [record["1"]]
+            : [],
+        )
+        .slice(-8),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function diagnosticEvents<T>(value: unknown, project: (event: unknown) => T) {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value) || !Array.isArray(value.events) || value.events.length > 8) {
+    throw new Error("Invalid desktop lifecycle diagnostics");
+  }
+  return { events: value.events.map(project), omitted: reportInteger(value.omitted, 1_000_000) };
+}
+
+function diagnosticEnum<const T extends readonly string[]>(value: unknown, values: T): T[number] {
+  const found = values.find((entry) => entry === value);
+  if (!found) {
+    throw new Error("Invalid desktop lifecycle category");
+  }
+  return found;
+}
+
+function desktopEndpointCloses(value: unknown) {
+  return diagnosticEvents(value, (event) => {
+    if (!isRecord(event) || (event.hadError !== null && typeof event.hadError !== "boolean")) {
+      throw new Error("Invalid desktop endpoint close");
+    }
+    return {
+      connectionIndex: reportInteger(event.connectionIndex, 1_000_000),
+      side: diagnosticEnum(event.side, ["client", "upstream", "fixture"]),
+      event: diagnosticEnum(event.event, ["end", "error", "close", "cleanup"]),
+      errorCategory:
+        event.errorCategory === null
+          ? null
+          : diagnosticEnum(event.errorCategory, [
+              "reset",
+              "broken-pipe",
+              "refused",
+              "timeout",
+              "other",
+            ]),
+      hadError: event.hadError,
+    };
+  });
+}
+
+function desktopRfbLifecycle(value: unknown) {
+  return diagnosticEvents(value, (event) => {
+    if (
+      !isRecord(event) ||
+      typeof event.connectedObserved !== "boolean" ||
+      (event.clean !== null && typeof event.clean !== "boolean")
+    ) {
+      throw new Error("Invalid desktop RFB lifecycle");
+    }
+    return {
+      ordinal: reportInteger(event.ordinal, 1_000_000),
+      socketIndex: event.socketIndex === null ? null : reportInteger(event.socketIndex, 9_999),
+      phase: diagnosticEnum(event.phase, [
+        "connecting",
+        "connected",
+        "security-failure",
+        "disconnected",
+      ]),
+      connectedObserved: event.connectedObserved,
+      clean: event.clean,
+      securityStatus:
+        event.securityStatus === null ? null : reportInteger(event.securityStatus, 0xffff_ffff),
+    };
+  });
+}
+
+function desktopGatewayCloses(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid desktop gateway diagnostics");
+  }
+  return {
+    observerCloses: diagnosticEvents(value.observerCloses, (event) => {
+      if (!isRecord(event)) {
+        throw new Error("Invalid desktop observer close");
+      }
+      return {
+        trigger: diagnosticEnum(event.trigger, [
+          "browser-close",
+          "browser-error",
+          "stream-close",
+          "stream-error",
+          "owner-close",
+          "authority-revoked",
+          "invalid-view-only-stream",
+          "authentication-failed",
+        ]),
+        cleanupCode: reportInteger(event.cleanupCode, 65_535),
+        closeCode: reportInteger(event.closeCode, 65_535),
+      };
+    }),
+    sshTunnelExits: diagnosticEvents(value.sshTunnelExits, (event) => {
+      if (!isRecord(event) || typeof event.stopRequested !== "boolean") {
+        throw new Error("Invalid desktop SSH exit");
+      }
+      return {
+        code: event.code === null ? null : reportInteger(event.code, 255),
+        signal:
+          event.signal === null
+            ? null
+            : diagnosticEnum(event.signal, [
+                "SIGHUP",
+                "SIGINT",
+                "SIGQUIT",
+                "SIGILL",
+                "SIGTRAP",
+                "SIGABRT",
+                "SIGBUS",
+                "SIGFPE",
+                "SIGKILL",
+                "SIGUSR1",
+                "SIGSEGV",
+                "SIGUSR2",
+                "SIGPIPE",
+                "SIGALRM",
+                "SIGTERM",
+                "SIGCHLD",
+                "SIGCONT",
+                "SIGSTOP",
+                "SIGTSTP",
+                "SIGTTIN",
+                "SIGTTOU",
+                "SIGURG",
+                "SIGXCPU",
+                "SIGXFSZ",
+                "SIGVTALRM",
+                "SIGPROF",
+                "SIGWINCH",
+                "SIGIO",
+                "SIGSYS",
+              ]),
+        stopRequested: event.stopRequested,
+      };
+    }),
+  };
+}
+
+export async function readDesktopProofGatewayCloses(file: string) {
+  const records = await readDesktopProofLog(file);
+  if (!records) {
+    return null;
+  }
+  const events = (message: string) => {
+    const matching = records.flatMap((record) =>
+      isRecord(record) &&
+      record["0"] === '{"subsystem":"gateway/desktop"}' &&
+      record["2"] === message
+        ? [record["1"]]
+        : [],
+    );
+    return { events: matching.slice(-8), omitted: Math.max(0, matching.length - 8) };
+  };
+  try {
+    return desktopGatewayCloses({
+      observerCloses: events("desktop observer closed"),
+      sshTunnelExits: events("desktop SSH tunnel exited"),
+    });
+  } catch {
+    return null;
+  }
+}
+
 function desktopViewerResizeFailure(value: unknown) {
   if (!isRecord(value) || typeof value.pageClosed !== "boolean") {
     throw new Error("Invalid desktop viewer diagnostic");
@@ -129,6 +395,18 @@ function desktopViewerResizeFailure(value: unknown) {
     socketCount: value.socketCount === null ? null : reportInteger(value.socketCount, 10_000),
     latestReadyState,
     socketCloses: desktopSocketCloses(value.socketCloses),
+    ...(value.nodeStreamCloses !== undefined
+      ? { nodeStreamCloses: desktopNodeStreamCloses(value.nodeStreamCloses) }
+      : {}),
+    ...(value.endpointCloses !== undefined
+      ? { endpointCloses: desktopEndpointCloses(value.endpointCloses) }
+      : {}),
+    ...(value.rfbLifecycle !== undefined
+      ? { rfbLifecycle: desktopRfbLifecycle(value.rfbLifecycle) }
+      : {}),
+    ...(value.gatewayCloses !== undefined
+      ? { gatewayCloses: desktopGatewayCloses(value.gatewayCloses) }
+      : {}),
   };
 }
 
@@ -213,6 +491,11 @@ export function desktopProofTestReport(value: unknown) {
                 }
               : null,
             failures: test.failureMessages.map(publicTestFailure),
+            ...(meta.desktopGatewayReadiness === undefined
+              ? {}
+              : {
+                  gatewayReadiness: desktopGatewayReadiness(meta.desktopGatewayReadiness),
+                }),
             ...(test.status === "failed" && meta.desktopViewerResizeFailure !== undefined
               ? { viewerResize: desktopViewerResizeFailure(meta.desktopViewerResizeFailure) }
               : {}),
@@ -225,7 +508,8 @@ export function desktopProofTestReport(value: unknown) {
 
 export async function readDesktopProofTestReport(file: string) {
   const stat = await lstat(file);
-  if (!stat.isFile() || stat.size > 1024 * 1024) {
+  // Includes both bounded readiness histories and private Vitest failure logs before projection.
+  if (!stat.isFile() || stat.size > 8 * 1024 * 1024) {
     throw new Error("Desktop test report must be a bounded regular file");
   }
   return desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
@@ -334,7 +618,9 @@ export async function withDesktopProofCleanup<T>(
     errors.push(error);
   }
   if (errors.length > 0) {
-    throw new AggregateError(errors, "Desktop proof operation or cleanup failed");
+    throw new AggregateError(errors, "Desktop proof operation or cleanup failed", {
+      cause: errors[0],
+    });
   }
   return result as T;
 }

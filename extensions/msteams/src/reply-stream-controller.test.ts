@@ -594,8 +594,8 @@ describe("createTeamsReplyStreamController", () => {
         } as never,
       });
 
-      await ctrl.pushProgressLine("tool: search");
-      await ctrl.pushProgressLine("tool: exec");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
+      await ctrl.pushItemEvent({ itemId: "exec", title: "tool: exec", phase: "start" });
       expect(stream.update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(5_000);
@@ -648,7 +648,7 @@ describe("createTeamsReplyStreamController", () => {
       });
 
       // One work event schedules the delayed start; the turn finishes first.
-      await ctrl.pushProgressLine("tool: search");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
       ctrl.preparePayload({ text: "done" });
       await ctrl.finalize();
       expect(stream.update).not.toHaveBeenCalled();
@@ -689,16 +689,15 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
     await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
     const lateFailure = {
-      id: "late-failure",
-      kind: "item" as const,
-      label: "Late failure",
-      text: "Late failure",
+      itemId: "late-failure",
+      title: "Late failure",
+      phase: "end",
       status: "failed",
     };
-    await ctrl.pushProgressLine(lateFailure);
+    await ctrl.pushItemEvent(lateFailure);
     await ctrl.finalize();
     await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
-    await ctrl.pushProgressLine(lateFailure);
+    await ctrl.pushItemEvent(lateFailure);
 
     expect(stream.update).not.toHaveBeenCalled();
   });
@@ -765,7 +764,14 @@ describe("createTeamsReplyStreamController", () => {
           streaming: { mode: "progress", progress: { toolProgress: true } },
         } as never,
       });
-      await expect(ctrl.noteProgressWork({ toolName: "exec" })).resolves.toBeUndefined();
+      await ctrl.pushItemEvent({
+        itemId: "tool:exec",
+        name: "exec",
+        title: "Exec",
+        phase: "end",
+        status: "failed",
+      });
+      expect(stream.update).toHaveBeenCalled();
     });
 
     it("swallows StreamCancelledError thrown from stream.emit during finalize", async () => {

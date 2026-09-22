@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -17,6 +18,81 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it.each(["stay", "navigate"] as const)(
+    "offers Undo when an individual archive completes after %s on the Sessions page",
+    async (transition) => {
+      const artifacts = createControlUiE2eArtifactDir(`archive-outcome-${transition}`);
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const main = sessionRow("agent:main:main", "Main", 1);
+      const target = sessionRow("agent:main:pending-archive", "Pending archive", 2, {
+        pinned: true,
+      });
+      const gateway = await installMockGateway(page, {
+        sessions: [main, target],
+        sessionKey: main.key,
+        sessionArchiveFiltering: true,
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const row = page.locator(".session-data-row").filter({ hasText: target.label });
+        await row.waitFor({ state: "visible" });
+        await gateway.deferNext("sessions.patch", { key: target.key, archived: true });
+        await row.getByRole("button", { name: "Open session menu" }).click();
+        await activateSelfRemovingControl(
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Archive session", exact: true }),
+        );
+        const archived = await waitForPatch(
+          gateway,
+          (params) => params.key === target.key && params.archived === true,
+        );
+        expect(archived.params).toMatchObject({
+          key: target.key,
+          expectedSessionId: target.sessionId,
+          archived: true,
+        });
+        const undo = page.getByRole("button", { name: "Undo", exact: true });
+        expect(await undo.count()).toBe(0);
+        if (transition === "navigate") {
+          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+          await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
+        }
+        const destination = new URL(page.url()).pathname;
+        await page.screenshot({ path: `${artifacts}/archive-pending.png` });
+
+        // Only the archive acknowledgement is held; the canonical mock owns its row update.
+        await gateway.resolveDeferred("sessions.patch");
+        await undo.waitFor({ state: "visible" });
+        await page.screenshot({ path: `${artifacts}/archive-completed.png` });
+        await undo.click();
+        const restored = await waitForPatch(
+          gateway,
+          (params) => params.key === target.key && params.archived === false,
+        );
+        expect(restored.params).toMatchObject({
+          key: target.key,
+          expectedSessionId: target.sessionId,
+          archived: false,
+          pinned: true,
+        });
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${target.key}"]`)
+          .waitFor({ state: "visible" });
+        expect(new URL(page.url()).pathname).toBe(destination);
+      } finally {
+        try {
+          await page.screenshot({ path: `${artifacts}/final-state.png` });
+        } finally {
+          await context.close();
+        }
+      }
+    },
+  );
+
   it.each([
     { surface: "header", reconnect: false },
     { surface: "header", reconnect: true },
@@ -43,7 +119,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await rowFor(archived.key).hover();
-          await rowFor(archived.key).getByRole("button", { name: "Open session menu" }).click();
+          await rowFor(archived.key).click({ button: "right" });
         }
         await activateSelfRemovingControl(
           page
@@ -159,6 +235,7 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         if (queued) {
+          await undo.hover();
           const listsBefore = (
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;

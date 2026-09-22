@@ -114,6 +114,7 @@ export function createRealtimeVoiceBridgeSession(
   let phase: RealtimeVoiceSessionPhase = "admitting";
   let terminalBeforeBridgeAdoption = false;
   let closeReported = false;
+  let detached = false;
   let closeCompletion: Promise<void> | undefined;
   const isAdmitting = () => phase === "admitting";
   const requireBridge = () => {
@@ -149,6 +150,7 @@ export function createRealtimeVoiceBridgeSession(
         return closeCompletion;
       }
       const bridge = requireBridge();
+      detached = isAdmitting() && options?.disposition === "detach";
       phase = "closing";
       try {
         const completion = bridge.close(options);
@@ -259,7 +261,8 @@ export function createRealtimeVoiceBridgeSession(
             request.signal?.throwIfAborted();
             const result = await runAgentConsult(request);
             request.signal?.throwIfAborted();
-            if (!isAdmitting()) {
+            // Replacement retires the transport, not work admitted before the handoff.
+            if (!isAdmitting() && !detached) {
               throw new Error("Realtime voice session is closed");
             }
             return result;

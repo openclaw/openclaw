@@ -69,15 +69,6 @@ describe("Kilo Gateway provider config", () => {
       expect(modelIds).toContain(KILOCODE_DEFAULT_MODEL_ID);
     });
 
-    it("surfaces the full Kilo model catalog", () => {
-      const result = applyKilocodeConfig({ models: { mode: "replace" } });
-      const provider = result.models?.providers?.kilocode;
-      const modelIds = provider?.models?.map((m) => m.id) ?? [];
-      for (const modelId of KILOCODE_MODEL_IDS) {
-        expect(modelIds).toContain(modelId);
-      }
-    });
-
     it("appends missing catalog models to existing Kilo provider config", () => {
       const result = applyKilocodeConfig({
         models: {

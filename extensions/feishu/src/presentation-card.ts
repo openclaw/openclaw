@@ -1,4 +1,3 @@
-// Feishu plugin module implements presentation card behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   legacyInteractiveReplyToPresentation,

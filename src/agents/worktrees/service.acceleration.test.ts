@@ -5,16 +5,23 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as commandExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import * as capacity from "./capacity.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
+import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -33,9 +40,10 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 describe("ManagedWorktreeService filesystem acceleration", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -59,18 +67,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     acceleration = undefined;
     // Real Git and the production lifecycle run on every host; only native
     // subvolume operations are replaced with independent directory copies.
-    backend = {
-      id: "btrfs",
-      estimateCloneBytes: (_entries, indexBytes) => 16 * 1024 ** 2 + 2 * indexBytes,
-      createTemplate: vi.fn(async (destination, options) => {
-        options.commitGuard();
-        await fs.mkdir(destination);
-      }),
-      cloneTemplate: vi.fn(async (source, destination, options) => {
-        options.commitGuard();
-        await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
-      }),
-    };
+    backend = createCopyWorktreeBackend();
     vi.mocked(detectWorktreeFilesystemBackend).mockReset().mockResolvedValue(backend);
     service = new ManagedWorktreeService({
       env,
@@ -79,34 +76,120 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
-  it.each(["warm", "small", "restore", "cold", "disabled", "invalid", "fallback"])(
-    "admits only reusable source clones under disk pressure (%s)",
-    async (mode) => {
-      const sourceBytes = mode === "small" ? 32 * 1024 : 32 * 1024 ** 2;
-      await fs.writeFile(path.join(repo, "large.bin"), Buffer.alloc(sourceBytes, 7));
-      await git(repo, "add", "large.bin");
-      await git(repo, "commit", "-m", "large source");
-      let restoreId: string | undefined;
-      if (mode !== "cold") {
-        const seed = await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
-        if (mode === "restore") {
-          await fs.writeFile(path.join(seed.path, "README.md"), "saved work\n");
-          await service.remove({ id: seed.id, reason: "archive" });
-          restoreId = seed.id;
+  it.each([
+    "warm",
+    "small",
+    "restore",
+    "remote-restore",
+    "cold",
+    "disabled",
+    "invalid",
+    "fallback",
+  ])("admits only reusable source clones under disk pressure (%s)", async (mode) => {
+    const sourceBytes = mode === "small" ? 32 * 1024 : 32 * 1024 ** 2;
+    await fs.writeFile(path.join(repo, "large.bin"), Buffer.alloc(sourceBytes, 7));
+    await git(repo, "add", "large.bin");
+    await git(repo, "commit", "-m", "large source");
+    const restores = mode === "restore" || mode === "remote-restore";
+    if (mode === "remote-restore") {
+      await git(repo, "push", "origin", "main");
+    }
+    let restoreId: string | undefined;
+    if (mode !== "cold") {
+      const seed = await service.create({
+        repoRoot: repo,
+        name: "seed",
+        baseRef: mode === "remote-restore" ? "origin/main" : "HEAD",
+      });
+      if (mode === "remote-restore") {
+        expect(await git(repo, "config", "--get", `branch.${seed.branch}.remote`)).toBe("origin");
+      }
+      if (restores) {
+        await fs.writeFile(path.join(seed.path, "README.md"), "saved work\n");
+        await service.remove({ id: seed.id, reason: "archive" });
+        restoreId = seed.id;
+        if (mode === "remote-restore") {
+          await expect(
+            git(repo, "config", "--get", `branch.${seed.branch}.remote`),
+          ).rejects.toThrow();
         }
       }
-      if (mode === "disabled") {
-        acceleration = false;
+    }
+    if (mode === "disabled") {
+      acceleration = false;
+    }
+    if (mode === "invalid") {
+      await fs.writeFile(path.join(listTemplates(env)[0]!.path, "README.md"), "changed template");
+    }
+    if (mode === "fallback") {
+      vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
+    }
+    const available = 16 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
+    const stats = fsSync.statfsSync(repo);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
+      type: stats.type,
+      files: stats.files,
+      ffree: stats.ffree,
+      frsize: stats.frsize,
+      bsize: 4096,
+      blocks: 1024 ** 4 / 4096,
+      bavail: available / 4096,
+      bfree: available / 4096,
+    });
+    const result = restoreId
+      ? service.restore({ id: restoreId })
+      : service.create({ repoRoot: repo, name: "limited", baseRef: "HEAD" });
+    if (mode === "warm" || restores || mode === "small") {
+      const created = await result;
+      expect((await fs.stat(path.join(created.path, "large.bin"))).size).toBe(sourceBytes);
+      if (mode === "small") {
+        expect(backend.cloneTemplate).toHaveBeenCalledTimes(1);
       }
-      if (mode === "invalid") {
-        await fs.writeFile(path.join(listTemplates(env)[0]!.path, "README.md"), "changed template");
+      if (restores) {
+        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+          "saved work\n",
+        );
+        expect(await git(created.path, "status", "--porcelain")).toBe("M README.md");
+        expect(await git(created.path, "rev-parse", "HEAD")).toBe(
+          await git(repo, "rev-parse", "HEAD"),
+        );
+      } else {
+        expect(await git(created.path, "status", "--porcelain")).toBe("");
       }
+    } else {
+      await expect(result).rejects.toThrow(/disk space/i);
       if (mode === "fallback") {
-        vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
+        expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
       }
-      const available = 16 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
+      expect(await git(repo, "branch", "--list", "openclaw/limited")).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/limited");
+      expect(
+        (await service.listRegistryRecords()).some(
+          (record) => record.branch === "openclaw/limited",
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it.each(["cold", "warm"])(
+    "admits the registered commit before preparing a %s template and pins fallback to it",
+    async (cache) => {
+      const initial = await git(repo, "rev-parse", "HEAD");
+      const sourceBytes = 32 * 1024 ** 2;
+      await fs.writeFile(path.join(repo, "large.bin"), Buffer.alloc(sourceBytes, 7));
+      await git(repo, "add", "large.bin");
+      await git(repo, "commit", "-m", "larger checkout source");
+      const larger = await git(repo, "rev-parse", "HEAD");
+      await git(repo, "checkout", "--detach", initial);
+      const sourceRef = "refs/remotes/origin/racing";
+      await git(repo, "update-ref", sourceRef, initial);
+      if (cache === "warm") {
+        await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
+      }
+      const before = await service.listRegistryRecords();
       const stats = fsSync.statfsSync(repo);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
+      let available = 16 * 1024 ** 3 + 24 * 1024 ** 2;
+      vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
         type: stats.type,
         files: stats.files,
         ffree: stats.ffree,
@@ -115,38 +198,46 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         blocks: 1024 ** 4 / 4096,
         bavail: available / 4096,
         bfree: available / 4096,
+      }));
+      let advanced = false;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (
+          !advanced &&
+          argv[0] === "git" &&
+          argv.includes("worktree") &&
+          argv.includes("add") &&
+          argv.at(-1) === "origin/racing"
+        ) {
+          await git(repo, "update-ref", sourceRef, larger, initial);
+          advanced = true;
+        }
+        return await realRunCommand(argv, options);
       });
-      const result = restoreId
-        ? service.restore({ id: restoreId })
-        : service.create({ repoRoot: repo, name: "limited", baseRef: "HEAD" });
-      if (mode === "warm" || mode === "restore" || mode === "small") {
-        const created = await result;
-        expect((await fs.stat(path.join(created.path, "large.bin"))).size).toBe(sourceBytes);
-        if (mode === "small") {
-          expect(backend.cloneTemplate).toHaveBeenCalledTimes(1);
-        }
-        if (mode === "restore") {
-          expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
-            "saved work\n",
-          );
-          expect(await git(created.path, "status", "--porcelain")).toBe("M README.md");
-          expect(await git(created.path, "rev-parse", "HEAD")).toBe(
-            await git(repo, "rev-parse", "HEAD"),
-          );
-        } else {
-          expect(await git(created.path, "status", "--porcelain")).toBe("");
-        }
-      } else {
-        await expect(result).rejects.toThrow(/disk space/i);
-        if (mode === "fallback") {
-          expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
-        }
-        expect(await git(repo, "branch", "--list", "openclaw/limited")).toBe("");
-        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/limited");
-        expect(
-          service.listRegistryRecords().some((record) => record.branch === "openclaw/limited"),
-        ).toBe(false);
+      const params = { repoRoot: repo, name: "racing", baseRef: "origin/racing" };
+      await expect(service.create(params)).rejects.toThrow(/disk space/i);
+      expect(advanced).toBe(true);
+      expect(await service.listRegistryRecords()).toEqual(before);
+      expect(await git(repo, "branch", "--list", "openclaw/racing")).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/racing");
+      for (const template of listTemplates(env)) {
+        await expect(fs.access(path.join(template.path, "large.bin"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       }
+
+      available = 16 * 1024 ** 3 + 96 * 1024 ** 2;
+      vi.mocked(backend.cloneTemplate).mockImplementationOnce(async () => {
+        await git(repo, "update-ref", sourceRef, initial, larger);
+        throw new Error("clone unavailable after the source ref moved");
+      });
+      const created = await service.create(params);
+      expect(await git(repo, "rev-parse", sourceRef)).toBe(initial);
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(larger);
+      expect((await fs.stat(path.join(created.path, "large.bin"))).size).toBe(sourceBytes);
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+      expect(
+        await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+      ).toBe("origin/racing");
     },
   );
 
@@ -357,8 +448,146 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect((await service.list()).map((entry) => entry.id)).toEqual([created.id]);
   });
 
+  it.each(["advanced", "detached", "redirected"])(
+    "preserves files when clone fallback finds a %s worktree HEAD",
+    async (change) => {
+      const initial = await git(repo, "rev-parse", "HEAD");
+      const later = await git(repo, "commit-tree", "HEAD^{tree}", "-p", initial, "-m", "later");
+      await git(repo, "branch", "other-owner", initial);
+      const branch = "openclaw/guarded-fallback";
+      let registration = "";
+      let destination = "";
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await realRunCommand(argv, options);
+        if (
+          argv[0] === "git" &&
+          argv.includes("worktree") &&
+          argv.includes("add") &&
+          argv.includes(branch) &&
+          result.code === 0
+        ) {
+          destination = argv.at(-2)!;
+          registration = await git(destination, "rev-parse", "--absolute-git-dir");
+        }
+        return result;
+      });
+      vi.mocked(backend.cloneTemplate).mockImplementationOnce(async (source, target) => {
+        assert(registration);
+        await fs.cp(source, target, { recursive: true, verbatimSymlinks: true });
+        await fs.writeFile(path.join(target, "sentinel.txt"), "new owner's files\n");
+        if (change === "advanced") {
+          await git(repo, "update-ref", `refs/heads/${branch}`, later, initial);
+        } else if (change === "detached") {
+          await git(repo, "--git-dir", registration, "update-ref", "--no-deref", "HEAD", initial);
+        } else {
+          await git(
+            repo,
+            "--git-dir",
+            registration,
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/other-owner",
+          );
+        }
+        // The copied .git still points at the template when cloning fails.
+        throw new Error("clone failed after worktree ownership changed");
+      });
+
+      await expect(
+        service.create({ repoRoot: repo, name: "guarded-fallback", baseRef: "HEAD" }),
+      ).rejects.toThrow(/changed|preserve/i);
+      expect(await fs.readFile(path.join(destination, "sentinel.txt"), "utf8")).toBe(
+        "new owner's files\n",
+      );
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(destination);
+      expect(await git(repo, "rev-parse", `refs/heads/${branch}`)).toBe(
+        change === "advanced" ? later : initial,
+      );
+      const symbolic = git(repo, "--git-dir", registration, "symbolic-ref", "HEAD");
+      if (change === "detached") {
+        await expect(symbolic).rejects.toThrow();
+      } else {
+        expect(await symbolic).toBe(
+          change === "redirected" ? "refs/heads/other-owner" : `refs/heads/${branch}`,
+        );
+      }
+      expect(await service.listRegistryRecords()).toEqual([]);
+    },
+  );
+
+  it("preserves an in-progress clone while garbage collection waits for allocation", async () => {
+    acceleration = false;
+    const existing = await service.create({ repoRoot: repo, name: "existing", baseRef: "HEAD" });
+    acceleration = true;
+    const inventoryStarted = createDeferredCore();
+    const finishInventory = createDeferredCore();
+    const readSize = capacity.directorySizeBytes;
+    vi.spyOn(capacity, "directorySizeBytes").mockImplementation(async (...args) => {
+      if (args[0] === existing.path) {
+        inventoryStarted.resolve();
+        await finishInventory.promise;
+      }
+      return await readSize(...args);
+    });
+    const cloneStarted = createDeferredCore<string>();
+    const finishClone = createDeferredCore();
+    vi.mocked(backend.cloneTemplate).mockImplementationOnce(
+      async (source, destination, options) => {
+        await fs.mkdir(destination);
+        await fs.writeFile(path.join(destination, "partial.txt"), "in-progress clone\n");
+        cloneStarted.resolve(destination);
+        await finishClone.promise;
+        options.commitGuard();
+        await fs.unlink(path.join(destination, "partial.txt"));
+        await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
+      },
+    );
+    const collection = service.gc({
+      limits: { maxTotalSizeBytes: Number.MAX_SAFE_INTEGER },
+    });
+    let creation: ReturnType<typeof service.create> | undefined;
+    try {
+      await Promise.race([
+        inventoryStarted.promise,
+        collection.then(() => {
+          throw new Error("Collection completed without inventorying the existing checkout");
+        }),
+      ]);
+      creation = service.create({ repoRoot: repo, name: "allocating", baseRef: "HEAD" });
+      const destination = await Promise.race([
+        cloneStarted.promise,
+        creation.then(() => {
+          throw new Error("Creation completed without starting a clone");
+        }),
+      ]);
+      const contended = createDeferredCore();
+      const sleep = backoff.sleepWithAbort;
+      vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
+        contended.resolve();
+        return await sleep(...args);
+      });
+      finishInventory.resolve();
+      await Promise.race([contended.promise, collection]);
+      expect(await fs.readFile(path.join(destination, "partial.txt"), "utf8")).toBe(
+        "in-progress clone\n",
+      );
+    } finally {
+      finishInventory.resolve();
+      finishClone.resolve();
+      await Promise.all([creation, collection]);
+    }
+    assert(creation);
+    const created = await creation;
+    expect((await collection).orphansDeleted).toBe(0);
+    expect((await service.listRegistryRecords()).map((record) => record.id).toSorted()).toEqual(
+      [existing.id, created.id].toSorted(),
+    );
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+  });
+
   it.each([false, true])(
-    "prunes expired snapshots despite an unavailable allocation lease with acceleration %s",
+    "retains expired snapshots until allocation cleanup can run with acceleration %s",
     async (enabled) => {
       acceleration = enabled;
       const created = await service.create({ repoRoot: repo, name: "expired", baseRef: "HEAD" });
@@ -368,11 +597,18 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         .spyOn(stateLease, "withOpenClawStateLease")
         .mockRejectedValue(new Error("allocation lease unavailable"));
 
-      expect((await service.gc()).snapshotsPruned).toBe(1);
-      expect(service.listRegistryRecords()).toEqual([]);
-      await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+      expect(await service.listRegistryRecords()).toEqual([
+        expect.objectContaining({ id: created.id, snapshotRef: removed.snapshotRef }),
+      ]);
+      expect(await git(repo, "rev-parse", removed.snapshotRef!)).toMatch(/^[a-f0-9]+$/u);
       expect(listTemplates(env)).toHaveLength(enabled ? 1 : 0);
-      expect(allocation).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      allocation.mockRestore();
+
+      expect((await service.gc()).snapshotsPruned).toBe(1);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+      expect(listTemplates(env)).toEqual([]);
     },
   );
 
@@ -467,12 +703,12 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   });
 
   it.each(["current", "revoked"] as const)(
-    "handles %s authority when snapshot and native fallback both fail",
+    "handles %s allocation authority when snapshot and native fallback both fail",
     async (authority) => {
       vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
       let failedDestination: string | undefined;
       vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-        if (argv[0] === "git" && argv.includes("reset") && argv.includes("--hard")) {
+        if (argv[0] === "git" && argv.includes("read-tree") && argv.includes("-u")) {
           failedDestination = argv[argv.indexOf("-C") + 1];
           return {
             stdout: "",
@@ -497,18 +733,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       });
       await held.promise;
       const queueCalls = vi.spyOn(gitExec, "enqueueGitRefMutation");
-      let current = true;
-      const revoked = new Error("checkout authority revoked");
       const pending = service
         .create({
           repoRoot: repo,
           name: "failed-fallback",
           baseRef: "HEAD",
-          commitGuard: () => {
-            if (!current) {
-              throw revoked;
-            }
-          },
         })
         .then(
           () => undefined,
@@ -524,12 +753,27 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         expect(failedDestination).toBeDefined();
         expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
         await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
-        current = authority === "current";
+        if (authority === "revoked") {
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              const changed = executeSqliteQuerySync(
+                db,
+                getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+                  .updateTable("state_leases")
+                  .set({ owner: "successor" })
+                  .where("scope", "=", "core:managed-worktrees:create")
+                  .where("lease_key", "=", "capacity"),
+              );
+              expect(changed.numAffectedRows).toBe(1n);
+            },
+            { env },
+          );
+        }
         release.resolve();
         await holder;
         const error = await pending;
         if (authority === "revoked") {
-          expect.soft(error === revoked).toBe(true);
+          expect(error).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
           expect(await git(repo, "branch", "--list", branch)).toBe(branch);
           expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
         } else {
@@ -541,7 +785,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         }
         expect(failedDestination).toBeDefined();
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("failed-fallback");
-        expect(service.listRegistryRecords()).toEqual([]);
+        expect(await service.listRegistryRecords()).toEqual([]);
         await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         release.resolve();
@@ -568,8 +812,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
         "irreplaceable worktree edit\n",
       );
-      expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-      expect(service.listRegistryRecords()[0]?.removedAt).toBeUndefined();
+      expect(await service.listRegistryRecords()).toEqual([
+        expect.objectContaining({ id: created.id }),
+      ]);
+      expect((await service.listRegistryRecords())[0]?.removedAt).toBeUndefined();
     },
   );
 
@@ -687,7 +933,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(repo, "rev-parse", removed.snapshotRef!)).toBe(snapshot);
     expect(await git(repo, "branch", "--list", created.branch)).toBe("");
     await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(service.listRegistryRecords()[0]?.removedAt).toBeDefined();
+    expect((await service.listRegistryRecords())[0]?.removedAt).toBeDefined();
     const restored = await service.restore({ id: created.id });
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
     expect(await git(restored.path, "status", "--porcelain")).toBe("M README.md");

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isMarkedAsUntransferable, type Transferable } from "node:worker_threads";
+import type { Transferable } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorktreeRepositoryError } from "../agents/worktrees/errors.js";
 import {
@@ -13,7 +13,8 @@ import {
   type GitWorkerHostRequest,
   type GitWorkerReply,
 } from "./git-worker-contract.js";
-import type { WorkerTaskChannel } from "./worker-task-pool.js";
+import type { WorkerTaskChannel } from "./worker-task-server.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type PendingHostRequest = {
   request: GitWorkerHostRequest;
@@ -23,6 +24,7 @@ type PendingHostRequest = {
 };
 type GitWorkerContext = {
   channel: WorkerTaskChannel;
+  filesystemRefs: boolean;
   pending: PendingHostRequest[];
   drain?: Promise<void>;
   closed: boolean;
@@ -58,28 +60,20 @@ export function restoreGitWorkerFailure(failure: GitWorkerFailure): Error {
   return error;
 }
 
-/** Only uniquely owned buffers can be transferred; pooled Buffers share unrelated bytes. */
-export function ownedGitWorkerBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
-  if (
-    bytes.buffer instanceof ArrayBuffer &&
-    bytes.byteOffset === 0 &&
-    bytes.byteLength === bytes.buffer.byteLength &&
-    !isMarkedAsUntransferable(bytes.buffer)
-  ) {
-    return new Uint8Array(bytes.buffer);
-  }
-  return Uint8Array.from(bytes);
-}
-
 export function hasGitWorkerContext(): boolean {
   return context.getStore() !== undefined;
+}
+
+export function canReadGitFilesystemRefs(): boolean {
+  return context.getStore()?.filesystemRefs === true;
 }
 
 export async function withGitWorkerContext<T>(
   channel: WorkerTaskChannel,
   operation: () => Promise<T>,
+  filesystemRefs = false,
 ): Promise<T> {
-  const state: GitWorkerContext = { channel, pending: [], closed: false };
+  const state: GitWorkerContext = { channel, filesystemRefs, pending: [], closed: false };
   return await context.run(state, async () => {
     try {
       return await operation();
@@ -97,7 +91,7 @@ async function requestHost(request: GitWorkerHostRequest): Promise<unknown> {
   }
   const transfers: Transferable[] = [];
   if (request.type === "workspace.inventory.write") {
-    const bytes = ownedGitWorkerBytes(request.input.bytes);
+    const bytes = ownedWorkerBytes(request.input.bytes);
     request.input.bytes = bytes;
     transfers.push(bytes.buffer);
   }

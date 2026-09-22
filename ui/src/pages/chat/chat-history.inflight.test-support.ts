@@ -13,7 +13,7 @@ export function createState(result: ChatHistoryResult): TestState {
     requestHandlers: { "chat.history": result },
     sessionKey: "main",
   });
-  vi.spyOn(host.sessions, "refreshReplacement").mockResolvedValue(null);
+  vi.spyOn(host.sessions, "reconcileMutation").mockResolvedValue({ status: "refreshed" });
   vi.spyOn(host.sessions, "reconcileRunTerminal").mockReturnValue(false);
   vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
   onTestFinished(() => host.sessions.dispose());

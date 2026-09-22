@@ -73,7 +73,7 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
       pluginRuntimeRefreshContinuation: true,
       pluginRuntimeRefreshMessages: messages
         ? [...(params.pluginRuntimeRefreshMessages ?? []), ...messages]
-        : params.pluginRuntimeRefreshMessages,
+        : (params.pluginRuntimeRefreshMessages ?? []),
       contextEngineLogicalTurnLease: undefined,
       modelHasVision: undefined,
       modelThinkingCapability: undefined,

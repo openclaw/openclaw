@@ -36,7 +36,7 @@ import {
   prepareDeferredPluginSessionImportReader,
   preserveDeferredPluginSessionSource,
 } from "./deferred-plugin-session-sources.js";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFirstLineSync } from "./first-line-read.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
@@ -449,21 +449,7 @@ export function resolveStaleLegacySessionFile(params: {
   if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
     return undefined;
   }
-  const readFirstLine = () => {
-    const fd = fs.openSync(targetSessionFile, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  };
+  const readFirstLine = () => readFirstLineSync(targetSessionFile);
   try {
     const firstLine = readFirstLine();
     const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
@@ -988,7 +974,11 @@ export async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
 
-    const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({ storePath, env });
+    const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
+      cfg: params.cfg,
+      target,
+      env,
+    });
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     let migrated = 0;
     let consumed = 0;

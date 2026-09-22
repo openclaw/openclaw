@@ -10,6 +10,7 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -84,7 +85,7 @@ async function runColdMutation(
 ): Promise<SessionColdMutationResult> {
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
-    async ({ assertCurrent: assertRequestCurrent, commitGate }) => {
+    async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
       const retained = await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
@@ -115,6 +116,7 @@ async function runColdMutation(
               cleanupIncomplete?: boolean;
             }>({
               diagnostics,
+              signal,
               expectedMessageType: "reclaimed",
               validationOwner: { database, isCurrent: claim.isCurrent },
               onCommitRequest: () => {
@@ -148,6 +150,18 @@ async function runColdMutation(
           throw new Error(
             "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
           );
+        }
+        if (plan.kind === "cold-restore" && completed.result.restored && claim.isCurrent()) {
+          const session = executeSqliteQueryTakeFirstSync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_windows")
+              .select("session_key")
+              .where("session_id", "=", plan.sessionId),
+          );
+          if (session) {
+            sessionChanges.emit({ storePath: database.path, sessionKey: session.session_key });
+          }
         }
         return completed.result;
       } finally {
@@ -535,7 +549,6 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig): Promi
             { databaseLabel: database.path, operationLabel: "session cold storage inventory" },
           ),
         { agentId, path: storePath },
-        { throwOnMissingTable: true },
       );
       const directory = path.join(resolveSessionArtifactDirectory(storePath), "cold");
       const files = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {

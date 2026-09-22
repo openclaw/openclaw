@@ -2,6 +2,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 
+export function orderedBoardTabs(tabs: readonly BoardTab[]): BoardTab[] {
+  return tabs.toSorted(
+    (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
+  );
+}
+
 function renderTab(tab: BoardTab, activeTabId: string, hoverTabId: string): TemplateResult {
   const active = tab.tabId === activeTabId;
   const dropTarget = tab.tabId === hoverTabId;

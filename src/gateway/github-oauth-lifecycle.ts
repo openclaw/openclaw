@@ -28,6 +28,7 @@ import {
   writeGitHubDeviceAuthorizationRecord,
   writeGitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
+import { clearNativeGitHubTokenCache } from "../agents/github-read-identity.js";
 import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import {
   createManagedGitHubProfileId,
@@ -112,6 +113,7 @@ export function createGitHubOAuthLifecycle(params: {
   };
 
   const queueOAuthCleanup = (profileId: string) => {
+    clearNativeGitHubTokenCache();
     try {
       deleteGitHubOAuthRecord(profileId);
     } catch {

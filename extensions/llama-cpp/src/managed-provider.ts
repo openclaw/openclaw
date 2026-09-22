@@ -36,17 +36,14 @@ import { wrapLlamaServerStream } from "./external-server/stream.js";
 import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
-function wrapManagedLlamaCppStream(
-  ctx: ProviderWrapStreamFnContext,
-  streamFn = ctx.streamFn,
-): StreamFn | undefined {
+function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const inner = wrapLlamaServerStream(ctx);
   const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   if (!providerConfig?.localService) {
-    return undefined;
+    return inner;
   }
-  const inner = streamFn;
   const selectedModel = ctx.model;
-  if (!inner || !selectedModel) {
+  if (!selectedModel) {
     return undefined;
   }
   return async (...args: Parameters<typeof inner>) => {
@@ -152,13 +149,8 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
         ? undefined
         : await prepareLlamaServerDynamicModel(ctx),
     reconcileLocalService: reconcileManagedLlamaServer,
-    wrapSimpleCompletionStreamFn: wrapManagedLlamaCppStream,
-    wrapStreamFn: (ctx) => {
-      const streamFn = wrapLlamaServerStream(ctx);
-      return ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
-        ? wrapManagedLlamaCppStream(ctx, streamFn)
-        : streamFn;
-    },
+    wrapSimpleCompletionStreamFn: wrapLlamaCppStream,
+    wrapStreamFn: wrapLlamaCppStream,
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
     wizard: {
       modelPicker: {

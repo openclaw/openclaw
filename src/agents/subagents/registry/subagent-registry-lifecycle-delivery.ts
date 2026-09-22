@@ -29,7 +29,7 @@ import {
 } from "../../announce-idempotency.js";
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -42,11 +42,8 @@ import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
-import type {
-  PendingFinalDeliveryPayload,
-  RequesterSettleWakeState,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { PendingFinalDeliveryPayload } from "./subagent-registry-read.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 

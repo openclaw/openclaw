@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabServerHandle } from "./lab-server.types.js";
@@ -62,7 +62,6 @@ export async function runQaRuntimeParitySuite(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   concurrency: number;
   selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   startLab?: QaSuiteStartLabFn;
@@ -85,7 +84,6 @@ export async function runQaRuntimeParitySuite(params: {
       evidenceMode: params.evidenceMode,
       channelId: params.channelId,
       channelDriver: params.channelDriver ?? undefined,
-      channelDriverSelection: params.channelDriverSelection,
     },
     params,
   );
@@ -103,7 +101,6 @@ export async function runQaRuntimeParitySuite(params: {
     adapterFactories: params.adapterFactories,
     channelDriver: params.channelDriver,
     channelId: params.channelId,
-    channelDriverSelection: params.channelDriverSelection,
     adapterOptions: params.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
@@ -123,6 +120,7 @@ export async function runQaRuntimeParitySuite(params: {
   let runError: unknown;
   let parentTransportCleaned = false;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let transportArtifacts: QaRunnerTransportArtifacts | undefined;
   let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
   const startedScenarioIndexes = new Set<number>();
   try {
@@ -158,7 +156,6 @@ export async function runQaRuntimeParitySuite(params: {
             evidenceMode: params.evidenceMode,
             channelId: params.channelId,
             channelDriver: params.channelDriver ?? undefined,
-            channelDriverSelection: params.channelDriverSelection,
           },
           {
             ...params,
@@ -209,7 +206,6 @@ export async function runQaRuntimeParitySuite(params: {
                     providerMode: params.providerMode,
                     transportId: params.transportId,
                     channelDriver: params.channelDriver ?? undefined,
-                    channelDriverSelection: params.channelDriverSelection,
                     primaryModel: remapModelRefForForcedRuntime({
                       modelRef: params.primaryModel,
                       providerMode: params.providerMode,
@@ -362,6 +358,7 @@ export async function runQaRuntimeParitySuite(params: {
       },
     );
 
+    transportArtifacts = await transport.captureArtifacts?.({ outputDir: params.outputDir });
     terminalScenarios = scenarios;
     publishTerminalResult = async () => {
       const finishedAt = new Date();
@@ -381,9 +378,9 @@ export async function runQaRuntimeParitySuite(params: {
           alternateModel: params.alternateModel,
           fastMode: params.fastMode,
           concurrency: params.concurrency,
-          channel: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+          channel: params.channelId ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          channelDriverSelection: params.channelDriverSelection,
+          transportArtifacts,
           scenarioIds:
             params.scenarioIds && params.scenarioIds.length > 0
               ? params.selectedScenarios.map((scenario) => scenario.id)

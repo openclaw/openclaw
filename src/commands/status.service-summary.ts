@@ -1,9 +1,11 @@
 // Reads service manager state for status reports.
 // Converts gateway/node launchd/systemd state into a compact summary shape.
 
+import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { formatServiceLabel } from "../daemon/runtime-format.js";
 import {
+  inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
   type GatewayServiceLayoutSummary,
 } from "../daemon/service-layout.js";
@@ -24,6 +26,7 @@ type ServiceStatusSummary = {
   runtime: GatewayServiceRuntime | undefined;
   layout?: GatewayServiceLayoutSummary;
   wrapperPath?: string;
+  installationDrift?: string;
 };
 
 function normalizeServiceWrapperPath(
@@ -38,12 +41,18 @@ export async function readServiceStatusSummary(
   service: GatewayService,
   fallbackLabel: string,
   timeoutMs?: number,
+  activePackageRoot?: string,
 ): Promise<ServiceStatusSummary> {
   try {
     const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
     // Layout is optional enrichment; a broken manifest or inaccessible path
     // must not erase service-manager evidence that the gateway is running.
     const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
+    const installationDrift = activePackageRoot
+      ? await inspectGatewayServiceInstallationDrift(layout, activePackageRoot).catch(
+          () => undefined,
+        )
+      : undefined;
     const wrapperPath = normalizeServiceWrapperPath(state.command);
     const managedByOpenClaw = state.installed;
     // A running unmanaged process still counts as installed for status display.
@@ -66,6 +75,15 @@ export async function readServiceStatusSummary(
       runtime: state.runtime,
       ...(layout ? { layout } : {}),
       ...(wrapperPath ? { wrapperPath } : {}),
+      ...(installationDrift
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              undefined,
+              state.env,
+            ),
+          }
+        : {}),
     };
   } catch (error) {
     // Status output should survive service-manager errors and show an unknown row.

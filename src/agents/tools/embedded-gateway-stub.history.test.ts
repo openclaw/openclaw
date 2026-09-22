@@ -9,8 +9,12 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "./embedded-gateway-stub.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
@@ -45,6 +49,8 @@ async function history(params: Record<string, unknown>) {
 
 describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
+  let unbindProjection: () => void;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
@@ -60,9 +66,13 @@ describe("embedded session history anchors", () => {
         },
       });
     }
+    projection = await createSessionRowProjection({ cfg: config });
+    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
   });
 
   afterEach(async () => {
+    unbindProjection?.();
+    projection?.dispose();
     vi.restoreAllMocks();
     await state.cleanup();
   });

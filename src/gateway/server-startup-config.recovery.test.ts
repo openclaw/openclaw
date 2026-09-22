@@ -28,6 +28,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
@@ -189,7 +190,6 @@ async function expectStartupResult(params: {
     }),
   ).resolves.toEqual({
     snapshot: params.snapshot,
-    wroteConfig: false,
     pluginMetadataSnapshot,
   });
 }
@@ -410,7 +410,6 @@ describe("gateway startup config validation", () => {
     expect(result.snapshot.sourceConfig.models?.providers?.anthropic).toEqual(overlay);
     expectPluginAutoEnableFor(sourceConfig);
     expect(runtimeConfig.channels?.telegram?.enabled).toBeUndefined();
-    expect(result.wroteConfig).toBe(false);
     expect(configIo.writeConfigFile).not.toHaveBeenCalled();
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
   });

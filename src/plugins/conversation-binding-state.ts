@@ -1,47 +1,79 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDedupeCache, type DedupeCache } from "../infra/dedupe.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { normalizeChannel } from "./conversation-binding-session-key.js";
+import type { PluginBindingApprovalEntry } from "./conversation-binding-state.types.js";
 
+export type { PluginBindingApprovalEntry } from "./conversation-binding-state.types.js";
 const log = createSubsystemLogger("plugins/binding");
-
-export type PluginBindingApprovalEntry = {
-  pluginRoot: string;
-  pluginId: string;
-  pluginName?: string;
-  channel: string;
-  accountId: string;
-  approvedAt: number;
-};
-
 type PluginBindingApprovalsState = { approvals: PluginBindingApprovalEntry[] };
-type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
-
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: DedupeCache;
   approvalsCache: PluginBindingApprovalsState | null;
+  approvalTail?: Promise<void>;
+  operations: Set<Promise<void>>;
+  generation: number;
+  resetting?: Promise<void>;
 };
 
-const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
 export const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState>(
-  pluginBindingGlobalStateKey,
+  Symbol.for("openclaw.plugins.binding.global-state"),
   () => ({
-    // Retain recent outage notices without keeping every historical binding forever.
     fallbackNoticeBindingIds: createDedupeCache({ ttlMs: 0, maxSize: 4_096 }),
     approvalsCache: null,
+    operations: new Set(),
+    generation: 0,
   }),
   (state) => {
-    state.fallbackNoticeBindingIds.clear();
-    state.approvalsCache = null;
+    if (state.resetting) {
+      return state.resetting;
+    }
+    state.generation++;
+    const clear = () => {
+      state.fallbackNoticeBindingIds.clear();
+      state.approvalsCache = null;
+    };
+    if (!state.operations.size && !state.approvalTail) {
+      clear();
+      return undefined;
+    }
+    // Keep admitted decisions and their cache publication owned until settlement.
+    state.resetting = Promise.allSettled([
+      ...state.operations,
+      ...(state.approvalTail ? [state.approvalTail] : []),
+    ]).then(() => {
+      clear();
+      state.resetting = undefined;
+    });
+    return state.resetting;
   },
 );
+
+export async function withPluginBindingApprovalOperation<T>(
+  run: (assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  const state = pluginBindingGlobalState;
+  const generation = state.generation;
+  const assertCurrent = () => {
+    if (state.resetting || state.generation !== generation) {
+      throw new Error("Plugin conversation binding operation closed. Retry the bind request.");
+    }
+  };
+  assertCurrent();
+  let release!: () => void;
+  const retained = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  state.operations.add(retained);
+  try {
+    return await run(assertCurrent);
+  } finally {
+    state.operations.delete(retained);
+    release();
+  }
+}
 
 function buildApprovalScopeKey(params: {
   pluginRoot: string;
@@ -55,83 +87,69 @@ function buildApprovalScopeKey(params: {
   ].join("::");
 }
 
-function loadApprovalsFromDatabase(): PluginBindingApprovalsState {
+function serializeApprovalOperation<T>(run: () => Promise<T>): Promise<T> {
+  const state = pluginBindingGlobalState;
+  const operation = (state.approvalTail ?? Promise.resolve()).then(run);
+  const tail = operation.then(
+    () => {},
+    () => {},
+  );
+  state.approvalTail = tail;
+  void tail.then(() => {
+    if (state.approvalTail === tail) {
+      state.approvalTail = undefined;
+    }
+  });
+  return operation;
+}
+
+async function getApprovals(
+  context: OpenClawStateWorkerContext,
+): Promise<PluginBindingApprovalsState> {
+  if (pluginBindingGlobalState.approvalsCache) {
+    return pluginBindingGlobalState.approvalsCache;
+  }
+  let approvals: PluginBindingApprovalEntry[];
   try {
-    const database = openOpenClawStateDatabase();
-    const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(database.db);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      approvalsDb
-        .selectFrom("plugin_binding_approvals")
-        .select(["plugin_root", "plugin_id", "plugin_name", "channel", "account_id", "approved_at"])
-        .orderBy("plugin_root", "asc")
-        .orderBy("channel", "asc")
-        .orderBy("account_id", "asc"),
-    ).rows;
-    return {
-      approvals: rows.map((row) => ({
-        pluginRoot: row.plugin_root,
-        pluginId: row.plugin_id,
-        pluginName: row.plugin_name ?? undefined,
-        channel: normalizeChannel(row.channel),
-        accountId: normalizeOptionalString(row.account_id) ?? "default",
-        approvedAt: row.approved_at,
-      })),
-    };
+    const { runOpenClawStateWorkerOperation } =
+      await import("../state/openclaw-state-worker-store.js");
+    approvals = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({ type: "plugins.conversationBindingApprovals.read", input: undefined }),
+    );
   } catch (error) {
     log.warn(`plugin binding approvals load failed: ${String(error)}`);
-    return { approvals: [] };
+    approvals = [];
   }
-}
-
-function persistApprovalEntry(entry: PluginBindingApprovalEntry): void {
-  const row = {
-    plugin_root: entry.pluginRoot,
-    channel: normalizeChannel(entry.channel),
-    account_id: entry.accountId.trim() || "default",
-    plugin_id: entry.pluginId,
-    plugin_name: entry.pluginName ?? null,
-    approved_at: entry.approvedAt,
-  };
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      approvalsDb
-        .insertInto("plugin_binding_approvals")
-        .values(row)
-        .onConflict((conflict) =>
-          conflict.columns(["plugin_root", "channel", "account_id"]).doUpdateSet({
-            plugin_id: (eb) => eb.ref("excluded.plugin_id"),
-            plugin_name: (eb) => eb.ref("excluded.plugin_name"),
-            approved_at: (eb) => eb.ref("excluded.approved_at"),
-          }),
-        ),
-    );
-  });
-}
-
-function getApprovals(): PluginBindingApprovalsState {
-  return (pluginBindingGlobalState.approvalsCache ??= loadApprovalsFromDatabase());
+  return (pluginBindingGlobalState.approvalsCache = { approvals });
 }
 
 export function hasPersistentApproval(params: {
   pluginRoot: string;
   channel: string;
   accountId: string;
-}): boolean {
+}): Promise<boolean> {
   const key = buildApprovalScopeKey(params);
-  return getApprovals().approvals.some((entry) => buildApprovalScopeKey(entry) === key);
+  const context = captureOpenClawStateWorkerContext();
+  return serializeApprovalOperation(async () =>
+    (await getApprovals(context)).approvals.some((entry) => buildApprovalScopeKey(entry) === key),
+  );
 }
 
-export function addPersistentApproval(entry: PluginBindingApprovalEntry): void {
-  // Persist before publishing the grant: a failed SQLite write must not leave the
-  // cache auto-approving later binds with permission that never reached disk.
-  persistApprovalEntry(entry);
-  const key = buildApprovalScopeKey(entry);
-  const approvals = getApprovals().approvals.filter(
-    (existing) => buildApprovalScopeKey(existing) !== key,
-  );
-  approvals.push(entry);
-  pluginBindingGlobalState.approvalsCache = { approvals };
+export function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise<void> {
+  const prepared = { ...entry };
+  const key = buildApprovalScopeKey(prepared);
+  const context = captureOpenClawStateWorkerContext();
+  return serializeApprovalOperation(async () => {
+    const { runOpenClawStateWorkerOperation } =
+      await import("../state/openclaw-state-worker-store.js");
+    // A failed write must never publish permission that did not reach disk.
+    await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({ type: "plugins.conversationBindingApprovals.upsert", input: prepared }),
+    );
+    const approvals = (await getApprovals(context)).approvals.filter(
+      (existing) => buildApprovalScopeKey(existing) !== key,
+    );
+    approvals.push(prepared);
+    pluginBindingGlobalState.approvalsCache = { approvals };
+  });
 }

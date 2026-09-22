@@ -2,14 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import { ServiceDefinitionInspectionError } from "./service-inspection-error.js";
+import {
+  ServiceDefinitionInspectionError,
+  ServiceOwnershipRefusalError,
+  findServiceOwnershipRefusal,
+} from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -19,9 +21,11 @@ import type {
   GatewayServiceReadOptions,
 } from "./service-types.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import { expandSystemdEnvironmentFilePattern } from "./systemd-environment-file-pattern.js";
 import type {
   SystemdCommandSnapshotParams,
   SystemdEnvironmentFilesParams,
+  SystemdEnvironmentFileSpec,
 } from "./systemd-service-files.types.js";
 import {
   parseSystemdEnvAssignments,
@@ -32,6 +36,18 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
+
+export function assertSystemdServiceAccount(user: string) {
+  const account = os.userInfo();
+  if (
+    user !== account.username &&
+    user !== String(account.uid) &&
+    !(user === "" && account.uid === 0)
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-account-refused");
+  }
+  return account;
+}
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -201,7 +217,7 @@ async function readSystemdManagerCommand(
           Array.isArray(spec) &&
           spec.length === 2 &&
           typeof spec[0] === "string" &&
-          spec[0].length > 0 &&
+          path.posix.isAbsolute(spec[0]) &&
           typeof spec[1] === "boolean",
       ) ||
       !isStringArray(unset) ||
@@ -217,29 +233,29 @@ async function readSystemdManagerCommand(
       }
       inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
     }
-    const account = systemScope ? os.userInfo() : undefined;
+    if (systemScope && typeof user !== "string") {
+      throw unavailable();
+    }
+    const account =
+      systemScope && typeof user === "string"
+        ? opts?.requireEffective
+          ? assertSystemdServiceAccount(user)
+          : os.userInfo()
+        : undefined;
     const sameAccount =
       account &&
       (user === account.username ||
         user === String(account.uid) ||
         (user === "" && account.uid === 0));
-    if (systemScope && (typeof user !== "string" || (opts?.requireEffective && !sameAccount))) {
-      throw new Error(
-        "System systemd Gateway runs as another account; run Doctor as the service's User= account.",
-      );
-    }
 
     await binding?.verify();
     const managedDefinition =
       !systemScope && sourcePath === resolveSystemdUnitPath(env) ? localDefinition : null;
     const managedOverrides =
       !reloadPending && managedDefinition
-        ? await readSystemdDropInOverrides(
-            dropInPaths,
-            managedUnsetEnvironment,
-            env,
-            sourcePath,
-          ).catch(() => UNKNOWN_SYSTEMD_OVERRIDES)
+        ? await readSystemdDropInOverrides(dropInPaths, managedUnsetEnvironment, env).catch(
+            () => UNKNOWN_SYSTEMD_OVERRIDES,
+          )
         : UNKNOWN_SYSTEMD_OVERRIDES;
     const snapshot = await buildSystemdCommandSnapshot({
       programArguments,
@@ -247,8 +263,6 @@ async function readSystemdManagerCommand(
       inlineEnvironment,
       environmentFileSpecs: fileSpecs,
       unsetEnvironment: unset,
-      env,
-      unitPath: sourcePath,
       failOnUnavailable: opts?.requireEffective,
     });
     if (
@@ -274,8 +288,7 @@ async function readSystemdDropInOverrides(
   dropInPaths: string[],
   managedUnsetEnvironment: string[],
   env: GatewayServiceEnv,
-  unitPath: string,
-): Promise<GatewayServiceManagedOverrides | undefined> {
+): Promise<GatewayServiceManagedOverrides> {
   const inlineEnvironmentKeys = new Set<string>();
   const fileEnvironmentKeys = new Set<string>();
   const unsetEnvironmentKeys = new Set<string>();
@@ -340,18 +353,13 @@ async function readSystemdDropInOverrides(
             }
             unsetEnvironmentKeys.add(key);
           }
-        } else if (
-          parseEnvironmentFileSpecs(value).some((filename) =>
-            filename.replace(/%%|%h/gu, "").includes("%"),
-          )
-        ) {
+        } else if (value.replace(/%%|%h/gu, "").includes("%")) {
           overrides.environment = true;
         } else {
           try {
+            const spec = parseSystemdEnvironmentFileSpec(value, env);
             const fileEnvironment = await resolveSystemdEnvironmentFiles({
-              environmentFileSpecs: [value],
-              env,
-              unitPath,
+              environmentFileSpecs: spec ? [spec] : [],
               failOnUnavailable: true,
             });
             for (const key of Object.keys(fileEnvironment)) {
@@ -376,7 +384,9 @@ async function readSystemdDropInOverrides(
       };
     }
   }
-  return Object.keys(overrides).length ? overrides : undefined;
+  // A known-empty set preserves the authored definition without mistaking native
+  // defaults (such as a user service's home cwd) for operator-owned overrides.
+  return overrides;
 }
 
 export async function readSystemdServiceExecStart(
@@ -408,7 +418,7 @@ export async function readSystemdServiceExecStart(
     let execStart = "";
     let workingDirectory = "";
     let inlineEnvironment: Record<string, string> = {};
-    const environmentFileSpecs: string[] = [];
+    const environmentFileSpecs: SystemdEnvironmentFileSpec[] = [];
     const unsetEnvironment: string[] = [];
     for (const rawLine of splitSystemdLogicalLines(content ?? "")) {
       const line = rawLine.trim();
@@ -421,8 +431,9 @@ export async function readSystemdServiceExecStart(
       if (directive === "ExecStart") {
         execStart = value;
       } else if (directive === "WorkingDirectory") {
-        const parsed = parseSystemdExecStart(value)[0] ?? "";
-        workingDirectory = expandSystemdSpecifier(parsed.replace(/^-/, ""), env);
+        const expanded = expandSystemdSpecifier(value.replace(/^-/, ""), env);
+        // Undo the renderer's terminal /. without collapsing symlink-sensitive .. segments.
+        workingDirectory = expanded.endsWith("/.") ? expanded.slice(0, -2) || "/" : expanded;
       } else if (directive === "Environment") {
         if (!value) {
           inlineEnvironment = {};
@@ -435,8 +446,13 @@ export async function readSystemdServiceExecStart(
         const entries = file ? environmentFileSpecs : unsetEnvironment;
         if (!value) {
           entries.length = 0;
+        } else if (file) {
+          const spec = parseSystemdEnvironmentFileSpec(value, env);
+          if (spec) {
+            environmentFileSpecs.push(spec);
+          }
         } else {
-          entries.push(...(file ? [value] : splitSystemdEnvironmentWords(value)));
+          unsetEnvironment.push(...splitSystemdEnvironmentWords(value));
         }
       }
     }
@@ -449,8 +465,6 @@ export async function readSystemdServiceExecStart(
       inlineEnvironment,
       environmentFileSpecs,
       unsetEnvironment,
-      env,
-      unitPath,
     });
     const localDefinition = content === null ? null : managedDefinition;
     const manager = await readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts)
@@ -459,7 +473,7 @@ export async function readSystemdServiceExecStart(
         return command;
       })
       .catch((error: unknown) => {
-        if (opts?.requireEffective) {
+        if (opts?.requireEffective || findServiceOwnershipRefusal(error)) {
           throw error;
         }
         opts?.onCommandInspection?.({ kind: "unavailable", error });
@@ -476,7 +490,7 @@ export async function readSystemdServiceExecStart(
     };
   } catch (error) {
     options?.onCommandInspection?.({ kind: "unavailable", error });
-    if (options?.requireEffective) {
+    if (options?.requireEffective || findServiceOwnershipRefusal(error)) {
       throw error;
     }
     return null;
@@ -513,8 +527,14 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
   );
 }
 
-function parseEnvironmentFileSpecs(raw: string): string[] {
-  return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
+function parseSystemdEnvironmentFileSpec(
+  value: string,
+  env: GatewayServiceEnv,
+): SystemdEnvironmentFileSpec | undefined {
+  const optional = value.startsWith("-");
+  const pathname = expandSystemdSpecifier(optional ? value.slice(1) : value, env);
+  // Native systemd ignores relative declarations rather than resolving them beside the unit.
+  return path.posix.isAbsolute(pathname) ? [pathname, optional] : undefined;
 }
 
 function decodeSystemdEnvironmentFileValue(rawValue: string): {
@@ -678,51 +698,30 @@ async function resolveSystemdEnvironmentFiles(
   params: SystemdEnvironmentFilesParams,
 ): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
-  const unitDir = path.posix.dirname(params.unitPath);
   const failIfUnavailable = (error: unknown, optional: boolean) => {
     if (params.failOnUnavailable && !optional) {
       throw error;
     }
   };
-  for (const specRaw of params.environmentFileSpecs) {
-    const managerExpandedPath = typeof specRaw !== "string";
-    const tokens = managerExpandedPath ? [specRaw[0]] : parseEnvironmentFileSpecs(specRaw);
-    for (const token of tokens) {
-      const optional = token.startsWith("-") || (typeof specRaw !== "string" && specRaw[1]);
-      const pathnameRaw = token.startsWith("-") ? token.slice(1).trim() : token;
-      if (!pathnameRaw) {
+  for (const [pattern, optional] of params.environmentFileSpecs) {
+    let pathnames: string[];
+    try {
+      pathnames = await expandSystemdEnvironmentFilePattern(pattern);
+    } catch (error) {
+      failIfUnavailable(error, optional);
+      continue;
+    }
+    pathnames.sort();
+    if (params.failOnUnavailable && !optional && pathnames.length === 0) {
+      throw new Error("Missing systemd environment file");
+    }
+    for (const filePath of pathnames) {
+      try {
+        Object.assign(resolved, (await readSystemdEnvironmentFile(filePath)).environment);
+      } catch (error) {
+        failIfUnavailable(error, optional);
+        // Diagnostics skip unavailable files, including non-optional ones.
         continue;
-      }
-      const expanded = managerExpandedPath
-        ? pathnameRaw
-        : expandSystemdSpecifier(pathnameRaw, params.env);
-      const pathname = path.posix.isAbsolute(expanded)
-        ? expanded
-        : path.posix.resolve(unitDir, expanded);
-      const pathnames = [pathname];
-      if (/[*?[]/u.test(pathname)) {
-        pathnames.length = 0;
-        try {
-          for await (const match of fs.glob(pathname)) {
-            pathnames.push(match);
-          }
-        } catch (error) {
-          failIfUnavailable(error, optional);
-          continue;
-        }
-        pathnames.sort();
-        if (params.failOnUnavailable && !optional && pathnames.length === 0) {
-          throw new Error("Missing systemd environment file");
-        }
-      }
-      for (const filePath of pathnames) {
-        try {
-          Object.assign(resolved, (await readSystemdEnvironmentFile(filePath)).environment);
-        } catch (error) {
-          failIfUnavailable(error, optional);
-          // Diagnostics skip unavailable files, including non-optional ones.
-          continue;
-        }
       }
     }
   }

@@ -1,4 +1,5 @@
 // Sandbox command tests cover browser/container status formatting and sandbox diagnostics.
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 
@@ -19,7 +20,8 @@ vi.mock("../agents/sandbox.js", () => ({
   removeSandboxBrowserContainer: mocks.removeSandboxBrowserContainer,
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.clackConfirm,
 }));
 
@@ -311,7 +313,7 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      await runCancelledConfirmation(Symbol("clack:cancel"));
+      await runCancelledConfirmation(CANCEL_SYMBOL);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();

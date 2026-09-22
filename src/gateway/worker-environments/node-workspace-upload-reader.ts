@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import fsp, { type FileHandle } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { NodeWorkspaceTransferInvalidReason } from "../../worker/node-workspace-transfer-protocol.js";
 import { nodeWorkspaceTransferEntryPath } from "./node-workspace-transfer-snapshot.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -19,7 +22,7 @@ import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +
   MAX_RECONCILIATION_TOTAL_BYTES +
-  MAX_RECONCILIATION_ENTRIES * 8 +
+  MAX_WORKSPACE_INVENTORY_ENTRIES * 8 +
   8;
 export class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";
@@ -149,21 +152,10 @@ async function streamUploadFile(params: {
       );
     }
     hash.update(chunk);
-    let chunkOffset = 0;
-    while (chunkOffset < chunk.length) {
-      const { bytesWritten } = await params.handle.write(
-        chunk,
-        chunkOffset,
-        chunk.length - chunkOffset,
-        offset + chunkOffset,
-      );
-      // A short write adds another await, so each suffix retry needs its own authority fence.
-      params.assertCurrent();
-      if (bytesWritten === 0) {
-        throw new Error("Workspace transfer upload write made no progress");
-      }
-      chunkOffset += bytesWritten;
-    }
+    await writeFileWindowFully(params.handle, chunk, offset, {
+      assertBeforeMutation: params.assertCurrent,
+    });
+    params.assertCurrent();
     offset += chunk.length;
   }
   if (hash.digest("hex") !== params.entry.sha256) {

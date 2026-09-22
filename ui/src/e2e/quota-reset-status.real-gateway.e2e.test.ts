@@ -8,6 +8,7 @@ import { describe, expect, inject, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
@@ -97,18 +98,39 @@ async function captureFinalStatus(
   observations.push({ action: "models-status", ...cli });
   expect(cli.code, cli.stderr).toBe(0);
   const status: ModelsStatus = JSON.parse(cli.stdout);
+  observations.push({
+    action: "models-profile-status",
+    profile: status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId),
+  });
   expect
     .soft(status.auth.unusableProfiles)
     .not.toContainEqual(expect.objectContaining({ profileId: fixture.profileId }));
+  // Refreshed fixture credentials stay valid for two days, outside the CLI
+  // 24-hour expiry warning; original-credential expiry scenarios remain separate.
   expect
     .soft(status.auth.oauth.profiles)
     .toContainEqual(
       expect.objectContaining({ profileId: fixture.profileId, type: "oauth", status: "ok" }),
     );
+  expect
+    .soft(
+      status.auth.oauth.profiles.find((profile) => profile.profileId === fixture.profileId)
+        ?.remainingMs,
+    )
+    .toBeGreaterThan(0);
 
+  // Gateway readiness does not join its background UI build; dashboard --json intentionally
+  // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
+  const document = await waitForControlUiDocument({
+    url: `http://127.0.0.1:${fixture.gateway.port}/`,
+    timeoutMs: 60_000,
+  });
+  expect(document.ready, JSON.stringify(document)).toBe(true);
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
-  expect(dashboard.code, dashboard.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+  const { browserUrl, reason }: { browserUrl: string; reason?: string } = JSON.parse(
+    dashboard.stdout,
+  );
+  expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
   const browser = await chromium.launch({
@@ -303,6 +325,34 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
 
           // Observe the next turn before CLI or browser reads can affect runtime preparation.
           const beforeRecovery = provider.requests.length;
+          let beforeRecoveryReply: ReturnType<typeof stats>;
+          if (catalogHold) {
+            const heldCatalog = catalogHold;
+            provider.observeNextSuccess(
+              () => {
+                beforeRecoveryReply = stats();
+                observations.push({
+                  action: "catalog-release-at-recovery",
+                  state: beforeRecoveryReply,
+                });
+                // Publish after recovery without spending the catalog deadline on terminal delivery.
+                heldCatalog.release();
+              },
+              { model: "gpt-5.5", path: "/v1/responses" },
+            );
+            const auxiliary = await fetch(`${provider.baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${fixture.access}`,
+                "chatgpt-account-id": ACCOUNT_ID,
+              },
+              body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+            });
+            expect(auxiliary.status, evidence()).toBe(200);
+            await auxiliary.text();
+            expect(beforeRecoveryReply, evidence()).toBeUndefined();
+          }
           const nextTurn = await turn();
           const inference = provider.requests
             .slice(beforeRecovery)
@@ -324,7 +374,8 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           expect(gateway.child).toBe(gatewayProcess);
           expect(gatewayProcess?.exitCode).toBeNull();
           if (catalogHold) {
-            catalogHold.release();
+            expect(beforeRecoveryReply, evidence()).toBeDefined();
+            expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
             expect(refreshed, evidence()).toMatchObject({ ok: true });
@@ -356,6 +407,14 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             JSON.stringify(observations, null, 2),
           );
           await fs.writeFile(path.join(artifactDir, "gateway-evidence.json"), evidence());
+          const finalStatus = observations.findLast(
+            (entry) => isRecord(entry) && entry.action === "models-profile-status",
+          );
+          const profile = isRecord(finalStatus) ? finalStatus.profile : undefined;
+          await fs.writeFile(
+            path.join(artifactDir, "quota.public.json"),
+            JSON.stringify(await fixture.publicDiagnostics(profile), null, 2),
+          );
         }
       },
     );

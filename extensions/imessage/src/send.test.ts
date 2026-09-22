@@ -5,6 +5,7 @@ import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
@@ -45,7 +46,7 @@ let sendMessageIMessage: SendModule["sendMessageIMessage"];
 
 async function loadFreshSendModule(): Promise<void> {
   ({ findLatestIMessageEntryForChat, rememberIMessageReplyCache } =
-    await loadFreshIMessageReplyCacheForTest());
+    await loadFreshIMessageReplyCacheForTest({ reuseDatabase: true }));
   ({ IMessageRpcRequestError } = await import("./client.js"));
   ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({
@@ -73,14 +74,23 @@ function createClient(result: Record<string, unknown>): IMessageRpcClient {
   } as unknown as IMessageRpcClient;
 }
 
-function createRejectingClient(error: Error): IMessageRpcClient {
+function createRejectingClient(error: Error, onRequest?: () => void): IMessageRpcClient {
   return {
     request: vi.fn(async () => {
+      onRequest?.();
       await Promise.resolve();
       throw error;
     }),
     stop: vi.fn(async () => {}),
   } as unknown as IMessageRpcClient;
+}
+
+function createTimedOutSendClient() {
+  const requestStarted = createDeferred<void>();
+  return {
+    client: createRejectingClient(new Error("imsg rpc timeout (send)"), requestStarted.resolve),
+    requestStarted: requestStarted.promise,
+  };
 }
 
 function getClientMocks(client: IMessageRpcClient): {
@@ -299,7 +309,7 @@ describe("sendMessageIMessage receipts", () => {
       readRequests,
       createChannelDelivery,
     } = createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { deliverThroughChannel } = await createChannelDelivery();
+    const { deliverThroughChannel } = createChannelDelivery();
     const channelYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"].join("\n");
     const channelYamlResult = await deliverThroughChannel(channelYaml);
     expect(channelYamlResult.sanitized).toContain("```yaml");
@@ -528,7 +538,7 @@ describe("sendMessageIMessage receipts", () => {
   it("scrubs embedded separators and preserves dunder links over local RPC", async () => {
     const { cfg, deliver, countNativeRequests, readRequests, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { channelChunker, channelSanitizer } = await createChannelDelivery();
+    const { channelChunker, channelSanitizer } = createChannelDelivery();
     let embeddedRequestCount = 0;
     for (const separator of [rawSeparator, entitySeparator]) {
       for (const role of roles) {
@@ -574,7 +584,7 @@ describe("sendMessageIMessage receipts", () => {
   it("preserves fenced YAML roles across monitor and channel RPC chunks", async () => {
     const { cfg, deliver, countNativeRequests, readRequests, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { channelChunker, channelSanitizer } = await createChannelDelivery();
+    const { channelChunker, channelSanitizer } = createChannelDelivery();
     const oversizedYaml = [
       "```yaml",
       ...Array.from({ length: 6 }, (_, index) =>
@@ -837,8 +847,65 @@ describe("sendMessageIMessage receipts", () => {
   it("rejects malformed, empty, and forged private content without native dispatch", async () => {
     const { cfg, actionOptions, deliver, readRequests, readActions, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { deliverThroughChannel } = await createChannelDelivery();
+    const { deliverThroughChannel } = createChannelDelivery();
     const { imessageActionsRuntime } = await import("./actions.runtime.js");
+    function createRawTextActions(source: string, replacementText: string) {
+      return [
+        [
+          "edit",
+          () =>
+            imessageActionsRuntime.editMessage({
+              chatGuid: actionOptions.chatGuid,
+              messageId: "edit-message-guid",
+              text: source,
+              backwardsCompatMessage: "visible fallback",
+              options: actionOptions,
+            }),
+        ],
+        [
+          "edit-fallback",
+          () =>
+            imessageActionsRuntime.editMessage({
+              chatGuid: actionOptions.chatGuid,
+              messageId: "edit-message-guid",
+              text: replacementText,
+              backwardsCompatMessage: source,
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-question",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: source,
+              choices: ["first", "second"],
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-first-option",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: "visible question",
+              choices: [source, "second"],
+              options: actionOptions,
+            }),
+        ],
+        [
+          "poll-second-option",
+          () =>
+            imessageActionsRuntime.sendPoll({
+              chatGuid: actionOptions.chatGuid,
+              question: "visible question",
+              choices: ["first", source],
+              options: actionOptions,
+            }),
+        ],
+      ] as const;
+    }
+
     const forgedTokenEntity = "&#xE000;".repeat("user".length);
     const roleTokenSwap = [
       "```xml",
@@ -887,58 +954,7 @@ describe("sendMessageIMessage receipts", () => {
                 options: actionOptions,
               }),
           ],
-          [
-            "edit",
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: source,
-                backwardsCompatMessage: "visible fallback",
-                options: actionOptions,
-              }),
-          ],
-          [
-            "edit-fallback",
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: "visible edit",
-                backwardsCompatMessage: source,
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-question",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: source,
-                choices: ["first", "second"],
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-first-option",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: [source, "second"],
-                options: actionOptions,
-              }),
-          ],
-          [
-            "poll-second-option",
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: ["first", source],
-                options: actionOptions,
-              }),
-          ],
+          ...createRawTextActions(source, "visible edit"),
         ] as const) {
           await expect(
             sendMalformed(),
@@ -1100,45 +1116,7 @@ describe("sendMessageIMessage receipts", () => {
       }),
     ).rejects.toThrow("iMessage poll options must remain distinct after sanitization");
 
-    for (const sendSwappedRole of [
-      () =>
-        imessageActionsRuntime.editMessage({
-          chatGuid: actionOptions.chatGuid,
-          messageId: "edit-message-guid",
-          text: roleTokenSwap,
-          backwardsCompatMessage: "visible fallback",
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.editMessage({
-          chatGuid: actionOptions.chatGuid,
-          messageId: "edit-message-guid",
-          text: "visible replacement",
-          backwardsCompatMessage: roleTokenSwap,
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: roleTokenSwap,
-          choices: ["first", "second"],
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: "visible question",
-          choices: [roleTokenSwap, "second"],
-          options: actionOptions,
-        }),
-      () =>
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: "visible question",
-          choices: ["first", roleTokenSwap],
-          options: actionOptions,
-        }),
-    ]) {
+    for (const [, sendSwappedRole] of createRawTextActions(roleTokenSwap, "visible replacement")) {
       await expect(sendSwappedRole()).rejects.toThrow("iMessage outbound role protection failed");
     }
 
@@ -1153,46 +1131,8 @@ describe("sendMessageIMessage receipts", () => {
           `\`${hidden}\``,
           nestMarkdownFences(hidden, 3),
         ]) {
-          const actionsWithHiddenCode = [
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: wrapped,
-                backwardsCompatMessage: "visible fallback",
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.editMessage({
-                chatGuid: actionOptions.chatGuid,
-                messageId: "edit-message-guid",
-                text: "visible replacement",
-                backwardsCompatMessage: wrapped,
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: wrapped,
-                choices: ["first", "second"],
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: [wrapped, "second"],
-                options: actionOptions,
-              }),
-            () =>
-              imessageActionsRuntime.sendPoll({
-                chatGuid: actionOptions.chatGuid,
-                question: "visible question",
-                choices: ["first", wrapped],
-                options: actionOptions,
-              }),
-          ];
-          for (const sendHiddenCode of actionsWithHiddenCode) {
+          const actionsWithHiddenCode = createRawTextActions(wrapped, "visible replacement");
+          for (const [, sendHiddenCode] of actionsWithHiddenCode) {
             await expect(sendHiddenCode()).rejects.toThrow(
               "iMessage outbound hidden assistant content is not allowed",
             );
@@ -1453,6 +1393,76 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("joins pending echo persistence before sending and its rollback before rejecting", async () => {
+    const { getIMessageRuntime } = await import("./runtime.js");
+    const state = getIMessageRuntime().state;
+    const openStore = state.openKeyedStore.bind(state);
+    const writeStarted = createDeferred<void>();
+    const writeGate = createDeferred<void>();
+    const deleteStarted = createDeferred<void>();
+    const deleteGate = createDeferred<void>();
+    const openSpy = vi
+      .spyOn(state, "openKeyedStore")
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
+        const store = openStore<T>(options);
+        if (options.namespace === "imessage.sent-echoes") {
+          const register = store.register.bind(store);
+          const remove = store.delete.bind(store);
+          vi.spyOn(store, "register").mockImplementation(async (...args) => {
+            writeStarted.resolve();
+            await writeGate.promise;
+            await register(...args);
+          });
+          vi.spyOn(store, "delete").mockImplementation(async (...args) => {
+            deleteStarted.resolve();
+            await deleteGate.promise;
+            return await remove(...args);
+          });
+        }
+        return store;
+      });
+    const client = createClient({ success: false, error: "recipient is not registered" });
+    let settled = false;
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    }).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    try {
+      await Promise.race([
+        writeStarted.promise,
+        send.then(() => {
+          throw new Error("Send settled before pending echo persistence");
+        }),
+      ]);
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+      writeGate.resolve();
+      await Promise.race([
+        deleteStarted.promise,
+        send.then(() => {
+          throw new Error("Send settled before pending echo rollback");
+        }),
+      ]);
+      expect(settled).toBe(false);
+      deleteGate.resolve();
+      expect(await send).toEqual(new Error("recipient is not registered"));
+      expect(
+        await hasPersistedIMessageEcho({
+          scope: "default:imessage:+15551234567",
+          text: "hello",
+          includePendingText: true,
+        }),
+      ).toBe(false);
+    } finally {
+      writeGate.resolve();
+      deleteGate.resolve();
+      await send;
+      openSpy.mockRestore();
+    }
+  });
+
   it("rejects an unsuccessful RPC send instead of acknowledging a delivered message", async () => {
     const client = createClient({ success: false, error: "recipient is not registered" });
 
@@ -1464,7 +1474,7 @@ describe("sendMessageIMessage receipts", () => {
     ).rejects.toThrow("recipient is not registered");
 
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope: "default:imessage:+15551234567",
         text: "hello",
         includePendingText: true,
@@ -1580,7 +1590,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("allows a delegated reply with a current same-account cache binding", async () => {
     const client = createClient({ guid: "p:0/imsg-bound" });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "bound-reply-guid",
       chatId: 42,
@@ -1612,7 +1622,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("uses the effective SMS service for a delegated raw-handle reply", async () => {
     const client = createClient({ guid: "p:0/imsg-sms-bound" });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "sms-reply-guid",
       chatGuid: "SMS;-;+15550004567",
@@ -1650,7 +1660,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("rejects a delegated reply when an auto handle has no concrete service", async () => {
     const client = createClient({ guid: "should-not-send" });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "ambiguous-service-guid",
       chatGuid: "SMS;-;+15550004567",
@@ -2189,10 +2199,12 @@ describe("sendMessageIMessage receipts", () => {
   it("floors a configured probe timeout so one delayed imsg fallback can resolve", async () => {
     vi.useFakeTimers();
     const delayedFallbackMs = 158_000;
+    const requestStarted = createDeferred<void>();
     const client = {
       request: vi.fn(
-        (_method: string, _params: Record<string, unknown>, opts?: { timeoutMs?: number }) =>
-          new Promise<Record<string, unknown>>((resolve, reject) => {
+        (_method: string, _params: Record<string, unknown>, opts?: { timeoutMs?: number }) => {
+          requestStarted.resolve();
+          return new Promise<Record<string, unknown>>((resolve, reject) => {
             const timeout = setTimeout(
               () => reject(new Error("imsg rpc timeout (send)")),
               opts?.timeoutMs,
@@ -2201,7 +2213,8 @@ describe("sendMessageIMessage receipts", () => {
               clearTimeout(timeout);
               resolve({ guid: "p:0/imsg-delayed-fallback" });
             }, delayedFallbackMs);
-          }),
+          });
+        },
       ),
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
@@ -2217,7 +2230,7 @@ describe("sendMessageIMessage receipts", () => {
       },
       client,
     });
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted.promise;
     await vi.advanceTimersByTimeAsync(delayedFallbackMs);
 
     await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-delayed-fallback" });
@@ -2252,7 +2265,7 @@ describe("sendMessageIMessage receipts", () => {
       expect.objectContaining({ messageId: "p:0/media-guid", isFromMe: true }),
     );
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope: "default:chat_guid:chat-1",
         messageId: "p:0/media-guid",
       }),
@@ -3003,7 +3016,7 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media"]);
     expect(onDeliveryResult).not.toHaveBeenCalled();
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope: "default:imessage:+15550004567",
         messageId: "p:0/caption-guid",
       }),
@@ -3059,11 +3072,11 @@ describe("sendMessageIMessage receipts", () => {
       }),
     );
     const scope = "default:imessage:+15550004567";
-    expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
+    expect(await hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
     expect(
-      hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
+      await hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
     ).toBe(true);
-    expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
+    expect(await hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
   });
 
   it("stops before a caption when accepted attachment custody cannot be recorded", async () => {
@@ -3206,14 +3219,13 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("persists an echo marker before awaiting the bridge send result", async () => {
-    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const requestStarted = createDeferred<void>();
+    const response = createDeferred<Record<string, unknown>>();
     const client = {
-      request: vi.fn(
-        () =>
-          new Promise<Record<string, unknown>>((resolve) => {
-            resolveRequest = resolve;
-          }),
-      ),
+      request: vi.fn(() => {
+        requestStarted.resolve();
+        return response.promise;
+      }),
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
@@ -3222,30 +3234,29 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted.promise;
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope: "default:imessage:+15551234567",
         text: "hello",
         includePendingText: true,
       }),
     ).toBe(true);
 
-    resolveRequest({ guid: "p:0/imsg-1" });
+    response.resolve({ guid: "p:0/imsg-1" });
     await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
   });
 
   it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-04T00:00:00Z"));
-    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const requestStarted = createDeferred<void>();
+    const response = createDeferred<Record<string, unknown>>();
     const client = {
-      request: vi.fn(
-        () =>
-          new Promise<Record<string, unknown>>((resolve) => {
-            resolveRequest = resolve;
-          }),
-      ),
+      request: vi.fn(() => {
+        requestStarted.resolve();
+        return response.promise;
+      }),
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
@@ -3253,18 +3264,18 @@ describe("sendMessageIMessage receipts", () => {
       config: IMESSAGE_TEST_CFG,
       client,
     });
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted.promise;
 
-    vi.advanceTimersByTime(61_000);
+    vi.setSystemTime(new Date("2026-06-04T00:01:01Z"));
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope: "default:imessage:+15551234567",
         text: "slow hello",
         includePendingText: true,
       }),
     ).toBe(true);
 
-    resolveRequest({ guid: "p:0/imsg-slow" });
+    response.resolve({ guid: "p:0/imsg-slow" });
     await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-slow" });
   });
 
@@ -3458,8 +3469,9 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for custom cliPath wrappers", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const { client, requestStarted } = createTimedOutSendClient();
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-remote");
@@ -3483,6 +3495,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await requestStarted;
+    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
@@ -3501,7 +3515,7 @@ describe("sendMessageIMessage receipts", () => {
     fs.writeFileSync(wrapperPath, '#!/bin/sh\nexec ssh -T gateway-host imsg "$@"\n');
     await resolveIMessageRemoteHost({ cliPath: wrapperPath });
     vi.useFakeTimers({ now: 1_000 });
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const { client, requestStarted } = createTimedOutSendClient();
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-ssh-wrapper");
@@ -3516,7 +3530,7 @@ describe("sendMessageIMessage receipts", () => {
           resolveSentMessageGuidImpl,
         }),
       ).rejects.toThrow("imsg rpc timeout (send)");
-      await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+      await requestStarted;
       await vi.advanceTimersByTimeAsync(5_000);
       await rejection;
     } finally {
@@ -3553,7 +3567,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("throws the rpc timeout without resending when sent-row recovery misses", async () => {
     vi.useFakeTimers({ now: 1_000 });
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const { client, requestStarted } = createTimedOutSendClient();
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const rejection = expect(
@@ -3565,7 +3579,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted;
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
@@ -3575,7 +3589,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("does not stop caller-owned rpc clients after sent-row recovery misses", async () => {
     vi.useFakeTimers({ now: 1_000 });
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const { client, requestStarted } = createTimedOutSendClient();
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const rejection = expect(
@@ -3587,7 +3601,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted;
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
@@ -3614,7 +3628,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {
     vi.useFakeTimers({ now: 1_000 });
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const { client, requestStarted } = createTimedOutSendClient();
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText();
@@ -3628,7 +3642,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    await requestStarted;
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 

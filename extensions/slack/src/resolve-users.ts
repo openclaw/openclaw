@@ -1,4 +1,3 @@
-// Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {

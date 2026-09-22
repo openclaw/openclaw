@@ -59,9 +59,10 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function fullSurfaceInspectPayload(pluginId: string) {
+  const diagnostics: Array<{ level: string; message: string }> = [];
   return {
     commands: ["kitchen"],
-    diagnostics: [],
+    diagnostics,
     plugin: {
       id: pluginId,
       enabled: true,
@@ -511,6 +512,85 @@ describe("kitchen-sink plugin assertions", () => {
 
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("tools missing kitchen_sink_search");
+  });
+
+  it.each(["all", "single"])(
+    "retains bounded redacted %s inspection failure details without dumping config",
+    (inspection) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-inspection-redactor-"));
+      const redactor = path.join(root, "redactor.mjs");
+      const secret = `FIXTURE_SECRET_${"x".repeat(5000)}_END`;
+      try {
+        writeFileSync(
+          redactor,
+          `export function redactSensitiveText(value, options) {
+  if (options.mode !== "tools") throw new Error("wrong redaction mode");
+  return value.replace(/FIXTURE_SECRET_.*?_END/gs, "[REDACTED]");
+}\n`,
+        );
+        const healthy = fullSurfaceInspectPayload("openclaw-kitchen-sink-fixture");
+        const failed = {
+          ...healthy,
+          plugin: {
+            ...healthy.plugin,
+            status: "error",
+            error: `loader refused ${secret}; retained cause`,
+            source: "/fixture/plugin/index.js",
+            config: { privateValue: "DO_NOT_DUMP_CONFIG" },
+          },
+          diagnostics: [
+            { level: "error", message: `registration failed ${secret}; retained diagnostic` },
+            ...Array.from({ length: 25 }, (_, index) => ({
+              level: "error",
+              message: `extra-diagnostic-${index} ${"z".repeat(4096)}`,
+            })),
+          ],
+        };
+        const result = runAssertInstalled({
+          inspectPayload: inspection === "single" ? failed : healthy,
+          allInspectPayload: [inspection === "all" ? failed : healthy],
+          env: { OPENCLAW_E2E_REDACTOR_MODULE: redactor },
+        });
+        const output = `${result.stdout}\n${result.stderr}`;
+        expect(result.status).toBe(1);
+        expect(output).toContain("expected enabled loaded kitchen-sink plugin");
+        expect(output).toContain("loader refused [REDACTED]; retained cause");
+        expect(output).toContain("registration failed [REDACTED]; retained diagnostic");
+        expect(output).toContain("/fixture/plugin/index.js");
+        expect(output).not.toContain("FIXTURE_SECRET_");
+        expect(output).not.toContain("DO_NOT_DUMP_CONFIG");
+        expect(output).not.toContain("extra-diagnostic-24");
+        expect(output.length).toBeLessThan(16 * 1024);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("keeps inspection failure details private when the canonical redactor fails", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-inspection-redactor-"));
+    const redactor = path.join(root, "redactor.mjs");
+    try {
+      writeFileSync(redactor, 'throw new Error("DO_NOT_DUMP_REDACTOR_ERROR");\n');
+      const healthy = fullSurfaceInspectPayload("openclaw-kitchen-sink-fixture");
+      const result = runAssertInstalled({
+        allInspectPayload: [
+          {
+            ...healthy,
+            plugin: { ...healthy.plugin, status: "error", error: "DO_NOT_DUMP_RAW_ERROR" },
+          },
+        ],
+        env: { OPENCLAW_E2E_REDACTOR_MODULE: redactor },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "inspection details omitted: canonical redaction unavailable",
+      );
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_RAW_ERROR");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_REDACTOR_ERROR");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("requires ClawHub kitchen-sink fixtures to expose context engines", () => {

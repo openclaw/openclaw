@@ -100,7 +100,7 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
-  test.each(["prepared", "activated"] as const)(
+  test.each(["prepared", "activated", "utility"] as const)(
     "returns the exact %s model only on the successful terminal result",
     async (kind) => {
       const modelRef = "ollama/qwen3:0.6b";
@@ -108,7 +108,10 @@ describe("WizardSession", () => {
         if (kind === "prepared") {
           owner.setPreparedModelRef(modelRef);
         } else {
-          owner.setModelActivation({ modelRef });
+          owner.setModelActivation({
+            modelRef,
+            ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+          });
         }
         await prompter.note("Finishing setup");
       });
@@ -124,7 +127,12 @@ describe("WizardSession", () => {
         status: "done",
         ...(kind === "prepared"
           ? { preparedModelRef: modelRef }
-          : { modelActivation: { modelRef } }),
+          : {
+              modelActivation: {
+                modelRef,
+                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+              },
+            }),
       });
     },
   );
@@ -139,7 +147,11 @@ describe("WizardSession", () => {
       const session = new WizardSession(async (_prompter, _signal, owner) => {
         await gate;
         owner.setPreparedModelRef("ollama/qwen3:0.6b");
-        owner.setModelActivation({ modelRef: "ollama/qwen3:0.6b", gatewayRestartRequired: true });
+        owner.setModelActivation({
+          modelRef: "ollama/qwen3:0.6b",
+          modelTarget: "utility",
+          gatewayRestartRequired: true,
+        });
         if (status === "error") {
           throw new Error("activation setup failed");
         }

@@ -77,6 +77,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ type: Boolean }) fitAutoContent = false;
+  @property({ type: Boolean }) pageChrome = false;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) sessionKey = "";
@@ -205,15 +206,12 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     void this.runAction(() => callbacks.grant(widget.name, decision), failureMessage);
   }
 
-  private handleMenuSelect(
-    event: CustomEvent<{ item: { value?: string } }>,
-    widget: BoardWidget,
-    callbacks: BoardWidgetCellCallbacks,
-  ): void {
-    if (!this.canMutate) {
+  selectMenuItem(value: string | undefined): void {
+    const widget = this.widget;
+    const callbacks = this.callbacks;
+    if (!widget || !callbacks || !this.active || !this.canMutate) {
       return;
     }
-    const value = event.detail.item.value;
     if (value === "remove") {
       void this.runAction(() => callbacks.remove(widget));
       return;
@@ -262,7 +260,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       active: this.active,
       loading: this.appView.loading,
       nearVisible: this.appView.nearVisible,
-      rectHeight: this.rect?.h ?? 4,
       sessionKey: this.sessionKey,
       widget,
       expired: () => this.appView.expire(),
@@ -386,7 +383,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
-    if (event.target !== event.currentTarget || !this.canMutate) {
+    if (event.target !== event.currentTarget || !this.canMutate || this.pageChrome) {
       return;
     }
     const direction =
@@ -445,72 +442,80 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         : undefined;
     // While a move/resize gesture runs, the card fills its (preview) cell so
     // the user manipulates the quantized rect they will actually commit.
-    const exactHeightPx = this.dragging
-      ? undefined
-      : exactBoardWidgetHeightPx(
-          widget,
-          this.contentHeightPx,
-          boardChromeRowPx(),
-          this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
-        );
+    const exactHeightPx =
+      this.dragging || this.pageChrome
+        ? undefined
+        : exactBoardWidgetHeightPx(
+            widget,
+            this.contentHeightPx,
+            boardChromeRowPx(),
+            this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+          );
     const exactHeightStyle =
       exactHeightPx === undefined
         ? ""
         : ` height: calc(${exactHeightPx}px - var(--board-widget-height-trim, 0px)); align-self: start;`;
     return html`
       <section
-        class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
+        class=${`board-widget ${this.pageChrome ? "board-widget--page-chrome" : ""} ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
         style=${`${toCssPlacement(rect)} --board-widget-rows: ${rect.h}; --board-widget-order: ${this.positionInSet};${exactHeightStyle}`}
         role="listitem"
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}
         aria-setsize=${this.setSize}
-        aria-label=${readOnly ? label : t("board.widget.cellLabel", { title: label })}
+        aria-label=${
+          readOnly || this.pageChrome ? label : t("board.widget.cellLabel", { title: label })
+        }
         data-widget-name=${widget.name}
         data-test-id="board-widget"
         @focus=${() => callbacks.focusChanged(widget.name)}
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, widget, callbacks)}
       >
-        <header class="board-widget__bar">
-          ${
-            readOnly
-              ? nothing
-              : html`<span
-                  class="board-widget__drag-handle"
-                  aria-hidden="true"
-                  title=${t("board.widget.moveHandle", { title: label })}
-                  @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
+        ${
+          this.pageChrome
+            ? nothing
+            : html`<header class="board-widget__bar">
+                ${
+                  readOnly
+                    ? nothing
+                    : html`<span
+                        class="board-widget__drag-handle"
+                        aria-hidden="true"
+                        title=${t("board.widget.moveHandle", { title: label })}
+                        @pointerdown=${(event: PointerEvent) =>
+                          callbacks.movePointerDown(widget, event)}
+                      >
+                        <span aria-hidden="true">⠿</span>
+                      </span>`
+                }
+                <span class="board-widget__title" title=${label}>${label}</span>
+                <span class="board-widget__kind"
+                  >${
+                    widget.contentKind === "mcp-app"
+                      ? t("board.widget.kindMcp")
+                      : widget.contentKind === "plugin"
+                        ? widget.kindLabel ||
+                          getPluginWidgetKindContribution(
+                            widget.pluginKind,
+                            this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [],
+                          )?.label ||
+                          t("board.widget.kindPlugin")
+                        : t("board.widget.kindHtml")
+                  }</span
                 >
-                  <span aria-hidden="true">⠿</span>
-                </span>`
-          }
-          <span class="board-widget__title" title=${label}>${label}</span>
-          <span class="board-widget__kind"
-            >${
-              widget.contentKind === "mcp-app"
-                ? t("board.widget.kindMcp")
-                : widget.contentKind === "plugin"
-                  ? widget.kindLabel ||
-                    getPluginWidgetKindContribution(
-                      widget.pluginKind,
-                      this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [],
-                    )?.label ||
-                    t("board.widget.kindPlugin")
-                  : t("board.widget.kindHtml")
-            }</span
-          >
-          ${renderBoardGrantedCapabilities(widget)}
-          ${
-            readOnly
-              ? nothing
-              : renderBoardWidgetMenu({
-                  widget,
-                  tabs: this.tabs,
-                  disabled: this.busy || this.actionPending,
-                  onSelect: (event) => this.handleMenuSelect(event, widget, callbacks),
-                })
-          }
-        </header>
+                ${renderBoardGrantedCapabilities(widget)}
+                ${
+                  readOnly
+                    ? nothing
+                    : renderBoardWidgetMenu({
+                        widget,
+                        tabs: this.tabs,
+                        disabled: this.busy || this.actionPending,
+                        onSelect: (event) => this.selectMenuItem(event.detail.item.value),
+                      })
+                }
+              </header>`
+        }
         <div
           class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""} ${presentation === "card" ? "board-widget__body--card" : ""}`}
         >
@@ -524,7 +529,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           }
         </div>
         ${
-          readOnly
+          readOnly || this.pageChrome
             ? nothing
             : html`<span
                 class="board-widget__resize-handle"
@@ -534,7 +539,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               ></span>`
         }
         ${
-          widget.grantState === "granted"
+          widget.grantState === "granted" && !this.pageChrome
             ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
             : nothing
         }

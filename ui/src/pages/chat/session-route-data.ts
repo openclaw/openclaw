@@ -13,6 +13,7 @@ export type ChatRouteData =
   | {
       kind: "session";
       sessionKey: string;
+      creation?: Readonly<{ admitted: boolean }>;
       agentId?: string;
       draft?: string;
       focusComposer?: boolean;
@@ -20,6 +21,7 @@ export type ChatRouteData =
       face: BoardFace;
       shortId?: string;
       routeLoadingSkeleton?: true;
+      sessionResolutionFromCache?: true;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
       canonicalLocationSource?: RouteLocation;

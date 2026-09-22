@@ -5,6 +5,7 @@ import { latestBrowserTabCards, loadBrowserTabThumbnail } from "./browser-tab-pr
 import { extractToolCardsCached } from "./tool-cards.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

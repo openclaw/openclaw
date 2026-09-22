@@ -179,8 +179,9 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
       break;
     case "create-agent":
       if (
-        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model", "role"]) ||
+        !hasExactKeys(operation, ["kind", "agentId"], ["name", "workspace", "model", "role"]) ||
         !isNonEmptyString(operation.agentId) ||
+        !hasOptionalString(operation, "name") ||
         (operation.role !== undefined &&
           !listAgentRoles().some((role) => role === operation.role)) ||
         !hasOptionalString(operation, "workspace") ||
@@ -242,12 +243,6 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
     return [
       "OpenClaw rescue cannot host the interactive channel setup from a message channel.",
       "Run `openclaw setup` locally and say `connect " + operation.channel + "` instead.",
-    ].join(" ");
-  }
-  if (operation.kind === "model-setup") {
-    return [
-      "OpenClaw rescue cannot host model-provider credential setup from a message channel.",
-      "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
     ].join(" ");
   }
   if (operation.kind === "doctor-fix") {

@@ -42,6 +42,7 @@ async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
   // failures without making the Gateway own the launched application's lifetime.
   const child = spawnCommand([command.command, ...command.args], {
     buffer: false,
+    // Independent applications must survive Gateway/broker shutdown.
     cleanup: false,
     detached: true,
     reject: true,

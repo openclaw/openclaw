@@ -17,7 +17,6 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
 import {
-  createTestStorePath,
   installVoiceCallStateRuntimeForTests,
   makePersistedCall,
   writeLegacyCallsJsonl,
@@ -103,7 +102,7 @@ describe("voice-call doctor state migration", () => {
   beforeAll(async () => {
     resetPluginStateStoreForTests();
     const warmStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-doctor-"));
-    const warmStorePath = createTestStorePath();
+    const warmStorePath = path.join(warmStateDir, "custom-store");
     const warmEnv = {
       ...process.env,
       HOME: warmStateDir,
@@ -150,14 +149,13 @@ describe("voice-call doctor state migration", () => {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       await fs.rm(warmStateDir, { recursive: true, force: true });
-      await fs.rm(warmStorePath, { recursive: true, force: true });
     }
   });
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-doctor-"));
-    storePath = createTestStorePath();
+    storePath = path.join(stateDir, "custom-store");
     env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
     installVoiceCallStateRuntimeForTests();
   });
@@ -166,7 +164,6 @@ describe("voice-call doctor state migration", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
-    await fs.rm(storePath, { recursive: true, force: true });
   });
 
   it("reports top-level and per-number session-store agents", () => {

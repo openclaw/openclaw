@@ -3763,32 +3763,23 @@ describe("installPluginFromDir", () => {
 
 describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
   const resolveRootMock = vi.mocked(resolveOpenClawPackageRootSync);
-  const hostDependencyDeclarations: Array<{
-    declaration: string;
-    peerDependencies: Record<string, string>;
-    dependencies?: Record<string, string>;
-  }> = [
-    {
-      declaration: "peerDependencies",
-      peerDependencies: { openclaw: "*" },
-    },
-    {
-      declaration: "dependencies",
-      peerDependencies: {},
-      dependencies: { openclaw: "*" },
-    },
+  type HostManifest = Partial<
+    Record<"peerDependencies" | "dependencies" | "optionalDependencies", Record<string, string>>
+  >;
+  const hostDependencyDeclarations: { declaration: string; manifest: HostManifest }[] = [
+    { declaration: "peerDependencies", manifest: { peerDependencies: { openclaw: "*" } } },
+    { declaration: "dependencies", manifest: { dependencies: { openclaw: "*" } } },
+    { declaration: "optionalDependencies", manifest: { optionalDependencies: { openclaw: "*" } } },
     {
       declaration: "dependencies alongside an unrelated peer dependency",
-      peerDependencies: { "unrelated-host": "^1.0.0" },
-      dependencies: { openclaw: "*" },
+      manifest: {
+        peerDependencies: { "unrelated-host": "^1.0.0" },
+        dependencies: { openclaw: "*" },
+      },
     },
   ];
 
-  function writePluginWithPeerDeps(
-    pluginDir: string,
-    peerDependencies: Record<string, string>,
-    dependencies?: Record<string, string>,
-  ): void {
+  function writePluginWithPeerDeps(pluginDir: string, manifest: HostManifest): void {
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -3796,8 +3787,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
         name: "peer-dep-plugin",
         version: "1.0.0",
         openclaw: { extensions: ["index.js"] },
-        ...(dependencies ? { dependencies } : {}),
-        peerDependencies,
+        ...manifest,
       }),
       "utf-8",
     );
@@ -3806,13 +3796,13 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
 
   it.each(hostDependencyDeclarations)(
     "creates a host-targeted node_modules/openclaw symlink for $declaration",
-    async ({ peerDependencies, dependencies }) => {
+    async ({ manifest }) => {
       const { pluginDir, extensionsDir } = setupPluginInstallDirs();
       const fakeHostRoot = suiteTempRootTracker.makeTempDir();
       const run = vi.mocked(runCommandWithTimeout);
       resolveRootMock.mockReturnValue(fakeHostRoot);
 
-      writePluginWithPeerDeps(pluginDir, peerDependencies, dependencies);
+      writePluginWithPeerDeps(pluginDir, manifest);
 
       const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
@@ -3833,7 +3823,10 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const fakeHostRoot = suiteTempRootTracker.makeTempDir();
     resolveRootMock.mockReturnValue(fakeHostRoot);
 
-    writePluginWithPeerDeps(pluginDir, { openclaw: "*" }, { "is-number": "7.0.0" });
+    writePluginWithPeerDeps(pluginDir, {
+      peerDependencies: { openclaw: "*" },
+      dependencies: { "is-number": "7.0.0" },
+    });
     fs.mkdirSync(path.join(pluginDir, "node_modules", "is-number"), { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "node_modules", "is-number", "package.json"),
@@ -3857,12 +3850,12 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
 
   it.each(hostDependencyDeclarations)(
     "replaces a copied local openclaw package with the host symlink for $declaration",
-    async ({ peerDependencies, dependencies }) => {
+    async ({ manifest }) => {
       const { pluginDir, extensionsDir } = setupPluginInstallDirs();
       const fakeHostRoot = suiteTempRootTracker.makeTempDir();
       resolveRootMock.mockReturnValue(fakeHostRoot);
 
-      writePluginWithPeerDeps(pluginDir, peerDependencies, dependencies);
+      writePluginWithPeerDeps(pluginDir, manifest);
       fs.mkdirSync(path.join(pluginDir, "node_modules", "openclaw"), { recursive: true });
       fs.writeFileSync(
         path.join(pluginDir, "node_modules", "openclaw", "package.json"),
@@ -3884,7 +3877,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     },
   );
 
-  it("does not create a symlink when neither dependency map declares openclaw", async () => {
+  it("does not create a symlink when no dependency map declares openclaw", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     resolveRootMock.mockReturnValue(suiteTempRootTracker.makeTempDir());
 
@@ -3902,40 +3895,43 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(fs.existsSync(symlinkPath)).toBe(false);
   });
 
-  it("is idempotent - re-installing replaces an existing symlink without error", async () => {
-    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
-    const fakeHostRoot = suiteTempRootTracker.makeTempDir();
-    resolveRootMock.mockReturnValue(fakeHostRoot);
+  it.each(hostDependencyDeclarations)(
+    "relinks $declaration when updating an existing install",
+    async ({ manifest }) => {
+      const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+      const fakeHostRoot = suiteTempRootTracker.makeTempDir();
+      resolveRootMock.mockReturnValue(fakeHostRoot);
 
-    writePluginWithPeerDeps(pluginDir, { openclaw: "*" });
+      writePluginWithPeerDeps(pluginDir, manifest);
 
-    // First install
-    const { result: first } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
-    expect(first.ok).toBe(true);
+      // First install
+      const { result: first } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+      expect(first.ok).toBe(true);
 
-    // Second install (update mode) should replace symlink, not throw.
-    const { result: second, warnings } = await installFromDirWithWarnings({
-      pluginDir,
-      extensionsDir,
-      mode: "update",
-    });
-    expect(second.ok).toBe(true);
-    expect(warnings).toHaveLength(0);
+      // Second install (update mode) should replace symlink, not throw.
+      const { result: second, warnings } = await installFromDirWithWarnings({
+        pluginDir,
+        extensionsDir,
+        mode: "update",
+      });
+      expect(second.ok).toBe(true);
+      expect(warnings).toHaveLength(0);
 
-    if (!second.ok) {
-      return;
-    }
-    const symlinkPath = path.join(second.targetDir, "node_modules", "openclaw");
-    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
-  });
+      if (!second.ok) {
+        return;
+      }
+      const symlinkPath = path.join(second.targetDir, "node_modules", "openclaw");
+      expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+    },
+  );
 
   it.each(hostDependencyDeclarations)(
     "rejects $declaration when the host package root cannot be resolved",
-    async ({ peerDependencies, dependencies }) => {
+    async ({ manifest }) => {
       const { pluginDir, extensionsDir } = setupPluginInstallDirs();
       resolveRootMock.mockReturnValue(null);
 
-      writePluginWithPeerDeps(pluginDir, peerDependencies, dependencies);
+      writePluginWithPeerDeps(pluginDir, manifest);
 
       const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 

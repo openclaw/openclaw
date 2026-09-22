@@ -92,7 +92,6 @@ describe("command palette catalog search", () => {
               {
                 id: "nightly",
                 name: "Nightly invoices",
-                description: "Reconciles customer billing",
               },
             ],
           };

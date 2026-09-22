@@ -393,8 +393,7 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
-    expect(result.pid).toBe(5151);
+    expect(result).toMatchObject({ mode: "spawned", pid: 5151 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["C:\\openclaw\\node_modules\\openclaw\\openclaw.mjs", "gateway", "run"],
@@ -460,8 +459,7 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
-    expect(result.pid).toBe(6161);
+    expect(result).toMatchObject({ mode: "spawned", pid: 6161 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["/repo/dist/index.js", "gateway", "run"],
@@ -483,7 +481,9 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("spawned");
+    if (result.mode !== "spawned") {
+      throw new Error("Expected a spawned update child");
+    }
     expect(result.child).toBe(child);
     expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
     const errorListener = child.on.mock.calls.find(([event]) => event === "error")?.[1];
@@ -505,7 +505,9 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     const result = respawnGatewayProcessForUpdate();
 
-    expect(result.mode).toBe("failed");
-    expect(result.detail).toContain("spawn failed");
+    expect(result).toMatchObject({
+      mode: "failed",
+      detail: expect.stringContaining("spawn failed"),
+    });
   });
 });

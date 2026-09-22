@@ -27,10 +27,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import {
-  buildAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
-} from "../../agent-run-terminal-reply.js";
+import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -41,6 +39,7 @@ import { textAssistant } from "../../test-helpers/sparse-transcript.test-support
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
+import { announceTesting as subagentAnnounceTesting } from "./subagent-announce-overrides.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -400,7 +399,6 @@ vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -409,8 +407,7 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow, testing: subagentAnnounceTesting } =
-      await import("./subagent-announce.js"));
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {

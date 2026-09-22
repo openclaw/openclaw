@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -27,7 +28,10 @@ import {
 } from "./state-migrations.receipts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 
 function createHarness() {
   const stateDir = tempDirs.make("openclaw-transcript-projections-");
@@ -150,6 +154,7 @@ describe("meeting transcript Doctor oversized projections", () => {
       expect(harness.snapshot()).toEqual(before);
 
       const readListedCapture = async (expectedSelector: string) => {
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         const reopened = new TranscriptsStore(harness.root, { env: harness.env });
         const listed = (await listTranscriptLibrary(reopened, {})).sessions.find(
@@ -190,6 +195,7 @@ describe("meeting transcript Doctor oversized projections", () => {
       const result = await harness.migrate();
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([expect.stringMatching(/1.*oversized/i)]);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const slug = safeTranscriptPathSegment(sessionId);
       const expected = structuredClone(before);
@@ -266,6 +272,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     const result = await harness.migrate();
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringMatching(/UNIQUE constraint failed.*selector/i)]);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect(harness.snapshot()).toEqual(before);
     expect(harness.detect().hasLegacy).toBe(true);

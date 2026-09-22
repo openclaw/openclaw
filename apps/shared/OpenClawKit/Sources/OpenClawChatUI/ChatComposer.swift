@@ -35,6 +35,12 @@ private struct OpenClawVideoTransfer: Sendable, Transferable {
         }
     }
 }
+
+private struct OpenClawPickerTransferUnavailable: LocalizedError {
+    var errorDescription: String? {
+        String(localized: "Could not load this attachment. Try selecting it again.")
+    }
+}
 #endif
 
 @MainActor
@@ -421,6 +427,24 @@ struct OpenClawChatComposer: View {
         if let talkControl, talkControl.isEnabled {
             ChatTalkActivityStrip(control: talkControl)
         }
+
+        if let dictationControl, self.dictationTask != nil || dictationControl.isActive {
+            ChatDictationActivityRow(
+                control: dictationControl,
+                onCancel: {
+                    ChatDictationActions.cancel(task: self.$dictationTask, control: dictationControl)
+                })
+        }
+
+        #if os(iOS)
+        if self.viewModel.attachmentStagingCount > 0 {
+            ChatAttachmentActivityRow(title: "Preparing attachments…")
+        } else if self.viewModel.isSendingAttachmentDraft {
+            ChatAttachmentActivityRow(title: "Sending attachments…")
+        } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
+            ChatAttachmentActivityRow(title: "Preparing message…")
+        }
+        #endif
 
         if self.composerChrome == .clean {
             self.composerCapabilityNoticeRow
@@ -1542,7 +1566,7 @@ extension OpenClawChatComposer {
                 }) ?? item.supportedContentTypes.first ?? .image
                 if type.conforms(to: .movie) {
                     guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
-                    else { continue }
+                    else { throw OpenClawPickerTransferUnavailable() }
                     defer { try? FileManager.default.removeItem(at: transfer.url) }
                     let metadata = OpenClawChatPickerAttachmentMetadata.resolve(
                         contentType: type,
@@ -1554,7 +1578,8 @@ extension OpenClawChatComposer {
                         mimeType: metadata.mimeType,
                         expectedSession: owner.session)
                 } else {
-                    guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                    guard let data = try await item.loadTransferable(type: Data.self)
+                    else { throw OpenClawPickerTransferUnavailable() }
                     let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
                     let name = "photo-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
                     await owner.viewModel.addImageAttachment(

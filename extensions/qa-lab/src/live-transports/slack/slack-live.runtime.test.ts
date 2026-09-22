@@ -422,6 +422,22 @@ describe("Slack live QA runtime helpers", () => {
     ).toBeUndefined();
   });
 
+  it.each(["slack-allowlist-block", "slack-channel-disabled-warning", "slack-mention-gating"])(
+    "keeps the %s negative observation inside its flow deadline",
+    (scenarioId) => {
+      const scenario = testing.findScenario([scenarioId])[0];
+      const run = scenario?.buildRun("U999999999");
+      if (!scenario || !run || !("expectReply" in run)) {
+        throw new Error(`missing Slack message scenario ${scenarioId}`);
+      }
+      expect(run.expectReply).toBe(false);
+      expect(run.noReplyObservationMs).toBe(8_000);
+      expect(scenario.timeoutMs).toBeGreaterThan(
+        run.noReplyObservationMs ?? Number.POSITIVE_INFINITY,
+      );
+    },
+  );
+
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.6-luna"),
@@ -762,6 +778,17 @@ describe("Slack live QA runtime helpers", () => {
                 return message;
               }
               return Object.assign({}, message, { blockText: ["Exec — sleep 5"] });
+            }),
+          }),
+        ).toContain("verified");
+        expect(
+          verifyObserved({
+            finalMessage: { text: finalMarker, ts: "2.000000" },
+            messages: messages.map((message) => {
+              if (message.ts !== "1.500000") {
+                return message;
+              }
+              return Object.assign({}, message, { blockText: ["Run — `sleep 5`"] });
             }),
           }),
         ).toContain("verified");

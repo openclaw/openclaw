@@ -11,9 +11,14 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  emitDiagnosticMemorySample,
+  resetDiagnosticMemoryForTest,
+  type EmitDiagnosticMemorySample,
+} from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -95,19 +100,6 @@ const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
 
-// The logging-core SDK shipped this callback input before automatic bundles retired.
-// Preserve its optional fields; the heartbeat only supplies emitSample.
-type DiagnosticMemorySampleCallbackOptions = NonNullable<
-  Parameters<typeof emitDiagnosticMemorySample>[0]
-> & {
-  writeCriticalBundle?: boolean;
-  stateDir?: string;
-  sessionStorePaths?: string[];
-  resolveSessionStorePaths?: () => string[] | undefined;
-};
-type EmitDiagnosticMemorySample = (
-  options?: DiagnosticMemorySampleCallbackOptions,
-) => ReturnType<typeof emitDiagnosticMemorySample>;
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
@@ -1140,6 +1132,7 @@ export function startDiagnosticHeartbeat(
   heartbeatInterval = setInterval(() => {
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
+    emitChildProcessSpawnSample();
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
       try {

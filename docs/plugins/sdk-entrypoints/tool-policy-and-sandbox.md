@@ -52,3 +52,22 @@ prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to
 preserve drive prefixes in container paths too, as Policy does for its existing
 Windows bind grammar. The default keeps POSIX container parsing unchanged.
 This helper splits text; it does not validate or authorize a mount.
+
+## Sandbox filesystem mappings
+
+`SandboxContext`, exported by `openclaw/plugin-sdk/agent-harness-runtime`, exposes
+its filesystem bridge through `fsBridge`. That bridge accepts optional readonly
+`pathMappings`: `{ hostRoot, containerRoot }` pairs from the backend's prepared
+mounts. Include workspace, agent-workspace, and protected-resource projections.
+The container root declares the path syntax: POSIX roots retain literal
+backslashes; Windows drive and UNC roots use Windows containment and preserve
+filename case. The deepest matching root wins; equal roots use the supplied
+order.
+
+Workspace-only file tools use these mappings for admission. Bridge operations
+still enforce physical boundaries, mount visibility, and read-only policy.
+A supplied empty list admits no paths, and an unmatched path never falls back
+to host-root admission. Older external bridges that omit the property retain
+the host-root compatibility exposed in v2026.9.4. New implementations should
+supply the mappings; removal of that compatibility requires a breaking SDK
+contract that makes the property required.

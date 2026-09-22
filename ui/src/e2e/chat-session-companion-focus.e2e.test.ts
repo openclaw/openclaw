@@ -173,16 +173,21 @@ suite.define(() => {
           deferredMethods: ["sessions.companion.ask"],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
+        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
         if (open) {
           await openChatSidePanelType(page, "Side chat");
+          // Complete the opening's focus handoff before filling the main composer.
+          await expect
+            .poll(() => input.evaluate((element) => document.activeElement === element))
+            .toBe(true);
         }
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         await mainInput.fill("/btw what is this?");
         await mainInput.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "what is this?" });
-        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-        await expect.poll(() => input.isDisabled()).toBe(true);
+        await page.locator(".chat-session-rail__exchange--pending").waitFor();
+        expect(await input.isDisabled()).toBe(false);
         await gateway.resolveDeferred("sessions.companion.ask", {
           answer: "A side conversation.",
           ts: 1,
@@ -218,7 +223,8 @@ suite.define(() => {
         const sideInput = panes
           .first()
           .getByRole("textbox", { name: "Ask in side chat", exact: true });
-        await expect.poll(() => sideInput.isDisabled()).toBe(true);
+        await page.locator(".chat-session-rail__exchange--pending").waitFor();
+        expect(await sideInput.isDisabled()).toBe(false);
         await secondInput.fill("Keep typing here");
         const foregroundInput = returnToFirstPane ? firstInput : secondInput;
         if (returnToFirstPane) {
@@ -271,7 +277,9 @@ suite.define(() => {
       await mainInput.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ agentId: "main", sessionKey: "global" });
-      await expect.poll(() => sideInput.isDisabled()).toBe(true);
+      await page.locator(".chat-session-rail__exchange--pending").waitFor();
+      expect(await sideInput.isDisabled()).toBe(false);
+      await mainInput.focus();
       // The shared selection owner also publishes background roster reconciliation.
       await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -331,11 +339,12 @@ suite.define(() => {
           await held.request;
           expect(await sideInput.count()).toBe(0);
         } else {
-          await expect.poll(() => sideInput.isDisabled()).toBe(true);
+          await page.locator(".chat-session-rail__exchange--pending").waitFor();
+          expect(await sideInput.isDisabled()).toBe(false);
         }
-        expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(
-          true,
-        );
+        // Side chat is now editable and can receive the initial focus handoff.
+        // Reclaim the main composer before testing newer foreground intent.
+        await mainInput.focus();
         let foregroundInput = mainInput;
         if (intent === "click") {
           await mainInput.click();
@@ -346,13 +355,15 @@ suite.define(() => {
           expect(await mainInput.inputValue()).toBe("");
         } else if (intent === "command palette") {
           await page.keyboard.press("ControlOrMeta+k");
-          foregroundInput = page.getByRole("combobox", { name: "Search chats and commands…" });
+          foregroundInput = page
+            .locator("openclaw-command-palette")
+            .getByRole("textbox", { name: "Search or start a task…" });
           await foregroundInput.fill("Keep typing here");
         } else if (intent === "sidebar menu" || intent === "sidebar menu before mount") {
           await page
-            .getByRole("button", { name: "Open session menu: Sidebar focus", exact: true })
+            .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
-          await page.keyboard.press("Enter");
+          await page.keyboard.press("Shift+F10");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

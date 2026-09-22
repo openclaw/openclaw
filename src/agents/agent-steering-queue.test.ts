@@ -1,5 +1,6 @@
 /** Tests subagent completion steering queue selection, leasing, and prompt merging. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -7,10 +8,8 @@ import {
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
 import { resolveSubagentCompletionResultText } from "./subagents/completion/subagent-completion-result.js";
-import type {
-  PendingFinalDeliveryPayload,
-  SubagentRunRecord,
-} from "./subagents/registry/subagent-registry.types.js";
+import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const readResult = async (entry: SubagentRunRecord) => ({
   text: resolveSubagentCompletionResultText(entry),
@@ -18,6 +17,7 @@ const readResult = async (entry: SubagentRunRecord) => ({
 });
 
 const requesterSessionKey = "agent:main:main";
+afterEach(() => publishSystemEventStoreResolver(undefined));
 
 function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> = {}) {
   return {
@@ -84,10 +84,11 @@ function extractSubagentResult(prompt: string): string {
 }
 
 describe("agent steering queue", () => {
-  it.each(["generation", "replacement", "delivery", "source"] as const)(
+  it.each(["generation", "replacement", "delivery", "source", "store"] as const)(
     "rejects %s invalidation while preparing a complete queued result",
     async (change) => {
-      const entry = makeRun();
+      const entry = makeRun({ requesterStorePath: "original-store" });
+      publishSystemEventStoreResolver(() => "original-store");
       const runs = runMap([entry]);
       let finish!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -117,25 +118,36 @@ describe("agent steering queue", () => {
       if (change === "source") {
         current = false;
       }
+      if (change === "store") {
+        publishSystemEventStoreResolver(() => "replacement-store");
+      }
       finish();
       await expect(leasing).rejects.toThrow("changed while preparing");
       expect(runs.get(entry.runId)?.delivery?.steeringLeaseId).toBeUndefined();
     },
   );
 
-  it("keeps lease and source authority live until the prepared prompt is submitted", async () => {
-    const entry = makeRun();
-    const runs = runMap([entry]);
-    const leased = await leasePendingAgentSteeringItemsFromSubagentRuns({
-      runs,
-      requesterSessionKey,
-      leaseId: "live-lease",
-      readResult,
-    });
-    expect(leased?.isCurrent()).toBe(true);
-    entry.generation = 2;
-    expect(leased?.isCurrent()).toBe(false);
-  });
+  it.each(["generation", "store"] as const)(
+    "rejects a changed %s before the prepared prompt is submitted",
+    async (change) => {
+      const entry = makeRun({ requesterStorePath: "original-store" });
+      publishSystemEventStoreResolver(() => "original-store");
+      const runs = runMap([entry]);
+      const leased = await leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "live-lease",
+        readResult,
+      });
+      expect(leased?.isCurrent()).toBe(true);
+      if (change === "generation") {
+        entry.generation = 2;
+      } else {
+        publishSystemEventStoreResolver(() => "replacement-store");
+      }
+      expect(leased?.isCurrent()).toBe(false);
+    },
+  );
 
   it("merges pending subagent completions in deterministic order", async () => {
     const runs = runMap([

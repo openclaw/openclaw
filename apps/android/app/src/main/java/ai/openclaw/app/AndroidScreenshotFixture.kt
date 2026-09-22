@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 
@@ -27,6 +28,7 @@ internal object AndroidScreenshotFixture {
   }
 
   val branchesEnabled: Boolean get() = scene == AndroidScreenshotScene.Branches
+  val attentionEnabled: Boolean get() = scene == AndroidScreenshotScene.Attention || scene == AndroidScreenshotScene.AttentionExpiry
 
   private val workScene: Boolean
     get() = scene in setOf(AndroidScreenshotScene.CompletedWork, AndroidScreenshotScene.ActiveWork, AndroidScreenshotScene.WorkBoundaries)
@@ -71,6 +73,54 @@ internal object AndroidScreenshotFixture {
           status = "pending",
         )
       }
+    val questionRecords =
+      AtomicReference(
+        if (attentionEnabled) {
+          listOf(
+            pendingQuestion.copy(id = "attention-question-1", sessionKey = "discord:android", createdAtMs = pendingQuestion.createdAtMs - 4000, questions = listOf(pendingQuestion.questions.first().copy(question = "Which Android version should we test first?"), pendingQuestion.questions.first().copy(questionId = "device", question = "Which screen size should we prioritize?"))),
+            pendingQuestion.copy(id = "attention-question-2", sessionKey = "discord:android", createdAtMs = pendingQuestion.createdAtMs - 2000, questions = listOf(pendingQuestion.questions.first().copy(question = "Should the tablet layout ship with this change?"))),
+          ).mapIndexed { index, question -> if (scene == AndroidScreenshotScene.AttentionExpiry) question.copy(expiresAtMs = System.currentTimeMillis() + 16000 - index * 4000) else question }
+        } else {
+          listOf(pendingQuestion)
+        },
+      )
+    val approvals =
+      AtomicReference(
+        if (attentionEnabled) {
+          GatewayApprovalKind.entries.mapIndexed { index, kind ->
+            buildJsonObject {
+              put("id", "attention-approval-$index")
+              put("createdAtMs", pendingQuestion.createdAtMs - 3000 + index * 1000)
+              put("expiresAtMs", System.currentTimeMillis() + if (scene == AndroidScreenshotScene.AttentionExpiry) 8000 + index * 4000 else 600000)
+              put("urlPath", "/approve/attention-approval-$index")
+              put("status", "pending")
+              put(
+                "presentation",
+                buildJsonObject {
+                  put("kind", kind.wireValue)
+                  put("agentId", "main")
+                  put(
+                    "allowedDecisions",
+                    buildJsonArray {
+                      add(JsonPrimitive("allow-once"))
+                      add(JsonPrimitive("deny"))
+                    },
+                  )
+                  if (kind == GatewayApprovalKind.Exec) {
+                    put("commandText", "pnpm android:test:integration")
+                  } else {
+                    put("title", if (kind == GatewayApprovalKind.Plugin) "Send the release summary" else "Update Gateway settings")
+                    put("description", "Review the prepared change before continuing.")
+                    if (kind == GatewayApprovalKind.Plugin) put("severity", "info") else put("proposalHash", "a".repeat(64))
+                  }
+                },
+              )
+            }
+          }
+        } else {
+          emptyList()
+        },
+      )
     return { method, paramsJson ->
       when (method) {
         "health" -> {
@@ -126,7 +176,49 @@ internal object AndroidScreenshotFixture {
         }
 
         "question.list" -> {
-          Json.encodeToString(QuestionListResult(if (workScene) emptyList() else listOf(pendingQuestion)))
+          Json.encodeToString(QuestionListResult(if (workScene) emptyList() else questionRecords.get().filter { it.status == "pending" && it.expiresAtMs > System.currentTimeMillis() }))
+        }
+
+        "question.get" -> {
+          val id =
+            Json
+              .parseToJsonElement(requireNotNull(paramsJson))
+              .jsonObject
+              .getValue("id")
+              .jsonPrimitive.content
+          val record = questionRecords.get().first { it.id == id }
+          val terminal = if (record.expiresAtMs <= System.currentTimeMillis()) record.copy(status = "expired") else record
+          """{"question":${Json.encodeToString(terminal)}}"""
+        }
+
+        "exec.approval.list", "plugin.approval.list", "openclaw.approval.list" -> {
+          val kind = GatewayApprovalKind.entries.first { method == "${it.eventPrefix}.approval.list" }
+          JsonArray(
+            approvals.get().filter { it.getValue("status") == JsonPrimitive("pending") && it.getValue("presentation").jsonObject.getValue("kind") == JsonPrimitive(kind.wireValue) }.map { approval ->
+              buildJsonObject {
+                listOf("id", "createdAtMs", "expiresAtMs").forEach { put(it, approval.getValue(it)) }
+                put(
+                  "request",
+                  buildJsonObject {
+                    put("sessionKey", "main")
+                    put("agentId", "main")
+                  },
+                )
+              }
+            },
+          ).toString()
+        }
+
+        "approval.get", "approval.resolve" -> {
+          val params = Json.parseToJsonElement(requireNotNull(paramsJson)).jsonObject
+          val id = params.getValue("id")
+          val current = approvals.get().first { it.getValue("id") == id }
+          val next = if (method == "approval.resolve") JsonObject(current + mapOf("status" to JsonPrimitive(if (params["decision"] == JsonPrimitive("deny")) "denied" else "allowed"), "decision" to params.getValue("decision"), "reason" to JsonPrimitive("user"), "resolvedAtMs" to JsonPrimitive(System.currentTimeMillis()))) else current
+          if (method == "approval.resolve") approvals.updateAndGet { rows -> rows.map { if (it.getValue("id") == id) next else it } }
+          buildJsonObject {
+            put("approval", next)
+            if (method == "approval.resolve") put("applied", true)
+          }.toString()
         }
 
         "cron.list" -> {

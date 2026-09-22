@@ -184,59 +184,18 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
-  it("does not stage a config proposal after its validation was cancelled", async () => {
+  it("createSystemAgentTool.execute does not stage a config proposal when cancelled", async () => {
     const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
     const controller = new AbortController();
+    controller.abort(new Error("Setup cancelled"));
     const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
       "cancelled-proposal",
       { action: "config_set", path: "gateway.port", value: "19001" },
       controller.signal,
     );
-    controller.abort(new Error("Setup cancelled"));
     await expect(pending).rejects.toThrow("Setup cancelled");
     expect(proposalRef).toEqual({});
   });
-
-  it("preserves a different proposal staged while config validation yields", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
-      "racing-proposal",
-      { action: "config_set", path: "gateway.port", value: "19001" },
-    );
-    const prior = { kind: "gateway-restart" as const };
-    proposalRef.operation = prior;
-    proposalRef.current = hashSystemAgentOperation(prior);
-    expect(toolText(await pending)).toContain("proposal-conflict");
-    expect(proposalRef.operation).toEqual(prior);
-  });
-
-  it.each([false, true])(
-    "preserves a proposal across rejected validation in-process and in the CLI mirror (approved=%s)",
-    async (approved) => {
-      const operation = {
-        kind: "config-set" as const,
-        path: "auth.profiles.invalid",
-        value: "true",
-      };
-      const original = { current: hashSystemAgentOperation(operation), operation };
-      const proposalRef = { ...original };
-      const args = { action: "config_set", path: operation.path, value: operation.value, approved };
-      let failure: unknown;
-      try {
-        await createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef }).execute(
-          "rejected-validation",
-          args,
-        );
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(Error);
-      expect(proposalRef).toEqual(original);
-      expect(
-        resolveSystemAgentProposalTransition({ args, resultText: String(failure) }),
-      ).toBeNull();
-    },
-  );
 
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
     const proposalRef: { current?: string } = {};
@@ -460,34 +419,41 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
-  it("refuses an armed call that differs from the proposed operation", async () => {
-    const proposalRef: { current?: string } = {};
-    const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
-    await proposingTool.execute("t3c", {
-      action: "set_default_model",
-      model: "openai/gpt-5.5",
-      approved: true,
-    });
-    const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
-    const result = await armedTool.execute("t3d", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    // A different operation than the approved one voids the approval entirely;
-    // even an identical retry in the same armed turn stays locked.
-    expect(toolText(result)).toContain("approval-mismatch");
-    expect(proposalRef.current).toBeUndefined();
-    const retry = await armedTool.execute("t3e", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    expect(toolText(retry)).toContain("approval-mismatch");
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      proposed: { action: "set_default_model", model: "openai/gpt-5.5" },
+      changed: { action: "config_set", path: "gateway.port", value: "1" },
+    },
+    {
+      proposed: { action: "create_agent", agentId: "qa-writer", name: "QA Writer" },
+      changed: { action: "create_agent", agentId: "qa-writer", name: "Other Writer" },
+    },
+  ])(
+    "refuses an armed call that differs from the proposed operation: $proposed",
+    async ({ proposed, changed }) => {
+      const proposalRef: { current?: string } = {};
+      const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
+      await proposingTool.execute("t3c", {
+        ...proposed,
+        approved: true,
+      });
+      const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
+      const result = await armedTool.execute("t3d", {
+        ...changed,
+        approved: true,
+      });
+      // A different operation than the approved one voids the approval entirely;
+      // even an identical retry in the same armed turn stays locked.
+      expect(toolText(result)).toContain("approval-mismatch");
+      expect(proposalRef.current).toBeUndefined();
+      const retry = await armedTool.execute("t3e", {
+        ...changed,
+        approved: true,
+      });
+      expect(toolText(retry)).toContain("approval-mismatch");
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
 
   it("never performs an approved write inside the model tool process", async () => {
     const proposalRef: { current?: string } = {};
@@ -619,10 +585,8 @@ describe("openclaw tool", () => {
       workspace: "/tmp/work",
     });
     expect(toolText(configureModel)).toContain("directive:");
-    expect(toolText(configureModel)).toContain(
-      "active inference route cannot be changed inside OpenClaw",
-    );
-    expect(toolText(configureModel)).toContain("openclaw onboard");
+    expect(toolText(configureModel)).toContain("protected Models sign-in guidance");
+    expect(toolText(configureModel)).toContain("Nothing has changed");
     expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
 
     const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
@@ -740,8 +704,7 @@ describe("openclaw tool", () => {
     expect(
       resolveSystemAgentDirectiveTransition({
         args: { action: "configure_model_provider", workspace: "/tmp/work" },
-        resultText:
-          "directive: the active inference route cannot be changed inside OpenClaw; run openclaw onboard.",
+        resultText: "directive: the host returns protected Models sign-in guidance next.",
       }),
     ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
     expect(

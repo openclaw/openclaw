@@ -152,12 +152,19 @@ export function loadSessionWorkspace(
   const sessionKey = state.sessionKey;
   const agentId = workspace.agentId;
   const client = state.client;
+  const browserPath = workspace.browserPath;
+  const browserSearch = workspace.browserSearch;
+  // Session ownership survives folder/search changes; this response belongs to its query.
+  const isCurrentListing = () =>
+    isCurrentSessionWorkspace(state, workspace) &&
+    workspace.browserPath === browserPath &&
+    workspace.browserSearch === browserSearch;
   void (async () => {
     try {
       const [files, artifacts] = await Promise.all([
         state.sessions.listFiles(sessionKey, {
-          path: workspace.browserSearch ? "" : workspace.browserPath,
-          search: workspace.browserSearch,
+          path: browserSearch ? "" : browserPath,
+          search: browserSearch,
           agentId,
         }),
         client.request<{
@@ -167,12 +174,11 @@ export function loadSessionWorkspace(
           ...(agentId ? { agentId } : {}),
         }),
       ]);
-      if (!isCurrentSessionWorkspace(state, workspace)) {
+      if (!isCurrentListing()) {
         return;
       }
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
-      const browserItems = files?.browser?.entries ?? [];
       workspace.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
@@ -181,16 +187,8 @@ export function loadSessionWorkspace(
         ...(files?.browser ? { browser: files.browser } : {}),
         artifacts: artifactItems,
       };
-      if (
-        workspace.activeId &&
-        !fileItems.some((file) => `file:${file.path}` === workspace.activeId) &&
-        !browserItems.some((entry) => `file:${entry.path}` === workspace.activeId) &&
-        !artifactItems.some((artifact) => `artifact:${artifact.id}` === workspace.activeId)
-      ) {
-        workspace.activeId = null;
-      }
     } catch (error) {
-      if (isCurrentSessionWorkspace(state, workspace)) {
+      if (isCurrentListing()) {
         setSessionWorkspaceError(workspace, formatUiError(error));
       }
     } finally {

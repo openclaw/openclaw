@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
-import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
@@ -40,7 +43,7 @@ export function readSessionFallbackModel(params: {
   try {
     const page = readSessionTranscriptBoundedMessageTailPage(
       { ...params.sessionScope, sessionId: entry.sessionId },
-      { maxBytes: 256 * 1024, maxMessages: 1, offset: 0 },
+      { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
     );
     const message = asOptionalRecord(asOptionalRecord(page.events[0]?.event)?.message);
     if (
@@ -66,7 +69,10 @@ export function readSessionFallbackModel(params: {
       }
     }
   } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+    if (
+      !isSessionTranscriptProjectionUnavailableError(error) &&
+      !(error instanceof SessionTranscriptStorageUnavailableError)
+    ) {
       throw error;
     }
   }

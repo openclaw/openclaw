@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
+import type {
+  AgentHarnessSelectionDecision,
+  AgentHarnessSelectionDecisionParams,
+} from "./harness/selection-decision.js";
 import type { AgentHarness } from "./harness/types.js";
 import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
@@ -16,7 +20,8 @@ export type IsolatedCliRunParams = {
 const isolatedCompletionMocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
-  getRegisteredAgentHarness: vi.fn(),
+  resolveAgentHarnessSelectionDecision:
+    vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
@@ -30,7 +35,6 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
   >(() => ({ config: { command: "test-cli" } })),
   resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
-  resolveEffectiveAgentRuntime: vi.fn(() => "codex"),
   runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 
@@ -40,6 +44,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
 }));
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,
@@ -52,8 +57,9 @@ vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: isolatedCompletionMocks.resolveModelAsync,
 }));
-vi.mock("./harness/registry.js", () => ({
-  getRegisteredAgentHarness: isolatedCompletionMocks.getRegisteredAgentHarness,
+vi.mock("./harness/selection-decision.js", () => ({
+  resolveAgentHarnessSelectionDecision:
+    isolatedCompletionMocks.resolveAgentHarnessSelectionDecision,
 }));
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: isolatedCompletionMocks.ensureSelectedAgentHarnessPlugin,
@@ -90,9 +96,6 @@ vi.mock("./runtime-plan/resolve-auth.js", () => ({
       }),
     ),
   }),
-}));
-vi.mock("./thinking-runtime.js", () => ({
-  resolveEffectiveAgentRuntime: isolatedCompletionMocks.resolveEffectiveAgentRuntime,
 }));
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent: isolatedCompletionMocks.runCliAgent }));
 vi.mock("../infra/private-temp-workspace.js", () => ({
@@ -179,7 +182,13 @@ export function resetIsolatedCompletionTestState(): void {
     config: { command: "test-cli" },
   });
   isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
-  isolatedCompletionMocks.resolveEffectiveAgentRuntime.mockReturnValue("codex");
+  isolatedCompletionMocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: "openclaw" },
+    selectedHarnessId: "openclaw",
+    selectedReason: "forced_openclaw",
+    candidates: [],
+    builtIn: true,
+  });
   isolatedCompletionMocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
   isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
   isolatedCompletionMocks.prepareSimpleCompletionModel.mockResolvedValue({
@@ -203,13 +212,20 @@ export function resetIsolatedCompletionTestState(): void {
 }
 
 export function registerIsolatedHarness(overrides: Partial<AgentHarness>): void {
-  isolatedCompletionMocks.getRegisteredAgentHarness.mockReturnValue({
-    harness: {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      ...overrides,
-    } satisfies AgentHarness,
+  const harness: AgentHarness = {
+    id: "codex",
+    label: "Codex",
+    supports: () => ({ supported: true }),
+    runAttempt: vi.fn(),
+    ...overrides,
+  };
+  isolatedCompletionMocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: harness.id },
+    selectedHarnessId: harness.id,
+    selectedReason: "forced_plugin",
+    candidates: [],
+    builtIn: false,
+    harness,
+    ownerPluginId: harness.pluginId ?? harness.id,
   });
 }

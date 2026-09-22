@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -7,199 +7,20 @@ import {
   resolveProjectedAgentRunModel,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import { runEmbeddedAgentEntry } from "./run-entry.js";
+import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
+import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
+  createDirectHarness,
+  makeResult,
   recordTurnAttempt,
   initialAttemptOptions,
-  fallbackAttemptOptions,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
 
-const state = vi.hoisted(() => ({
-  runWithModelFallback: vi.fn(),
-  ensureSelectedAgentHarnessPlugin: vi.fn(async (_params: unknown) => undefined),
-  selectAgentHarness: vi.fn(({ provider }: { provider: string }) => ({
-    id: provider === "fallback-provider" ? "fallback-harness" : "primary-harness",
-    contextEngineHostCapabilities: [],
-  })),
-  discardedAttempts: [] as string[],
-  finalizedAttempts: [] as string[],
-}));
-
-vi.mock("../harness/context-engine-turn-attempt.js", () => ({
-  discardContextEngineTurnAttemptIntent: vi.fn(
-    ({ facts }: { facts: ContextEngineTurnAttemptFacts }) => {
-      state.discardedAttempts.push(facts.sessionIdUsed);
-    },
-  ),
-  finalizeAcceptedContextEngineTurn: vi.fn(async ({ facts }) => {
-    state.finalizedAttempts.push(facts.sessionIdUsed);
-  }),
-}));
-
-vi.mock("../model-fallback-runner.js", () => ({
-  runWithModelFallback: (params: FallbackRunnerParams) => state.runWithModelFallback(params),
-}));
-
-vi.mock("../harness/runtime-plugin.js", () => ({
-  ensureSelectedAgentHarnessPlugin: (params: unknown) =>
-    state.ensureSelectedAgentHarnessPlugin(params),
-}));
-
-vi.mock("../harness/selection.js", () => ({
-  selectAgentHarness: (params: { provider: string }) => state.selectAgentHarness(params),
-}));
-
-function makeResult(params: {
-  provider: string;
-  model: string;
-  classification?: "empty";
-  meta?: Partial<EmbeddedAgentRunResult["meta"]>;
-}): EmbeddedAgentRunResult {
-  return {
-    payloads: params.classification ? [] : [{ text: "recovered" }],
-    meta: {
-      durationMs: 10,
-      aborted: false,
-      providerStarted: true,
-      stopReason: "completed",
-      agentHarnessResultClassification: params.classification,
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-      },
-      ...params.meta,
-    },
-  };
-}
-
-function createDirectHarness() {
-  return {
-    workspaceDir: "/tmp/workspace",
-    preparation: { kind: "direct" as const },
-    resolveRuntimeOverride: () => undefined,
-  };
-}
+const state = setupRunEntryTestState();
 
 describe("runEmbeddedAgentEntry", () => {
-  beforeEach(() => {
-    state.discardedAttempts.length = 0;
-    state.finalizedAttempts.length = 0;
-    state.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
-    state.selectAgentHarness
-      .mockReset()
-      .mockImplementation(({ provider }: { provider: string }) => ({
-        id: provider === "fallback-provider" ? "fallback-harness" : "primary-harness",
-        contextEngineHostCapabilities: [],
-      }));
-    state.runWithModelFallback
-      .mockReset()
-      .mockImplementation(async (params: FallbackRunnerParams) => {
-        await params.prepareCandidateChain?.([
-          {
-            provider: params.provider,
-            model: params.model,
-            routeOrigin: "requested",
-            routeResolution: "raw",
-          },
-          {
-            provider: "fallback-provider",
-            model: "fallback-model",
-            routeOrigin: "configured-fallback",
-            routeResolution: "raw",
-          },
-        ]);
-        await params.prepareAgentHarnessRuntime?.({
-          provider: params.provider,
-          model: params.model,
-          agentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride?.(
-            params.provider,
-            params.model,
-          ),
-        });
-        const primaryResult = await params.run(params.provider, params.model, {
-          ...initialAttemptOptions(params),
-          allowTransientCooldownProbe: true,
-        });
-        const classification = await params.classifyResult?.({
-          result: primaryResult,
-          provider: params.provider,
-          model: params.model,
-          attempt: 1,
-          total: 2,
-        });
-        expect(classification).toBeTruthy();
-        const fallbackProvider = "fallback-provider";
-        const fallbackModel = "fallback-model";
-        await params.prepareAgentHarnessRuntime?.({
-          provider: fallbackProvider,
-          model: fallbackModel,
-          agentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride?.(
-            fallbackProvider,
-            fallbackModel,
-          ),
-        });
-        const result = await params.run(fallbackProvider, fallbackModel, {
-          ...fallbackAttemptOptions(params, "format"),
-          isFinalFallbackAttempt: true,
-        });
-        return {
-          outcome: "completed" as const,
-          result,
-          provider: fallbackProvider,
-          model: fallbackModel,
-          attempts: [
-            {
-              provider: params.provider,
-              model: params.model,
-              error: "empty result",
-              reason: "format" as const,
-            },
-          ],
-        };
-      });
-  });
-
-  it("does not persist a previous candidate error after fallback setup fails", async () => {
-    const transcript = await import("../../config/sessions/transcript.js");
-    const { makeAssistantMessageFixture } =
-      await import("../test-helpers/assistant-message-fixtures.js");
-    const append = vi
-      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
-      .mockRejectedValue(new Error("stale error committed"));
-    try {
-      await expect(
-        runEmbeddedAgentEntry({
-          selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-          identity: { runId: "run-stale-error", agentId: "main", sessionId: "session-1" },
-          harness: createDirectHarness(),
-          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-          sessionOverride: { kind: "preserve" },
-          runCandidate: async (provider, model, options) => {
-            if (options.isFallbackRetry) {
-              throw new Error("fallback setup failed");
-            }
-            options.assistantErrorTranscript.record(
-              makeAssistantMessageFixture({ provider, model }),
-              {
-                agentId: "main",
-                sessionId: "session-1",
-                sessionKey: "agent:main:session-1",
-                storePath: "/tmp/unused-stale-error.sqlite",
-              },
-            );
-            return makeResult({ provider, model, classification: "empty" });
-          },
-        }),
-      ).rejects.toThrow("fallback setup failed");
-      expect(append).not.toHaveBeenCalled();
-    } finally {
-      append.mockRestore();
-    }
-  });
+  registerRunEntryFailureTests(state);
 
   it("keeps shared fallback and terminal behavior aligned across entry modes", async ({
     onTestFinished,
@@ -288,6 +109,7 @@ describe("runEmbeddedAgentEntry", () => {
                       runId: "run-shared-fallback",
                       sessionId: "session-1",
                       turnId: "turn-1",
+                      assistantTranscriptIdempotencyKey: "selected-saved-reply",
                       requested: { provider, model },
                       effective: { provider, model, responseModel: "producer-model" },
                       successfulToolNames: [],
@@ -344,6 +166,9 @@ describe("runEmbeddedAgentEntry", () => {
       },
       rerouted: true,
     });
+    expect(channel.result.terminal.metadata.assistantTranscriptIdempotencyKey).toBe(
+      "selected-saved-reply",
+    );
     expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
       effective: {
@@ -399,8 +224,16 @@ describe("runEmbeddedAgentEntry", () => {
         }),
     });
 
-    expect(resolveContextEngineHost).toHaveBeenCalledWith("primary-provider", "primary-model");
-    expect(resolveContextEngineHost).toHaveBeenCalledWith("fallback-provider", "fallback-model");
+    expect(resolveContextEngineHost).toHaveBeenCalledWith(
+      "primary-provider",
+      "primary-model",
+      undefined,
+    );
+    expect(resolveContextEngineHost).toHaveBeenCalledWith(
+      "fallback-provider",
+      "fallback-model",
+      undefined,
+    );
     expect(state.selectAgentHarness).not.toHaveBeenCalled();
   });
 
@@ -610,42 +443,6 @@ describe("runEmbeddedAgentEntry", () => {
     },
   );
 
-  it("does not finalize any candidate when fallback is exhausted", async () => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const preferredResult = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const latestResult = await params.run(
-        "fallback-provider",
-        "fallback-model",
-        fallbackAttemptOptions(params, "unknown"),
-      );
-      return {
-        outcome: "exhausted" as const,
-        result: params.mergeExhaustedResult?.({ latestResult, preferredResult }) ?? latestResult,
-        provider: "fallback-provider",
-        model: "fallback-model",
-        attempts: [],
-      };
-    });
-    await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model, options) => {
-        recordTurnAttempt(options.onContextEngineTurnCandidate, provider);
-        return makeResult({ provider, model, classification: "empty" });
-      },
-    });
-
-    expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["fallback-provider"]);
-  });
-
   it.each([
     {
       label: "yielded",
@@ -729,149 +526,6 @@ describe("runEmbeddedAgentEntry", () => {
     });
     expect(state.finalizedAttempts).toEqual([]);
     expect(state.discardedAttempts).toEqual(["candidate"]);
-  });
-
-  it("does not finalize a candidate when classification throws", async () => {
-    const classificationError = new Error("classification failed");
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      await params.classifyResult?.({
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      throw classificationError;
-    });
-    await expect(
-      runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "provider", model: "model" },
-        identity: { runId: "settle-classifier-throw", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
-        behavior: {
-          kind: "channel-delivery",
-          readDeliveryEvidence: () => {
-            throw classificationError;
-          },
-        },
-        sessionOverride: { kind: "preserve" },
-        runCandidate: async (provider, model, options) => {
-          recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-          return makeResult({ provider, model, classification: "empty" });
-        },
-      }),
-    ).rejects.toBe(classificationError);
-
-    expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
-  });
-
-  it("does not replay a thrown channel-delivery attempt that already delivered its reply (#113788)", async () => {
-    const failure = new Error("insufficient quota");
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      // Mirror the fallback loop's thrown-error exit: the attempt error bypasses
-      // result classification, so the error-path backstop is the only guard that
-      // can stop the next candidate from replaying the delivered turn.
-      await expect(
-        params.run(params.provider, params.model, initialAttemptOptions(params)),
-      ).rejects.toBe(failure);
-      const allowed = await params.canFallbackAfterError?.({
-        provider: params.provider,
-        model: params.model,
-        error: failure,
-        attempt: 1,
-        total: 2,
-      });
-      expect(allowed).toBe(false);
-      throw failure;
-    });
-    const runCandidate = vi.fn(async (_provider: string, _model: string) => {
-      throw failure;
-    });
-
-    await expect(
-      runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-        identity: { runId: "channel-throw", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
-        behavior: {
-          kind: "channel-delivery",
-          readDeliveryEvidence: () => ({
-            hasDirectlySentBlockReply: true,
-            hasBlockReplyPipelineOutput: false,
-            hasRetryBlockedDelivery: false,
-          }),
-        },
-        sessionOverride: { kind: "preserve" },
-        runCandidate,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(runCandidate).toHaveBeenCalledTimes(1);
-  });
-
-  it("still falls back when a thrown channel-delivery attempt delivered nothing", async () => {
-    const failure = new Error("insufficient quota");
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await expect(
-        params.run(params.provider, params.model, initialAttemptOptions(params)),
-      ).rejects.toBe(failure);
-      const allowed = await params.canFallbackAfterError?.({
-        provider: params.provider,
-        model: params.model,
-        error: failure,
-        attempt: 1,
-        total: 2,
-      });
-      expect(allowed).toBe(true);
-      const fallbackProvider = "fallback-provider";
-      const fallbackModel = "fallback-model";
-      const result = await params.run(fallbackProvider, fallbackModel, {
-        ...fallbackAttemptOptions(params, "billing"),
-        isFinalFallbackAttempt: true,
-      });
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: fallbackProvider,
-        model: fallbackModel,
-        attempts: [
-          {
-            provider: params.provider,
-            model: params.model,
-            error: failure.message,
-            reason: "billing" as const,
-          },
-        ],
-      };
-    });
-    const runCandidate = vi.fn(async (provider: string, model: string) => {
-      if (provider === "primary-provider") {
-        throw failure;
-      }
-      return makeResult({ provider, model });
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "channel-throw-empty", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: {
-        kind: "channel-delivery",
-        readDeliveryEvidence: () => ({
-          hasDirectlySentBlockReply: false,
-          hasBlockReplyPipelineOutput: false,
-          hasRetryBlockedDelivery: false,
-        }),
-      },
-      sessionOverride: { kind: "preserve" },
-      runCandidate,
-    });
-
-    expect(runCandidate).toHaveBeenCalledTimes(2);
-    expect(result.outcome).toBe("completed");
-    expect(result.provider).toBe("fallback-provider");
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {

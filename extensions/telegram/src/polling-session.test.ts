@@ -5,9 +5,9 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Bot } from "grammy";
-import type { Update } from "grammy/types";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS as TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -17,9 +17,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
   executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openOpenClawStateDatabase,
-  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
@@ -28,6 +25,17 @@ import {
   resetTelegramRestartBackoffState,
   resolveTelegramRestartDelayMs,
 } from "./polling-session-restart-policy.js";
+import {
+  adoptClaimOwner,
+  directUpdate,
+  failedUpdateIds,
+  failedUpdateReasons,
+  forumUpdate,
+  openTelegramSpoolTestKysely,
+  topicUpdate,
+  type TestTelegramUpdate,
+} from "./polling-session-spool.test-support.js";
+import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -212,34 +220,11 @@ type TestWorkerMessage =
   | { type: "poll-error"; finishedAt: number; message: string };
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-type TelegramPollingTestDatabase = Pick<
-  OpenClawStateKyselyDatabaseForTests,
-  "channel_ingress_events"
->;
 type IsolatedIngressOptions = NonNullable<
   ConstructorParameters<typeof TelegramPollingSession>[0]["ingress"]
 >;
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
-
-function installTelegramIngressQueueRuntime(
-  resolveStateDir: () => string,
-  queueOpenError?: Error,
-): void {
-  setTelegramRuntime({
-    state: {
-      resolveStateDir,
-      openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => {
-        if (queueOpenError) {
-          throw queueOpenError;
-        }
-        return createChannelIngressQueue({ ...options, channelId: "telegram" });
-      },
-    },
-  } as TelegramRuntime);
-}
 
 function mockObjectArg(
   source: MockCallSource,
@@ -465,62 +450,6 @@ function createPollingSession(params: {
   });
 }
 
-type TestTelegramUpdate = Update & {
-  message: NonNullable<Update["message"]> & { text: string };
-};
-
-const testTelegramSender = {
-  id: 111,
-  is_bot: false as const,
-  first_name: "Ada",
-};
-
-function topicUpdate(updateId: number, threadId: number, text: string): TestTelegramUpdate {
-  return {
-    update_id: updateId,
-    message: {
-      message_id: updateId,
-      date: 1_736_380_800,
-      from: testTelegramSender,
-      text,
-      message_thread_id: threadId,
-      is_topic_message: true,
-      chat: { id: -100, type: "supergroup", title: "Test group" },
-    },
-  };
-}
-
-function directUpdate(updateId: number, chatId: number, text: string): TestTelegramUpdate {
-  const message = {
-    message_id: updateId,
-    date: 1_736_380_800,
-    from: testTelegramSender,
-    text,
-  };
-  if (chatId < 0) {
-    return {
-      update_id: updateId,
-      message: {
-        ...message,
-        chat: { id: chatId, type: "supergroup", title: "Test group" },
-      },
-    };
-  }
-  return {
-    update_id: updateId,
-    message: {
-      ...message,
-      chat: { id: chatId, type: "private", first_name: "Ada" },
-    },
-  };
-}
-
-function forumUpdate(updateId: number, text: string) {
-  const update = topicUpdate(updateId, 5907, text);
-  update.message.chat.is_forum = true;
-  return update;
-}
-
 async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return;
@@ -585,77 +514,6 @@ function installSpooledClaimRefreshHarness(): {
       refresh();
     },
   };
-}
-
-function normalizeTelegramTestAccountId(spoolDir: string): string {
-  const trimmed = path.basename(spoolDir).trim();
-  return trimmed ? trimmed.replace(/[^a-z0-9._-]+/gi, "_") : "default";
-}
-
-function telegramTestQueueName(spoolDir: string): string {
-  return JSON.stringify(["telegram", normalizeTelegramTestAccountId(spoolDir)]);
-}
-
-function openTelegramSpoolTestKysely(spoolDir: string) {
-  const database = openOpenClawStateDatabase({
-    env: { ...process.env, OPENCLAW_STATE_DIR: spoolDir },
-  });
-  return {
-    database,
-    kysely: getNodeSqliteKysely<TelegramPollingTestDatabase>(database.db),
-  };
-}
-
-async function failedUpdateIds(spoolDir: string): Promise<number[]> {
-  const { database, kysely } = openTelegramSpoolTestKysely(spoolDir);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    kysely
-      .selectFrom("channel_ingress_events")
-      .select("event_id")
-      .where("queue_name", "=", telegramTestQueueName(spoolDir))
-      .where("status", "=", "failed")
-      .orderBy("event_id", "asc"),
-  ).rows;
-  return rows.map((row) => Number(row.event_id));
-}
-
-async function failedUpdateReasons(
-  spoolDir: string,
-): Promise<Array<{ id: number; reason: string }>> {
-  const { database, kysely } = openTelegramSpoolTestKysely(spoolDir);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    kysely
-      .selectFrom("channel_ingress_events")
-      .select(["event_id", "failed_reason"])
-      .where("queue_name", "=", telegramTestQueueName(spoolDir))
-      .where("status", "=", "failed")
-      .orderBy("event_id", "asc"),
-  ).rows;
-  return rows.map((row) => ({ id: Number(row.event_id), reason: String(row.failed_reason) }));
-}
-
-async function adoptClaimOwner(params: {
-  spoolDir: string;
-  updateId: number;
-  ownerId: string;
-  claimedAt: number;
-}): Promise<void> {
-  const { database, kysely } = openTelegramSpoolTestKysely(params.spoolDir);
-  executeSqliteQuerySync(
-    database.db,
-    kysely
-      .updateTable("channel_ingress_events")
-      .set({
-        claim_owner: params.ownerId,
-        claimed_at: params.claimedAt,
-        updated_at: params.claimedAt,
-      })
-      .where("queue_name", "=", telegramTestQueueName(params.spoolDir))
-      .where("event_id", "=", String(params.updateId).padStart(16, "0"))
-      .where("status", "=", "claimed"),
-  );
 }
 
 async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T> {
@@ -1416,6 +1274,7 @@ describe("TelegramPollingSession", () => {
       });
       let blockedFirstClaim = false;
       setTelegramRuntime({
+        channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
         state: {
           resolveStateDir: () => tempDir,
           openChannelIngressQueue: (
@@ -3430,6 +3289,105 @@ describe("TelegramPollingSession", () => {
       }
     });
   });
+
+  it.each(
+    (["buffered", "inline"] as const).flatMap((admission) =>
+      (["commit", "rollback"] as const).map((operation) => ({ admission, operation })),
+    ),
+  )(
+    "joins a held $admission replay $operation beyond polling stop grace",
+    async ({ admission, operation }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await withTempSpool(async (spoolDir) => {
+          const abort = new AbortController();
+          const operationStarted = createDeferred<void>();
+          const releaseOperation = createDeferred<void>();
+          const recorded = new Set<string>();
+          const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+          let settlement: Promise<void> | undefined;
+          await writeSpooledTestUpdates(spoolDir, [directUpdate(42, 111, "held replay write")]);
+          const { runPromise, stopWorker } = startIsolatedIngressSession({
+            abort,
+            spoolDir,
+            handleUpdate: async () => {
+              const participant = collectDeferredParticipant(participants, "held-replay-write");
+              const hold = expectDefined(participant.beginSettlementHold(), "adoption hold");
+              settlement = (async () => {
+                try {
+                  await commitTelegramMessageDispatchReplay({
+                    requirePersistent: true,
+                    guard: {
+                      claim: async () => ({ kind: "invalid" }),
+                      warmup: async () => 0,
+                      forget: async (event) => {
+                        operationStarted.resolve();
+                        await releaseOperation.promise;
+                        for (const key of "keys" in event ? (event.keys ?? []) : []) {
+                          recorded.delete(key);
+                        }
+                        return true;
+                      },
+                    },
+                    claims: ["first", "second"].map((key) => ({
+                      keys: [key],
+                      commit: async (options) => {
+                        if (operation === "commit" && key === "first") {
+                          operationStarted.resolve();
+                          await releaseOperation.promise;
+                        }
+                        recorded.add(key);
+                        if (operation === "rollback" && key === "second") {
+                          options?.onDiskError?.(new Error("synthetic commit failure"));
+                        }
+                        return true;
+                      },
+                      release: () => undefined,
+                    })),
+                  });
+                  hold.release("discard-pending");
+                  participant.settle({ kind: "completed" });
+                } catch (error) {
+                  hold.release("replay-pending");
+                  participant.settle({ kind: "failed-retryable", error });
+                }
+              })();
+              if (admission === "inline") {
+                await settlement;
+              }
+            },
+          });
+          let accountStopped = false;
+          const accountRun = runPromise.then(() => {
+            accountStopped = true;
+          });
+          try {
+            await operationStarted.promise;
+            abort.abort();
+            stopWorker();
+            await vi.advanceTimersByTimeAsync(16_000);
+            expect(accountStopped).toBe(false);
+          } finally {
+            releaseOperation.resolve();
+            await settlement;
+            abort.abort();
+            stopWorker();
+            await accountRun;
+            await waitForTelegramTestState(async () =>
+              expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]),
+            );
+          }
+          expect([...recorded]).toEqual(operation === "commit" ? ["first", "second"] : []);
+          expect(await pendingUpdateIds(spoolDir, "all")).toEqual(
+            operation === "commit" ? [] : [42],
+          );
+          expect(await failedUpdateIds(spoolDir)).toEqual([]);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("recovers orphaned spooled claims across isolated ingress restarts", async () => {
     // Core drain dispose leaves the claim for recover; the next cycle re-dispatches.

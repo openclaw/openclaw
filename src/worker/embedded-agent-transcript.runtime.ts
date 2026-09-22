@@ -18,32 +18,6 @@ import {
   type WorkerProviderReplayUnavailable,
 } from "./transcript-message.js";
 
-export function toAgentMessage(message: WorkerTranscriptMessage): Message {
-  if (message.role === "user") {
-    return {
-      role: "user",
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      timestamp: message.timestamp,
-    };
-  }
-  if (message.role === "toolResult") {
-    return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
-    };
-  }
-  return structuredClone(message);
-}
-
 function toWorkerInferenceMessage(
   message: Message,
 ): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {

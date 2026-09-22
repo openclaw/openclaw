@@ -28,7 +28,10 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
 export type ConfigWriteAuditOrigin =
@@ -156,7 +159,13 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -165,6 +174,7 @@ export type ReadConfigFileSnapshotInternalResult = {
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };

@@ -57,6 +57,27 @@ the draft and masks the new field. Press Enter or **Connect to Gateway** to conn
 In Connection Settings, blank credentials reuse the saved credentials for the same
 endpoint.
 
+### Chrome extension setup
+
+The app prepares the local Chrome native helper at startup and after CLI
+installation. Release builds reuse a matching CLI or install a version-matched
+browser runtime under their own app-data directory. This download does not
+create, probe, refresh, or restart a Gateway service, replace its runtime, or
+change the selected remote connection. It requires an internet connection.
+
+Choose **Set Up Chrome Extension…** in the tray to retry setup and open the
+official Chrome Web Store listing after native registration succeeds. Google
+Chrome on Linux still requires **Add to Chrome** in the Store; the app does not
+use enterprise force-install policies or reopen the Store at every startup.
+Once enabled, supported host-local setups pair automatically without a copied
+credential. A remote-only desktop connection still needs a browser node on this
+computer to expose its tabs to the remote Gateway.
+
+Development builds use an existing local CLI rather than downloading an
+unrelated stable runtime. The Windows Tauri test build does not provide this
+runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
+disconnection, and manual recovery.
+
 ### Desktop compatibility
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -76,8 +97,9 @@ The shell does not grant microphone capture to its embedded WebKitGTK WebView,
 so `getUserMedia` is expected to fail there. Open the Gateway's Control UI in a
 regular browser for [Talk mode](/nodes/talk).
 
-The desktop connects as a Gateway operator, not a node host. Device commands
-belong to the [CLI node host](/cli/node) and its
+The desktop connects as a Gateway operator and uses the local CLI to share this
+computer's desktop with its Primary Gateway. Its app-owned node exposes desktop
+streaming only. Other device commands belong to the [CLI node host](/cli/node) and its
 [Linux Node plugin](/platforms/linux#node-capabilities).
 
 The [native macOS app](/platforms/macos) and [Windows Hub](/platforms/windows)
@@ -118,6 +140,27 @@ after the new dashboard loads successfully.
 
 The macOS Tauri build is named **OpenClaw-Tauri** and keeps its saved connections
 separate from the native **OpenClaw** app.
+
+### Desktop sharing
+
+Open **Settings → This computer → Capabilities → Desktop sharing** to change the
+setting. The macOS Tauri build labels this section **This Mac**. Sharing starts
+enabled; an existing `desktop.host.enabled: false` stays off until you explicitly
+enable it in the app. Your choice persists across app restarts and is independent
+of **Keep computer awake**.
+
+Sharing requires a local OpenClaw CLI, including when your Gateway is remote,
+and an authenticated local VNC server. On macOS, enable **Screen Sharing** in
+System Settings. Approve the computer's desktop capability on the Primary Gateway
+when requested, then open its desktop from **Systems**. See
+[paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops)
+for authentication, pairing, and upgrade behavior.
+
+The status row shows whether the app's desktop process is running or needs
+attention. Pairing approval and the local VNC server must also be ready before
+the desktop can open. Missing CLI or invalid configuration errors appear here.
+Turning sharing off, changing Primary Gateway, or quitting the app stops the old
+desktop connection. Closing the window to the tray keeps sharing active.
 
 ### First-run setup
 
@@ -189,6 +232,20 @@ environment file. Provider admin keys, GitHub tokens, and unrelated environment
 variables are not copied into the service.
 
 ### Host sleep
+
+Choose **Keep computer awake** in the native tray menu to prevent idle sleep
+while the desktop companion is running, including when its windows are closed.
+The setting is off by default and remembers your choice across app restarts.
+Turning it off or quitting OpenClaw releases the keep-awake request. It does not
+change your permanent power settings or unlock the computer. If the operating
+system cannot honor a saved request, the menu marks the checked preference
+**inactive** and reports the error. You can still uncheck it to turn the saved
+preference off.
+
+Linux uses GNOME’s session manager or an xdg-desktop-portal backend that supports
+idle inhibition. Depending on the desktop, this can also prevent display dimming and automatic
+locking; manual locking remains available. The optional macOS and Windows Tauri
+builds prevent system idle sleep without requesting that the display stay on.
 
 On systems with systemd-logind, the companion prepares a suspension lease for
 its local Gateway before the host sleeps. After wake, it reconnects and resumes
@@ -273,6 +330,10 @@ development commands.
 
 ### Quick Chat
 
+`Ctrl+Shift+O` opens a new session only in the focused dashboard. The companion
+does not reserve this chord globally, so other foreground apps keep their own
+shortcut behavior.
+
 Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
 chip shows the configured avatar, emoji, or monogram; select it to switch agents.
 Messages use the selected agent's main session and honor global session scope.
@@ -305,8 +366,13 @@ On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
 plain **Quick Chat** tray item. Global shortcuts are not available on Wayland, so
 the shortcut settings are hidden and the tray item remains the entry point.
 After an accepted send, Quick Chat stays open and streams the selected agent's
-plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
-`Ctrl+Enter` still opens the dashboard.
+plain-text reply above one bottom composer, with your submitted message alongside
+the reply. Collapse the reply to keep a compact composer; expanding it restores
+the live text and any widget contents. You can prepare the next draft while a
+reply streams, then send it when the turn finishes. Return sends, Shift-Return
+adds a newline, and `Ctrl+Enter` sends and opens the dashboard. **Open dashboard**
+is also available beside the composer controls. Press `Esc` to dismiss the bar
+and its reply.
 
 ## CLI and SSH alternative
 
@@ -382,6 +448,14 @@ Canvas bridge or its A2UI push commands.
 
 ## Gateway service (systemd)
 
+On Linux hosts without a supported service manager, run the Gateway in the
+foreground or through your own supervisor, such as rc.d. `openclaw gateway status
+--deep` reports **no supported service manager detected** and identifies a
+remaining service unit as stale. That recorded unit does not select the status
+probe's configuration or port. Updates continue with a service warning; restart
+your manually launched Gateway after the update. An unavailable user session bus
+on a systemd host remains a separate service-access diagnostic.
+
 Install with one of:
 
 ```bash
@@ -399,6 +473,16 @@ openclaw doctor
 `openclaw gateway install` renders a systemd **user** unit by default. Full
 service guidance, including the **system**-level unit variant for shared or
 always-on hosts, lives in the [Gateway runbook](/gateway#supervision-and-service-lifecycle).
+
+Managed units escape literal paths automatically. In a custom unit, do not add
+shell quotes around `WorkingDirectory=` or `EnvironmentFile=` paths, even when
+they contain spaces. Use a separate `EnvironmentFile=` directive for each absolute
+path; systemd ignores relative paths. Write `%%` for a literal percent sign.
+`EnvironmentFile=` also accepts glob patterns, so escape literal glob characters
+with a backslash. Managed working-directory paths must not end in spaces or
+tabs: systemd 255 loses that trailing whitespace when starting the process.
+OpenClaw rejects those paths rather than risk using a different directory;
+choose a path without trailing whitespace.
 
 Write a unit by hand only for a custom setup. Minimal user-unit example
 (`~/.config/systemd/user/openclaw-gateway[-<profile>].service`):
@@ -455,6 +539,10 @@ Covered child process surfaces:
 - MCP stdio server children
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
+
+Sandbox backend transports keep their prepared environment and inherited OOM
+score instead of receiving this wrapper. Workload resource policy belongs to
+the sandbox backend; ordinary host commands and PTYs retain the child-first bias.
 
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or

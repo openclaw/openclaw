@@ -1,14 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
   runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { clearOpenClawAgentDatabaseValidationCache } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 type MaintenanceScope = {
@@ -89,69 +90,55 @@ async function runMaintenanceScope<T>(
           },
         }
       : {}),
-    ...(owner.withDatabaseFileMutation
-      ? {
-          withDatabaseFileMutation<Value, Captured>(
-            operation: OpenClawStateMutationOperation<Value, Captured>,
-          ) {
-            assertAdmission();
-            return track(
-              owner.withDatabaseFileMutation!({
-                ...operation,
-                assertCurrent() {
-                  assertCurrent();
-                  operation.assertCurrent();
-                },
-              }),
-            );
-          },
-        }
-      : {}),
   };
-  return activeMaintenance.run(scope, () =>
-    runWithAgentDatabaseMaintenanceAuthority(lease, databasePath, async () => {
-      let outcome: { value: T } | { error: unknown };
-      try {
-        assertCurrent();
-        outcome = { value: await run(lease) };
-      } catch (error) {
-        outcome = { error };
-      }
-      scope.accepting = false;
-      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
-      let joined = 0;
-      while (joined < scope.pending.length) {
-        const admitted = scope.pending.slice(joined);
-        joined += admitted.length;
-        for (const result of await Promise.allSettled(admitted)) {
-          if (result.status === "rejected" && !errors.includes(result.reason)) {
-            errors.push(result.reason);
+  try {
+    return await withSqliteIntegrityWorkerScope(assertCurrent, () =>
+      activeMaintenance.run(scope, () =>
+        runWithAgentDatabaseMaintenanceAuthority(lease, databasePath, async () => {
+          let outcome: { value: T } | { error: unknown };
+          try {
+            assertCurrent();
+            outcome = { value: await run(lease) };
+          } catch (error) {
+            outcome = { error };
           }
-        }
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        if (!errors.includes(error)) {
-          errors.push(error);
-        }
-      } finally {
-        scope.active = false;
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Agent maintenance and nested work failed", {
-          cause: errors[0],
-        });
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if ("error" in outcome) {
-        throw outcome.error;
-      }
-      return outcome.value;
-    }),
-  );
+          scope.accepting = false;
+          const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
+          let joined = 0;
+          while (joined < scope.pending.length) {
+            const admitted = scope.pending.slice(joined);
+            joined += admitted.length;
+            for (const result of await Promise.allSettled(admitted)) {
+              if (result.status === "rejected" && !errors.includes(result.reason)) {
+                errors.push(result.reason);
+              }
+            }
+          }
+          try {
+            assertCurrent();
+          } catch (error) {
+            if (!errors.includes(error)) {
+              errors.push(error);
+            }
+          }
+          if (errors.length > 1) {
+            throw new AggregateError(errors, "Agent maintenance and nested work failed", {
+              cause: errors[0],
+            });
+          }
+          if (errors.length === 1) {
+            throw errors[0];
+          }
+          if ("error" in outcome) {
+            throw outcome.error;
+          }
+          return outcome.value;
+        }),
+      ),
+    );
+  } finally {
+    scope.active = false;
+  }
 }
 
 /** Retain one real lease through nested Doctor work; serialized selectors grant no authority. */
@@ -194,6 +181,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       runMaintenanceScope(databasePath, maintenance, async (lease) => {
         await closeOpenClawAgentDatabasesAsync();
         assertNoOpenClawAgentDatabaseLeases(lease, options);
+        clearOpenClawAgentDatabaseValidationCache();
         return run(lease);
       }),
   );

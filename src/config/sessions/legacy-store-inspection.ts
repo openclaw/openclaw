@@ -10,10 +10,12 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
+import { resolveSessionFilePathCore } from "./paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
-type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
+export type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
 type LegacySessionStoreIssue = { code: string; message: string; sessionKey?: string };
 
 export function listLegacySessionTranscriptFiles(directory: string): string[] {
@@ -101,7 +103,7 @@ export function readLegacySessionStoreEntries(
       if (!isSessionEntry(value)) {
         issues.push({
           code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
+          message: `${target.storePath}: session entry is missing a valid sessionId; skipped while preserving the original index for recovery.`,
           sessionKey,
         });
         continue;
@@ -145,6 +147,48 @@ export function shouldFilterLegacySessionRecordsByTarget(
   // Filtering depends on whether the authored store path encodes an owner,
   // not on the configured/default owner selected for its SQLite target.
   return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
+}
+
+export function resolveLegacyTranscriptPaths(
+  target: Pick<LegacySessionStoreTarget, "agentId" | "storePath">,
+  entry: { sessionId: string; sessionFile?: unknown },
+  verifiedSourcePaths?: ReadonlySet<string>,
+): {
+  transcriptPath?: string;
+  transcriptCandidates: string[];
+  transcriptDependencies: string[];
+} {
+  const legacySessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile : undefined;
+  if (parseSqliteSessionFileMarker(legacySessionFile)) {
+    return { transcriptCandidates: [], transcriptDependencies: [] };
+  }
+  const sessionsDir = path.dirname(target.storePath);
+  const relocatedPath = legacySessionFile?.trim()
+    ? path.join(sessionsDir, path.basename(legacySessionFile))
+    : undefined;
+  let defaultPath: string;
+  try {
+    defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
+      agentId: target.agentId,
+      sessionsDir,
+    });
+  } catch (error) {
+    if (!relocatedPath) {
+      throw error;
+    }
+    defaultPath = relocatedPath;
+  }
+  const transcriptPaths = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
+  const transcriptPath =
+    transcriptPaths.find((file) => verifiedSourcePaths?.has(path.resolve(file))) ??
+    transcriptPaths.find((file) => fs.existsSync(file)) ??
+    (relocatedPath ? defaultPath : undefined);
+  // Reads may retain a foreign root after archival, but recovery artifacts are direct
+  // files in this target's sessions directory. Their dependencies must stay local too.
+  const transcriptDependencies = transcriptPaths.map((file) =>
+    path.join(sessionsDir, path.basename(file)),
+  );
+  return { transcriptPath, transcriptCandidates: transcriptPaths, transcriptDependencies };
 }
 
 function isSessionEntry(value: unknown): value is SessionEntry {

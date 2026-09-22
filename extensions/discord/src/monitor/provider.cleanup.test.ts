@@ -2,18 +2,18 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 describe("cleanupDiscordProviderStartup", () => {
   it.each([false, true])(
-    "joins presence work when message-handler cleanup fails=%s",
+    "joins listener work when message-handler cleanup fails=%s",
     async (fails) => {
       const ready = createDeferred<void>();
       const entered = createDeferred<void>();
       const failure = new Error("message-handler cleanup failed");
       let settled = false;
       const cleanup = cleanupDiscordProviderStartup({
-        stopPresenceListener: () => {
+        stopMonitorListeners: () => {
           entered.resolve();
           return ready.promise;
         },

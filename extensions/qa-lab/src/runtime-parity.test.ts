@@ -7,7 +7,9 @@ import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/sessio
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   appendSqliteTrajectoryRuntimeEvents,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,10 +29,11 @@ const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
+  // Join worker cleanup before removing its databases. Agent lease release can reopen
+  // shared state, so drain agent resources first and shared state second.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await tempDirs.cleanup();
 });

@@ -1,10 +1,12 @@
 import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import "./web-awesome.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
@@ -98,6 +100,56 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
       </wa-dropdown>
     `;
   }
+}
+
+function menuContainer(path: EventTarget[]): HTMLElement {
+  const modalHost = path.find(
+    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
+  );
+  if (modalHost instanceof HTMLElement) {
+    return modalHost;
+  }
+  for (const target of path) {
+    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
+      return target;
+    }
+  }
+  return document.body;
+}
+
+/** Native-only menu placement and actions load with the menu, not the browser shell. */
+export function mountNativeLinkMenu(options: {
+  path: EventTarget[];
+  anchor: HTMLAnchorElement;
+  url: URL;
+  x: number;
+  y: number;
+  close: (expected: NativeLinkMenu) => void;
+  openExternal: () => void;
+  openInline: () => void;
+}): NativeLinkMenu | null {
+  const container = menuContainer(options.path);
+  if (!container.isConnected) {
+    return null;
+  }
+  // SAFETY: This module registers the tag; createElement uses its retained constructor after HMR.
+  const menu = document.createElement("openclaw-native-link-menu") as NativeLinkMenu;
+  menu.x = options.x;
+  menu.y = options.y;
+  menu.trigger = options.anchor;
+  menu.onClose = () => options.close(menu);
+  menu.onAction = (action) => {
+    if (action === "copy") {
+      void copyToClipboard(options.url.href);
+    } else if (action === "inline") {
+      options.openInline();
+    } else {
+      options.openExternal();
+    }
+  };
+  container.append(menu);
+  promoteToPopoverTopLayer(menu);
+  return menu;
 }
 
 if (!customElements.get("openclaw-native-link-menu")) {

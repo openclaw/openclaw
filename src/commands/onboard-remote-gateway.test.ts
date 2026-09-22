@@ -158,6 +158,88 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
+  it.each([true, false])(
+    "preserves utility role through remote setup and rejects role drift (match=%s)",
+    async (matchingRole) => {
+      const call = vi.fn(async (options: CallGatewayCliOptions) => {
+        if (options.method === "openclaw.setup.detect") {
+          return {
+            ...detectResult(),
+            candidates: [
+              {
+                kind: "provider-auto:fixture",
+                label: "Utility",
+                detail: "Setup",
+                modelRef: "fixture/small",
+                modelTarget: "utility",
+                recommended: false,
+              },
+            ],
+            setupModel: "fixture/small",
+            utilityModel: "fixture/small",
+          };
+        }
+        if (options.method === "openclaw.setup.activate.start") {
+          expect(options.params).toMatchObject({
+            modelTarget: "utility",
+            modelRef: "fixture/small",
+          });
+          return {
+            sessionId: "fixture-session",
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: "fixture/small", modelTarget: "utility" },
+          };
+        }
+        if (options.method === "openclaw.setup.verify") {
+          expect(options.params).toEqual({ modelTarget: "utility" });
+          return {
+            ok: true,
+            modelRef: "fixture/small",
+            ...(matchingRole ? { modelTarget: "utility" } : {}),
+            latencyMs: 10,
+          };
+        }
+        throw new Error(`Unexpected request: ${options.method}`);
+      });
+      const work = runRemoteGatewayInferenceOnboarding(
+        makeTarget(makeLocalConfig(), { token: "synthetic-token" }),
+        makeRuntime(),
+        {
+          callGateway: asGatewayCall(call),
+          createPrompter: () => createWizardPrompter(),
+          runGuidedOnboarding: async (_options, runtime, deps) => {
+            const detection = await deps?.detect?.();
+            expect(detection).toMatchObject({
+              setupComplete: false,
+              setupModel: "fixture/small",
+              utilityModel: "fixture/small",
+            });
+            const choice = detection?.candidates[0];
+            expect(choice?.modelTarget).toBe("utility");
+            const result = await deps?.activate?.({
+              kind: "provider-auto:fixture",
+              modelRef: "fixture/small",
+              modelTarget: choice?.modelTarget,
+              surface: "cli",
+              runtime,
+            });
+            expect(result).toMatchObject({
+              ok: true,
+              modelTarget: "utility",
+              modelRef: "fixture/small",
+            });
+          },
+        },
+      );
+      if (matchingRole) {
+        await work;
+      } else {
+        await expect(work).rejects.toThrow("different model role");
+      }
+    },
+  );
+
   it.each(["accept", "decline", "cancel"] as const)(
     "relays saved replacement confirmation through the Gateway wizard: %s",
     async (choice) => {

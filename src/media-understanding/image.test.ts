@@ -543,6 +543,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: expect.any(AbortSignal),
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
@@ -617,6 +618,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: expect.any(AbortSignal),
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,

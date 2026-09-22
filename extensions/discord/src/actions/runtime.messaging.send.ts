@@ -336,12 +336,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         appliedTags: appliedTags ?? undefined,
       };
       try {
-        const thread = await discordMessagingActionRuntime.createThreadDiscord(
-          channelId,
-          payload,
-          ctx.withOpts(),
-        );
-        return jsonResult({ ok: true, thread });
+        const { initialMessageDelivery, ...thread } =
+          await discordMessagingActionRuntime.createThreadDiscord(
+            channelId,
+            payload,
+            ctx.withOpts(),
+          );
+        return jsonResult({
+          ok: true,
+          thread,
+          ...(initialMessageDelivery ? { threadSnapshot: "creation", initialMessageDelivery } : {}),
+        });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
           const initialMessageDelivery = error.initialMessageDelivery;

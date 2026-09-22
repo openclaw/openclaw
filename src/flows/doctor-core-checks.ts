@@ -30,24 +30,25 @@ import {
   resolveKnownModelRefMigrationTarget,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronListPageResult } from "../cron/service/list-page-types.js";
 import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
-import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
+import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import {
+  collectRuntimeToolSchemaFindingsWithRuntime,
+  createRuntimeToolSchemaCheck,
+} from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { copyHealthCheck } from "./health-check-adapter.js";
+import { copyHealthCheck, securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -58,7 +59,6 @@ import type {
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
-const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
@@ -81,6 +81,7 @@ export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
   readonly collectSecurityWarnings: (
     cfg: OpenClawConfig,
+    env?: NodeJS.ProcessEnv,
   ) => Promise<readonly SecurityAuditFinding[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
@@ -108,9 +109,10 @@ async function detectUnavailableSkillsWithRuntime(
 
 async function collectSecurityWarningsWithRuntime(
   cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): Promise<readonly SecurityAuditFinding[]> {
   const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
-  return collectSecurityWarnings(cfg);
+  return collectSecurityWarnings(cfg, env);
 }
 
 async function collectWorkspaceSuggestionNotesWithRuntime(
@@ -127,21 +129,6 @@ async function collectWorkspaceSuggestionNotesWithRuntime(
     notes.push(MEMORY_SYSTEM_PROMPT);
   }
   return notes;
-}
-
-async function collectRuntimeToolSchemaFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  const runWithPluginMetadataSnapshot = (
-    ctx as HealthCheckContext & {
-      runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-    }
-  ).runWithPluginMetadataSnapshot;
-  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg, {
-    env: ctx.env,
-    ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
-  });
 }
 
 async function collectProviderCatalogProjectionFindingsWithRuntime(
@@ -161,7 +148,7 @@ async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  const runtime = await import("../commands/doctor-gateway-health.js");
   return runtime.collectGatewayHealthFindings(ctx);
 }
 
@@ -254,17 +241,6 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
   listGatewayCronJobs: listGatewayCronJobsWithRuntime,
 };
-
-export function configValidationIssuesToHealthFindings(
-  issues: readonly ConfigValidationIssue[],
-): readonly HealthFinding[] {
-  return issues.map((issue): HealthFinding => ({
-    checkId: FINAL_CONFIG_VALIDATION_CHECK_ID,
-    severity: "error",
-    message: issue.message,
-    path: issue.path || "<root>",
-  }));
-}
 
 const gatewayConfigCheck: HealthCheck = {
   id: "core/doctor/gateway-config",
@@ -382,7 +358,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
     ) {
       fixHints.push(
         ctx.mode === "doctor"
-          ? "Review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
+          ? "If Workshop repair has not run, use `openclaw doctor --fix`. Otherwise review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
           : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
       );
     }
@@ -409,104 +385,6 @@ const skillWorkshopRelocationCheck: HealthCheck = {
     ];
   },
 };
-
-function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
-  return cfg.gateway?.mode === "remote" ? "remote" : "local";
-}
-
-function buildGatewayTokenSecretRefUnavailableMessage(params: {
-  cfg: OpenClawConfig;
-  ref: SecretRef;
-  unresolvedRefReason?: string;
-}): string {
-  if (params.unresolvedRefReason) {
-    return `Gateway token SecretRef could not be resolved: ${params.unresolvedRefReason}`;
-  }
-  if (params.ref.source === "exec") {
-    const staticError = getSkippedExecRefStaticError({ ref: params.ref, config: params.cfg });
-    if (staticError) {
-      return `Gateway token SecretRef could not be verified: ${staticError}`;
-    }
-    return "Gateway token SecretRef uses an exec provider and did not resolve.";
-  }
-  return "Gateway token is managed via SecretRef and is currently unavailable.";
-}
-
-function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
-  if (ref.source === "exec") {
-    return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
-  }
-  return "Resolve or rotate the external secret source, then rerun doctor.";
-}
-
-/** Shared auth diagnostics keep doctor's read-only and repair paths on the same policy. */
-export async function detectGatewayAuthHealth(
-  ctx: Pick<HealthCheckContext, "cfg" | "env" | "allowExecSecretRefs">,
-): Promise<HealthFinding[]> {
-  if (resolveDoctorMode(ctx.cfg) !== "local") {
-    return [];
-  }
-  const auth = resolveGatewayAuth({
-    authConfig: ctx.cfg.gateway?.auth,
-    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-    env: ctx.env,
-  });
-  if (auth.mode !== "token") {
-    return [];
-  }
-  const gatewayTokenRef = resolveSecretInputRef({
-    value: ctx.cfg.gateway?.auth?.token,
-    defaults: ctx.cfg.secrets?.defaults,
-  }).ref;
-  const invalidExecRef =
-    gatewayTokenRef?.source === "exec" &&
-    getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
-  if (gatewayTokenRef?.source === "exec" && ctx.allowExecSecretRefs !== true && !invalidExecRef) {
-    return [];
-  }
-  const resolved: Awaited<ReturnType<typeof resolveGatewayAuthToken>> = invalidExecRef
-    ? { secretRefConfigured: true }
-    : await resolveGatewayAuthToken({
-        cfg: ctx.cfg,
-        env: ctx.env ?? process.env,
-        unresolvedReasonStyle: "detailed",
-        ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
-      });
-  if (resolved.token && !isInvalidGatewaySecret(resolved.token)) {
-    return [];
-  }
-  if (gatewayTokenRef) {
-    return [
-      {
-        checkId: "core/doctor/gateway-auth",
-        severity: "warning",
-        message: buildGatewayTokenSecretRefUnavailableMessage({
-          cfg: ctx.cfg,
-          ref: gatewayTokenRef,
-          unresolvedRefReason: isInvalidGatewaySecret(resolved.token)
-            ? "the resolved token is blank or the literal string undefined/null"
-            : resolved.unresolvedRefReason,
-        }),
-        path: "gateway.auth.token",
-        fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
-      },
-    ];
-  }
-  const invalid =
-    isInvalidGatewaySecret(resolved.token) || isInvalidGatewaySecret(ctx.cfg.gateway?.auth?.token);
-  return [
-    {
-      checkId: "core/doctor/gateway-auth",
-      severity: invalid ? "error" : "warning",
-      message: invalid
-        ? "Gateway token is blank or the literal string undefined/null, not a usable secret."
-        : "Gateway auth is off or missing a token.",
-      path: "gateway.auth.token",
-      fixHint:
-        "Run `openclaw doctor --fix --generate-gateway-token` to generate a token, then restart the Gateway.",
-    },
-  ];
-}
 
 const gatewayAuthCheck: HealthCheck = {
   id: "core/doctor/gateway-auth",
@@ -558,7 +436,7 @@ const hooksModelCheck: HealthCheck = {
       catalog,
       ref: hooksModelRef,
       defaultProvider,
-      defaultModel,
+      defaultModel: { provider: defaultProvider, model: defaultModel },
     });
     const findings: HealthFinding[] = [];
     if (!status.allowed) {
@@ -699,18 +577,6 @@ const bootstrapSizeCheck: HealthCheck = {
     return findings;
   },
 };
-
-function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
-    id: "core/doctor/runtime-tool-schemas",
-    kind: "core",
-    description: "Active agent tool schemas project into model/runtime-compatible tool inputs.",
-    source: "doctor",
-    async detect(ctx) {
-      return deps.collectRuntimeToolSchemaFindings(ctx);
-    },
-  };
-}
 
 function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
@@ -906,22 +772,9 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
     description: "Security posture checks produce structured findings.",
     source: "doctor",
     async detect(ctx) {
-      const findings = await deps.collectSecurityWarnings(ctx.cfg);
+      const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
       return findings.map(securityAuditFindingToHealthFinding);
     },
-  };
-}
-
-export function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
-  const detailLines = finding.detail.split("\n");
-  const firstDetail = detailLines.shift() ?? "";
-  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
-  return {
-    checkId: "core/doctor/security",
-    severity:
-      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
-    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
-    ...(fixHint ? { fixHint } : {}),
   };
 }
 
@@ -1382,21 +1235,6 @@ const browserClawdProfileResidueCheck: HealthCheck = {
       warnings: result.warnings,
       effects: result.changes.length > 0 ? [effect] : [],
     };
-  },
-};
-
-const finalConfigValidationCheck: HealthCheck = {
-  id: FINAL_CONFIG_VALIDATION_CHECK_ID,
-  kind: "core",
-  description: "Active openclaw.jsonc parses and conforms to the config schema.",
-  source: "doctor",
-  async detect() {
-    const { readConfigFileSnapshot } = await import("../config/config.js");
-    const snap = await readConfigFileSnapshot({ observe: false });
-    if (!snap.exists || snap.valid) {
-      return [];
-    }
-    return configValidationIssuesToHealthFindings(snap.issues);
   },
 };
 

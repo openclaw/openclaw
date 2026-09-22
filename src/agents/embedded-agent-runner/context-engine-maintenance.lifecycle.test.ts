@@ -2,18 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAllLanes } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   getTaskFlowById,
-  reloadTaskFlowRegistryFromStore,
+  reloadTaskFlowRegistryFromStoreAsync,
 } from "../../tasks/task-flow-registry.js";
-import {
-  getTaskById,
-  listTasksForOwnerKey,
-  reloadTaskRegistryFromStore,
-} from "../../tasks/task-registry.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "../../tasks/task-registry.maintenance.js";
 import {
@@ -26,7 +24,7 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 const CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 
 afterEach(async () => {
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetCommandQueueStateForTest();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -37,6 +35,7 @@ afterEach(async () => {
 describe("deferred context-engine maintenance lifecycle", () => {
   it("retains live work across restart and loses it after the owning process closes", async () => {
     await withStateDirEnv("openclaw-context-maintenance-lifecycle-", async () => {
+      using deliveries = captureTaskDeliveryWork();
       vi.useFakeTimers();
       resetCommandQueueStateForTest();
       resetTaskRegistryForTests({ persist: false });
@@ -85,6 +84,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
       expect(getTaskFlowById(flowId)?.status).toBe("running");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      await deliveries.settle();
       resetAllLanes();
       await drainGlobalSingletonLifecycleState("restart");
       expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
@@ -108,8 +108,8 @@ describe("deferred context-engine maintenance lifecycle", () => {
         updatedAt: lostTask?.endedAt,
       });
 
-      reloadTaskRegistryFromStore();
-      reloadTaskFlowRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+      await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       const durableTask = getTaskById(task.taskId);
       const durableFlow = getTaskFlowById(flowId);
       expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
@@ -127,6 +127,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
 
       releaseMaintenance?.();
       await deferredMaintenance;
+      await deliveries.settle();
     });
   });
 });

@@ -49,7 +49,7 @@ export async function gatewayStatusCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  ensureExplicitGatewayAuth({
+  await ensureExplicitGatewayAuth({
     urlOverride: opts.url?.trim(),
     urlOverrideSource: "cli",
     explicitAuth: resolveExplicitGatewayAuth(opts),

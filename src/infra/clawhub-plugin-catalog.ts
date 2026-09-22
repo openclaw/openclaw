@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import {
   fetchClawHubJson,
+  isClawHubTelemetryDisabled,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField as readRequiredBoolean,
@@ -15,6 +16,12 @@ import {
   parseClawHubPackageSecurityResponse,
   type ClawHubPackageSecurityResponse,
 } from "./clawhub-packages.js";
+import {
+  parseClawHubPluginCapabilities,
+  parseClawHubPluginCompatibility,
+  type ClawHubPluginCompatibility,
+  type ClawHubPluginCapabilities,
+} from "./clawhub-plugin-manifest.js";
 
 export type ClawHubPluginCatalogEntry = {
   packageName: string;
@@ -36,27 +43,23 @@ export type ClawHubPluginCatalogEntry = {
   trendingRank?: number;
 };
 
-export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
-  owner?: { handle?: string; displayName?: string; imageUrl?: string };
-  topics: string[];
-  createdAt?: number;
-  updatedAt?: number;
-  readme?: string;
-  compatibility?: ClawHubPluginCompatibility;
-  configFields: ClawHubPluginConfigField[];
-  mcpServers: string[];
-  skills: Array<{ name: string; description?: string }>;
-  versions: ClawHubPluginVersion[];
-  verification?: ClawHubPluginVerification;
-  security?: ClawHubPluginSecurity;
-};
-
-type ClawHubPluginCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  pluginSdkVersion?: string;
-  minGatewayVersion?: string;
-};
+export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
+  ClawHubPluginCapabilities & {
+    owner?: { handle?: string; displayName?: string; imageUrl?: string; official?: boolean };
+    topics: string[];
+    createdAt?: number;
+    updatedAt?: number;
+    readme?: string;
+    repositoryUrl?: string;
+    documentationUrl?: string;
+    compatibility?: ClawHubPluginCompatibility;
+    configFields: ClawHubPluginConfigField[];
+    mcpServers: string[];
+    skills: Array<{ name: string; description?: string }>;
+    versions: ClawHubPluginVersion[];
+    verification?: ClawHubPluginVerification;
+    security?: ClawHubPluginSecurity;
+  };
 
 type ClawHubPluginConfigField = {
   name: string;
@@ -123,6 +126,7 @@ const PLUGIN_CATEGORY_ICON_KEYS = new Set([
   "globe",
   "message-circle",
   "message-square",
+  "mic",
   "package",
   "palette",
   "shield",
@@ -196,7 +200,9 @@ function parseCatalogPackage(
   const ownerHandle = readClawHubStringField(value, "ownerHandle", context);
   const latestVersion = readClawHubStringField(value, "latestVersion", context);
   const runtimeId = readClawHubStringField(value, "runtimeId", context);
-  const icon = readClawHubStringField(value, "icon", context);
+  const icon =
+    readClawHubStringField(value, "icon", context) ??
+    readClawHubStringField(value, "ownerImage", context);
   // Registry-owned icons are relative; published packages may also use external URLs.
   const iconUrl = resolveClawHubImageUrl(icon, baseUrl) ?? icon;
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
@@ -307,46 +313,26 @@ function readOptionalRecord(
   return value;
 }
 
-function parseCompatibility(
+function parseManifest(
   value: Record<string, unknown> | undefined,
-  context: string,
-): ClawHubPluginCompatibility | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const compatibility = {
-    pluginApiRange: readClawHubStringField(value, "pluginApiRange", context),
-    builtWithOpenClawVersion: readClawHubStringField(value, "builtWithOpenClawVersion", context),
-    pluginSdkVersion: readClawHubStringField(value, "pluginSdkVersion", context),
-    minGatewayVersion: readClawHubStringField(value, "minGatewayVersion", context),
-  };
-  const entries = Object.entries(compatibility).filter((entry): entry is [string, string] =>
-    Boolean(entry[1]),
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-function parseManifest(value: Record<string, unknown> | undefined): {
-  compatibility?: ClawHubPluginCompatibility;
-  configFields: ClawHubPluginConfigField[];
-  mcpServers: string[];
-  skills: Array<{ name: string; description?: string }>;
-} {
+): Pick<
+  ClawHubPluginDetail,
+  "compatibility" | "configFields" | "mcpServers" | "skills" | keyof ClawHubPluginCapabilities
+> {
   if (!value) {
     return { configFields: [], mcpServers: [], skills: [] };
   }
-  const configFields = value.configFields;
-  const mcpServers = value.mcpServers;
-  const bundledSkills = value.bundledSkills;
+  const { configFields, mcpServers, bundledSkills } = value;
   if (!Array.isArray(configFields) || !Array.isArray(mcpServers) || !Array.isArray(bundledSkills)) {
     throw new Error("Malformed ClawHub plugin manifest summary: expected capability arrays.");
   }
-  const compatibility = parseCompatibility(
+  const compatibility = parseClawHubPluginCompatibility(
     readOptionalRecord(value, "compatibility", "plugin manifest summary"),
     "plugin manifest compatibility",
   );
   return {
     ...(compatibility ? { compatibility } : {}),
+    ...parseClawHubPluginCapabilities(value),
     configFields: configFields.map((entry, index) => {
       if (!isRecord(entry)) {
         throw new Error(`Malformed ClawHub plugin config field ${index}: expected an object.`);
@@ -424,6 +410,7 @@ function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSe
         : (moderationStatus ?? trust.scanStatus ?? "unknown");
   return {
     status,
+    ...(value.verdict ? { verdict: value.verdict } : {}),
     auditUrl: value.securityAuditUrl,
     summary: value.overview,
   };
@@ -450,6 +437,7 @@ function parseVersions(value: unknown): ClawHubPluginVersion[] {
 export async function fetchClawHubPluginCatalog(
   params: ClawHubReadOptions & {
     query?: string;
+    searchSource?: "openclaw-control-ui";
     intent?: "all" | "trending" | "official" | "featured";
     category?: string;
     cursor?: string;
@@ -464,11 +452,15 @@ export async function fetchClawHubPluginCatalog(
     fetchImpl: params.fetchImpl,
   };
   if (query) {
+    const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;
     const value = await fetchClawHubJson<unknown>({
       ...shared,
       path: "/api/v1/plugins/search",
+      // Marked searches record demand; replay could duplicate a committed observation.
+      retryTransientReads: searchSource === undefined,
       search: {
         q: query,
+        searchSource,
         category: params.category,
         isOfficial: params.intent === "official" ? "true" : undefined,
         limit: params.limit ? String(params.limit) : undefined,
@@ -604,7 +596,7 @@ export async function fetchClawHubPluginDetail(
   const topics = readClawHubStringArrayField(value.package, "topics", "plugin detail") ?? [];
   const createdAt = readOptionalNonNegativeNumber(value.package, "createdAt", "plugin detail");
   const updatedAt = readOptionalNonNegativeNumber(value.package, "updatedAt", "plugin detail");
-  const packageCompatibility = parseCompatibility(
+  const packageCompatibility = parseClawHubPluginCompatibility(
     readOptionalRecord(value.package, "compatibility", "plugin detail"),
     "plugin compatibility",
   );
@@ -646,6 +638,7 @@ export async function fetchClawHubPluginDetail(
     ...(ownerHandle ? { handle: ownerHandle } : {}),
     ...(ownerDisplayName ? { displayName: ownerDisplayName } : {}),
     ...(ownerImageUrl ? { imageUrl: ownerImageUrl } : {}),
+    ...(typeof ownerRecord?.official === "boolean" ? { official: ownerRecord.official } : {}),
   };
   return {
     ...catalog,
@@ -655,12 +648,9 @@ export async function fetchClawHubPluginDetail(
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(readme ? { readme } : {}),
-    ...((manifest.compatibility ?? packageCompatibility)
-      ? { compatibility: manifest.compatibility ?? packageCompatibility }
-      : {}),
-    configFields: manifest.configFields,
-    mcpServers: manifest.mcpServers,
-    skills: manifest.skills,
+    ...(verification?.sourceRepo ? { repositoryUrl: verification.sourceRepo } : {}),
+    ...(packageCompatibility ? { compatibility: packageCompatibility } : {}),
+    ...manifest,
     versions: parseVersions(value.versions),
     ...(verification ? { verification } : {}),
     ...(security ? { security } : {}),

@@ -1,4 +1,3 @@
-// Slack plugin module implements errors behavior.
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 

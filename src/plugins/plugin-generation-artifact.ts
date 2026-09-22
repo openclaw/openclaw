@@ -7,6 +7,7 @@ import { moduleResolve } from "import-meta-resolve";
 import type { JitiOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
+import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
@@ -38,7 +39,6 @@ import {
 export function capturePluginGenerationArtifact(
   rootDir: string,
   entryFile?: string,
-  inputBoundaryRoot = rootDir,
   execute?: <T>(run: () => T) => T,
   moduleSource?: (filename: string) => string,
 ) {
@@ -70,7 +70,12 @@ export function capturePluginGenerationArtifact(
     metadataOnly = false,
     executableEntry = false,
   ): string => {
-    const boundary = entry && !executableEntry ? fs.realpathSync(inputBoundaryRoot) : root;
+    const boundary = root;
+    // Recovery packages are themselves captures; omit output only when it is nested in this source.
+    const outputRoot =
+      sourceCapture.outputRoot && isPathInside(boundary, sourceCapture.outputRoot)
+        ? sourceCapture.outputRoot
+        : undefined;
     const existing = packages.get(root);
     if (existing) {
       if (!metadataOnly) {
@@ -81,18 +86,16 @@ export function capturePluginGenerationArtifact(
     const packageId = `package-${packages.size}`;
     const moduleRoot = path.join(directory, packageId, "node_modules");
     const parentName = path.basename(path.dirname(boundary));
+    const sourceModuleRoot = parentName.startsWith("@")
+      ? path.dirname(path.dirname(boundary))
+      : path.dirname(boundary);
     const destination = path.join(
       moduleRoot,
       parentName.startsWith("@") ? parentName : "",
       path.basename(boundary),
-      path.relative(boundary, root),
     );
-    const capturedBoundary = path.resolve(destination, path.relative(root, boundary));
-    sourceAliases[boundary] = capturedBoundary;
+    const capturedBoundary = destination;
     sourceAliases[root] = destination;
-    if (entry && !executableEntry) {
-      sourceAliases[path.resolve(inputBoundaryRoot)] = capturedBoundary;
-    }
     digest.update(packageId).update("\0");
     const owner: PluginPackageCapture = {
       destination,
@@ -146,6 +149,9 @@ export function capturePluginGenerationArtifact(
         throw new Error(
           `Plugin source link leaves its package: ${path.relative(root, source)}. Declare shared code as a package dependency.`,
         );
+      }
+      if (outputRoot && isPathInside(outputRoot, real)) {
+        return;
       }
       const stat = fs.statSync(real, { bigint: true });
       const captured = capturedPaths.get(real);
@@ -233,9 +239,12 @@ export function capturePluginGenerationArtifact(
     ) => {
       const captured = copyPackage(dependency.root, undefined, captureMetadataOnly);
       // Preserve real nested installs; synthetic per-file node_modules confuse native addon roots.
+      // Installed peers also need sibling paths for native assets read directly from disk.
       const lookupDirectory = inPackage(boundary, dependency.lookupDirectory)
         ? path.join(capturedBoundary, path.relative(boundary, dependency.lookupDirectory))
-        : capturedBoundary;
+        : path.join(dependency.lookupDirectory, "node_modules") === sourceModuleRoot
+          ? path.dirname(moduleRoot)
+          : capturedBoundary;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
       if (!fs.existsSync(link)) {
@@ -270,6 +279,9 @@ export function capturePluginGenerationArtifact(
         const real = fs.realpathSync(source);
         if (!isPathInside(boundary, real)) {
           throw new Error("Standalone plugin input leaves its source directory");
+        }
+        if (outputRoot && isPathInside(outputRoot, real)) {
+          return;
         }
         if (fs.statSync(source).isDirectory()) {
           if (scannedDirectories.has(real)) {
@@ -396,7 +408,7 @@ export function capturePluginGenerationArtifact(
           return input;
         }
         const requested = path.resolve(path.dirname(source), value);
-        const lexicalBoundary = entry && !executableEntry ? path.resolve(inputBoundaryRoot) : root;
+        const lexicalBoundary = entry && !executableEntry ? path.resolve(rootDir) : root;
         const local =
           module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
             ? path.join(boundary, path.relative(lexicalBoundary, requested))
@@ -589,10 +601,7 @@ export function capturePluginGenerationArtifact(
       capturePluginModuleSource(filename, (root, source) => copyPackage(root, source, false, true)),
     );
   const packageForFile = (filename: string) =>
-    // Every captured package root and dependency link belongs to this artifact.
-    isPathInside(directory, filename)
-      ? findPluginCapturedPackage(packages.values(), filename)?.owner
-      : undefined;
+    findPluginCapturedPackage(packages, filename, directory)?.owner;
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
@@ -618,14 +627,6 @@ export function capturePluginGenerationArtifact(
     assertSourceCurrent();
     pendingInputs.clear();
     additions.clear();
-    const resolveCaptured = (source: string) => {
-      const lexical = path.resolve(source);
-      const canonical = isPathInside(path.resolve(rootDir), lexical)
-        ? path.join(sourceRoot, path.relative(path.resolve(rootDir), lexical))
-        : lexical;
-      const captured = capturedPaths.get(canonical);
-      return captured && isPathInside(root, captured) ? captured : undefined;
-    };
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages];
     const clearCaptures = () => captures.forEach((capture) => capture.clear());
     return {
@@ -637,8 +638,16 @@ export function capturePluginGenerationArtifact(
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: digest.copy().digest("hex"),
+      ...createPluginGenerationSourceLookup({
+        rootDir,
+        sourceRoot,
+        capturedRoot: root,
+        boundaryRoot: directory,
+        capturedPaths,
+        hardlinkedSources,
+        assertModuleAvailable,
+      }),
       assertSourceCurrent,
-      hasSource: (source: string) => resolveCaptured(source) !== undefined,
       moduleRoot: (filename: string) =>
         originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
       assertModuleAvailable,
@@ -686,7 +695,7 @@ export function capturePluginGenerationArtifact(
           return known;
         }
         return captureAdmitted(() => {
-          const captured = findPluginCapturedPackage(packages.values(), filename);
+          const captured = findPluginCapturedPackage(packages, filename, directory);
           // import.meta.url can name a deferred peer through a private dependency link.
           const original = captured
             ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
@@ -698,19 +707,6 @@ export function capturePluginGenerationArtifact(
           }
           return target;
         }).value;
-      },
-      resolve: (source: string, rejectHardlinks = false) => {
-        // Public exports may be loaded for the first time after the original package
-        // has been edited or removed. Resolve only through facts captured with it.
-        const captured = resolveCaptured(source);
-        if (!captured) {
-          throw new Error("Plugin entry is outside its captured source package");
-        }
-        if (rejectHardlinks && hardlinkedSources.has(captured)) {
-          throw new Error("Plugin source is hardlinked; use a separate file and reload.");
-        }
-        assertModuleAvailable(captured);
-        return captured;
       },
       dispose: () => {
         sourceCapture.dispose();

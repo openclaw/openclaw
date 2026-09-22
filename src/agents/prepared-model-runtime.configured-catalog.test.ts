@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
@@ -8,6 +9,62 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
+  it("bounds captured catalog policy loading by provider and refreshes it per invocation", () => {
+    const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");
+    try {
+      const capture = (rowCount: number, scope: "first" | "second") => {
+        const config: OpenClawConfig = {};
+        const metadataSnapshot = createPluginMetadataSnapshotFixture();
+        const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+          config,
+          includePluginCatalogs: false,
+          pluginMetadataSnapshot: metadataSnapshot,
+          modelsJsonContents: JSON.stringify({
+            providers: {
+              fixture: {
+                api: "openai-responses",
+                baseUrl: "https://fixture.invalid/v1",
+                models: Array.from({ length: rowCount }, (_, index) =>
+                  ["legacy", "first", "second"].map((prefix) => ({
+                    id: `${prefix}-${index}`,
+                    name: `${prefix}-${index}`,
+                    contextWindow: 32_000,
+                    maxTokens: 4096,
+                    reasoning: false,
+                    input: ["text"],
+                  })),
+                ).flat(),
+              },
+            },
+          }),
+        });
+        loadPolicy.mockClear().mockReturnValue({
+          normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
+        });
+        const { modelCatalog } = prepareCapturedRuntimeFacts({
+          agentFacts: { input: { config }, configuredModelRefs: [] },
+          workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+          templateModelRegistry: registry,
+          configuredRuntimeModels: [],
+        });
+        expect(modelCatalog.entries.map(({ id }) => id)).toEqual(
+          Array.from({ length: rowCount }, (_, index) => [
+            `legacy-${index}`,
+            `${scope === "first" ? "second" : "first"}-${index}`,
+          ]).flat(),
+        );
+        return loadPolicy.mock.calls.length;
+      };
+
+      const singleRowLoads = capture(1, "first");
+      expect(singleRowLoads).toBeGreaterThan(0);
+      expect(capture(32, "first")).toBe(singleRowLoads);
+      expect(capture(32, "second")).toBe(singleRowLoads);
+    } finally {
+      loadPolicy.mockRestore();
+    }
+  });
+
   it.each<{
     name: string;
     mode: "merge" | "replace";

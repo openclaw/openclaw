@@ -45,7 +45,6 @@ export type TestChatPane = HTMLElement & {
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
-  prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
   stagedOlderPage: unknown;

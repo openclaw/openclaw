@@ -9,22 +9,20 @@ import {
 } from "../../packages/terminal-core/src/progress-line.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import {
-  createSubsystemLogger,
-  enableConsoleCapture,
-  resetLogger,
-  routeLogsToStderr,
-  setConsoleTimestampPrefix,
-  setLoggerOverride,
-} from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
-import { writeRootConsoleLine } from "./console.js";
+import {
+  enableConsoleCapture,
+  routeLogsToStderr,
+  setConsoleTimestampPrefix,
+  writeRootConsoleLine,
+} from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
+import { createSubsystemLogger } from "./subsystem.js";
 import {
   captureConsoleSnapshot,
   type ConsoleSnapshot,

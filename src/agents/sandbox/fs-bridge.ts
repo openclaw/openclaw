@@ -15,6 +15,7 @@ import type {
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
+import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard, type PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
@@ -26,6 +27,7 @@ import {
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
+import { resolveSandboxTmpfsMounts } from "./workspace-mounts.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -49,18 +51,23 @@ const PINNED_MUTATION_ACTION_LABELS = {
 /** Create the filesystem bridge for local Docker-style mounted sandboxes. */
 export function createSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
+  containerOnlyMounts?: readonly string[];
 }): SandboxFsBridge {
-  return new SandboxFsBridgeImpl(params.sandbox);
+  return new SandboxFsBridgeImpl(params.sandbox, params.containerOnlyMounts);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
+  private readonly containerOnlyMounts: readonly string[];
 
-  constructor(sandbox: SandboxFsBridgeContext) {
+  constructor(sandbox: SandboxFsBridgeContext, containerOnlyMounts?: readonly string[]) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
+    this.containerOnlyMounts =
+      containerOnlyMounts ??
+      resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map((mount) => mount.containerPath);
     const mountsByContainer = [...this.mounts].toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
@@ -68,6 +75,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     // the broader workspace root during symlink and mutation safety checks.
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
+      containerOnlyMounts: this.containerOnlyMounts,
       runCommand: (script, options) => this.runCommand(script, options),
     });
   }
@@ -79,6 +87,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       relativePath: target.relativePath,
       containerPath: target.containerPath,
     };
+  }
+
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return this.mounts;
+  }
+
+  async [SANDBOX_FILE_IDENTITY](params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    return this.pathGuard.resolveFileIdentity(this.resolveResolvedPath(params), params.signal);
   }
 
   async resolvePinnedMutationTarget(
@@ -97,7 +117,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target, params.maxBytes);
+    return this.readPinnedFile(target, params.maxBytes, params.signal);
   }
 
   async readDirectory(
@@ -310,9 +330,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
+    const resolved = await this.pathGuard.resolveCanonicalReadTarget(
+      target,
+      "stat files",
+      params.signal,
+    );
     const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
     const result = await this.runPlannedCommand(
-      buildStatPlan(target, anchoredTarget),
+      // Keep stat's original parent/basename metadata semantics, while its
+      // boundary check validates the container-visible backing rather than a hidden host alias.
+      buildStatPlan(resolved.target, anchoredTarget),
       params.signal,
     );
     if (result.code !== 0) {
@@ -356,8 +383,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async readPinnedFile(target: SandboxResolvedFsPath, maxBytes?: number): Promise<Buffer> {
-    const opened = await this.pathGuard.openReadableFile(target);
+  private async readPinnedFile(
+    target: SandboxResolvedFsPath,
+    maxBytes?: number,
+    signal?: AbortSignal,
+  ): Promise<Buffer> {
+    const opened = await this.pathGuard.openReadableFile(target, signal);
     try {
       if (maxBytes === undefined) {
         return await readFileAsync(opened.fd);
@@ -422,6 +453,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       defaultWorkspaceRoot: this.sandbox.workspaceDir,
       defaultContainerRoot: this.sandbox.containerWorkdir,
       mounts: this.mounts,
+      containerOnlyMounts: this.containerOnlyMounts,
     });
   }
 

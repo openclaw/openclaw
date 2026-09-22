@@ -149,6 +149,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   readonly syncCalls: SyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+  readonly deletedSources: Array<{ path: string; source: MemorySource; expectedHash?: string }> =
+    [];
   corpusListCalls = 0;
   private afterNextCorpusList: (() => Promise<void>) | null = null;
   private corpusListWork: Promise<void> = Promise.resolve();
@@ -365,5 +367,18 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.indexedContents.push(options.content ?? "");
+  }
+
+  protected override async deleteIndexedFile(
+    pathname: string,
+    source: MemorySource,
+    expectedHash?: string,
+  ): Promise<void> {
+    // This in-memory harness tests corpus selection. File-owned publication,
+    // workspace locking and conditional deletion have separate integration tests.
+    this.deletedSources.push({ path: pathname, source, expectedHash });
+    this.db
+      .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ? AND hash = ?")
+      .run(pathname, source, expectedHash ?? null);
   }
 }

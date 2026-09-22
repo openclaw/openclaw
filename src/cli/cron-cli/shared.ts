@@ -9,7 +9,7 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/index.js";
+import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -36,7 +36,7 @@ import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
-import { CronCliError } from "./cron-cli-error.js";
+import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
 export function parseCronIntegerOption(
   value: unknown,
@@ -269,6 +269,7 @@ export function handleCronCliError(err: unknown) {
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
   const diagnostic = err instanceof CronCliError ? (err.originalError ?? err) : err;
+  const matches = err instanceof CronCliError ? err.matches : undefined;
   if (isJsonOutputModeActive(process.argv)) {
     if (
       !missingJob &&
@@ -286,13 +287,44 @@ export function handleCronCliError(err: unknown) {
       message,
       humanOutput: danger(message),
       machineOutput: message,
+      matches,
     });
   }
   const message = missingJob
     ? formatCronLookupMiss(missingJob.jobId)
     : formatErrorMessage(diagnostic);
-  defaultRuntime.error(danger(message));
+  defaultRuntime.error(danger(matches ? `${message}\n${formatCronJobMatches(matches)}` : message));
   exitCliAfterOutput(defaultRuntime, 1);
+}
+
+export function createCronAmbiguousNameError(jobs: readonly CronJob[]): CronCliError {
+  return new CronCliError(
+    "Multiple automations match this name. Retry this command with a matching job ID instead of the name.",
+    {
+      matches: jobs.map((job) => ({
+        id: job.id,
+        name: job.name,
+        // Event command text is unnecessary for choosing a job and can contain credentials.
+        schedule:
+          job.schedule.kind === "on-exit" || job.schedule.kind === "stream"
+            ? job.schedule.kind
+            : formatSchedule(job.schedule, job.trigger !== undefined),
+        enabled: job.enabled,
+        status: computeStatus(job),
+      })),
+    },
+  );
+}
+
+function formatCronJobMatches(matches: readonly CronCliJobMatch[]): string {
+  return [
+    "Matching automations:",
+    ...matches.map(
+      (match) =>
+        `  ${sanitizeTerminalText(match.id)}  ${sanitizeTerminalText(match.name)}\n` +
+        `    ${sanitizeTerminalText(match.schedule)}; enabled: ${match.enabled ? "yes" : "no"}; status: ${sanitizeTerminalText(match.status)}`,
+    ),
+  ].join("\n");
 }
 
 export const formatCronLookupMiss = (jobId: string) =>
@@ -382,8 +414,8 @@ export function parseCronStringList(input: unknown): string[] | undefined {
       : "";
   return raw
     .split(/[,\s]+/u)
-    .map((fallback) => normalizeOptionalString(fallback))
-    .filter((fallback): fallback is string => Boolean(fallback));
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /**

@@ -973,7 +973,7 @@ describe("gateway run option collisions", () => {
         session: { reset: { mode: "idle", idleMinutes: 45 } },
         meta: {
           lastTouchedVersion: VERSION,
-          migrations: { modelPolicyAllowlist: true },
+          migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
         },
       } satisfies ConfigFileSnapshot["sourceConfig"];
       const repairedSnapshot = {

@@ -12,6 +12,8 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
 export type ProviderCatalogContext = {
+  /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -59,7 +61,6 @@ export type ProviderPluginCatalog = {
 };
 
 export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
-  signal?: AbortSignal;
   includeLive?: boolean;
   timeoutMs?: number;
 };

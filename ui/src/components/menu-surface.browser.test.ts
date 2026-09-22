@@ -369,7 +369,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   );
 
   it.each(["dark", "light"] as const)(
-    "reaches browser-card shadow menus in %s mode",
+    "matches session menu geometry and theme inside browser-card shadow roots in %s mode",
     async (theme) => {
       await useDesktopViewport();
       const highlight = useTheme(theme);
@@ -388,10 +388,31 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await page
         .elementLocator(card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!)
         .click();
-      await hoverBackground(
-        card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!,
-        highlight,
-      );
+      const item = card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!;
+      const reference = document.createElement("wa-dropdown");
+      reference.className = "session-menu";
+      const referenceItem = document.createElement("wa-dropdown-item");
+      referenceItem.className = "session-menu__item";
+      referenceItem.textContent = "Reference action";
+      reference.append(referenceItem);
+      document.body.append(reference);
+      await reference.updateComplete;
+      await referenceItem.updateComplete;
+      const menu = card
+        .shadowRoot!.querySelector("wa-dropdown")!
+        .shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      const referenceMenu = reference.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
+        expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
+          getComputedStyle(referenceMenu).getPropertyValue(property),
+        );
+      }
+      for (const property of ["min-height", "padding", "font-size", "color"]) {
+        expect(getComputedStyle(item).getPropertyValue(property)).toBe(
+          getComputedStyle(referenceItem).getPropertyValue(property),
+        );
+      }
+      await hoverBackground(item, highlight);
     },
   );
 
@@ -402,19 +423,25 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      render(
-        renderComposerMenuOption({
-          id: "hover-command",
-          active: false,
-          select: () => {},
-          hover: () => {},
-          icon: "",
-          name: "/help",
-          description: "Show commands",
-        }),
-        host,
-      );
-      await hoverBackground(host.querySelector<HTMLElement>('[role="option"]')!, highlight);
+      const renderOption = (active: boolean) => {
+        render(
+          renderComposerMenuOption({
+            id: "hover-command",
+            active,
+            select: () => {},
+            hover: () => renderOption(true),
+            icon: "",
+            name: "/help",
+            description: "Show commands",
+          }),
+          host,
+        );
+      };
+      renderOption(false);
+      const option = host.querySelector<HTMLElement>('[role="option"]')!;
+      await hoverBackground(option, highlight);
+      expect(option.getAttribute("aria-selected")).toBe("true");
+      expect(getComputedStyle(option).cursor).toBe("pointer");
     },
   );
 

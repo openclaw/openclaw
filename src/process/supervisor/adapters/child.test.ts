@@ -5,12 +5,15 @@ import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { closeOwnedStdioProcess } from "../../owned-stdio.js";
 import {
+  createChildAdapterHarness,
   createStubChild,
   createWindowsNpmShim,
   firstMockArg,
   firstSpawnWithFallbackParams,
   readyChildAdapter,
+  setPlatform,
 } from "./child.test-support.js";
 import {
   expectRealExitWinsOverSigkillFallback,
@@ -63,23 +66,8 @@ let startChildAdapter: ReturnType<typeof readyChildAdapter>;
 let getWindowsInstallRoots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function createAdapterHarness(params?: {
-  pid?: number;
-  argv?: string[];
-  env?: NodeJS.ProcessEnv;
-  stdinMode?: Parameters<typeof startChildAdapter>[0]["stdinMode"];
-}) {
-  const stub = createStubChild(params?.pid);
-  spawnWithFallbackMock.mockResolvedValue({
-    child: stub.child,
-    usedFallback: false,
-  });
-  const adapter = await startChildAdapter({
-    argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
-    env: params?.env,
-    stdinMode: params?.stdinMode ?? "pipe-open",
-  });
-  return { ...stub, adapter };
+function createAdapterHarness(params?: Parameters<typeof createChildAdapterHarness>[2]) {
+  return createChildAdapterHarness(startChildAdapter, spawnWithFallbackMock, params);
 }
 
 function expectedTrustedCmdExe(): string {
@@ -89,13 +77,6 @@ function expectedTrustedCmdExe(): string {
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
-  const setPlatform = (platform: NodeJS.Platform) => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: platform,
-    });
-  };
 
   beforeEach(async () => {
     vi.resetModules();
@@ -118,12 +99,15 @@ describe("createChildAdapter", () => {
       flush: () => "",
     }));
     createServiceChildRelayAdapterMock.mockResolvedValue({
-      pid: 9999,
-      onStdout: vi.fn(),
-      onStderr: vi.fn(),
-      wait: vi.fn(),
-      kill: vi.fn(),
-      dispose: vi.fn(),
+      ready: Promise.resolve(),
+      adapter: {
+        pid: 9999,
+        onStdout: vi.fn(),
+        onStderr: vi.fn(),
+        wait: vi.fn(),
+        kill: vi.fn(),
+        dispose: vi.fn(),
+      },
     });
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
@@ -492,27 +476,31 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("selects the exact service relay instead of direct shared-group signaling", async () => {
-    process.env.OPENCLAW_SERVICE_MARKER = "1";
-    try {
-      await startChildAdapter({
-        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
-        exactEnv: true,
-        stdinMode: "pipe-open",
-      });
-      expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          command: "node",
-          args: ["-e", "setTimeout(() => {}, 1000)"],
+  it.each(["linux", "darwin", "freebsd"] as const)(
+    "selects the exact service relay instead of direct shared-group signaling on %s",
+    async (platform) => {
+      setPlatform(platform);
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      try {
+        await startChildAdapter({
+          argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+          exactEnv: true,
           stdinMode: "pipe-open",
-        }),
-      );
-      expect(spawnWithFallbackMock).not.toHaveBeenCalled();
-      expect(signalProcessTreeMock).not.toHaveBeenCalled();
-    } finally {
-      delete process.env.OPENCLAW_SERVICE_MARKER;
-    }
-  });
+        });
+        expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            command: "node",
+            args: ["-e", "setTimeout(() => {}, 1000)"],
+            stdinMode: "pipe-open",
+          }),
+        );
+        expect(spawnWithFallbackMock).not.toHaveBeenCalled();
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
 
   it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
@@ -738,6 +726,30 @@ describe("createChildAdapter", () => {
       expected: { code: 0, signal: "SIGKILL" },
     });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("does not renew the Windows hard-kill fallback or invent extinction on repeated KILL", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    signalProcessTreeMock.mockImplementationOnce(() => {}).mockImplementationOnce(() => {});
+    const { adapter } = await createAdapterHarness({ pid: 9756 });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+    expect(adapter.waitForExtinction).toBeTypeOf("function");
+    const closing = closeOwnedStdioProcess(adapter, { force: true });
+    const rejected = expect(closing).rejects.toThrow("before the kill deadline");
+    await vi.advanceTimersByTimeAsync(3_000);
+    adapter.kill("SIGKILL");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGKILL" });
+    await rejected;
+    adapter.kill("SIGKILL");
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settled).toHaveBeenCalledOnce();
+    await expect(adapter.waitForExtinction!()).rejects.toThrow("before the kill deadline");
+    adapter.dispose();
   });
 
   it("waits for Windows tree-kill completion before forced stream settlement", async () => {

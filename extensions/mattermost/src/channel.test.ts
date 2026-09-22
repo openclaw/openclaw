@@ -1,4 +1,4 @@
-// Mattermost tests cover channel plugin behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
 import { createChannelMessageReplyPipeline } from "../runtime-api.js";
@@ -27,7 +27,6 @@ import { mattermostPlugin } from "./channel.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
-  requestUrl,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
 import { resolveMattermostPresentation } from "./normalize.js";

@@ -88,8 +88,8 @@ describe("iMessage provider resource binding", () => {
     ).toEqual({ chatIdentifier: "SMS;-;user@example.com" });
   });
 
-  it("requires a current positive account and chat cache match", () => {
-    rememberIMessageReplyCache({
+  it("requires a current positive account and chat cache match", async () => {
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "bound-guid",
       chatGuid: "any;-;+15550001111",
@@ -98,65 +98,65 @@ describe("iMessage provider resource binding", () => {
       timestamp: Date.now(),
     });
     expect(
-      resolveIMessageCachedResourceBinding("bound-guid", {
+      await resolveIMessageCachedResourceBinding("bound-guid", {
         accountId: "work",
         chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("match");
 
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "mixed-case-email-guid",
       chatGuid: "any;-;User@Example.com",
       timestamp: Date.now(),
     });
     expect(
-      resolveIMessageCachedResourceBinding("mixed-case-email-guid", {
+      await resolveIMessageCachedResourceBinding("mixed-case-email-guid", {
         accountId: "work",
         chatIdentifier: "iMessage;-;user@example.com",
       }),
     ).toBe("match");
     expect(
-      resolveIMessageCachedResourceBinding("bound-guid", {
+      await resolveIMessageCachedResourceBinding("bound-guid", {
         accountId: "personal",
         chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("mismatch");
 
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "guid-only",
       chatGuid: "any;-;+15550001111",
       timestamp: Date.now(),
     });
     expect(
-      resolveIMessageCachedResourceBinding("guid-only", {
+      await resolveIMessageCachedResourceBinding("guid-only", {
         accountId: "work",
         chatId: 1,
       }),
     ).toBe("unknown");
     expect(
-      resolveIMessageCachedResourceBinding("bound-guid", {
+      await resolveIMessageCachedResourceBinding("bound-guid", {
         accountId: "work",
         chatId: 99,
       }),
     ).toBe("mismatch");
     expect(
-      resolveIMessageCachedResourceBinding("bound-guid", {
+      await resolveIMessageCachedResourceBinding("bound-guid", {
         accountId: "work",
         chatGuid: "iMessage;+;other",
         chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("mismatch");
 
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "stale-guid",
       chatId: 42,
       timestamp: Date.now() - 7 * 60 * 60 * 1000,
     });
     expect(
-      resolveIMessageCachedResourceBinding("stale-guid", {
+      await resolveIMessageCachedResourceBinding("stale-guid", {
         accountId: "default",
         chatId: 42,
       }),
@@ -293,8 +293,8 @@ describe("iMessage provider resource binding", () => {
     ).toBe("mismatch");
   });
 
-  it("accepts an uncached delegated reference only after a local database match", () => {
-    expect(() =>
+  it("accepts an uncached delegated reference only after a local database match", async () => {
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -304,8 +304,8 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: { chatGuid: "iMessage;+;other" },
@@ -315,8 +315,8 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).toThrow("does not belong to the selected conversation");
-    expect(() =>
+    ).rejects.toThrow("does not belong to the selected conversation");
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: { chatGuid: "iMessage;+;other" },
@@ -326,18 +326,18 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "direct-operator",
       }),
-    ).toThrow("does not belong to the selected conversation");
+    ).rejects.toThrow("does not belong to the selected conversation");
   });
 
-  it("uses the local database when cached chat keys are not comparable", () => {
-    rememberIMessageReplyCache({
+  it("uses the local database when cached chat keys are not comparable", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "message-guid",
       chatGuid: "any;-;+15550001111",
       timestamp: Date.now(),
     });
 
-    expect(() =>
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: { chatId: 1 },
@@ -347,18 +347,18 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("uses positive cache attestation for remote delegated calls", () => {
-    rememberIMessageReplyCache({
+  it("uses positive cache attestation for remote delegated calls", async () => {
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "remote-guid",
       chatGuid: "any;-;+15550001111",
       timestamp: Date.now(),
     });
 
-    expect(() =>
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "work",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -368,8 +368,8 @@ describe("iMessage provider resource binding", () => {
         messageId: "remote-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "work",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -379,8 +379,8 @@ describe("iMessage provider resource binding", () => {
         messageId: "p:0/remote-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "personal",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -390,13 +390,13 @@ describe("iMessage provider resource binding", () => {
         messageId: "remote-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).toThrow("different account or conversation");
+    ).rejects.toThrow("different account or conversation");
   });
 
   it.each([undefined, "delegated", "unknown-origin"])(
     "fails unknown remote references closed for origin %s",
-    (conversationReadOrigin) => {
-      expect(() =>
+    async (conversationReadOrigin) => {
+      await expect(
         authorizeIMessageResourceReference({
           accountId: "default",
           chatContext: { chatId: 1 },
@@ -406,11 +406,11 @@ describe("iMessage provider resource binding", () => {
           messageId: "unknown-guid",
           conversationReadOrigin,
         }),
-      ).toThrow("require a current same-account conversation binding");
+      ).rejects.toThrow("require a current same-account conversation binding");
     },
   );
 
-  it("preserves direct operators when remote binding evidence is unavailable", () => {
+  it("preserves direct operators when remote binding evidence is unavailable", async () => {
     const params = {
       accountId: "default",
       chatContext: { chatId: 1 },
@@ -420,16 +420,16 @@ describe("iMessage provider resource binding", () => {
       messageId: "unknown-guid",
     };
 
-    expect(() =>
+    await expect(
       authorizeIMessageResourceReference({
         ...params,
         conversationReadOrigin: "direct-operator",
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("does not use an account-ambiguous local database for delegated authorization", () => {
-    expect(() =>
+  it("does not use an account-ambiguous local database for delegated authorization", async () => {
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "work",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -439,9 +439,9 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).toThrow("require a current same-account conversation binding");
+    ).rejects.toThrow("require a current same-account conversation binding");
 
-    expect(() =>
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "work",
         chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
@@ -451,10 +451,10 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "direct-operator",
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("treats provider-resolved handle aliases as unavailable binding evidence", () => {
+  it("treats provider-resolved handle aliases as unavailable binding evidence", async () => {
     expect(
       checkIMessageResourceBinding({
         chatContext: {},
@@ -463,7 +463,7 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
       }),
     ).toBe("unavailable");
-    expect(() =>
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: {},
@@ -473,8 +473,8 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "direct-operator",
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       authorizeIMessageResourceReference({
         accountId: "default",
         chatContext: {},
@@ -484,7 +484,7 @@ describe("iMessage provider resource binding", () => {
         messageId: "message-guid",
         conversationReadOrigin: "delegated",
       }),
-    ).toThrow("require a current same-account conversation binding");
+    ).rejects.toThrow("require a current same-account conversation binding");
   });
 
   it("does not treat a configured database as local for an SSH imsg wrapper", () => {

@@ -12,7 +12,7 @@ import {
 } from "../state/agent-database-admission.js";
 import {
   listAgentProvenance,
-  readAgentProvenance,
+  readAgentProvenanceForDisplay,
   type AgentProvenance,
 } from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
@@ -144,10 +144,12 @@ export async function agentsListCommand(
     recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
   }
   const summaries = buildAgentSummaries(cfg);
-  const provenance = opts.tree ? listAgentProvenance() : [];
+  const provenance = opts.tree ? await listAgentProvenance() : [];
   if (opts.json) {
+    const records = await readAgentProvenanceForDisplay(summaries.map((summary) => summary.id));
+    const recordsById = new Map(records.map((record) => [record.agentId, record]));
     for (const summary of summaries) {
-      const record = readAgentProvenance(summary.id);
+      const record = recordsById.get(summary.id);
       if (record) {
         summary.createdVia = record.createdVia;
         summary.creatorAgentId = record.creatorAgentId;

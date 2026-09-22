@@ -172,10 +172,12 @@ export function createSessionMcpRuntimeManagerInstall(
   ): Promise<SessionMcpRuntime> => {
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
     const runtime = await getOrCreateRuntimeEntry(params);
-    store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
-      connectionHash,
-      resolvedAt: store.now(),
-    });
+    if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
+      store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
+        connectionHash,
+        resolvedAt: store.now(),
+      });
+    }
     return runtime;
   };
 
@@ -255,6 +257,7 @@ export function createSessionMcpRuntimeManagerInstall(
       redactConnectionServerNames: new Set(params.resolverRequesterServerNames),
       requesterScope: params.requesterScope,
       toolOverrides: params.toolOverrides,
+      toolDenylist: params.toolDenylist,
     });
   };
 

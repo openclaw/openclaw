@@ -95,7 +95,7 @@ describe("processDiscordMessage ack reactions", () => {
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       message: {
-        id: "m1",
+        id: "1001",
         timestamp: new Date().toISOString(),
         attachments: [],
       },

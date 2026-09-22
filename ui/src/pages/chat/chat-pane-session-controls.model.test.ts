@@ -8,6 +8,10 @@ import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
 } from "../../lib/chat/outbox-store.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   createGatewayRequestMock,
@@ -28,16 +32,8 @@ import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.
 
 describe("chat pane model controls", () => {
   it("binds model events to the admitted run when session rows omit exact run IDs", async () => {
-    const pane = createRenderTestChatPane();
-    const state = pane.initialize(createInitializationContext());
-    state.sessionKey = "agent:main:current";
-    state.connected = true;
-    state.chatModelCatalog = [
-      { id: "primary", name: "Primary", provider: "example" },
-      { id: "fallback", name: "Fallback", provider: "example" },
-    ];
     const row: GatewaySessionRow = {
-      key: state.sessionKey,
+      key: "agent:main:current",
       kind: "direct",
       sessionId: "current-session",
       updatedAt: 1,
@@ -47,10 +43,61 @@ describe("chat pane model controls", () => {
       activeModel: "fallback",
       activeModelProvider: "example",
     };
-    state.sessions.reconcile(row, createSessionsListResult().defaults);
-    state.sessionsResult = state.sessions.state.result;
+    const steerAck = createDeferred<unknown>();
+    const request = createGatewayRequestMock((method) => {
+      if (method === "sessions.list") {
+        return { ...createSessionsListResult(), sessions: [row] };
+      }
+      return method === "chat.send" ? steerAck.promise : Promise.resolve({});
+    });
+    const client = createTestGatewayClient(request);
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    gateway.snapshot.sessionKey = row.key;
+    const sessions = createTestSessionCapability(gateway);
+    const context = createInitializationContext();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize({
+      ...context,
+      gateway: {
+        ...context.gateway,
+        ...gateway,
+        get snapshot() {
+          return { ...context.gateway.snapshot, ...gateway.snapshot };
+        },
+        subscribe(listener) {
+          return gateway.subscribe((snapshot) =>
+            listener({ ...context.gateway.snapshot, ...snapshot }),
+          );
+        },
+      },
+      sessions,
+    });
+    state.sessionKey = row.key;
+    state.client = client;
+    state.hello = sessionMutationGatewayHello();
+    state.connected = true;
+    state.chatModelCatalog = [
+      { id: "primary", name: "Primary", provider: "example" },
+      { id: "fallback", name: "Fallback", provider: "example" },
+    ];
+    await sessions.refresh({ agentId: "main", force: true });
+    state.sessionsResult = sessions.state.result;
+    state.sessionsResultAgentId = sessions.state.agentId;
+    const stop = sessions.subscribe((snapshot) => {
+      state.sessionsResult = snapshot.result;
+      state.sessionsResultAgentId = snapshot.agentId;
+    });
+    const observation = sessions.observeRow({ key: row.key, agentId: "main" }, () => {}, {
+      onEvent: (event, result) => handlePageGatewayEvent(state, event, undefined, result),
+    });
+    onTestFinished(() => {
+      stop();
+      observation.dispose();
+      sessions.dispose();
+      steerAck.resolve({});
+    });
     const container = document.createElement("div");
-    const draw = () => {
+    const draw = (starting = false) => {
       const controls = renderChatPaneComposerControls({
         state,
         selectedSession: state.sessionsResult?.sessions[0],
@@ -65,6 +112,8 @@ describe("chat pane model controls", () => {
       render(controls.composerControls, container);
       const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
+      expect(trigger?.getAttribute("aria-busy")).toBe(String(starting));
+      expect(trigger?.querySelector(".btn__spinner") !== null).toBe(starting);
       return trigger?.textContent;
     };
     state.chatSending = true;
@@ -72,17 +121,17 @@ describe("chat pane model controls", () => {
       sessionKey: state.sessionKey,
       agentId: "main",
     });
-    expect(draw()).toContain("Model pending");
+    expect(draw(true)).toContain("Primary");
     adoptStartedChatRun(state, "current-run", 2);
     state.chatSending = false;
-    expect(draw()).toContain("Model pending");
+    expect(draw(true)).toContain("Primary");
     const observe = (
       runId: string,
       model: string | null,
       updatedAt: number,
       sessionKey = row.key,
     ) =>
-      handlePageGatewayEvent(state, {
+      emitEvent({
         type: "event",
         event: "sessions.changed",
         payload: {
@@ -102,11 +151,11 @@ describe("chat pane model controls", () => {
     observe("elsewhere-run", "primary", 5, "agent:main:elsewhere");
     expect(draw()).toContain("Fallback");
     observe("current-run", null, 6);
-    expect(draw()).toContain("Model pending");
+    expect(draw(true)).toContain("Primary");
     observe("current-run", "fallback", 7);
     expect(draw()).toContain("Fallback");
     adoptStartedChatRun(state, "replacement-run", 8);
-    expect(draw()).toContain("Model pending");
+    expect(draw(true)).toContain("Primary");
     observe("replacement-run", "primary", 9);
     expect(draw()).toContain("Primary");
     state.chatSending = true;
@@ -122,23 +171,17 @@ describe("chat pane model controls", () => {
     observe("next-run", "fallback", 10);
     // A delayed event can carry the latest session projection but an older emitter ID.
     observe("replacement-run", "fallback", 10);
-    expect(draw()).toContain("Model pending");
+    expect(draw(true)).toContain("Primary");
     adoptStartedChatRun(state, "next-run", 11);
     state.chatSending = false;
     expect(draw()).toContain("Fallback");
     observe("next-run", "primary", 12);
     expect(draw()).toContain("Primary");
-    const steerAck = createDeferred<unknown>();
     vi.stubGlobal("sessionStorage", window.sessionStorage);
     onTestFinished(() => {
       sessionStorage.clear();
       vi.unstubAllGlobals();
     });
-    const request = createGatewayRequestMock((method) =>
-      method === "chat.send" ? steerAck.promise : Promise.resolve({}),
-    );
-    state.client = createTestGatewayClient(request);
-    state.hello = sessionMutationGatewayHello();
     state.chatQueue = [];
     const steer = {
       id: "held-steer",
@@ -174,7 +217,6 @@ describe("chat pane model controls", () => {
     expect(draw()).toContain("Fallback");
     reconcileChatRunLifecycle(state, { clearLocalRun: true, clearChatStream: true });
     expect(getChatModelObservedRunId(state, state.sessionsResult?.sessions[0])).toBeUndefined();
-    state.sessions.dispose();
   });
 
   it("does not show another session's pending model after switching sessions", () => {

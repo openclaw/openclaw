@@ -40,6 +40,8 @@ node-placed CLI execution, remain unsupported for rooted reviews. When the confi
 model chain is provably unsupported, the weekly job remains visible but disabled
 with `no-rooted-runtime` in its display name. Configure a supported runtime or fallback;
 Gateway startup and config reload reconcile enablement and clear that reason.
+Reconciliation uses prepared policy and processes one agent at a time, yielding
+between updates so fleet-wide review preparation does not block Gateway health requests.
 Stored session model or runtime preferences are preserved; reviews with these
 preferences remain enabled because configuration alone cannot prove their execution path.
 If eligibility cannot be determined statically, the job remains enabled and runtime

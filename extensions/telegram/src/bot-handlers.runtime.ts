@@ -18,7 +18,6 @@ export const createTelegramHandlers = (
   const authorization = createTelegramHandlerAuthorization(params);
   const inboundPipeline = createTelegramInboundPipeline({ params, message, authorization });
   return {
-    cancelPending: inboundPipeline.cancelPending,
     register(nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher) {
       const callbackRouter = createTelegramCallbackRouter({
         params: { ...params, nativeCommandCallbackDispatcher },

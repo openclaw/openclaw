@@ -2,10 +2,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  UpdateDoctorError,
+} from "../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -17,6 +23,7 @@ import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-s
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.gateway.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 import { mocks } from "./doctor-health.test-support.js";
 
@@ -24,11 +31,13 @@ const snapshotProcesses = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
+  const { promisify } = await import("node:util");
   const actual = await importOriginal<typeof import("node:child_process")>();
   snapshotProcesses.execFile.mockImplementation(actual.execFile);
-  Object.defineProperties(
+  Object.defineProperty(
     snapshotProcesses.execFile,
-    Object.getOwnPropertyDescriptors(actual.execFile),
+    promisify.custom,
+    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
   );
   return { ...actual, execFile: snapshotProcesses.execFile };
 });
@@ -36,6 +45,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const maintenance = vi.hoisted(() => ({
   run: <T>(operation: () => T): T => operation(),
   finish: vi.fn(),
+  releaseState: vi.fn(),
   release: vi.fn(),
 }));
 afterEach(() => vi.restoreAllMocks());
@@ -47,6 +57,96 @@ describe("Doctor refused-migration maintenance outcome", () => {
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
   });
+
+  it.each(["success", "validation", "conflict", "missing-receipt"] as const)(
+    "uses the latest receipt for maintenance-time token recovery (%s)",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg = { gateway: { mode: "local" as const }, plugins: { enabled: false } };
+        await state.writeConfig(cfg);
+        const planned = await readConfigFileSnapshot();
+        mocks.config.mockReturnValue(cfg);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        mocks.runContributions.mockImplementationOnce(async (ctx) => {
+          // The config-flow fixture skips planning; supply the revision observed before repair.
+          ctx.configResult.confirmedConfigSource = {
+            path: planned.path,
+            hash: planned.hash ?? hashConfigRaw(planned.raw),
+          };
+          await writeDoctorGatewayConfig(ctx, {
+            ...ctx.cfg,
+            gateway: { ...ctx.cfg.gateway, port: 19091 },
+          });
+          const first = await readConfigFileSnapshot();
+          expect(ctx.configResult.confirmedConfigSource).toEqual({
+            path: first.path,
+            hash: first.hash,
+          });
+          expect(first.hash).not.toBe(planned.hash);
+          maintenance.finish.mockImplementationOnce(async (_cfg, writeConfig) => {
+            expect(writeConfig).toBeTypeOf("function");
+            if (outcome === "conflict") {
+              fs.appendFileSync(state.configPath, "\n// operator-only raw drift\n");
+            } else if (outcome === "missing-receipt") {
+              ctx.configResult.confirmedConfigSource = { path: first.path, hash: null };
+            }
+            const previous = ctx.cfg;
+            const baseline = ctx.cfgForPersistence;
+            const receipt = ctx.configResult.confirmedConfigSource;
+            const retained = [state.configPath, state.configPath + ".bak"].map((path) =>
+              fs.readFileSync(path),
+            );
+            const candidate = {
+              ...ctx.cfg,
+              gateway: {
+                ...ctx.cfg.gateway,
+                auth: { mode: "token" as const, token: "maintenance-recovered-token" },
+                ...(outcome === "validation" ? { port: 0 } : {}),
+              },
+            };
+            if (outcome !== "success") {
+              await expect(writeConfig(candidate)).rejects.toThrow("did not persist");
+              expect(ctx.configWriteRefusal).toBe(
+                outcome === "validation" ? "validation" : "config-conflict",
+              );
+              expect(ctx.cfg).toBe(previous);
+              expect(ctx.cfgForPersistence).toBe(baseline);
+              expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
+              expect(
+                [state.configPath, state.configPath + ".bak"].map((path) => fs.readFileSync(path)),
+              ).toEqual(retained);
+              expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
+            } else {
+              const committed = await writeConfig(candidate);
+              expect(committed).toEqual(ctx.cfg);
+              expect(ctx.cfgForPersistence.gateway?.auth?.token).toBe(
+                "maintenance-recovered-token",
+              );
+              const saved = await readConfigFileSnapshot();
+              expect(ctx.configResult.confirmedConfigSource).toEqual({
+                path: saved.path,
+                hash: saved.hash,
+              });
+              expect(saved.hash).not.toBe(first.hash);
+              expect(saved.sourceConfig.gateway?.port).toBe(19091);
+            }
+          });
+        });
+        await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        expect(maintenance.finish).toHaveBeenCalledOnce();
+        const persisted = await readConfigFileSnapshot();
+        expect(persisted.sourceConfig.gateway?.auth?.token).toBe(
+          outcome === "success" ? "maintenance-recovered-token" : undefined,
+        );
+        expect(persisted.sourceConfig.gateway?.port).toBe(19091);
+        if (outcome !== "success") {
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+        } else {
+          expect(runtime.exit).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("retains migration recovery and explains why source rollback cannot undo repaired state", async () => {
     await withOpenClawTestState(
@@ -192,7 +292,19 @@ describe("Doctor maintenance admission", () => {
           ),
         ).toEqual([]);
         expect(failure).toBeInstanceOf(Error);
-        expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+        if (owner === "agent") {
+          expect(failure).toBeInstanceOf(UpdateDoctorError);
+          expect(collectUpdateDoctorFailureFacts(failure)).toEqual([
+            {
+              check: "doctor",
+              code: "agent-database-lease-active",
+              message:
+                "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+            },
+          ]);
+        } else {
+          expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+        }
         expect(performance.now() - started).toBeLessThan(1_000);
         expect(
           fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,
@@ -203,7 +315,7 @@ describe("Doctor maintenance admission", () => {
 });
 
 describe("Doctor agent lease admission", () => {
-  it("admits the exact dangling Workshop index without mutating state", async () => {
+  it("reserves dangling Workshop index admission for Doctor without mutating state", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const opened = openOpenClawStateDatabase({ env: state.env });
       const pathname = opened.path;
@@ -231,8 +343,21 @@ describe("Doctor agent lease admission", () => {
       }
       const before = fs.readFileSync(pathname);
 
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toThrow(
+        /legacy-workshop-review-index/,
+      );
       expect(fs.readFileSync(pathname)).toEqual(before);
+      const doctor = await doctorMaintenance.beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        expect(doctor).toBeDefined();
+        expect(fs.readFileSync(pathname)).toEqual(before);
+      } finally {
+        await doctor?.release();
+      }
     });
   });
 

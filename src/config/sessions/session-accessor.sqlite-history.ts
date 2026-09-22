@@ -113,6 +113,7 @@ export function listSessionTranscriptArchivesReadOnly(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
     archiveNames?: readonly string[];
     sessionIds?: readonly string[];
+    includeAllAgents?: boolean;
   },
 ) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
@@ -123,7 +124,12 @@ export function listSessionTranscriptArchivesReadOnly(
   const resolved = resolveSqliteReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      listTranscriptArchivesFromDatabase(database, resolved.agentId, selectors, archiveNames),
+      listTranscriptArchivesFromDatabase(
+        database,
+        scope.includeAllAgents ? undefined : resolved.agentId,
+        selectors,
+        archiveNames,
+      ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
@@ -140,6 +146,24 @@ export async function findSessionTranscriptArchiveEventReadOnly(
   const resolved = resolveSqliteReadScope(scope);
   const options = toDatabaseOptions(resolved);
   return withSqliteTranscriptArchiveSession(options, async () => {
+    // Empty lookups must not hold completion roots through archive Worker startup.
+    const registered = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        listTranscriptArchivesFromDatabase(
+          database,
+          resolved.agentId,
+          [scope.sessionId ?? scope.sessionKey],
+          [],
+        ).some((archive) =>
+          scope.sessionId
+            ? archive.sessionId === scope.sessionId
+            : archive.sessionKey === scope.sessionKey,
+        ),
+      options,
+    );
+    if (!registered.found || !registered.value) {
+      return undefined;
+    }
     const [result] = await runSqliteTranscriptArchiveReadWorker([
       {
         agentId: options.agentId,

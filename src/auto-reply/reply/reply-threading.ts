@@ -12,6 +12,7 @@ import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  setReplyPayloadMetadata,
   type ReplyDeliveryContext,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -160,6 +161,18 @@ export function createReplyDeliveryContext(
   };
 }
 
+function suppressReplyTarget(payload: ReplyPayload): ReplyPayload {
+  return setReplyPayloadMetadata(
+    copyReplyPayloadMetadata(payload, {
+      ...payload,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+    }),
+    { replyTargetSuppressed: true },
+  );
+}
+
 /** Create a payload filter that strips reply targets according to reply-to mode. */
 function createReplyToModeFilter(
   mode: ReplyToMode,
@@ -181,7 +194,11 @@ function createReplyToModeFilter(
       if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !isStatusNotice) {
         return payload;
       }
-      return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
+      return copyReplyPayloadMetadata(payload, {
+        ...payload,
+        replyToId: undefined,
+        replyToCurrent: payload.replyToCurrent === true ? false : payload.replyToCurrent,
+      });
     }
     if (mode === "all") {
       return payload;
@@ -193,7 +210,7 @@ function createReplyToModeFilter(
       if (isStatusNotice) {
         return payload;
       }
-      return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
+      return suppressReplyTarget(payload);
     }
     // Status notices are transient messages — they should be
     // threaded (so they appear in-context), but they must not consume the

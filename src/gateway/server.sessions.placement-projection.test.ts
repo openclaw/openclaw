@@ -200,13 +200,14 @@ test.each([
   { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
   { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
 ])(
-  "sessions.list batch-projects durable worker placement: $name",
+  "sessions.list retains durable worker placement for resident rows: $name",
   async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
     const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-      expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
-      return new Map([[placement.sessionId, placement]]);
+      return new Map(
+        sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
+      );
     });
     const diskSpace = {
       status: "warning" as const,
@@ -224,29 +225,30 @@ test.each([
         ? { ...identity, ownerEpoch, state: "attached" }
         : undefined,
     );
+    const context = {
+      workerSessionPlacementService: { getMany },
+      workerEnvironmentService: {
+        get: getEnvironment,
+        readMachineShape: () => identity.machine,
+        machineShapeVersion: () => 0,
+        inventoryVersion: () => 0,
+      },
+      workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+      workerPlacementRunnerAvailabilityReader: {
+        read: () => ({ kind: "device", status: "offline" }),
+        version: () => 1,
+      },
+    };
     const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
       "sessions.list",
       {},
-      {
-        context: {
-          workerSessionPlacementService: { getMany },
-          workerEnvironmentService: {
-            get: getEnvironment,
-            readMachineShape: () => identity.machine,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
-          },
-          workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-          workerPlacementRunnerAvailabilityReader: {
-            read: () => ({ kind: "device", status: "offline" }),
-            version: () => 1,
-          },
-        },
-      },
+      { context },
     );
 
     expect(result.ok).toBe(true);
-    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(
+      getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["sess-main", "sess-other"]);
     const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
     const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
     expect(main?.placement).toStrictEqual({
@@ -267,6 +269,9 @@ test.each([
       ...(expectedIdentity ? identity : {}),
     });
     expect(other?.placement).toBeUndefined();
+    getMany.mockClear();
+    expect((await directSessionReq("sessions.list", {}, { context })).ok).toBe(true);
+    expect(getMany).not.toHaveBeenCalled();
   },
 );
 
@@ -363,15 +368,18 @@ test("sessions.list projects durable placement move progress", async () => {
     updatedAtMs: 340,
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(getPlacementMoves).toHaveBeenCalledOnce();
+  expect(
+    getPlacementMoves.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+  ).toEqual(["sess-main", "sess-other"]);
 });
 
 test("sessions.describe projects durable worker placement", async () => {
   await seedSessionRows();
   const placement = activePlacementRecord();
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    expect(sessionIds).toEqual(["sess-main"]);
-    return new Map([[placement.sessionId, placement]]);
+    return new Map(
+      sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
+    );
   });
   const diskSpace = {
     status: "critical" as const,
@@ -379,24 +387,22 @@ test("sessions.describe projects durable worker placement", async () => {
     totalBytes: 1_000,
     observedAtMs: 350,
   };
+  const context = {
+    workerSessionPlacementService: { getMany },
+    workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+    workerPlacementRunnerAvailabilityReader: {
+      read: () => ({ kind: "device", status: "offline" }),
+      version: () => 1,
+    },
+  };
 
   const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
     "sessions.describe",
     { key: "main" },
-    {
-      context: {
-        workerSessionPlacementService: { getMany },
-        workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-        workerPlacementRunnerAvailabilityReader: {
-          read: () => ({ kind: "device", status: "offline" }),
-          version: () => 1,
-        },
-      },
-    },
+    { context },
   );
 
   expect(result.ok).toBe(true);
-  expect(getMany).toHaveBeenCalledTimes(1);
   expect(result.payload?.session?.placement).toEqual({
     state: "active",
     environmentId: "env-placement",
@@ -413,6 +419,27 @@ test("sessions.describe projects durable worker placement", async () => {
     diskSpace,
     runner: { kind: "device", status: "offline" },
   });
+
+  // The list joins sibling hydration before we inspect all placement reads.
+  const listed = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
+    "sessions.list",
+    {},
+    { context },
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions.map((session) => session.sessionId).toSorted()).toEqual([
+    "sess-main",
+    "sess-other",
+  ]);
+  expect(getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b))).toEqual(
+    ["sess-main", "sess-other"],
+  );
+  expect(
+    listed.payload?.sessions.find((session) => session.sessionId === "sess-main")?.placement,
+  ).toEqual(result.payload?.session?.placement);
+  expect(
+    listed.payload?.sessions.find((session) => session.sessionId === "sess-other")?.placement,
+  ).toBeUndefined();
 });
 
 test.each([

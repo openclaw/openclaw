@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
@@ -11,6 +10,8 @@ import {
 } from "../../../src/gateway/test-helpers.e2e.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -133,11 +134,13 @@ suite.define(() => {
         const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
         const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
         await trigger.click();
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await picker.textContent()).toContain("Pinned session account");
-        expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
-          "fixture",
+        expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
+          "Refreshing models for Fixture…",
         );
+        expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
         await gateway.resolveDeferred("models.list", { models: [older] });
@@ -152,6 +155,7 @@ suite.define(() => {
         expect(await picker.textContent()).toContain("Pinned session account");
         await trigger.click();
         await trigger.click();
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
@@ -239,6 +243,8 @@ suite.define(() => {
             },
           },
         });
+        // Startup cron hydration publishes a separate sessions.changed invalidation.
+        await gateway.server.startupSettled;
         const admin = gateway.client;
         await upsertSessionEntryCore(
           { agentId: "alpha", sessionKey },
@@ -368,6 +374,7 @@ suite.define(() => {
             await expect.poll(() => account.isVisible()).toBe(true);
             await expect.poll(() => account.textContent()).toContain("Account A");
             const row = picker.locator('[data-chat-model-option="fixture/first"]');
+            await revealChatModelOption(row);
             await expect.poll(() => row.isVisible()).toBe(true);
             expect(await row.isEnabled()).toBe(true);
             expect(catalogRequests.size).toBe(requestsBeforeOpen);
@@ -378,6 +385,7 @@ suite.define(() => {
             heldReplies.splice(0).forEach((send) => send());
             await trigger.click();
             await trigger.click();
+            await revealChatModelOption(row);
             await expect.poll(() => row.isVisible()).toBe(true);
             expect(catalogRequests.size).toBe(requestsBeforeOpen);
             return;
@@ -420,6 +428,7 @@ suite.define(() => {
           }
           await expect.poll(() => account.textContent()).toContain("Account B");
           const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
+          await revealChatModelOption(selectedRow);
           await expect.poll(() => selectedRow.isVisible()).toBe(true);
           expect(await selectedRow.isEnabled()).toBe(true);
           expect(await account.textContent()).not.toContain("Account A");

@@ -1,16 +1,12 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  hashText,
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { DatabaseSync } from "node:sqlite";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   markMemoryVectorRebuildRequired,
@@ -28,6 +24,10 @@ export type MemorySourceIndexReplacement = {
   now: number;
   vectorReady: boolean;
 } & ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
+
+export type MemorySourceIndexHeader = Omit<MemorySourceIndexReplacement, "chunks" | "embeddings"> &
+  ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
+export type MemorySourceIndexRow = { chunk: IndexedMemoryChunk; embedding: number[] };
 
 type SourceIndexDatabase = {
   memory_index_sources: {
@@ -69,13 +69,24 @@ export class MemorySourceIndexKernel {
   ) {}
 
   replace(params: MemorySourceIndexReplacement): void {
-    const { entry, source, chunks, embeddings, model, now, vectorReady } = params;
+    this.replaceRows(
+      params,
+      (function* () {
+        for (const [index, chunk] of params.chunks.entries()) {
+          yield { chunk, embedding: params.embeddings[index] ?? [] };
+        }
+      })(),
+    );
+  }
+
+  replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
+    const { entry, source, model, now, vectorReady } = params;
     this.clear(entry.path, source);
     let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
     let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
-    let ftsStatement: StatementSync | undefined;
-    for (const [index, chunk] of chunks.entries()) {
-      const embedding = embeddings[index] ?? [];
+    let hasEmbeddings = false;
+    for (const { chunk, embedding } of rows) {
+      hasEmbeddings ||= embedding.length > 0;
       const id = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
@@ -89,13 +100,6 @@ export class MemorySourceIndexKernel {
       if (vectorReady && embedding.length > 0) {
         writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
         writeVector(id, embedding);
-      }
-      if (this.state.fts.enabled && this.state.fts.available) {
-        ftsStatement ??= this.database.prepare(
-          `INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-            ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        ftsStatement.run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
     const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
@@ -118,7 +122,7 @@ export class MemorySourceIndexKernel {
           })),
         ),
     );
-    if (!vectorReady && embeddings.some((embedding) => embedding.length > 0)) {
+    if (!vectorReady && hasEmbeddings) {
       markMemoryVectorRebuildRequired(this.database);
     }
   }
@@ -181,14 +185,6 @@ export class MemorySourceIndexKernel {
           markMemoryVectorRebuildRequired(this.database);
         }
       }
-    }
-    if (this.state.fts.enabled && this.state.fts.available) {
-      try {
-        // Lexical search is model-agnostic; remove every model for this source.
-        this.database
-          .prepare(`DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE path = ? AND source = ?`)
-          .run(pathname, source);
-      } catch {}
     }
     executeSqliteQuerySync(
       this.database,

@@ -69,7 +69,7 @@ describe("createProgressDraftDiffStatTracker", () => {
     completeMutation(tracker, "edit-1");
     expect(tracker.resolve()).toEqual({ files: 1, added: 3, removed: 2 });
 
-    for (const status of ["failed", "error"]) {
+    for (const status of ["failed", "error", "blocked", "unknown", ""]) {
       const toolCallId = `failed-${status}`;
       stageMutation(tracker, toolCallId, "write", {
         path: `src/${toolCallId}.ts`,

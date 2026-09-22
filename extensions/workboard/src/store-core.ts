@@ -3,7 +3,6 @@ import type {
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardDeleteResult,
-  WorkboardEvent,
   WorkboardLink,
   WorkboardMetadata,
   WorkboardStatus,
@@ -12,10 +11,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
-  PersistedWorkboardCard,
   WorkboardCardStore,
   WorkboardKeyedStore,
   WorkboardSubscriptionStore,
+  WorkboardWriteAuthority,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
@@ -23,7 +22,6 @@ import {
   cardBoardId,
   cardParentIds,
   cardSessionKey,
-  compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
   lifecycleStatusSourceUpdatedAtFromPatch,
@@ -49,6 +47,7 @@ import type {
   WorkboardListOptions,
   WorkboardMutationScope,
   WorkboardStatsResult,
+  WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
 import {
   appendLinkPreservingDependencies,
@@ -73,18 +72,8 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
+import { readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
-
-type WorkboardUpdateCardOptions = {
-  allowAutomationLaunch?: boolean;
-  allowMetadataDependencyLinks?: boolean;
-  enforceStatusHolds?: boolean;
-  event?: Omit<WorkboardEvent, "id" | "at">;
-  eventAt?: number;
-  expectedUpdatedAt?: number;
-  ownerSlot?: { ownerId: string; now: number };
-  preserveProofId?: string;
-};
 
 type WorkboardMutationJournalEntry = {
   before?: WorkboardCard;
@@ -110,9 +99,10 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       ready?: Promise<number>;
       dataVersion?: () => number | Promise<number>;
       close?: () => void | Promise<void>;
+      runWithWriteAuthority?: WorkboardWriteAuthority;
     },
   ) {
-    super(stores.dataVersion, stores.close, stores.ready);
+    super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
     this.store = this.trackCardStore(store);
     this.boardStore = this.track(stores.boards);
     this.subscriptionStore = {
@@ -301,14 +291,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
 
   async list(options: WorkboardListOptions = {}): Promise<WorkboardCard[]> {
     const boardId = normalizeBoardId(options.boardId);
-    const entries = await this.store.entries(boardId);
-    return entries
-      .map((entry) => entry.value)
-      .filter(
-        (entry): entry is PersistedWorkboardCard => entry?.version === 1 && Boolean(entry.card?.id),
-      )
-      .map((entry) => entry.card)
-      .toSorted(compareCards);
+    return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
   async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
@@ -394,7 +377,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       if (await this.store.hasCards(boardId)) {
         throw new Error("board still has cards; archive it or move/delete the cards first.");
       }
-      for (const entry of await this.subscriptionStore.entries()) {
+      for (const entry of await this.subscriptionStore.entries({ boardId })) {
         if (entry.value?.version === 1 && entry.value.subscription?.boardId === boardId) {
           await this.subscriptionStore.delete(entry.key);
         }
@@ -476,10 +459,12 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   async create(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    assertOwnerCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
       async () =>
         await this.withCardCompensation(async () => await this.createDirect(input, scope)),
+      assertOwnerCurrent,
     );
   }
 
@@ -633,7 +618,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         throw new Error("sessionKey is required.");
       }
       const boardId = normalizeBoardId(input.boardId) ?? "default";
-      const matches = (await this.list())
+      const matches = (await readCards(this.store, { kind: "session", sessionKey }))
         .filter((card) => cardSessionKey(card) === sessionKey)
         .toSorted((left, right) => right.updatedAt - left.updatedAt);
       const existing =

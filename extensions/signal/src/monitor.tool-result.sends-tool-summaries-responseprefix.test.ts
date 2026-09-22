@@ -472,16 +472,19 @@ describe("monitorSignalProvider tool results", () => {
         replyToMode: "off",
       }),
     );
-    replyMock.mockResolvedValue([{ text: "working", ...flag }]);
+    replyMock.mockResolvedValue([{ text: "working", ...flag }, { text: "final reply" }]);
 
     await receiveSignalPayloads(createSignalQuoteInput());
 
     await waitForSignalDelivery(() => {
-      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(sendMock).toHaveBeenCalledTimes(2);
     });
-    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
-    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
-    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+    expect(sendMock.mock.calls.map((call) => call[1])).toEqual(["PFX working", "PFX final reply"]);
+    for (const call of sendMock.mock.calls) {
+      expect(call[2]).not.toHaveProperty("replyToId");
+      expect(call[2]).not.toHaveProperty("replyToAuthor");
+      expect(call[2]).not.toHaveProperty("replyToBody");
+    }
   });
 
   it("does not implicitly quote a single-message batched-mode turn", async () => {

@@ -20,6 +20,7 @@ import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-cat
 import {
   applyAgentModelDefaults,
   applyOnboardingPrimaryModel,
+  applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
 import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
@@ -273,6 +274,9 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
+    if (applied.utilityModelOverride) {
+      return applyOnboardingUtilityModel(next, target, applied.utilityModelOverride);
+    }
     // Auth recommendations initialize an unset primary; reauth must not replace
     // the target's explicit or inherited model.
     if (

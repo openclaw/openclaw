@@ -65,7 +65,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     });
     expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
     expect(String(deliveredCallArg().triggerMessage)).toContain("private marker");
-    expect(String(deliveredCallArg().triggerMessage)).toContain("no external response is required");
+    expect(String(deliveredCallArg().triggerMessage)).toContain(
+      "send it through an available, permitted messaging tool",
+    );
+    expect(String(deliveredCallArg().triggerMessage)).toContain(
+      "when no further work or user-facing update is owed, or after sending that update",
+    );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
@@ -92,41 +97,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         reason: "completion_handoff_unavailable",
         disposition: "intentional_non_delivery",
       }),
-    );
-  });
-
-  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        completion: { required: true, resultText: "network findings" },
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        completion: { required: true, resultText: "social findings" },
-      }),
-    ]);
-
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
-
-    expect(woke).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledTimes(1);
-    const call = deliveredCallArg();
-    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
-    expect(call.requesterIsSubagent).toBe(false);
-    expect(call.expectsCompletionMessage).toBe(false);
-    expect(call.requireDirectDelivery).toBe(true);
-    expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
-    const message = String(call.triggerMessage);
-    expect(message).toContain("settled");
-    expect(message).toContain("social findings");
-    expect(message).toContain("network findings");
-    expect(message).toContain("NO_REPLY");
-    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
-      REQUESTER,
-      "run-b",
-      "main",
     );
   });
 
@@ -422,7 +392,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliveredCallArg().requireVisibleReply).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
-    expect(message).toContain("continue any remaining in-scope work before replying");
+    expect(message).toContain("in-scope fixable blockers require continued work");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
       delivered: true,

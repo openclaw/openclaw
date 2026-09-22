@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
@@ -128,6 +129,34 @@ describe("managed handoff database publication", () => {
     expect(stat.nlink).toBe(1);
     expect(readOwners()).toEqual(["first"]);
     expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
+  });
+
+  it("uses synchronous directory spelling for synchronous durability receipts", () => {
+    // Windows native realpath expands short aliases that ordinary realpath may preserve.
+    // Model that spelling difference without replacing the directory or its identity.
+    const nativeRealpath = fs.realpathSync.native;
+    vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      const result = nativeRealpath(...args);
+      return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
+    });
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "alias-owner"),
+    );
+
+    expect(readOwners()).toEqual(["alias-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
+  });
+
+  it("publishes when the parent file ID exceeds Number's exact range", () => {
+    mockLargeDirectoryId(root);
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "exact-owner"),
+    );
+
+    expect(readOwners()).toEqual(["exact-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 
   it("recovers an existing private empty database through the existing DDL path", () => {

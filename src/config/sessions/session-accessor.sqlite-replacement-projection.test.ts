@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 
 const { readExactSessionEntryRowMock } = vi.hoisted(() => ({
   readExactSessionEntryRowMock:
@@ -46,6 +49,7 @@ describe("session entry replacement compare-and-swap", () => {
 
   afterEach(() => {
     readExactSessionEntryRowMock.mockReset();
+    closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
   });
 

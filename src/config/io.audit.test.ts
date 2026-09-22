@@ -1,7 +1,7 @@
 // Covers config audit reporting for files, paths, and values.
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -16,7 +16,118 @@ import {
   sanitizeConfigAuditRecord,
   scrubConfigAuditLog,
 } from "./io.audit.js";
+import type { ConfigAuditRecord } from "./io.audit.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
+
+type ExpectedConfigObserveAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.observe";
+  phase: "read";
+  configPath: string;
+  pid: number;
+  ppid: number;
+  cwd: string;
+  argv: string[];
+  execArgv: string[];
+  exists: boolean;
+  valid: boolean;
+  hash: string | null;
+  bytes: number | null;
+  mtimeMs: number | null;
+  ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
+  hasMeta: boolean;
+  gatewayMode: string | null;
+  suspicious: string[];
+  lastKnownGoodHash: string | null;
+  lastKnownGoodBytes: number | null;
+  lastKnownGoodMtimeMs: number | null;
+  lastKnownGoodCtimeMs: number | null;
+  lastKnownGoodDev: string | null;
+  lastKnownGoodIno: string | null;
+  lastKnownGoodMode: number | null;
+  lastKnownGoodNlink: number | null;
+  lastKnownGoodUid: number | null;
+  lastKnownGoodGid: number | null;
+  lastKnownGoodGatewayMode: string | null;
+  backupHash: string | null;
+  backupBytes: number | null;
+  backupMtimeMs: number | null;
+  backupCtimeMs: number | null;
+  backupDev: string | null;
+  backupIno: string | null;
+  backupMode: number | null;
+  backupNlink: number | null;
+  backupUid: number | null;
+  backupGid: number | null;
+  backupGatewayMode: string | null;
+  clobberedPath: string | null;
+  restoredFromBackup: boolean;
+  restoredBackupPath: string | null;
+  restoreErrorCode: string | null;
+  restoreErrorMessage: string | null;
+};
+
+type ConfigObserveAuditRecord = Extract<ConfigAuditRecord, { event: "config.observe" }>;
+
+expectTypeOf<ConfigObserveAuditRecord>().toMatchTypeOf<ExpectedConfigObserveAuditRecord>();
+expectTypeOf<ExpectedConfigObserveAuditRecord>().toMatchTypeOf<ConfigObserveAuditRecord>();
+
+type ExpectedConfigWriteAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.write";
+  result: "rename" | "copy-fallback" | "failed" | "rejected";
+  configPath: string;
+  pid: number;
+  ppid: number;
+  cwd: string;
+  argv: string[];
+  execArgv: string[];
+  watchMode: boolean;
+  watchSession: string | null;
+  watchCommand: string | null;
+  existsBefore: boolean;
+  previousHash: string | null;
+  nextHash: string | null;
+  previousBytes: number | null;
+  nextBytes: number | null;
+  previousDev: string | null;
+  nextDev: string | null;
+  previousIno: string | null;
+  nextIno: string | null;
+  previousMode: number | null;
+  nextMode: number | null;
+  previousNlink: number | null;
+  nextNlink: number | null;
+  previousUid: number | null;
+  nextUid: number | null;
+  previousGid: number | null;
+  nextGid: number | null;
+  changedPathCount: number | null;
+  changedPaths?: string[];
+  origin?: import("./io.types.js").ConfigWriteAuditOrigin;
+  hasMetaBefore: boolean;
+  hasMetaAfter: boolean;
+  gatewayModeBefore: string | null;
+  gatewayModeAfter: string | null;
+  suspicious: string[];
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+expectTypeOf<
+  Extract<ConfigAuditRecord, { event: "config.write" }>
+>().toMatchTypeOf<ExpectedConfigWriteAuditRecord>();
+expectTypeOf<ExpectedConfigWriteAuditRecord>().toMatchTypeOf<
+  Extract<ConfigAuditRecord, { event: "config.write" }>
+>();
 
 function createAuditRecordBase(configPath: string, argv?: string[]) {
   return createConfigWriteAuditRecordBase({

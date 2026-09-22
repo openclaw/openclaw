@@ -172,12 +172,6 @@ describe("isolated QA suite nested publication", () => {
     vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const lab = createCleanupTestLab();
-    const selection = {
-      capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-      channel: "telegram",
-      channelDriver: "crabline",
-      providerReadinessArtifactPath: "crabline-provider-readiness.json",
-    } as const;
     let activeWorkers = 0;
     let maxActiveWorkers = 0;
     let releaseWorkers!: () => void;
@@ -246,7 +240,7 @@ describe("isolated QA suite nested publication", () => {
 
     const result = await runQaFlowSuiteIsolated(
       {
-        channelDriverSelection: selection,
+        channelDriver: "crabline",
         channelId: "telegram",
         lab,
         startLab: async () => createCleanupTestLab(),
@@ -271,13 +265,18 @@ describe("isolated QA suite nested publication", () => {
     expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
     for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
       expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
-      expect(nonFinalArtifacts.channelDriverSelection).toBeUndefined();
+      expect(nonFinalArtifacts.transportArtifacts).toBeUndefined();
     }
     const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
     expect(finalArtifacts).toMatchObject({
       channel: "telegram",
       channelDriver: "crabline",
-      channelDriverSelection: selection,
+      transportArtifacts: {
+        artifacts: [
+          { kind: "channel-capability-matrix", path: "capabilities.json" },
+          { kind: "channel-driver-smoke", path: "readiness.json" },
+        ],
+      },
     });
   });
 

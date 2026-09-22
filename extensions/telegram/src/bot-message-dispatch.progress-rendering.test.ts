@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 beforeEach(() => registerChannelDelivery.mockReset());
 import {
   describeTelegramDispatch,
+  emitToolStart,
   appendAssistantMirrorMessageByIdentity,
   createContext,
   createDraftStream,
@@ -79,8 +80,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "progress_card",
+        toolCallId: "plan-1",
         phase: "start",
         args: {
           markdown: '<progress aria-label="Browser Use Setup, 2/3" value="2" max="3"></progress>',
@@ -205,7 +207,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       // The first valid preamble after the draft opened must render as the
       // status headline in the same push, not wait for another progress event.
       await replyOptions?.onItemEvent?.({
@@ -227,7 +229,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Shelling\n\nChecking recent context\n🛠️ Exec",
-        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
+        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b> <i>running</i>",
       ),
     );
   });
@@ -242,7 +244,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
         itemId: "preamble-1",
         progressText: "Checking memory",
       });
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "memory_search",
         phase: "start",
         toolCallId: "memory-search-1",
@@ -268,7 +270,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       return { queuedFinal: false };
     });
 
@@ -295,7 +297,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
       return { queuedFinal: false };
     });
@@ -327,7 +329,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
         await replyOptions?.onReplyStart?.();
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         return { queuedFinal: false };
       });
 
@@ -343,7 +345,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       });
 
       expect(draftStream.updatePreview).toHaveBeenCalledWith(
-        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b>"),
+        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b> <i>running</i>"),
       );
     },
   );
@@ -355,7 +357,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await new Promise<void>((resolve) => {
         finishRun = resolve;
       });
@@ -397,13 +399,22 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
         }),
     );
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({
+        itemId: "tool:exec-1",
+        toolCallId: "exec-1",
+        name: "exec",
+        title: "Exec",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+      });
       const pendingToolStart = replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await Promise.resolve();
       await Promise.resolve();
       const updateBeforeStatusReaction = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
       releaseSetTool?.();
       await pendingToolStart;
-      expect(updateBeforeStatusReaction).toBe("<b>Shelling</b><br><b>🛠️ Exec</b>");
+      expect(updateBeforeStatusReaction).toBe("<b>Shelling</b><br><b>🛠️ Exec</b> <i>running</i>");
       return { queuedFinal: false };
     });
 
@@ -558,7 +569,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
           },
           { kind: "tool" },
         );
-        await replyOptions?.onToolStart?.({ name: "wait", phase: "start" });
+        await emitToolStart(replyOptions, { name: "wait", toolCallId: "wait-1", phase: "start" });
         return { queuedFinal: true };
       },
     );

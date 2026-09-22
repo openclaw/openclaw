@@ -5,8 +5,8 @@ export type OneTimeTicketStore<T> = {
     payload: T,
     opts?: { ttlMs?: number; nowMs?: number; revokeSignal?: AbortSignal },
   ): { token: string; expiresAtMs: number };
-  /** Single use: validates the token shape, deletes the entry, returns the payload only if unexpired. */
-  consume(token: string, nowMs?: number): T | undefined;
+  /** Single use; a rejected owner check leaves an unexpired ticket available to its owner. */
+  consume(token: string, nowMs?: number, accept?: (payload: T) => boolean): T | undefined;
   /** Drops a ticket without redeeming or expiring it (no `onExpire`). */
   delete(token: string): boolean;
   clear(): void;
@@ -63,13 +63,24 @@ export function createOneTimeTicketStore<T>(opts: {
       }
       return { token, expiresAtMs };
     },
-    consume(token, nowMs = now()) {
+    consume(token, nowMs, accept) {
+      const currentTimeMs = nowMs ?? now();
       const normalized = token.trim();
       if (!/^[a-f0-9]{48}$/u.test(normalized)) {
         return undefined;
       }
+      if (accept) {
+        const pending = entries.get(normalized);
+        if (
+          pending &&
+          pending.expiresAtMs > currentTimeMs &&
+          (!accept(pending.payload) || entries.get(normalized) !== pending)
+        ) {
+          return undefined;
+        }
+      }
       const entry = remove(normalized);
-      return entry && entry.expiresAtMs > nowMs ? entry.payload : undefined;
+      return entry && entry.expiresAtMs > currentTimeMs ? entry.payload : undefined;
     },
     delete(token) {
       return remove(token) !== undefined;

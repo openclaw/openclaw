@@ -691,7 +691,7 @@ describe.each([
       if (endpoint.includes("/jobs?")) {
         return JSON.stringify({ total_count: 1, jobs: [job] });
       }
-      if (endpoint.endsWith("/attempts/1")) {
+      if (endpoint.endsWith("/attempts/1") || endpoint.endsWith(`/actions/runs/${RUN_ID}`)) {
         return JSON.stringify({
           id: Number(RUN_ID),
           run_attempt: 1,

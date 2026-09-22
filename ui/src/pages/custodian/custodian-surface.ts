@@ -10,6 +10,7 @@ import { handleMarkdownTableInteraction } from "../../components/markdown-tables
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat/grouped.css";
@@ -19,12 +20,24 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import {
+  adjustTextareaHeight,
+  disconnectTextareaOverflowObserver,
+  observeTextareaOverflow,
+} from "../chat/components/chat-composer-dom.ts";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import * as eventNudgeState from "./event-nudge.ts";
+import {
+  createPluginHelpRequest,
+  currentPluginHelpReference,
+  pluginHelpFocusRequest,
+} from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
 import { renderCustodianTranscriptEntry } from "./transcript.ts";
+
+registerPluginManagementEnglish();
 
 class CustodianSurface extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -40,7 +53,9 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
+  private composerTextarea: HTMLTextAreaElement | null = null;
   private lastMessageId: number | null = null;
+  private lastPluginHelpFocus = 0;
 
   constructor() {
     super();
@@ -71,12 +86,40 @@ class CustodianSurface extends OpenClawLightDomElement {
     this.store.connect(this.context, sessionVariant(this.onboarding, this.newAgentIntent));
   }
 
+  override disconnectedCallback(): void {
+    if (this.composerTextarea) {
+      disconnectTextareaOverflowObserver(this.composerTextarea);
+      this.composerTextarea = null;
+    }
+    super.disconnectedCallback();
+  }
+
   override updated(): void {
     const store = this.store;
+    const textarea = this.querySelector<HTMLTextAreaElement>("textarea");
+    if (this.composerTextarea && this.composerTextarea !== textarea) {
+      disconnectTextareaOverflowObserver(this.composerTextarea);
+    }
+    this.composerTextarea = textarea;
+    if (textarea) {
+      observeTextareaOverflow(textarea);
+      adjustTextareaHeight(textarea);
+    }
     if (store.canSend && !store.sensitive && !store.hasUnresolvedQuestion()) {
       custodianAlertStore.askIfReady(
         (question, admission, display) => void store.send(question, display, false, admission),
       );
+    }
+    const focusRequest = pluginHelpFocusRequest(this.context);
+    if (
+      focusRequest > 0 &&
+      focusRequest !== this.lastPluginHelpFocus &&
+      !store.sensitive &&
+      !store.wizardInputPending &&
+      store.chatAvailable
+    ) {
+      this.lastPluginHelpFocus = focusRequest;
+      textarea?.focus();
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     const messageId = this.store.messages.at(-1)?.id ?? null;
@@ -99,6 +142,10 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
+    const plugin = currentPluginHelpReference(this.context);
+    const placeholder = plugin
+      ? t("custodian.pluginPlaceholder", { plugin: plugin.name })
+      : t("custodian.placeholder");
     const alertCard = custodianAlertStore.alert
       ? renderCustodianAlertCard({
           alert: custodianAlertStore.alert,
@@ -135,6 +182,15 @@ class CustodianSurface extends OpenClawLightDomElement {
     const activeWizardMessage = store.wizardInputPending
       ? store.messages.findLast((message) => message.step !== null)
       : undefined;
+    // Greeting suggestions are optional; actual pending setup input and existing
+    // conversations retain their transcript and the Gateway's inference gate.
+    const pluginWelcome =
+      plugin &&
+      store.activeVariant === "caretaker" &&
+      !store.sensitive &&
+      !store.hasUnresolvedQuestion();
+    const pluginIntro = pluginWelcome && !store.hasRealUserTurn();
+    const askPlugin = pluginIntro ? createPluginHelpRequest(this.context, plugin) : undefined;
     return html`
       <section
         class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""} ${
@@ -175,28 +231,61 @@ class CustodianSurface extends OpenClawLightDomElement {
                 })
               : nothing
           }
-          ${store.messages.map((message) => {
-            const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
-            const showQuestion =
-              message.question !== null && !store.dismissedQuestions.has(questionKey);
-            return renderCustodianTranscriptEntry({
-              message,
-              boundaryAfterId: store.earlierBoundaryAfterId,
-              showQuestion,
-              questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
-              onSelect: (label) => store.answerQuestion(message, label),
-              onSkip: () => void store.dismissQuestion(message),
-              showWizardStep: message === activeWizardMessage,
-              wizardValue: store.wizardValue,
-              wizardDisabled: !store.canSend,
-              wizardSecretVisible: store.wizardSecretVisible,
-              onWizardValueChange: (value) => store.setWizardValue(value),
-              onWizardAnswer: (value) => store.answerWizardStep(message, value),
-              showWizardCancel: store.wizardCancelAvailable,
-              onWizardCancel: () => store.cancelWizardStep(message),
-              onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
-            });
-          })}
+          ${
+            pluginIntro
+              ? html`<div class="custodian__plugin-intro">
+                  <h2>${t("custodian.pluginIntroTitle", { plugin: plugin.name })}</h2>
+                  <div class="custodian__plugin-starters">
+                    ${[
+                      {
+                        label: t("custodian.pluginStarterPurpose"),
+                        prompt: t("custodian.pluginPromptPurpose", { plugin: plugin.name }),
+                      },
+                      {
+                        label: t("custodian.pluginStarterTools"),
+                        prompt: t("custodian.pluginPromptTools", { plugin: plugin.name }),
+                      },
+                      {
+                        label: t("custodian.pluginStarterSetup"),
+                        prompt: t("custodian.pluginPromptSetup", { plugin: plugin.name }),
+                      },
+                    ].map(
+                      ({ label, prompt }) => html`<button
+                        class="btn"
+                        type="button"
+                        @click=${() => void askPlugin?.({ question: prompt })}
+                      >
+                        ${label}
+                      </button>`,
+                    )}
+                  </div>
+                </div>`
+              : nothing
+          }
+          ${store.messages
+            .filter((message) => !pluginWelcome || !message.optionalWelcome)
+            .map((message) => {
+              const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
+              const showQuestion =
+                message.question !== null && !store.dismissedQuestions.has(questionKey);
+              return renderCustodianTranscriptEntry({
+                message,
+                boundaryAfterId: store.earlierBoundaryAfterId,
+                showQuestion,
+                questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
+                onSelect: (label) => store.answerQuestion(message, label),
+                onSkip: () => void store.dismissQuestion(message),
+                showWizardStep: message === activeWizardMessage,
+                wizardValue: store.wizardValue,
+                wizardDisabled: !store.canSend,
+                wizardSecretVisible: store.wizardSecretVisible,
+                onWizardValueChange: (value) => store.setWizardValue(value),
+                onWizardAnswer: (value) => store.answerWizardStep(message, value),
+                showWizardCancel: store.wizardCancelAvailable,
+                onWizardCancel: () => store.cancelWizardStep(message),
+                onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
+              });
+            })}
           ${
             store.sending
               ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
@@ -267,14 +356,17 @@ class CustodianSurface extends OpenClawLightDomElement {
                               rows="1"
                               .value=${store.input}
                               autocomplete="on"
-                              placeholder=${t("custodian.placeholder")}
-                              aria-label=${t("custodian.placeholder")}
-                              ?disabled=${!store.canSend}
+                              placeholder=${placeholder}
+                              aria-label=${placeholder}
+                              ?disabled=${!store.chatAvailable}
                               @input=${(event: Event) =>
                                 store.setInput((event.target as HTMLTextAreaElement).value)}
                               @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
                             ></textarea>`
                       }
+                      <span class="agent-chat__composer-placeholder" aria-hidden="true"
+                        >${store.sensitive ? t("custodian.sensitivePlaceholder") : placeholder}</span
+                      >
                     </div>
                     <div class="agent-chat__composer-actions">
                       <button

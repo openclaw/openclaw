@@ -89,3 +89,9 @@ export type SqliteArchiveSessionResponse = {
   | { type: "published"; results: TranscriptArchivePublishResult[] }
   | { type: "final-read"; results: TranscriptArchiveReadResult[] }
 );
+export type SessionTranscriptMaintenanceSizingInput = {
+  agentId: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+  sessionIds: readonly string[];
+};

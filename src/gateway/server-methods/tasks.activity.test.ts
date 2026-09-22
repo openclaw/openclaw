@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { markTaskTerminalById } from "../../tasks/runtime-internal.js";
+import {
+  claimAgentRunContext,
+  releaseAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
+import {
+  findTaskByRunId,
+  getTaskById,
+  markTaskTerminalById,
+} from "../../tasks/runtime-internal.js";
+import { clearTaskActivity } from "../../tasks/task-registry-activity.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import {
   getTaskPayload,
@@ -9,9 +23,186 @@ import {
 } from "./tasks.fixture.test-support.js";
 import { runTaskHandler } from "./tasks.test-helpers.js";
 
-useTaskGatewayFixture();
+describe("registered subagent execution", () => {
+  const fixture = useSubagentControlFixture();
+
+  it.each(["tasks.get", "tasks.list"] as const)(
+    "%s separates retained tasks from current execution ownership",
+    async (method) => {
+      const runId = "retained-execution";
+      const childSessionKey = `agent:main:subagent:${runId}`;
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: `${runId}-revision`,
+      });
+      registerSubagentRun({
+        runId,
+        childSessionKey,
+        requesterSessionKey: mainSessionTaskScope.requesterSessionKey,
+        requesterAgentId: "main",
+        requesterDisplayKey: "main",
+        task: "Inspect execution ownership",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
+      });
+      const task = findTaskByRunId(runId)!;
+      const entry = subagentRuns.get(runId)!;
+      const readTask = async () => {
+        if (method === "tasks.get") {
+          return (await getTaskPayload(task.taskId)).payload?.task;
+        }
+        const { payload } = await runTaskHandler("tasks.list", {});
+        return payload?.tasks?.find((row) => row.id === task.taskId);
+      };
+
+      expect(await readTask()).toMatchObject({
+        id: task.taskId,
+        status: "running",
+        execution: { state: "unknown" },
+      });
+
+      const claim = claimAgentRunContext(
+        runId,
+        { sessionKey: childSessionKey },
+        { trackOwner: true, ownsContext: true },
+      );
+      try {
+        const sourceId = "owned-observer";
+        const executionId = "owned-turn";
+        emitAgentEvent({
+          runId,
+          stream: "execution",
+          data: { state: "running", sourceId, executionId },
+        });
+        expect(await readTask()).toMatchObject({
+          status: "running",
+          execution: { state: "running" },
+        });
+
+        // Losing the current observation does not release the run context or settle its task.
+        emitAgentEvent({
+          runId,
+          stream: "execution",
+          data: { state: "unknown", sourceId, invalidate: true },
+        });
+        expect(await readTask()).toMatchObject({
+          id: task.taskId,
+          status: "running",
+          execution: { state: "unknown" },
+        });
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+
+        emitAgentEvent({
+          runId,
+          stream: "execution",
+          data: { state: "running", sourceId, executionId },
+        });
+        expect(await readTask()).toMatchObject({
+          status: "running",
+          execution: { state: "running" },
+        });
+
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: { phase: "start", name: "read", toolCallId: "owned-read" },
+        });
+        expect(await readTask()).toMatchObject({
+          status: "running",
+          execution: { state: "running", currentTool: { name: "read" } },
+        });
+
+        // The old task must not borrow a replacement registration's owner or activity.
+        subagentRuns.set(runId, { ...entry, generation: entry.generation! + 1 });
+        const replaced = await readTask();
+        expect(replaced).toMatchObject({
+          status: "running",
+          execution: { state: "unknown" },
+        });
+        expect(replaced?.execution).not.toHaveProperty("currentTool");
+        subagentRuns.set(runId, entry);
+      } finally {
+        releaseAgentRunContext(runId, claim);
+      }
+
+      const released = await readTask();
+      expect(released).toMatchObject({
+        id: task.taskId,
+        status: "running",
+        execution: { state: "unknown" },
+      });
+      expect(released?.execution).not.toHaveProperty("currentTool");
+      expect(getTaskById(task.taskId)?.status).toBe("running");
+    },
+  );
+});
 
 describe("tasks gateway execution and activity", () => {
+  useTaskGatewayFixture();
+  afterEach(resetAgentRunRegistryForTest);
+  it("reports a live CLI run before activity arrives and after transient activity is cleared", async () => {
+    const runId = "run-cli-owner";
+    const sessionKey = "agent:main:dashboard:cli-owner";
+    const claim = claimAgentRunContext(
+      runId,
+      { sessionKey, agentId: "main" },
+      { trackOwner: true, ownsContext: true },
+    );
+    const task = createTaskFixture("cli", {
+      ...mainSessionTaskScope,
+      childSessionKey: sessionKey,
+      runId,
+      task: "Inspect a live CLI run",
+    });
+    const execution = async () => (await getTaskPayload(task.taskId)).payload?.task?.execution;
+
+    expect(await execution()).toEqual({ state: "running" });
+    const listed = await runTaskHandler("tasks.list", {});
+    expect(listed.payload?.tasks?.find((row) => row.id === task.taskId)?.execution).toEqual({
+      state: "running",
+    });
+
+    emitAgentEvent({
+      runId,
+      stream: "execution",
+      data: { state: "waiting", wait: { kind: "approval" } },
+    });
+    expect(await execution()).toMatchObject({ state: "waiting", wait: { kind: "approval" } });
+    emitAgentEvent({ runId, stream: "execution", data: { state: "unknown" } });
+    expect(await execution()).toMatchObject({ state: "unknown" });
+
+    clearTaskActivity(task.taskId);
+    expect(await execution()).toEqual({ state: "running" });
+    releaseAgentRunContext(runId, claim);
+    expect(await execution()).toEqual({ state: "unknown" });
+  });
+
+  it.each(["other-session", "other-agent"] as const)(
+    "does not borrow CLI activity from a context marked %s",
+    async (scenario) => {
+      const runId = `run-cli-${scenario}`;
+      const sessionKey = "agent:main:dashboard:cli-isolation";
+      const context = {
+        sessionKey: scenario === "other-session" ? "agent:main:dashboard:other" : sessionKey,
+        agentId: scenario === "other-agent" ? "other" : "main",
+      };
+      claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true });
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        agentId: "main",
+        childSessionKey: sessionKey,
+        runId,
+        task: "Do not reuse unrelated activity",
+      });
+      expect((await getTaskPayload(task.taskId)).payload?.task?.execution).toEqual({
+        state: "unknown",
+      });
+    },
+  );
+
   it.each([
     { status: "succeeded", ledgerStatus: "completed", executionState: "finished" },
     { status: "lost", ledgerStatus: "failed", executionState: "unknown" },

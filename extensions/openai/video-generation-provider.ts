@@ -392,64 +392,66 @@ export function buildOpenAIVideoGenerationProvider({
         dispatcherPolicy,
       });
 
+      let submitted: OpenAIVideoResponse;
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
-        const submitted = await readProviderJsonResponse<OpenAIVideoResponse>(
+        submitted = await readProviderJsonResponse<OpenAIVideoResponse>(
           response,
           "OpenAI video generation failed",
         );
-        const failureMessage = readOpenAIVideoFailureMessage(submitted);
-        if (failureMessage) {
-          throw new Error(failureMessage);
-        }
-        const videoId = normalizeOptionalString(submitted.id);
-        if (!videoId) {
-          throw new Error("OpenAI video generation response missing video id");
-        }
-        const completed =
-          submitted.status === "completed"
-            ? submitted
-            : await pollOpenAIVideo(
-                {
-                  videoId,
-                  headers,
-                  timeoutMs: resolveProviderOperationTimeoutMs({
-                    deadline,
-                    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                  }),
-                  baseUrl,
-                  fetchFn,
-                  allowPrivateNetwork,
-                  dispatcherPolicy,
-                },
-                { createProviderOperationDeadline, pollProviderOperationJson },
-              );
-        const video = await downloadOpenAIVideo({
-          videoId,
-          headers,
-          timeoutMs: createProviderOperationTimeoutResolver({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          }),
-          baseUrl,
-          fetchFn,
-          allowPrivateNetwork,
-          dispatcherPolicy,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
-        });
-        return {
-          videos: [video],
-          model: completed.model ?? submitted.model ?? model,
-          metadata: {
-            videoId,
-            status: completed.status,
-            seconds: completed.seconds ?? submitted.seconds,
-            size: completed.size ?? submitted.size,
-          },
-        };
       } finally {
+        // A consumed submission no longer owns transport during polling or download.
         await release();
       }
+      const failureMessage = readOpenAIVideoFailureMessage(submitted);
+      if (failureMessage) {
+        throw new Error(failureMessage);
+      }
+      const videoId = normalizeOptionalString(submitted.id);
+      if (!videoId) {
+        throw new Error("OpenAI video generation response missing video id");
+      }
+      const completed =
+        submitted.status === "completed"
+          ? submitted
+          : await pollOpenAIVideo(
+              {
+                videoId,
+                headers,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
+                baseUrl,
+                fetchFn,
+                allowPrivateNetwork,
+                dispatcherPolicy,
+              },
+              { createProviderOperationDeadline, pollProviderOperationJson },
+            );
+      const video = await downloadOpenAIVideo({
+        videoId,
+        headers,
+        timeoutMs: createProviderOperationTimeoutResolver({
+          deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
+        baseUrl,
+        fetchFn,
+        allowPrivateNetwork,
+        dispatcherPolicy,
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+      });
+      return {
+        videos: [video],
+        model: completed.model ?? submitted.model ?? model,
+        metadata: {
+          videoId,
+          status: completed.status,
+          seconds: completed.seconds ?? submitted.seconds,
+          size: completed.size ?? submitted.size,
+        },
+      };
     },
   };
 }

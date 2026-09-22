@@ -98,4 +98,7 @@ export function applyGatewayLaneConcurrency(
     setCommandLaneConcurrency(CommandLane.Nested, 1);
   }
   setCommandLaneConcurrency(CommandLane.Subagent, concurrency.subagent);
+  // Recall can be awaited while its parent holds a main or subagent slot.
+  // Keep a separate, finite helper budget shared by every agent and session.
+  setCommandLaneConcurrency(CommandLane.ActiveMemory, concurrency.subagent);
 }

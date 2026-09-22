@@ -13,6 +13,7 @@ export function createEmbeddedAgentSubscribeState(
   const initialPendingToolMedia = collectAgentInternalEventMedia(params.internalEvents);
   return {
     assistantTexts: [],
+    answerSegments: [],
     toolMetas: [],
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
@@ -35,13 +36,13 @@ export function createEmbeddedAgentSubscribeState(
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     streamBlockText: "",
-    streamBlockOffset: 0,
+    streamBlockFinal: false,
+    blockReplyScopeStart: undefined,
     thinkingTagStream: createThinkingTagStreamState(),
     deltaBufferIsCommentary: false,
     hasFlushedPartialText: false,
-    // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    lastAssistantAudioDirectiveCount: 0,
     assistantStream: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
@@ -82,6 +83,7 @@ export function createEmbeddedAgentSubscribeState(
     messagingToolSentMediaUrls: [],
     messagingToolSourceReplyPayloads: [],
     messageToolOnlySourceReplyDelivered: false,
+    sourceReplyDeliveryState: "missing",
     successfulCronAdds: 0,
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,

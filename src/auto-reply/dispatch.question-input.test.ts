@@ -165,23 +165,15 @@ describe("routed channel question input delivery order", () => {
           } else if (messageId === "newest") {
             newestStarted.resolve();
           } else {
-            let payload: ReplyPayload | undefined;
-            try {
-              const result = await runReplyQuestionInput({
-                commandBody: outcome === "answered" ? "Continue" : "maybe",
-                followupRun: run,
-                sessionKey,
-                sessionCtx: params.ctx,
-                opts: params.replyOptions,
-              });
-              expect(result.handled).toBe(true);
-              payload = result.handled ? result.payload : undefined;
-            } catch (error) {
-              // The correction consumer is a separate change; validation remains real.
-              expect(error).toBeInstanceOf(GatewayClientRequestError);
-              expect(error).toMatchObject({ details: { reason: "QUESTION_INVALID_ANSWER" } });
-              payload = { text: "Choose Continue or Stop.", isError: true };
-            }
+            const result = await runReplyQuestionInput({
+              commandBody: outcome === "answered" ? "Continue" : "maybe",
+              followupRun: run,
+              sessionKey,
+              sessionCtx: params.ctx,
+              opts: params.replyOptions,
+            });
+            expect(result.handled).toBe(true);
+            const payload = result.handled ? result.payload : undefined;
             if (payload) {
               params.dispatcher.sendFinalReply(payload);
             }
@@ -235,7 +227,11 @@ describe("routed channel question input delivery order", () => {
           );
           expect(operation.result).toBeNull();
           expect(questionSettled).toHaveBeenCalledOnce();
-          expect(deliveries).toEqual(outcome === "correction" ? ["Choose Continue or Stop."] : []);
+          expect(deliveries).toEqual(
+            outcome === "correction"
+              ? [expect.stringContaining("The answer was not accepted: question 'answer'")]
+              : [],
+          );
           expect(broker.get({ id: questionId }).question.status).toBe(
             outcome === "answered" ? "answered" : "pending",
           );

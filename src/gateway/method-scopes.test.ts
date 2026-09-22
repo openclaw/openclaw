@@ -140,6 +140,7 @@ describe("method scope resolution", () => {
     ["diagnostics.stability", ["operator.read"]],
     ["diagnostics.lanes", ["operator.read"]],
     ["diagnostics.cpuProfile", ["operator.admin"]],
+    ["diagnostics.heapProfile", ["operator.admin"]],
     ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
@@ -915,10 +916,10 @@ describe("operator scope authorization", () => {
     "question.resolve",
     "question.get",
     "question.list",
-  ])("requires questions scope for %s", (method) => {
+  ])("keeps broad question authority distinct from own-run admission for %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-      allowed: false,
-      missingScope: "operator.questions",
+      allowed: true,
+      sessionScope: "operator.sessions.write",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,

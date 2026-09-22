@@ -38,7 +38,7 @@ vi.mock("../../../plugins/loader.js", () => ({
 const runGatewayStopMock = vi.fn(
   async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
-const hookErrorMock = vi.fn();
+const hookErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     debug: vi.fn(),

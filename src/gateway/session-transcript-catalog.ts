@@ -16,7 +16,7 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
+import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 export type SessionTranscriptCatalogPage = {

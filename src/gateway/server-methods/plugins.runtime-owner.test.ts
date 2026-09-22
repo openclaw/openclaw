@@ -57,6 +57,7 @@ it.each(
         pluginId: "colliding-plugin",
         source: "fixture",
         origin: "workspace",
+        id: "request-service",
         service: { id: "request-service", start: vi.fn() },
       } satisfies PluginServiceRegistration;
       requestRegistry.services.push(service);

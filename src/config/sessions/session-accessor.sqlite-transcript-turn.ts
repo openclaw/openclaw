@@ -37,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
+import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -69,6 +70,7 @@ export async function appendExpectedSessionTranscriptTurn(
     expectedSessionId: string;
     initialSessionEntry?: SessionEntry;
     messages: readonly SessionTranscriptTurnMessageAppend[];
+    onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
@@ -263,8 +265,8 @@ export async function appendExpectedSessionTranscriptTurn(
 
         // Append-owned metadata (including history coverage) is part of this same
         // transaction. Do not overwrite it with the pre-append entry snapshot.
-        const appendedEntry =
-          readSessionEntryRow(transactionDb, resolved.sessionKey)?.entry ?? currentEntry;
+        const appended = readSessionEntryRow(transactionDb, resolved.sessionKey);
+        const appendedEntry = appended?.entry ?? currentEntry;
         const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
           appendedMessages,
           currentEntry: appendedEntry,
@@ -283,7 +285,14 @@ export async function appendExpectedSessionTranscriptTurn(
         let publishIdentity: (() => void) | undefined;
         if (initialEntry || next !== appendedEntry) {
           const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
-          const previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
+          const previousIdentity = readSessionIdentitySnapshot(
+            transactionDb,
+            identityKeys.filter((key) => key !== resolved.sessionKey),
+          );
+          // The selected row is still current in this write reservation; read only its siblings.
+          if (appended) {
+            previousIdentity.set(resolved.sessionKey, appended.entry);
+          }
           writeSessionEntry(transactionDb, resolved.sessionKey, next, {
             canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
           });
@@ -317,6 +326,10 @@ export async function appendExpectedSessionTranscriptTurn(
         return publishIdentity;
       }, toDatabaseOptions(resolved));
       publish?.();
+      // Complete committed custody before cancellation can run at an async return.
+      for (const message of result.appendedMessages) {
+        options.onMessageCommitted?.(message);
+      }
       return result;
     },
     "session.transcript.turn",

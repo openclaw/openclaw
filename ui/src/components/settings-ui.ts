@@ -374,8 +374,9 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
 export function renderSettingsSegmented<T extends string>(
@@ -392,6 +393,7 @@ export function renderSettingsSegmented<T extends string>(
     }>;
     disabled?: boolean;
     ariaLabel?: string;
+    descriptionId?: string;
     className?: string;
     carapace?: boolean;
   } & (
@@ -448,6 +450,7 @@ export function renderSettingsSegmented<T extends string>(
     <wa-radio-group
       class="settings-segmented ${props.carapace ? "oc-segmented" : ""} ${props.className ?? ""}"
       size="s"
+      aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
       .value=${live(props.value)}
       ?disabled=${live(props.disabled ?? false)}

@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { withTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -146,7 +147,61 @@ describe("ACP accepted cancellation ownership", () => {
     });
   });
 
-  it("joins a late handle cancellation acknowledgement before settling setup cancellation", async () => {
+  it("refuses stale caller authority before aborting an accepted turn", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const state = fixture();
+      mockParentedAcpSessionEntries({
+        childSessionKey: state.target.sessionKey,
+        parentSessionKey: "agent:main:main",
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      state.runTurn.mockImplementationOnce(async function* (input) {
+        activeSignal = input.signal;
+        entered.resolve();
+        await release.promise;
+        yield { type: "done", stopReason: "end_turn" };
+      });
+      const admitted = createTestAdmittedRunContext("caller-revoked");
+      const turn = state.manager.runTurn({
+        ...state.target,
+        provenance: "system",
+        mode: "prompt",
+        text: "keep working",
+        requestId: "caller-revoked",
+        admittedRunContext: admitted,
+      });
+      try {
+        await entered.promise;
+        await expect(
+          withTaskCancellationControl(
+            {
+              assertCurrent: () => {
+                throw new Error("Caller no longer controls this task.");
+              },
+            },
+            () =>
+              state.manager.cancelSession({
+                ...state.target,
+                expectedRunId: "caller-revoked",
+                expectedInstanceId: admitted.operationalRunInstance.instanceId,
+                expectedOwnerKey: "agent:main:main",
+              }),
+          ),
+        ).rejects.toThrow("Caller no longer controls this task.");
+        expect(activeSignal?.aborted).toBe(false);
+        expect(state.cancel).not.toHaveBeenCalled();
+        expect(requireTaskByRunId("caller-revoked").status).toBe("running");
+      } finally {
+        release.resolve();
+        await turn;
+      }
+      expect(requireTaskByRunId("caller-revoked").status).toBe("succeeded");
+    });
+  });
+
+  it("joins accepted late-handle cancellation after caller authority is revoked", async () => {
     const state = fixture();
     const ensureEntered = createDeferred();
     const ensureRelease = createDeferred();
@@ -178,12 +233,29 @@ describe("ACP accepted cancellation ownership", () => {
     });
     await ensureEntered.promise;
     let settled = false;
-    const cancel = state.manager.cancelSession(state.target).then(() => {
+    let callerCurrent = true;
+    const cancel = withTaskCancellationControl(
+      {
+        assertCurrent: () => {
+          if (!callerCurrent) {
+            throw new Error("Caller no longer controls this task.");
+          }
+        },
+      },
+      () => state.manager.cancelSession({ ...state.target, expectedRunId: "late" }),
+    ).then(() => {
       settled = true;
     });
+    const settlement = Promise.all([turn, cancel]);
+    callerCurrent = false;
     ensureRelease.resolve();
     try {
-      await cancelEntered.promise;
+      await Promise.race([
+        cancelEntered.promise,
+        settlement.then(() => {
+          throw new Error("Cancellation settled before backend acknowledgement.");
+        }),
+      ]);
       expect(settled).toBe(false);
       expect(events).toEqual([]);
       expect(state.runTurn).not.toHaveBeenCalled();
@@ -192,6 +264,7 @@ describe("ACP accepted cancellation ownership", () => {
       cancelRelease.resolve();
       await Promise.allSettled([turn, cancel]);
     }
+    await settlement;
     expect(state.cancel).toHaveBeenCalledOnce();
     expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
   });

@@ -1,6 +1,7 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
+import { diagnosticForksPool } from "./vitest.forks-pool.ts";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
@@ -182,6 +183,7 @@ export function createScopedVitestConfig(
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    execArgv?: string[];
     argv?: string[];
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
@@ -244,13 +246,21 @@ export function createScopedVitestConfig(
       ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
+      ...(options?.execArgv ? { execArgv: options.execArgv } : {}),
       isolate,
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
       include: scopedInclude,
       exclude,
-      ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.pool
+        ? {
+            pool:
+              options.pool === "forks" && (scopedDir === "extensions" || options.name === "infra")
+                ? diagnosticForksPool
+                : options.pool,
+          }
+        : {}),
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),

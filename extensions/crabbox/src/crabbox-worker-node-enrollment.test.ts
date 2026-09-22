@@ -10,6 +10,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
@@ -68,10 +69,15 @@ if (args[0] === "--version") {
 } else if (args[0] === "plugins" && args[1] === "enable") {
   fs.appendFileSync(path.join(state, "activation.jsonl"), JSON.stringify({ runtimePublished: fs.existsSync(path.join(state, "runtime")) }) + "\\n");
   if (${JSON.stringify(build)} === "activation-failed") process.exit(1);
-  fs.appendFileSync(path.join(state, "enabled"), args[2] + "\\n");
+  for (const id of args.slice(2)) {
+    if (${JSON.stringify(build)} === "verbose-activation") process.stdout.write("x".repeat(700_000));
+    fs.appendFileSync(path.join(state, "enabled"), id + "\\n");
+  }
 } else {
   process.title = "openclaw-connect";
-  fs.writeFileSync(path.join(state, "launch.json.tmp"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins: fs.readFileSync(path.join(state, "enabled"), "utf8").trim().split("\\n") }));
+  const enabledFile = path.join(state, "enabled");
+  const enabledPlugins = fs.existsSync(enabledFile) ? fs.readFileSync(enabledFile, "utf8").trim().split("\\n") : [];
+  fs.writeFileSync(path.join(state, "launch.json.tmp"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins }));
   // Existence signals readiness only after the child publishes complete JSON.
   fs.renameSync(path.join(state, "launch.json.tmp"), path.join(state, "launch.json"));
   setInterval(() => {}, 60000);
@@ -86,7 +92,7 @@ if (args[0] === "--version") {
 function testHome() {
   const home = fs.realpathSync(tempDirs.make("crabbox-bootstrap-home-"));
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
-  const stop = () => {
+  const stop = async () => {
     const pidFile = path.join(stateDir, "node.pid");
     if (fs.existsSync(pidFile)) {
       const pid = Number(fs.readFileSync(pidFile, "utf8"));
@@ -97,7 +103,9 @@ function testHome() {
           throw error;
         }
       }
-      fs.rmSync(pidFile);
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow("ESRCH"), {
+        timeout: 5_000,
+      });
     }
   };
   cleanups.push(stop);
@@ -363,6 +371,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       timeoutMs: () => 60_000,
     });
     const manager = createCrabboxWarmImageManager({
+      state: crabboxState,
       warn: (message) => {
         throw new Error(message);
       },
@@ -425,11 +434,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     await expectSetupPhases(
       enroll(homes.get(initial.id)!, oldArtifact.nodeBootstrap, undefined, true),
     );
-    manager.markEnrolled(initial.id);
+    await manager.markEnrolled(initial.id);
     expect(await manager.capture(initial)).toBe(true);
     await manager.release(initial);
     fs.rmSync(homes.get(initial.id)!, { recursive: true });
-    const originalCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+    const originalCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
+      .image!.checkpointId;
 
     const upgraded = context("cbx_upgraded", currentArtifact.nodeBootstrap.sha256);
     expect(await manager.allocate(upgraded)).toEqual({
@@ -445,11 +455,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         path.join(runtimeRoot(homes.get(upgraded.id)!), currentArtifact.nodeBootstrap.sha256),
       ),
     ).toBe(true);
-    manager.markEnrolled(upgraded.id);
+    await manager.markEnrolled(upgraded.id);
     const refreshed = await manager.capture(upgraded);
     await manager.release(upgraded);
     fs.rmSync(homes.get(upgraded.id)!, { recursive: true });
-    const retainedCheckpoint = openCrabboxWarmImageStore().entries()[0]!.value.image!.checkpointId;
+    const retainedCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
+      .image!.checkpointId;
 
     const next = context("cbx_next", currentArtifact.nodeBootstrap.sha256);
     const nextChoice = await manager.allocate(next);
@@ -466,8 +477,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(nextChoice).toEqual({ kind: "checkpoint", checkpointId: retainedCheckpoint });
     expect(currentWasCached).toBe(true);
     expect(repeatPhases).not.toContain("openclaw-bootstrap-installation");
-    expect(openCrabboxWarmImageStore().entries()).toHaveLength(1);
-    expect(Object.keys(openCrabboxWarmImageStore().entries()[0]!.value.allocations)).toEqual([]);
+    expect(await openCrabboxWarmImageStore(crabboxState).entries()).toHaveLength(1);
+    expect(
+      Object.keys((await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value.allocations),
+    ).toEqual([]);
   }, 60_000);
 
   it.each(["file", "directory"] as const)(
@@ -690,7 +703,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     );
     expect(fs.readdirSync(stateDir).some((name) => name.startsWith("node-bootstrap-"))).toBe(false);
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).cli).toBe(launch.cli);
@@ -794,7 +807,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     expect(
       JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
     ).toEqual({ scriptsRan: true });
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));
     await expectSetupPhases(enroll(home, second.nodeBootstrap));
@@ -952,17 +965,38 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
   );
 
   it.each([
-    { enabled: true, runtimeDir: "/run/fixture" },
-    { enabled: true, runtimeDir: "" },
-    { enabled: false, runtimeDir: "/run/fixture" },
+    { enabled: true, runtimeDir: "/run/fixture", pluginIds: ["demo"], verbose: false },
+    { enabled: true, runtimeDir: "", pluginIds: ["demo"], verbose: false },
+    { enabled: false, runtimeDir: "/run/fixture", pluginIds: ["demo"], verbose: false },
+    { enabled: false, runtimeDir: "/run/fixture", pluginIds: [], verbose: false },
+    {
+      enabled: true,
+      runtimeDir: "/run/fixture",
+      pluginIds: ["demo", "cua-computer"],
+      verbose: true,
+    },
   ])(
     "binds only desktop nodes to the exact XFCE session: %j",
-    async ({ enabled, runtimeDir }) => {
+    async ({ enabled, runtimeDir, pluginIds, verbose }) => {
       const { home, stateDir } = testHome();
-      const { nodeBootstrap } = await serveArtifact(await packageFixture("desktop"));
+      const served = await serveArtifact(
+        await packageFixture(verbose ? "verbose-activation" : "desktop"),
+      );
+      const nodeBootstrap = { ...served.nodeBootstrap, enabledPluginIds: pluginIds };
       await expectSetupPhases(enroll(home, nodeBootstrap, { enabled, runtimeDir }));
       const launch = await readLaunch(stateDir);
-      expect(launch.enabledPlugins).toEqual(enabled ? ["demo", "cua-computer"] : ["demo"]);
+      expect(launch.enabledPlugins).toEqual(enabled ? ["demo", "cua-computer"] : pluginIds);
+      const activationFile = path.join(stateDir, "activation.jsonl");
+      const activations = fs.existsSync(activationFile)
+        ? fs
+            .readFileSync(activationFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line))
+        : [];
+      expect(activations).toEqual(
+        enabled || pluginIds.length > 0 ? [{ runtimePublished: false }] : [],
+      );
       expect(launch.environment).toEqual(
         enabled
           ? {

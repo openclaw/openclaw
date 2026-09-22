@@ -1,9 +1,16 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchOllamaModels, readOllamaModelShowInfo } from "./provider-models.js";
+import {
+  enrichOllamaModelsWithContext,
+  fetchOllamaModels,
+  readOllamaModelShowInfo,
+} from "./provider-models.js";
 import { pullOllamaModel } from "./setup-pull.js";
 import { checkOllamaCloudAuth } from "./setup.runtime.js";
 
@@ -196,6 +203,56 @@ describe("Ollama setup response cleanup", () => {
     },
   ])("releases a $name while capture retains a response clone", async ({ body, run, status }) => {
     await expectReleaseWithoutWaitingForCapture({ body, run, status });
+  });
+
+  it("joins sibling model-probe cleanup before rejecting with the original cancellation", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("model discovery canceled");
+    const firstCleanup = createDeferred<void>();
+    const siblingCleanup = createDeferred<void>();
+    const firstRelease = vi.fn(() => firstCleanup.promise);
+    const siblingRelease = vi.fn(() => siblingCleanup.promise);
+    for (const release of [firstRelease, siblingRelease]) {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: jsonResponse({ capabilities: ["completion"] }),
+        finalUrl: "http://127.0.0.1:11434/api/show",
+        release,
+      });
+    }
+    let settled = false;
+    let failure: unknown;
+    const completed = enrichOllamaModelsWithContext(
+      "http://127.0.0.1:11434",
+      [{ name: "first-model" }, { name: "sibling-model" }],
+      { signal: controller.signal },
+    ).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        failure = error;
+        settled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(firstRelease).toHaveBeenCalledOnce();
+        expect(siblingRelease).toHaveBeenCalledOnce();
+      });
+      controller.abort(cancellation);
+      firstCleanup.reject(new Error("first request closed"));
+      await nextTurn();
+      expect(settled).toBe(false);
+
+      siblingCleanup.reject(new Error("sibling request closed"));
+      await completed;
+      expect(settled).toBe(true);
+      expect(failure).toBe(cancellation);
+    } finally {
+      firstCleanup.resolve();
+      siblingCleanup.resolve();
+      await completed;
+    }
   });
 
   it.each([

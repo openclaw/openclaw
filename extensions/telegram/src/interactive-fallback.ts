@@ -1,4 +1,3 @@
-// Telegram plugin module implements interactive fallback behavior.
 import {
   adaptMessagePresentationForChannel,
   legacyInteractiveReplyToPresentation,
@@ -12,6 +11,7 @@ import {
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
+  copyReplyPayloadMetadata,
   resolveAskUserQuestionOptionIndices,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -212,7 +212,7 @@ export function canonicalizeTelegramPresentationPayload(
       return payload;
     }
     // Native-only controls need the same visible message anchor as portable controls.
-    return { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK };
+    return copyReplyPayloadMetadata(payload, { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK });
   }
   const richTables = options?.richTables === true;
   const presentation = adaptMessagePresentationForChannel({
@@ -293,7 +293,7 @@ export function canonicalizeTelegramPresentationPayload(
       },
     };
   }
-  return canonical;
+  return copyReplyPayloadMetadata(payload, canonical);
 }
 
 export function resolveTelegramInteractiveTextFallback(params: {

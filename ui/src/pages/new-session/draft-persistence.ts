@@ -19,14 +19,23 @@ type NewSessionDraftState = {
   incognito: boolean;
 };
 
-type DraftLineage = { revision: number; writeId?: string; localWriteIds: Set<string> };
+type DraftRetirement = { revision: number; writeId?: string };
+type DraftLineage = {
+  revision: number;
+  writeId?: string;
+  localWriteIds: Set<string>;
+  retirement?: Promise<DraftRetirement | undefined>;
+};
 type DraftMutation = {
   writeId: string;
   retired: boolean;
   committedRevision: number;
   writes: Set<Promise<void>>;
 };
-type PendingDraftSnapshot = DurableChatComposerSnapshot & { mutation: DraftMutation };
+type PendingDraftSnapshot = DurableChatComposerSnapshot & {
+  mutation: DraftMutation;
+  retirement?: Promise<DraftRetirement | undefined>;
+};
 export type NewSessionDraftHandoff = ReturnType<NewSessionDraftPersistence["captureSubmission"]>;
 const createMutation = (): DraftMutation => ({
   writeId: Math.random().toString(36).slice(2),
@@ -58,7 +67,6 @@ export class NewSessionDraftPersistence {
   private restoredIdentity = "";
   private pending: PendingDraftSnapshot | null = null;
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private incognitoRetirement: Promise<void> = Promise.resolve();
   private readonly lineageByScope = new Map<string, DraftLineage>();
   // Mounted views are projections of the durable draft. A departed submitter
   // can retire their restored copy without owning their newer edits.
@@ -102,15 +110,19 @@ export class NewSessionDraftPersistence {
 
   setIncognito(incognito: boolean): Promise<void> {
     if (incognito) {
-      this.incognitoRetirement = this.retireActive();
-      return this.incognitoRetirement;
+      return this.retireActive();
     }
-    return this.incognitoRetirement;
+    const scope = this.scope();
+    return (
+      (scope ? this.lineage(scope).retirement : undefined)?.then(() => {}) ?? Promise.resolve()
+    );
   }
 
   transitionIncognito(wasIncognito: boolean, incognito: boolean, publish: () => void) {
     const transition = this.setIncognito(incognito);
     if (wasIncognito && !incognito) {
+      // Capture this route's input before navigation can replace the composer.
+      this.noteUserMutation();
       void transition.finally(publish);
       return;
     }
@@ -183,25 +195,33 @@ export class NewSessionDraftPersistence {
     this.timer = globalThis.setTimeout(() => this.persistNow(), NEW_SESSION_DRAFT_PERSIST_DELAY_MS);
   }
 
-  async retireActive(): Promise<void> {
+  retireActive(): Promise<void> {
     this.mutationGeneration += 1;
+    this.mutation.retired = true;
     this.discardPending();
     const requestedRevision = nextDraftRevision(this.revision);
     this.revision = requestedRevision;
     const scope = this.scope();
     if (!scope) {
-      return;
+      return Promise.resolve();
     }
-    const { retireDurableComposerDraft } = await durableComposerStore;
     const lineage = this.lineage(scope);
-    const minimumRevision = Math.max(requestedRevision, lineage.revision);
-    const result = await retireDurableComposerDraft(scope, minimumRevision);
-    if (result.status === "storage-failed") {
-      reportDurableComposerStorageError(scope, this.onStorageError);
-    } else if (result.status === "persisted") {
-      lineage.localWriteIds.clear();
-      this.adoptCommittedRevision(scope, result.revision ?? minimumRevision, result.writeId);
-    }
+    // Revoke delayed writes immediately, including older edits of this route.
+    lineage.localWriteIds.clear();
+    lineage.retirement = (async () => {
+      const { retireDurableComposerDraft } = await durableComposerStore;
+      const minimumRevision = Math.max(requestedRevision, lineage.revision);
+      const result = await retireDurableComposerDraft(scope, minimumRevision);
+      if (result.status === "storage-failed") {
+        reportDurableComposerStorageError(scope, this.onStorageError);
+      } else if (result.status === "persisted") {
+        const revision = result.revision ?? minimumRevision;
+        this.adoptCommittedRevision(scope, revision, result.writeId);
+        return { revision, writeId: result.writeId };
+      }
+      return undefined;
+    })();
+    return lineage.retirement.then(() => {});
   }
 
   captureSubmission() {
@@ -333,15 +353,28 @@ export class NewSessionDraftPersistence {
     // order writes without delaying attachments behind a promise chain.
     const writing = (async () => {
       try {
-        if (snapshot.mutation.retired) {
+        const retirement = snapshot.retirement ? await snapshot.retirement : undefined;
+        if (
+          snapshot.mutation.retired ||
+          !this.lineage(snapshot.scope).localWriteIds.has(snapshot.writeId)
+        ) {
           return;
         }
-        const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
+        const write =
+          retirement && retirement.revision > snapshot.expectedRevision
+            ? {
+                ...snapshot,
+                expectedRevision: retirement.revision,
+                expectedWriteId: retirement.writeId,
+                revision: nextDraftRevision(Math.max(snapshot.revision, retirement.revision)),
+              }
+            : snapshot;
+        const { result, payloadUnavailable } = await writeDurableComposerSnapshot(write);
         if (payloadUnavailable) {
           reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
         }
         if (result.status === "persisted" || result.status === "payload-too-large") {
-          const committedRevision = result.revision ?? snapshot.revision;
+          const committedRevision = result.revision ?? write.revision;
           snapshot.mutation.committedRevision = committedRevision;
           this.adoptCommittedRevision(
             snapshot.scope,
@@ -413,6 +446,7 @@ export class NewSessionDraftPersistence {
     return {
       scope,
       mutation: this.mutation,
+      retirement: lineage.retirement,
       expectedRevision: lineage.revision,
       ...(lineage.writeId ? { expectedWriteId: lineage.writeId } : {}),
       expectedWriteIds,
@@ -559,7 +593,12 @@ export class NewSessionDraftPersistence {
       return;
     }
     lineage.localWriteIds.delete(snapshot.writeId);
-    if (!lineage.revision && !lineage.writeId && !lineage.localWriteIds.size) {
+    if (
+      !lineage.revision &&
+      !lineage.writeId &&
+      !lineage.localWriteIds.size &&
+      !lineage.retirement
+    ) {
       this.lineageByScope.delete(identity);
     }
   }

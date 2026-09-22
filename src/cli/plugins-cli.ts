@@ -131,45 +131,49 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("enable")
-    .description("Enable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
-    .action(async (id: string, opts: { acceptCapabilities?: boolean }) => {
+    .description("Enable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .option("--accept-capabilities", "Accept each plugin's declared capabilities", false)
+    .action(async (ids: string[], opts: { acceptCapabilities?: boolean }) => {
       const { runPluginsEnableCommand } = await loadPluginsRuntime();
-      await runPluginsEnableCommand(id, opts);
+      for (const id of ids) {
+        await runPluginsEnableCommand(id, opts);
+      }
     });
 
   plugins
     .command("disable")
-    .description("Disable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
+    .description("Disable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .action(async (ids: string[]) => {
       const { runPluginsDisableCommand } = await loadPluginsRuntime();
-      await runPluginsDisableCommand(id);
+      for (const id of ids) {
+        await runPluginsDisableCommand(id);
+      }
     });
 
   plugins
     .command("reload")
-    .description("Reload a plugin in the running Gateway")
-    .argument("<id>", "Plugin id")
+    .description("Reload one or more plugins in the running Gateway")
+    .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
     .option("--json", "Print the applied runtime generation", false)
-    .action(async (id: string, opts: { json?: boolean; acceptCapabilities?: boolean }) => {
+    .action(async (ids: string[], opts: { json?: boolean; acceptCapabilities?: boolean }) => {
       const { runPluginsReloadCommand } = await loadPluginsRuntime();
-      await runPluginsReloadCommand(id, opts);
+      await runPluginsReloadCommand(ids, opts);
     });
 
   plugins
     .command("uninstall")
-    .description("Uninstall a plugin")
-    .argument("<id>", "Plugin id")
+    .description("Uninstall one or more plugin packages")
+    .argument("<ids...>", "Plugin ids")
     .option("--keep-files", "Keep installed files on disk", false)
     .option("--keep-config", "Deprecated alias for --keep-files", false)
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
-    .action(async (id: string, opts: PluginUninstallOptions) => {
+    .action(async (ids: string[], opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
+      await runPluginUninstallCommand(ids, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -224,7 +228,7 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("update")
     .description("Update installed plugins and tracked hook packs")
-    .argument("[id]", "Plugin or hook-pack id (omit with --all)")
+    .argument("[ids...]", "Plugin or hook-pack ids or npm specs (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
@@ -238,9 +242,9 @@ export function registerPluginsCli(program: Command) {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
+    .action(async (ids: string[], opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({ ids, opts });
     });
 
   plugins
@@ -342,7 +346,8 @@ export function registerPluginsCli(program: Command) {
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
-      const { runPluginMarketplaceListCommand } = await loadPluginsRuntime();
+      const { runPluginMarketplaceListCommand } =
+        await import("./plugins-marketplace-list-command.js");
       await runPluginMarketplaceListCommand(source, opts);
     });
 

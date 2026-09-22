@@ -22,7 +22,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   onPendingWorkChanged: () => void;
   onError: (error: unknown) => void;
 }) {
-  const pendingKeys = new Map<string, number>();
+  const pendingKeys = new Map<string, { count: number; senderKey: string }>();
   const activeFlushes = new Set<Promise<void>>();
   // Close waits wake as soon as a queued key becomes flushable, avoiding
   // timer polling and preserving fake-timer shutdown behavior.
@@ -34,7 +34,11 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       resolve();
     }
   };
-  const buildKey = (msg: WhatsAppQueuedInboundMessage): string | null => {
+  const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
+    const admission = requireWhatsAppInboundAdmission(msg);
+    return `${admission.accountId}:${admission.conversation.id}`;
+  };
+  const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
     const senderKey =
@@ -45,20 +49,20 @@ export function createWhatsAppInboundMessageDebouncer(options: {
           msg.platform.senderName ??
           admission.sender.id)
         : admission.conversation.id;
-    return senderKey ? `${admission.accountId}:${admission.conversation.id}:${senderKey}` : null;
+    return senderKey;
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
-  const trackKey = (key: string) => {
-    pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1);
+  const trackKey = (key: string, senderKey: string) => {
+    pendingKeys.set(key, { count: (pendingKeys.get(key)?.count ?? 0) + 1, senderKey });
   };
   const releaseKey = (entry: WhatsAppQueuedInboundMessage) => {
     if (!entry.debounceKey || entry.debounceKeyTracked !== true) {
       return;
     }
-    const remaining = (pendingKeys.get(entry.debounceKey) ?? 0) - 1;
-    if (remaining > 0) {
-      pendingKeys.set(entry.debounceKey, remaining);
+    const pending = pendingKeys.get(entry.debounceKey);
+    if (pending && pending.count > 1) {
+      pending.count -= 1;
     } else {
       pendingKeys.delete(entry.debounceKey);
     }
@@ -160,9 +164,16 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     const key = buildKey(message);
     if (key) {
       message.debounceKey = key;
+      const senderKey = resolveSenderKey(message);
+      const pending = pendingKeys.get(key);
+      // One conversation lane orders dispatch; sender changes end the current
+      // batch so payloads and attribution never combine across participants.
+      if (pending && pending.senderKey !== senderKey) {
+        await debouncer.flushKey(key);
+      }
       if (message.debounceMs > 0 && shouldDebounce(message)) {
         message.debounceKeyTracked = true;
-        trackKey(key);
+        trackKey(key, senderKey);
         options.onPendingWorkChanged();
         notifyWork();
       }

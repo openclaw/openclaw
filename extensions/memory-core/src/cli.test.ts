@@ -17,7 +17,6 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
-  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   firstWrittenJsonArg,
@@ -33,6 +32,7 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
+  seedMemoryIndexWithOrphanedProvenance,
   shortTermTestState as shortTermTesting,
 } from "./test-helpers.js";
 
@@ -2368,22 +2368,7 @@ describe("memory cli", () => {
     const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
     const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const agentDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
-    agentDatabase.db.exec(`
-      PRAGMA foreign_keys = OFF;
-      INSERT INTO memory_index_chunks (
-        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      ) VALUES (
-        'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
-        'hash', 'none', 'orphaned memory', '[]', 1
-      );
-      INSERT INTO memory_index_chunk_provenance (
-        chunk_id, origin_class, session_kind, observed_at
-      ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
-      DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
-      PRAGMA foreign_keys = ON;
-    `);
-    closeOpenClawAgentDatabasesForTest();
+    const databasePath = await seedMemoryIndexWithOrphanedProvenance(env);
 
     const cfg = {
       memory: {
@@ -2413,7 +2398,7 @@ describe("memory cli", () => {
     const error = spyRuntimeErrors(defaultRuntime);
     await runMemoryCli(args);
 
-    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(agentDatabase.path);
+    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
     expect(process.exitCode).toBe(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
   });
@@ -2471,15 +2456,15 @@ describe("memory cli", () => {
     });
   });
 
-  it("accepts --query for memory search", async () => {
+  it.each(["deployment notes", "   "])("accepts --query %j for memory search", async (query) => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);
     mockManager({ search, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["search", "--query", "deployment notes"]);
+    await runMemoryCli(["search", "--query", query]);
 
-    expect(search).toHaveBeenCalledWith("deployment notes", {
+    expect(search).toHaveBeenCalledWith(query, {
       maxResults: undefined,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
@@ -2505,9 +2490,14 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it.each([false, true])("rejects queryless search before acquisition (json=%s)", async (json) => {
+  it.each([
+    { json: false, args: [] },
+    { json: true, args: [] },
+    { json: false, args: ["positional", "--query", ""] },
+    { json: true, args: ["positional", "--query", ""] },
+  ])("rejects queryless search before acquisition ($json, $args)", async ({ json, args }) => {
     const writeJson = spyRuntimeJson(defaultRuntime);
-    await expect(runMemoryCli(["search", ...(json ? ["--json"] : [])])).rejects.toThrow(
+    await expect(runMemoryCli(["search", ...args, ...(json ? ["--json"] : [])])).rejects.toThrow(
       "Missing search query. Provide a positional query or use --query <text>.",
     );
     expect(getMemorySearchManager).not.toHaveBeenCalled();
@@ -2522,7 +2512,7 @@ describe("memory cli", () => {
       message: "Memory promote-explain requires a non-empty selector.",
     },
     {
-      args: ["promote-explain", "unmatched fixture"],
+      args: ["promote-explain", "  unmatched fixture  "],
       acquires: true,
       message: 'No promotion candidate matched "unmatched fixture".',
     },
@@ -2750,7 +2740,7 @@ describe("memory cli", () => {
       });
 
       const writeJson = spyRuntimeJson(defaultRuntime);
-      await runMemoryCli(["promote-explain", "router", "--json", "--include-promoted"]);
+      await runMemoryCli(["promote-explain", "  router  ", "--json", "--include-promoted"]);
 
       const payload = firstWrittenJsonArg<{ candidate?: { snippet?: string } }>(writeJson);
       expect(payload?.candidate?.snippet).toContain("Configured VLAN 10");

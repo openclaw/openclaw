@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph users behavior.
 import {
   escapeOData,
   fetchAllGraphPages,

@@ -131,12 +131,17 @@ export async function verifyReversibleFenceRecovery(
       releaseFence = undefined;
     }
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     expect(fixture.firstStart).toHaveBeenCalledTimes(2);
     expect(recoveryWork).toHaveBeenCalledOnce();
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
-    expect(instance.run(() => "restored")).toBe("restored");
+    expect(() => instance.run(() => "stale")).toThrow("reloaded or disabled");
+    const restored = getPluginInstance(
+      fixture.registryOwner.registry.plugins.find((record) => record.id === "first")!,
+    );
+    assert(restored);
+    expect(restored.run(() => "restored")).toBe("restored");
     await vi.waitFor(() => expect(signals.first).toHaveLength(2));
     expect(signals.first[0]?.aborted).toBe(true);
     expect(signals.first[1]?.aborted).toBe(false);

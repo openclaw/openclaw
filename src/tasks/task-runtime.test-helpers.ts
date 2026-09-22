@@ -11,9 +11,5 @@ export {
 } from "./task-flow-registry.test-support.js";
 export {
   maybeDeliverTaskStateChangeUpdate,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-registry.test-support.js";

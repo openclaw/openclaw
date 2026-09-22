@@ -9,6 +9,7 @@ import {
   refreshGitHubOAuthToken,
   type GitHubOAuthTokenPair,
 } from "../agents/github-oauth-client.js";
+import { clearNativeGitHubTokenCache } from "../agents/github-read-identity.js";
 import {
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
@@ -98,6 +99,21 @@ export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitH
   };
 }
 
+function revalidatePersonalGitHubStatus(
+  action: PersonalGitHubAction,
+  prepared: PersonalGitHubStatus,
+): PersonalGitHubStatus {
+  const current = personalGitHubStatus(action);
+  if (
+    current.generation !== prepared.generation ||
+    current.account?.accountId !== prepared.account?.accountId ||
+    current.account?.login.toLowerCase() !== prepared.account?.login.toLowerCase()
+  ) {
+    throw new Error("My GitHub connection changed; reload its status.");
+  }
+  return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
+}
+
 async function resolvePersonalGitHubStatus(
   action: PersonalGitHubAction,
 ): Promise<PersonalGitHubStatus> {
@@ -110,10 +126,7 @@ async function resolvePersonalGitHubStatus(
     return { ...status, state: "unavailable" };
   }
   const assertCurrent = () => {
-    action.assertCurrent();
-    if (readUserGitHubConnection(action.owner)?.generation !== record.generation) {
-      throw new Error("My GitHub connection changed; reload its status.");
-    }
+    revalidatePersonalGitHubStatus(action, status);
   };
   try {
     // Receipts use the durable selection above; live status must additionally
@@ -123,11 +136,9 @@ async function resolvePersonalGitHubStatus(
       accountId: record.selection.accountId,
       assertCurrent,
     });
-    assertCurrent();
-    return status;
+    return revalidatePersonalGitHubStatus(action, status);
   } catch {
-    assertCurrent();
-    return { ...status, state: "unavailable" };
+    return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
   }
 }
 
@@ -576,6 +587,7 @@ export function createPersonalGitHubOAuthLifecycle() {
 
   return {
     status: resolvePersonalGitHubStatus,
+    revalidateStatus: revalidatePersonalGitHubStatus,
     async startAuthorization(
       action: PersonalGitHubAction,
     ): Promise<UsersGitHubAuthorizeStartResult> {
@@ -649,6 +661,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     disconnect(action: PersonalGitHubAction): void {
       guard(action);
       disconnectUserGitHubConnection(action.owner, () => guard(action));
+      clearNativeGitHubTokenCache();
     },
     refresh,
     maintain(): Promise<void> {

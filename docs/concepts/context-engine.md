@@ -128,6 +128,15 @@ The legacy engine does not register tools or provide a `systemPromptAddition`.
 
 When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this engine is used automatically.
 
+Disabling or denying the selected plugin preserves the slot preference but uses
+`legacy` normally when the engine's registered owner identifies the plugin, or
+when the engine ID matches the plugin ID. After a cold start with no registration,
+a distinct engine ID does not identify its owning plugin: resolution still reports
+the missing engine. Global plugin disablement uses `legacy` regardless of this
+owner mapping. Re-enabling the plugin restores the retained selection when its
+runtime registration is available. An enabled selection that is missing or fails
+still follows the failure-isolation behavior below.
+
 ## Plugin engines
 
 A plugin can register a context engine using the plugin API:
@@ -255,6 +264,22 @@ Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
+
+After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
+also offers `maintain()` through the same maintenance scheduler. Engines declaring
+`turnMaintenanceMode: "background"` run deferred maintenance. Background work
+retains the logical turn's engine and supplying resources until it settles, without
+making reply completion wait for maintenance. Engines declaring `"foreground"` or
+omitting the mode run maintenance inline: accepted-turn finalization and reply
+completion wait for it to settle. Inline maintenance receives the committed
+session target, provider/model/token budget, LLM capability, and transcript rewrite
+capability, without background compaction permission. Transcript rewrites reopen
+the durable target rather than requiring a live session manager.
+Failed commits remain queued and do
+not trigger this handoff. Pre-run outbox recovery reconciles ingestion before
+bootstrap and assembly; it does not start concurrent background maintenance.
+Maintenance is best effort, not a crash-durable job for every committed turn, and
+one invocation does not guarantee that an engine drains all pending compaction.
 
 For these admitted turns, embedded tool-loop `assemble()` receives the history
 before the current turn, with a token budget that reserves space for pending user

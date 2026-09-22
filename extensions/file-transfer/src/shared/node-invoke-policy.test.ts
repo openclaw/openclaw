@@ -66,6 +66,25 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
+  it.each([undefined, true, false])(
+    "honors caller followSymlinks=%s within the configured permission",
+    async (followSymlinks) => {
+      const { ctx, invokeNode } = createCtx({
+        params: { path: "/tmp/file.txt", followSymlinks },
+        pluginConfig: {
+          nodes: {
+            "node-1": { allowReadPaths: ["/tmp/**"], followSymlinks: true, ask: "off" },
+          },
+        },
+      });
+      expect((await createFileTransferNodeInvokePolicy().handle(ctx)).ok).toBe(true);
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      for (const [request] of invokeNode.mock.calls) {
+        expect(request?.params).toMatchObject({ followSymlinks: followSymlinks !== false });
+      }
+    },
+  );
+
   it("normalizes string maxBytes before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
@@ -422,6 +441,28 @@ describe("file-transfer node invoke policy", () => {
       preflightOnly: true,
     });
     expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
+  });
+
+  it("refuses restricted writes before mutation when an old node ignores hardlink rejection", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "file.write",
+      params: {
+        path: "/tmp/AGENTS.md",
+        contentBase64: Buffer.from("payload").toString("base64"),
+        overwrite: true,
+        rejectHardlinks: true,
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "HARDLINK_REJECTION_UNSUPPORTED" });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      preflightOnly: true,
+      rejectHardlinks: true,
+    });
   });
 
   it("checks file.write canonical policy before the mutating node call", async () => {

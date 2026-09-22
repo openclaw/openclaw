@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -786,16 +786,20 @@ describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   async function drainPendingHeartbeatWakes(): Promise<void> {
-    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
-    const dispose = setHeartbeatWakeHandler(handler);
+    const dispose = setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
     try {
-      requestHeartbeat({
-        source: "other",
-        intent: "immediate",
-        reason: "test-cleanup",
-        coalesceMs: 0,
-      });
-      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+      // An older session wake can call the handler before this cleanup barrier settles.
+      await expect(
+        requestHeartbeatAndWait(
+          {
+            source: "other",
+            intent: "immediate",
+            reason: "test-cleanup",
+            coalesceMs: 0,
+          },
+          { abortSignal: AbortSignal.timeout(NOTIFY_EVENT_TIMEOUT_MS) },
+        ),
+      ).resolves.toEqual({ status: "ran", durationMs: 0 });
     } finally {
       dispose();
     }

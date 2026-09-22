@@ -270,8 +270,8 @@ describe("fixed-store session bootstrap", () => {
 });
 
 describe("createEmbeddedRunSessionPromptState", () => {
-  it("keeps the admitted writer fence private across context-engine target adoption", () => {
-    const state = createEmbeddedRunSessionPromptState({
+  it("keeps the admitted writer fence private across context-engine target adoption", async () => {
+    await using state = await createEmbeddedRunSessionPromptState({
       runParams: {
         agentId: "main",
         prompt: "hello",
@@ -291,6 +291,7 @@ describe("createEmbeddedRunSessionPromptState", () => {
         workspaceDir: "/tmp",
       } as never,
       lifecycleGeneration: "generation-a",
+      onInterrupt: () => {},
       resolvedSessionKey: "agent:main:main",
       sessionAgentId: "main",
     });

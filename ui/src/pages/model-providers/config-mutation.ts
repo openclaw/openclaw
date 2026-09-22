@@ -5,6 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import type { DefaultModelSelection } from "./data.ts";
 
 export type ModelBehaviorConfig = {
@@ -38,6 +39,7 @@ export function modelDefaultsActions(
       });
     },
     onUtilityChange: (model: string | null) => stageDefaults({ utilityModel: model }),
+    onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
     onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
@@ -71,6 +73,7 @@ export function buildDefaultsPatch(params: {
   primary: string;
   fallbacks: readonly string[];
   utilityModel: string | null;
+  decisionModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -88,6 +91,7 @@ export function buildDefaultsPatch(params: {
             }
           : {}),
         utilityModel: params.utilityModel,
+        ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
         fastModeDefault:
@@ -142,6 +146,18 @@ export type ModelProviderRowMessage = {
   warning?: string;
 };
 
+export function modelProviderConfigBusy(context: ApplicationContext): boolean {
+  const runtimeState = context.runtimeConfig.state;
+  const update = context.overlays.snapshot;
+  return (
+    runtimeState.configLoading ||
+    runtimeState.configSaving ||
+    runtimeState.configApplying ||
+    update.updateRunning ||
+    update.updateReconciliationPending
+  );
+}
+
 export type ModelProviderConfigMutation = {
   key: string;
   raw: Record<string, unknown>;
@@ -149,16 +165,10 @@ export type ModelProviderConfigMutation = {
   replacePaths?: string[];
 };
 
-export type ModelProviderConfigMutationResult =
-  | { ok: false }
-  | { ok: true; agentEpoch: number; warning: string | null };
-
 type ModelProviderConfigMutationOwner = {
   runtimeConfig: RuntimeConfigCapability;
-  agentEpoch: number;
   isCurrentClient: () => boolean;
   isCurrentAgent: () => boolean;
-  refreshProviders: () => Promise<void>;
   setBusy: (busy: boolean) => void;
   setMessage: (message: ModelProviderRowMessage | null) => void;
 };
@@ -185,20 +195,20 @@ export function modelProviderErrorMessage(error: unknown): string {
 }
 
 /**
- * Config patches are global; the initiating agent owns only busy/message UI.
- * Refresh warnings must preserve an already acknowledged mutation.
+ * The config owner adopts the committed snapshot and reconciles application.
+ * Saving ends at its acknowledgement, not at a second read or provider discovery.
  */
 export async function runModelProviderConfigMutation(
   owner: ModelProviderConfigMutationOwner,
   params: ModelProviderConfigMutation,
-): Promise<ModelProviderConfigMutationResult> {
-  const { agentEpoch, runtimeConfig } = owner;
+): Promise<void> {
+  const { runtimeConfig } = owner;
   owner.setBusy(true);
   owner.setMessage(null);
   try {
     await runtimeConfig.ensureLoaded();
     if (!owner.isCurrentClient()) {
-      return { ok: false };
+      return;
     }
     const patched = await runtimeConfig.patch({
       raw: params.raw,
@@ -206,7 +216,7 @@ export async function runModelProviderConfigMutation(
       ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
     });
     if (!owner.isCurrentClient()) {
-      return { ok: false };
+      return;
     }
     if (!patched) {
       if (owner.isCurrentAgent()) {
@@ -215,35 +225,11 @@ export async function runModelProviderConfigMutation(
           text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
         });
       }
-      return { ok: false };
     }
-
-    let warning: string | null = null;
-    try {
-      await runtimeConfig.refresh();
-      // The config owner records ordinary config.get failures in lastError
-      // and resolves refresh(), so rejection alone cannot detect them.
-      warning = runtimeConfig.state.lastError;
-      if (!warning && owner.isCurrentClient()) {
-        await owner.refreshProviders();
-      }
-    } catch (error) {
-      // An acknowledged config patch is already committed; a later refresh
-      // failure must not turn it into a failed credential edit.
-      warning = modelProviderErrorMessage(error);
-    }
-    if (!owner.isCurrentClient()) {
-      return { ok: false };
-    }
-    if (owner.isCurrentAgent() && warning) {
-      owner.setMessage({ kind: "warning", text: warning });
-    }
-    return { ok: true, agentEpoch, warning };
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
       owner.setMessage({ kind: "error", text: modelProviderErrorMessage(error) });
     }
-    return { ok: false };
   } finally {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
       owner.setBusy(false);
@@ -253,7 +239,7 @@ export async function runModelProviderConfigMutation(
 
 /** Credential writes share config serialization and retain acknowledged success during refresh. */
 export async function runModelProviderApiKeyMutation(
-  owner: Omit<ModelProviderConfigMutationOwner, "refreshProviders"> & {
+  owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
   },
@@ -264,18 +250,18 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string | null;
     success: string;
   },
-): Promise<ModelProviderConfigMutationResult> {
+): Promise<{ ok: false } | { ok: true; warning: string | null }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
   try {
     const result = await owner.runtimeConfig.runExternalMutation(
-      (client) => {
+      async (client) => {
         if (client !== params.client) {
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        return params.apiKey === null
+        const receipt = await (params.apiKey === null
           ? client.request<{ warning?: string }>("models.authLogout", {
               ...target,
               credentialType: "api_key",
@@ -283,7 +269,9 @@ export async function runModelProviderApiKeyMutation(
           : client.request<{ warning?: string }>("models.authSetApiKey", {
               ...target,
               apiKey: params.apiKey,
-            });
+            }));
+        invalidateModelAuthStatusRequests(client);
+        return receipt;
       },
       { canDispatch: () => isCurrent() && owner.canMutate() },
     );
@@ -312,7 +300,7 @@ export async function runModelProviderApiKeyMutation(
     }
     const warning = warnings.length > 0 ? warnings.join(" ") : null;
     owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
-    return { ok: true, agentEpoch: owner.agentEpoch, warning };
+    return { ok: true, warning };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);

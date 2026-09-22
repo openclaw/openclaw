@@ -4,6 +4,7 @@ import { ModelChoiceSchema } from "../../../packages/gateway-protocol/src/schema
 import { augmentPreparedModelCatalogWithAgentHarness } from "../../agents/harness/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -15,6 +16,114 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("models.list configured runtime choices", () => {
+  it.each([false, true])(
+    "indexes configured rows once while projecting several logical models (auth rejects: %s)",
+    async (rejectAuth) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "model-projector-rows-", agentEnv: "main" },
+        async (state) => {
+          const provider = "projection-fixture";
+          const authFailure = new Error("Configured auth read rejected");
+          let rejectAuthReads = false;
+          const configuredRowVisits = new Map<ModelDefinitionConfig, number>();
+          const models = Array.from({ length: 17 }, (_, index): ModelDefinitionConfig => ({
+            id: `model-${index}`,
+            name: `Configured ${index}`,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32_000,
+            contextTokens: 16_000 + index,
+            maxTokens: 4096,
+          }));
+          const configuredModels = new Proxy(models, {
+            get(target, key, receiver) {
+              if (key === Symbol.iterator) {
+                return function* () {
+                  for (const model of target) {
+                    configuredRowVisits.set(model, (configuredRowVisits.get(model) ?? 0) + 1);
+                    yield model;
+                  }
+                };
+              }
+              return Reflect.get(target, key, receiver);
+            },
+          });
+          const selectedIndexes = [0, 4, 8, 12, 16];
+          const entries: ModelCatalogEntry[] = selectedIndexes.map((index) => ({
+            provider,
+            id: `model-${index}`,
+            name: `Catalog ${index}`,
+            contextWindow: 8192,
+            contextTokens: 2048,
+          }));
+          const cfg: OpenClawConfig = {
+            agents: { defaults: { workspace: state.workspaceDir, model: `${provider}/model-0` } },
+            models: {
+              providers: {
+                [provider]: {
+                  baseUrl: "https://models.example.test/v1",
+                  models: configuredModels,
+                  get apiKey() {
+                    if (rejectAuthReads) {
+                      throw authFailure;
+                    }
+                    return undefined;
+                  },
+                },
+              },
+            },
+          };
+          const projector = createGatewayAgentModelCatalogProjector({
+            cfg,
+            agentId: "main",
+            snapshot: { entries, routeVariants: entries },
+            metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+            preparedAuthStore: {
+              version: 1,
+              profiles: {
+                "projection-fixture:test": { type: "api_key", provider, key: "synthetic-test-key" },
+              },
+            },
+          });
+          // Auth scope preparation visits configured models before projection begins.
+          const visitsAfterConstruction = new Map(configuredRowVisits);
+          rejectAuthReads = rejectAuth;
+          if (rejectAuth) {
+            await expect(projector.projectCatalog()).rejects.toBe(authFailure);
+            expect(configuredRowVisits).toEqual(visitsAfterConstruction);
+            return;
+          }
+          const projected = await projector.projectCatalog();
+          expect(
+            projected.map(({ name, contextWindow, contextTokens }) => ({
+              name,
+              contextWindow,
+              contextTokens,
+            })),
+          ).toEqual(
+            selectedIndexes.map((index) => ({
+              name: `Configured ${index}`,
+              contextWindow: 32_000,
+              contextTokens: 16_000 + index,
+            })),
+          );
+          expect(
+            Math.max(
+              ...Array.from(
+                configuredRowVisits,
+                ([model, visits]) => visits - (visitsAfterConstruction.get(model) ?? 0),
+              ),
+            ),
+          ).toBeLessThanOrEqual(1);
+          const visitsAfterProjection = new Map(configuredRowVisits);
+          expect(await projector.projectCatalog()).toBe(projected);
+          expect(configuredRowVisits).toEqual(visitsAfterProjection);
+        },
+      );
+    },
+  );
+
   it.each([true, false])(
     "isolates an OpenClaw alternative from native-first metadata (host donor: %s)",
     async (hostDonor) => {

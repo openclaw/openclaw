@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { DiagnosticCpuProfileOutcome } from "../../logging/diagnostic-cpu-profile.js";
+import type { captureDiagnosticCpuProfile } from "../../logging/diagnostic-cpu-profile.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -17,8 +17,37 @@ const result = {
   actualDurationMs: 5_015,
   samplingIntervalMicros: 10_000,
   sampleLossCount: null,
-  redactedNodeCount: 0,
-  profile: { nodes: [], startTime: 0, endTime: 5_015_000, samples: [], timeDeltas: [] },
+  redactedNodeCount: 1,
+  profile: {
+    nodes: [
+      {
+        id: 1,
+        callFrame: {
+          functionName: "(root)",
+          scriptId: "0",
+          url: "",
+          lineNumber: -1,
+          columnNumber: -1,
+        },
+        children: [2],
+      },
+      {
+        id: 2,
+        callFrame: {
+          functionName: "[redacted]",
+          scriptId: "12",
+          url: "",
+          lineNumber: -10,
+          columnNumber: -200,
+        },
+        positionTicks: [{ line: -9, ticks: 1 }],
+      },
+    ],
+    startTime: 0,
+    endTime: 5_015_000,
+    samples: [2],
+    timeDeltas: [10_000],
+  },
 };
 
 function request(
@@ -67,7 +96,9 @@ beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   capture
     .mockReset()
-    .mockResolvedValue({ status: "complete", result } satisfies DiagnosticCpuProfileOutcome);
+    .mockResolvedValue({ status: "complete", result } satisfies Awaited<
+      ReturnType<typeof captureDiagnosticCpuProfile>
+    >);
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
@@ -89,7 +120,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
   });
 
   it.each([undefined, {}])(
-    "lets admin request empty params %j through the lazy family",
+    "preserves signed-origin profiles for admin requests with empty params %j",
     async (params) => {
       const call = request({ params });
       await call.pending;

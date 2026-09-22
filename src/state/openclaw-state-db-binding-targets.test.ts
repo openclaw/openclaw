@@ -271,7 +271,10 @@ describe("conversation binding target migration", () => {
         migrated.db
           .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION, app_version: VERSION });
+      ).toEqual({
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        app_version: migrationPath === "runtime open" ? VERSION : null,
+      });
       expect(
         migrated.db
           .prepare(

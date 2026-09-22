@@ -276,7 +276,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       | { contextKey?: unknown; sessionKey?: unknown }
       | undefined;
     expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
-    expect(progressOptions?.sessionKey).toBe("global");
+    expect(progressOptions?.sessionKey).toBe("agent:ops:global");
     const heartbeatOptions = firstMockCall(requestHeartbeatMock, "heartbeat request")[0] as
       | { agentId?: string; reason?: string }
       | undefined;

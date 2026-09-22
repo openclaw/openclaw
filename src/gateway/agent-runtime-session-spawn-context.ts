@@ -1,3 +1,5 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+
 /** Automatic intent bound to the complete request before creation resolves aliases. */
 export type AgentRuntimeSpawnModelAutoSelection = {
   model: string;
@@ -6,7 +8,10 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
+  /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
+  requesterProfileId?: string;
   completionOwnerSessionKey?: string;
+  resolvedModel?: ProviderModelRef;
   inheritedToolPolicy: {
     version: 1;
     allow: string[];

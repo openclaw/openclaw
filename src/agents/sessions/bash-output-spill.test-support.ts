@@ -1,9 +1,15 @@
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, vi } from "vitest";
-import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
+import { bashOutputSpillEntrypoints } from "./bash-output-spill-entrypoints.test-support.js";
 
 export const nativeBashSpillScenarios = ["fault-large", "writable-large", "fault-small"] as const;
 
@@ -60,13 +66,14 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-const { root, tracePath, entrypoint, scenario, toolUrl, executorUrl } = fixture;
+const { root, tracePath, entrypoint, scenario, toolUrl, executorUrl, startedAt } = fixture;
 let traceCount = 0;
 function trace(phase, fields = {}) {
   const line = JSON.stringify({ actor: "runner", phase, at: Date.now(), ...fields }) + "\n";
   assert(++traceCount <= 32 && Buffer.byteLength(line) <= 512, "runner trace exceeded bound");
   fs.appendFileSync(tracePath, line);
 }
+trace("runner-started", { startedAt });
 const { createBashTool, createLocalBashOperations } = await import(toolUrl);
 const { executeBashWithOperations } = await import(executorUrl);
 trace("imports-ready");
@@ -86,6 +93,7 @@ let nativeError;
 let observerFailed = false;
 let creations = 0;
 let prefix = "";
+let payloadObserved = false;
 function release() {
   if (released) return;
   fs.writeFileSync(path.join(root, "release"), "release", { flag: "wx", mode: 0o600 });
@@ -106,6 +114,12 @@ function producerAlive() {
   return producer.pid;
 }
 function onText(text) {
+  if (text && !payloadObserved) {
+    const producerPid = producerAlive();
+    assert(Date.now() - startedAt < 20_000, "producer receipt exceeded child deadline");
+    payloadObserved = true;
+    trace("payload-observed", { producerPid });
+  }
   prefix = (prefix + text).slice(-64);
   if (small && prefix.includes("BEGIN:small")) release();
 }
@@ -149,6 +163,7 @@ try {
   settled = true;
   trace("call-settled", { rejected: rejection !== undefined, observerFailed, creations });
   assert.equal(observerFailed, false);
+  assert.equal(payloadObserved, true);
   assert.equal(fs.existsSync(path.join(root, "deadline")), false);
   assert.equal(fs.existsSync(path.join(root, "completed")), true);
   if (fault && !small) {
@@ -205,7 +220,8 @@ export async function expectNativeBashSpill(
   const root = await realpath(await mkdtemp(join(artifactRoot, "bash-spill-test-")));
   const tracePath = `${root}.trace`;
   let producerStopped = false;
-  let childResult: ReturnType<typeof spawnNodeEvalSync> | undefined;
+  let childResult: SpawnSyncReturns<string> | undefined;
+  let elapsedMs: number | undefined;
   const diagnostics = async () => ({
     entrypoint,
     scenario,
@@ -213,6 +229,7 @@ export async function expectNativeBashSpill(
     status: childResult?.status,
     signal: childResult?.signal,
     spawnError: childResult?.error?.message,
+    elapsedMs,
     stdout: childResult?.stdout,
     stderr: childResult?.stderr,
     trace: await readFile(tracePath, "utf8").catch(() => "trace unavailable"),
@@ -220,31 +237,45 @@ export async function expectNativeBashSpill(
   try {
     await writeFile(tracePath, "", { flag: "wx", mode: 0o600 });
     await writeFile(join(root, "producer.mjs"), producerSource, { mode: 0o600 });
+    const toolUrl = resolveRuntimeWorkerUrl(bashOutputSpillEntrypoints.tool);
+    const executorUrl = resolveRuntimeWorkerUrl(bashOutputSpillEntrypoints.executor);
+    const nodeExecPath = resolveTestNodeExecPath();
+    const startedAt = Date.now();
     const fixture = {
       root,
       tracePath,
       entrypoint,
       scenario,
-      toolUrl: new URL("./tools/bash.ts", import.meta.url).href,
-      executorUrl: new URL("./bash-executor.ts", import.meta.url).href,
+      startedAt,
+      toolUrl: toolUrl.href,
+      executorUrl: executorUrl.href,
     };
-    const result = spawnNodeEvalSync(`const fixture = ${JSON.stringify(fixture)};\n${caseSource}`, {
-      imports: ["tsx"],
-      timeout: 20_000,
-      maxBuffer: 64 * 1024,
-      env: {
-        PATH: process.env.PATH,
-        HOME: root,
-        USERPROFILE: root,
-        TMPDIR: root,
-        TMP: root,
-        TEMP: root,
-        OPENCLAW_STATE_DIR: join(root, "state"),
-        OPENCLAW_OFFLINE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        TSX_DISABLE_CACHE: "1",
+    const result = spawnSync(
+      nodeExecPath,
+      [
+        ...resolveRuntimeWorkerArgv(toolUrl, nodeExecPath).slice(0, -1),
+        ...createNodeEvalArgs(`const fixture = ${JSON.stringify(fixture)};\n${caseSource}`),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 20_000,
+        maxBuffer: 64 * 1024,
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          USERPROFILE: root,
+          TMPDIR: root,
+          TMP: root,
+          TEMP: root,
+          OPENCLAW_STATE_DIR: join(root, "state"),
+          OPENCLAW_OFFLINE: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          TSX_DISABLE_CACHE: "1",
+        },
       },
-    });
+    );
+    elapsedMs = Date.now() - startedAt;
     childResult = result;
     // The observed child is closed; release a surviving command before joining it.
     try {

@@ -46,102 +46,112 @@ export async function runCodexAppServerAttempt(
       const resources = prepareCodexAttemptResources(attemptPrompt);
       attemptTools.runtimeYieldCompletionClaim.current = () =>
         resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
-      await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
-
-      const turnRuntime = createCodexAttemptTurnState(resources);
+      let activeTurnOwnsCleanup = false;
       try {
-        const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
-        const notifications = createCodexAttemptNotificationController(
-          resources,
-          turnRuntime,
-          lifecycle,
-        );
-        const serverRequests = createCodexAttemptServerRequestController(
-          resources,
-          turnRuntime,
-          lifecycle,
-          notifications.waitForNativeTerminalItems,
-        );
-        const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
-          prepareCodexAttemptRoute(
+        await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
+
+        const turnRuntime = createCodexAttemptTurnState(resources);
+        try {
+          const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
+          const notifications = createCodexAttemptNotificationController(
+            resources,
+            turnRuntime,
+            lifecycle,
+          );
+          const serverRequests = createCodexAttemptServerRequestController(
+            resources,
+            turnRuntime,
+            lifecycle,
+            notifications.waitForNativeTerminalItems,
+          );
+          const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
+            prepareCodexAttemptRoute(
+              resources,
+              turnRuntime,
+              notifications,
+              serverRequests.handleServerRequest,
+            ),
+          );
+          const turnRequest = await preparation.measure("turn-request", () =>
+            prepareCodexAttemptTurnRequest(
+              resources,
+              turnRuntime,
+              ensureCurrentThreadRoute,
+              notifications.waitForActiveNativeTurnCompletion,
+            ),
+          );
+          preparation.ready();
+          const turnStart = await startCodexAttemptTurn(
             resources,
             turnRuntime,
             notifications,
-            serverRequests.handleServerRequest,
-          ),
-        );
-        const turnRequest = await preparation.measure("turn-request", () =>
-          prepareCodexAttemptTurnRequest(
+            turnRequest,
+          );
+          if ("result" in turnStart) {
+            return turnStart.result;
+          }
+          const activeTurn = activateCodexAttemptTurn(
             resources,
             turnRuntime,
-            ensureCurrentThreadRoute,
-            notifications.waitForActiveNativeTurnCompletion,
-          ),
-        );
-        preparation.ready();
-        const turnStart = await startCodexAttemptTurn(
-          resources,
-          turnRuntime,
-          notifications,
-          turnRequest,
-        );
-        if ("result" in turnStart) {
-          return turnStart.result;
-        }
-        const activeTurn = activateCodexAttemptTurn(
-          resources,
-          turnRuntime,
-          lifecycle,
-          notifications,
-          turnStart.turn,
-        );
-        let finalizedResult: EmbeddedRunAttemptResult | undefined;
-        try {
+            lifecycle,
+            notifications,
+            turnStart,
+          );
+          activeTurnOwnsCleanup = true;
+          let finalizedResult: EmbeddedRunAttemptResult | undefined;
           try {
-            await activeTurn.ready;
-            finalizedResult = await finalizeCodexAttempt(
-              resources,
-              turnRuntime,
-              lifecycle,
-              notifications,
-              turnRequest,
-              activeTurn,
-            );
-          } finally {
-            await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+            try {
+              await activeTurn.ready;
+              finalizedResult = await finalizeCodexAttempt(
+                resources,
+                turnRuntime,
+                lifecycle,
+                notifications,
+                turnRequest,
+                activeTurn,
+              );
+            } finally {
+              await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+            }
+          } catch (error) {
+            if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
+              throw error;
+            }
+            // A failed handoff still owns completed effects. Return their replay
+            // evidence rather than throwing them away at the cleanup boundary.
+            const original = attemptTerminal.project(finalizedResult.terminal).promptError;
+            finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
+              kind: "failed",
+              source: "prompt",
+              error: new AggregateError(
+                original ? [original, error] : [error],
+                "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
+              ),
+            });
+            delete finalizedResult.pluginRuntimeRefreshMessages;
+            delete finalizedResult.settledTurnFinalizationContext;
           }
-        } catch (error) {
-          if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
-            throw error;
+          // Cleanup retires the execution lease; only then can device loss no longer
+          // race the final result captured during asynchronous terminal processing.
+          if (
+            resources.state.executionDisconnectError &&
+            !connection.terminalState.explicitCancellationObserved
+          ) {
+            throw resources.state.executionDisconnectError;
           }
-          // A failed handoff still owns completed effects. Return their replay
-          // evidence rather than throwing them away at the cleanup boundary.
-          const original = attemptTerminal.project(finalizedResult.terminal).promptError;
-          finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
-            kind: "failed",
-            source: "prompt",
-            error: new AggregateError(
-              original ? [original, error] : [error],
-              "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
-            ),
-          });
-          delete finalizedResult.pluginRuntimeRefreshMessages;
-          delete finalizedResult.settledTurnFinalizationContext;
+          return finalizedResult;
+        } finally {
+          turnRuntime.deadlines.dispose();
         }
-        // Cleanup retires the execution lease; only then can device loss no longer
-        // race the final result captured during asynchronous terminal processing.
-        if (
-          resources.state.executionDisconnectError &&
-          !connection.terminalState.explicitCancellationObserved
-        ) {
-          throw resources.state.executionDisconnectError;
-        }
-        return finalizedResult;
       } finally {
-        turnRuntime.deadlines.dispose();
+        if (!activeTurnOwnsCleanup) {
+          await resources.cleanupBeforeActiveTurn();
+        }
       }
     } finally {
-      await attemptTools.disposeMcpTools();
+      await attemptTools.disposeTools(
+        connection.runAbortController.signal.aborted ? "cancel" : "error",
+      );
     }
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.

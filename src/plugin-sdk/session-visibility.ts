@@ -51,11 +51,29 @@ type ScopedSessionAccessProvider = (
   request: ScopedSessionAccessRequest,
 ) => ScopedSessionAccessGrant | undefined;
 
-const scopedSessionAccessProviders = new Set<ScopedSessionAccessProvider>();
+type ScopedSessionAccessRegistration = {
+  provider: ScopedSessionAccessProvider;
+  resolveAsync?: (
+    request: ScopedSessionAccessRequest,
+  ) => Promise<ScopedSessionAccessGrant | undefined>;
+};
 
-function registerScopedSessionAccessProvider(provider: ScopedSessionAccessProvider): () => void {
-  scopedSessionAccessProviders.add(provider);
-  return () => scopedSessionAccessProviders.delete(provider);
+const scopedSessionAccessProviders = new Map<
+  ScopedSessionAccessProvider,
+  ScopedSessionAccessRegistration
+>();
+
+function registerScopedSessionAccessProvider(
+  provider: ScopedSessionAccessProvider,
+  options?: Pick<ScopedSessionAccessRegistration, "resolveAsync">,
+): () => void {
+  const registration = { provider, resolveAsync: options?.resolveAsync };
+  scopedSessionAccessProviders.set(provider, registration);
+  return () => {
+    if (scopedSessionAccessProviders.get(provider) === registration) {
+      scopedSessionAccessProviders.delete(provider);
+    }
+  };
 }
 
 function resolveScopedSessionAccess(
@@ -66,7 +84,7 @@ function resolveScopedSessionAccess(
   if (resolveIncognitoSessionAccessDecision(request.targetSessionKey)) {
     return undefined;
   }
-  for (const provider of scopedSessionAccessProviders) {
+  for (const provider of scopedSessionAccessProviders.keys()) {
     try {
       const grant = provider(request);
       const expectedSessionId = normalizeOptionalString(grant?.expectedSessionId);
@@ -75,6 +93,32 @@ function resolveScopedSessionAccess(
       }
     } catch {
       // Access providers fail closed; normal visibility evaluation still runs.
+    }
+  }
+  return undefined;
+}
+
+async function resolveScopedSessionAccessAsync(
+  request: ScopedSessionAccessRequest,
+): Promise<ScopedSessionAccessGrant | undefined> {
+  if (resolveIncognitoSessionAccessDecision(request.targetSessionKey)) {
+    return undefined;
+  }
+  // A replacement registration cannot authorize work admitted by its predecessor.
+  const registrations = [...scopedSessionAccessProviders.values()];
+  for (const registration of registrations) {
+    const { provider, resolveAsync } = registration;
+    if (scopedSessionAccessProviders.get(provider) !== registration) {
+      continue;
+    }
+    try {
+      const grant = await (resolveAsync ?? provider)(request);
+      const expectedSessionId = normalizeOptionalString(grant?.expectedSessionId);
+      if (expectedSessionId && scopedSessionAccessProviders.get(provider) === registration) {
+        return { expectedSessionId };
+      }
+    } catch {
+      // Do not retry a declined async decision through its synchronous companion.
     }
   }
   return undefined;
@@ -337,6 +381,7 @@ function createSessionVisibilityCheckerImpl(
 export const createSessionVisibilityChecker = Object.assign(createSessionVisibilityCheckerImpl, {
   registerScopedAccessProvider: registerScopedSessionAccessProvider,
   resolveScopedAccess: resolveScopedSessionAccess,
+  resolveScopedAccessAsync: resolveScopedSessionAccessAsync,
 });
 
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */

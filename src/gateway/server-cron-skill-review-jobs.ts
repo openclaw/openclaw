@@ -28,7 +28,6 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   params.commitGuard?.();
 
   const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs);
-  const desired = new Set(specs.map((spec) => spec.agentId));
   const { retained, duplicates } = partitionSystemMonitors(
     jobs,
     skillCollectionReviewMonitorAgentId,
@@ -55,6 +54,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   for (const spec of specs) {
     await yieldToEventLoop();
     params.commitGuard?.();
+    retained.delete(spec.agentId);
     try {
       await params.cron.add(spec.input, {
         enabledExplicit: true,
@@ -73,9 +73,6 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   }
 
   for (const [agentId, job] of retained) {
-    if (desired.has(agentId)) {
-      continue;
-    }
     await yieldToEventLoop();
     params.commitGuard?.();
     try {

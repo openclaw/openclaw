@@ -33,7 +33,9 @@ const store = vi.hoisted(() => {
         }),
     ),
     writeDurableComposerDraft: vi.fn(async () => ({ status: "persisted" as const })),
-    retireDurableComposerDraft: vi.fn(async () => ({ status: "persisted" as const })),
+    retireDurableComposerDraft: vi.fn<
+      typeof import("../../lib/chat/composer-draft-store.runtime.ts").retireDurableComposerDraft
+    >(async () => ({ status: "persisted" as const })),
     writeDurableComposerSnapshot: vi.fn<
       typeof import("../chat/durable-composer-persistence.ts").writeDurableComposerSnapshot
     >(async () => ({
@@ -93,6 +95,86 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("saves the captured normal draft after retirement settles on another route", async () => {
+    let finishRetirement!: (result: {
+      status: "persisted";
+      revision: number;
+      writeId: string;
+    }) => void;
+    store.retireDurableComposerDraft.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRetirement = resolve;
+        }),
+    );
+    const flow = createFlow();
+    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+    flow.draftPersistence.selectRoute("original-route");
+    flow.setVisibility("incognito");
+    flow.setMessage("private input becoming an ordinary draft");
+    flow.setVisibility("normal");
+    flow.draftPersistence.selectRoute("other-route");
+    flow.setMessage("other route input");
+    await vi.waitFor(() => expect(finishRetirement).toBeTypeOf("function"));
+    expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+    const revision = Date.now() + 1000;
+    finishRetirement({ status: "persisted", revision, writeId: "retired:original" });
+    await settle();
+    expect(store.writeDurableComposerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ scopeKey: "original-route" }),
+        text: "private input becoming an ordinary draft",
+        expectedRevision: revision,
+        expectedWriteId: "retired:original",
+      }),
+    );
+    expect(flow.message).toBe("other route input");
+    flow.disconnect();
+    await settle();
+  });
+
+  it.each([false, true])(
+    "revokes a waiting ordinary write before a second retirement settles (newer edit: %s)",
+    async (editAgain) => {
+      const retirements: Array<
+        (result: { status: "persisted"; revision: number; writeId: string }) => void
+      > = [];
+      const holdRetirement = () =>
+        new Promise<{ status: "persisted"; revision: number; writeId: string }>((resolve) => {
+          retirements.push(resolve);
+        });
+      store.retireDurableComposerDraft
+        .mockImplementationOnce(holdRetirement)
+        .mockImplementationOnce(holdRetirement);
+      const flow = createFlow();
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.selectRoute("private-route");
+      flow.setVisibility("incognito");
+      flow.setMessage("must remain private");
+      flow.setVisibility("normal");
+      flow.draftPersistence.persistNow();
+      if (editAgain) {
+        flow.setMessage("newer private input");
+      }
+      flow.setVisibility("incognito");
+      await vi.waitFor(() => expect(retirements).toHaveLength(2));
+      const [finishFirst, finishSecond] = retirements;
+      if (!finishFirst || !finishSecond) {
+        throw new Error("Both privacy retirements must be pending");
+      }
+      const revision = Date.now() + 1000;
+      finishFirst({ status: "persisted", revision, writeId: "retired:first" });
+      await settle();
+      // The later retirement is deliberately still pending: CAS cannot fence this interval.
+      expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+      finishSecond({ status: "persisted", revision: revision + 1, writeId: "retired:second" });
+      await settle();
+      expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+      expect(flow.visibility).toBe("incognito");
+      flow.disconnect();
+    },
+  );
+
   it("keeps an incognito draft private when navigation hands it to a fresh page", async () => {
     const { context, flow: source } = createDraftFixture();
     const handoff = createChatAttachmentHandoff();

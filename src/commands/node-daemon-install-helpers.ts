@@ -46,6 +46,7 @@ export async function buildNodeInstallPlan(params: {
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
@@ -55,6 +56,7 @@ export async function buildNodeInstallPlan(params: {
     runtime: params.runtime,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
+    pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({

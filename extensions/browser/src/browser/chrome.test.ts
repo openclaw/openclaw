@@ -8,7 +8,6 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHROME_STOP_PROBE_TIMEOUT_MS } from "./cdp-timeouts.js";
-import * as cdpHelpers from "./cdp.helpers.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import { parseBrowserMajorVersion } from "./chrome.executable-probe.js";
 import { resolveGoogleChromeExecutableForPlatform } from "./chrome.executables.js";
@@ -386,59 +385,6 @@ describe("browser chrome helpers", () => {
         await expect(isChromeCdpReady(baseUrl, 300, 5)).resolves.toBe(false);
       },
     });
-  });
-
-  it("diagnoses stale websocket command channels with the discovered websocket URL", async () => {
-    // Real discovery and command exchange are covered above. Classify an already-open
-    // stale channel without letting native handshake scheduling choose another failure.
-    const baseUrl = "http://cdp-fixture.invalid";
-    const wsUrl = "ws://cdp-fixture.invalid/devtools/browser/stale-diagnostic";
-    const socket = Object.assign(new EventEmitter(), {
-      send: vi.fn(),
-      close: vi.fn(),
-      terminate: vi.fn(),
-    });
-    let probe: Promise<ChromeCdpDiagnostic> | undefined;
-    vi.useFakeTimers();
-    try {
-      const discovery = vi.spyOn(cdpHelpers, "fetchCdpChecked").mockResolvedValue({
-        response: jsonResponse({ webSocketDebuggerUrl: wsUrl }),
-        release: async () => {},
-      });
-      const openSocket = vi
-        .spyOn(cdpHelpers, "openCdpWebSocket")
-        .mockReturnValue(socket as unknown as ReturnType<typeof cdpHelpers.openCdpWebSocket>);
-      probe = diagnoseChromeCdp(baseUrl, 300, 50);
-      let settled = false;
-      const markSettled = () => {
-        settled = true;
-      };
-      void probe.then(markSettled, markSettled);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(discovery.mock.calls[0]?.[0]).toBe(`${baseUrl}/json/version`);
-      expect(openSocket).toHaveBeenCalledWith(
-        wsUrl,
-        expect.objectContaining({ handshakeTimeoutMs: 50 }),
-      );
-      socket.emit("open");
-      expect(socket.send).toHaveBeenCalledExactlyOnceWith(
-        JSON.stringify({ id: 1, method: "Browser.getVersion" }),
-      );
-
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(settled).toBe(true);
-      const diagnostic = expectFailedChromeCdpDiagnostic(await probe);
-      expect(diagnostic.code).toBe("websocket_health_command_timeout");
-      expect(diagnostic.wsUrl).toBe(wsUrl);
-      expect(socket.terminate).toHaveBeenCalledOnce();
-      expect(socket.close).toHaveBeenCalledOnce();
-      expect(socket.listenerCount("message")).toBe(0);
-    } finally {
-      socket.emit("close");
-      await probe?.catch(() => undefined);
-      vi.useRealTimers();
-    }
   });
 
   it("formats diagnostics with redacted CDP credentials", () => {

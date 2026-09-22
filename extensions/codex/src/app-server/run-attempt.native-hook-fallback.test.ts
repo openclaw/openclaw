@@ -6,12 +6,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import {
-  createEmptyPluginRegistry,
-  createMockPluginRegistry,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -27,7 +23,6 @@ import {
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
-afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("Codex native hook Gateway fallback", () => {
   it.each(["fresh", "resumed"] as const)(

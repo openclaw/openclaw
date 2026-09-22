@@ -1,11 +1,62 @@
 // Reads PID-reuse-safe Windows process start identities without workspace imports.
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { resolveDiagnosticProcessEnv, resolveEnvironmentValue } from "./process-env.ts";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+declare const SEALED_RUNTIME_BUILD: boolean;
+let nativeProcessStartTime: ((pid: number) => number | null) | undefined;
+
+function loadNativeProcessStartTime(): (pid: number) => number | null {
+  const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
+  const kernel32 = koffi.load("kernel32.dll");
+  const openProcess = kernel32.func(
+    "void * __stdcall OpenProcess(uint32_t access, int32_t inheritHandle, uint32_t processId)",
+  );
+  const getProcessTimes = kernel32.func(
+    "int32_t __stdcall GetProcessTimes(void *process, void *creation, void *exit, void *kernel, void *user)",
+  );
+  const closeHandle = kernel32.func("int32_t __stdcall CloseHandle(void *handle)");
+  return (pid) => {
+    const handle: bigint | null = openProcess(0x1000, 0, pid);
+    if (handle === null) {
+      return null;
+    }
+    try {
+      const creation = Buffer.alloc(8);
+      if (!getProcessTimes(handle, creation, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) {
+        return null;
+      }
+      const ticks = creation.readBigUInt64LE();
+      if (ticks === 0n) {
+        return null;
+      }
+      // FILETIME exceeds Number's exact integer range; discard sub-millisecond ticks first.
+      return Number(ticks / 10000n - 11644473600000n);
+    } finally {
+      closeHandle(handle);
+    }
+  };
+}
+
+function readNativeProcessStartTime(pid: number): number | null {
+  // Sealed updater helpers must remain independent of the replaced installation's native modules.
+  if (
+    process.platform !== "win32" ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return null;
+  }
+  try {
+    nativeProcessStartTime ??= loadNativeProcessStartTime();
+    return nativeProcessStartTime(pid);
+  } catch {
+    return null;
+  }
+}
 
 function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
   const configured =
@@ -83,12 +134,20 @@ export function readWindowsProcessStartTimeSync(
   timeoutMs = DEFAULT_PROCESS_START_TIMEOUT_MS,
   env: NodeJS.ProcessEnv = process.env,
 ): number | null {
-  if (!Number.isInteger(pid) || pid <= 0) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
     return null;
   }
   // Preserve both former 5s attempts inside one deadline. Explicit callers
   // still keep their smaller end-to-end budget.
   const deadline = Date.now() + timeoutMs;
+  const nativeStartTime = readNativeProcessStartTime(pid);
+  if (nativeStartTime !== null) {
+    return nativeStartTime;
+  }
+  const powershellBudgetMs = deadline - Date.now();
+  if (powershellBudgetMs <= 0) {
+    return null;
+  }
   const powershell = spawnSync(
     windowsPowerShellPath(env),
     [
@@ -102,7 +161,7 @@ export function readWindowsProcessStartTimeSync(
     {
       encoding: "utf8",
       env: resolveDiagnosticProcessEnv(env, "win32"),
-      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
+      timeout: Math.min(powershellBudgetMs, DEFAULT_TIMEOUT_MS),
       windowsHide: true,
     },
   );

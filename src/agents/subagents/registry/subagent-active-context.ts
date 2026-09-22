@@ -4,6 +4,7 @@
  * Renders sanitized runtime-owned subagent facts for the current-turn carrier.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { sanitizeForPromptLiteral } from "../../sanitize-for-prompt.js";
@@ -13,15 +14,16 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
-import { buildSubagentList } from "./subagent-list.js";
+import {
+  buildSubagentList,
+  captureSubagentListReadContext,
+  readSubagentListSessionEntries,
+} from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
-import {
-  getSubagentRunsSnapshotForSession,
-  getSubagentSessionListRunsSnapshotForRead,
-} from "./subagent-registry-state.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { sortSubagentRuns } from "./subagent-run-view.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -71,13 +73,13 @@ function formatPendingResult(entry: SubagentRunRecord): string {
 }
 
 /** Builds a bounded, deterministic snapshot without repeating system instructions. */
-export function buildActiveSubagentRuntimeContext(params: {
+export async function buildActiveSubagentRuntimeContext(params: {
   cfg: OpenClawConfig;
   controllerSessionKey?: string;
   controllerAgentId?: string;
   recentMinutes?: number;
   includeSpawnContext?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const rawControllerSessionKey = params.controllerSessionKey?.trim();
   if (!rawControllerSessionKey) {
     return undefined;
@@ -89,113 +91,128 @@ export function buildActiveSubagentRuntimeContext(params: {
     mainKey,
   });
   const agentId = params.controllerAgentId ?? parseAgentSessionKey(controllerSessionKey)?.agentId;
-  const snapshot = agentId
-    ? getSubagentRunsSnapshotForSession(subagentRuns, controllerSessionKey)
-    : new Map<string, SubagentRunRecord>();
-  const readSnapshot = getSubagentSessionListRunsSnapshotForRead(subagentRuns);
-  for (const [runId, entry] of snapshot) {
-    readSnapshot.set(runId, entry);
+  if (!agentId) {
+    return undefined;
   }
-  const latest = buildSubagentRunReadIndexFromRuns({
-    runs: readSnapshot,
-  }).latestRunsByChildSessionKey;
-  const visible = agentId
-    ? [...snapshot.values()].filter((entry) =>
-        isSubagentRunVisibleToSession(entry, controllerSessionKey, agentId, params.cfg),
-      )
-    : [];
-  const runs = sortSubagentRuns(
-    visible.filter((entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId),
+  const storePath = resolvePhysicalSessionStorePath(
+    { sessionKey: controllerSessionKey, agentId },
+    params.cfg,
   );
-  // Read every retained generation through the same visibility policy. A newer
-  // execution or a recent-history cutoff cannot acknowledge an older result.
-  const pending = agentId
-    ? visible
+  const isVisible = (entry: SubagentRunReadRecord) =>
+    isSubagentRunVisibleToSession(entry, controllerSessionKey, agentId, params.cfg) &&
+    ((entry.controllerSessionKey?.trim() === controllerSessionKey &&
+      entry.controllerStorePath === storePath) ||
+      (entry.requesterSessionKey.trim() === controllerSessionKey &&
+        entry.requesterStorePath === storePath));
+  return withSubagentRunReadSnapshot(
+    subagentRuns,
+    (snapshot) => {
+      const index = buildSubagentRunReadIndexFromRuns({
+        runs: snapshot,
+        inMemoryRuns: subagentRuns.values(),
+      });
+      const yielded = [...index.latestRunsByChildSessionKey.values()].filter(
+        (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
+      );
+      return {
+        index,
+        runIds: [],
+        sessionKeys: [controllerSessionKey, ...yielded.map((entry) => entry.childSessionKey)],
+      };
+    },
+    ({ index }, snapshot) => {
+      const latest = index.latestRunsByChildSessionKey;
+      const visible = [...snapshot.values()].filter(isVisible);
+      const runs = visible.filter(
+        (entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId,
+      );
+      // Read every retained generation through the same visibility policy. A newer
+      // execution or a recent-history cutoff cannot acknowledge an older result.
+      const pending = visible
         .filter(hasOutstandingCompletion)
         .toSorted(
           (left, right) =>
             (left.execution.endedAt ?? 0) - (right.execution.endedAt ?? 0) ||
             (left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : 0),
-        )
-    : [];
-  if (runs.length === 0 && pending.length === 0) {
-    return undefined;
-  }
-  const recentMinutes = params.recentMinutes ?? 30;
-  const list = buildSubagentList({
-    cfg: params.cfg,
-    runs,
-    recentMinutes,
-    taskMaxChars: 96,
-    readSnapshot,
-  });
-  // buildSubagentList returns recent runs in registry order, so sort before
-  // capping to keep the prompt block deterministic across turns.
-  const pendingIds = new Set(pending.map((entry) => entry.runId));
-  const recentForPrompt = list.recent
-    .filter((entry) => !pendingIds.has(entry.runId))
-    .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
-    .slice(0, RECENT_PROMPT_MAX_ENTRIES);
-  if (
-    pending.length === 0 &&
-    (params.includeSpawnContext === false ||
-      (list.active.length === 0 && recentForPrompt.length === 0))
-  ) {
-    return undefined;
-  }
-  const formatEntry = (entry: (typeof list.active)[number]) =>
-    [
-      "-",
-      entry.taskName
-        ? `taskName_json=${quotePromptData(truncateUtf16Safe(entry.taskName, 64))};`
-        : undefined,
-      `session=${entry.sessionKey};`,
-      `run=${entry.runId};`,
-      `status=${entry.status};`,
-      `execution=${entry.execution.state};`,
-      entry.execution.wait ? `wait=${entry.execution.wait.kind};` : undefined,
-      entry.execution.wait?.dependencies
-        ? `wait_runs=${JSON.stringify(entry.execution.wait.dependencies.map((child) => child.runId))};`
-        : undefined,
-      entry.deliveryStatus ? `delivery=${entry.deliveryStatus};` : undefined,
-      entry.resume ? `resume_rpc=${entry.resume.method};` : undefined,
-      `label_json=${quotePromptData(entry.label)};`,
-      `task_json=${quotePromptData(entry.task)}`,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  const lines: string[] = [];
-  if (params.includeSpawnContext !== false && list.active.length > 0) {
-    lines.push(
-      "## Active Subagents",
-      ...list.active
-        .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
-        .slice(0, 16)
-        .map(formatEntry),
-      ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
-    );
-  }
-  if (params.includeSpawnContext !== false && recentForPrompt.length > 0) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push(
-      "## Recently Completed Subagents",
-      `Children that ended in the last ${recentMinutes}m, newest first:`,
-      ...recentForPrompt.map(formatEntry),
-    );
-  }
-  if (pending.length > 0) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push(
-      "## Child results awaiting delivery",
-      ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
-      ...(pending.length > PENDING_RESULT_MAX_ENTRIES
-        ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]
-        : []),
-    );
-  }
-  return lines.join("\n");
+        );
+      if (runs.length === 0 && pending.length === 0) {
+        return undefined;
+      }
+      const recentMinutes = params.recentMinutes ?? 30;
+      const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
+      const list = buildSubagentList({
+        context,
+        sessionEntries: readSubagentListSessionEntries(params.cfg, context),
+        taskMaxChars: 96,
+      });
+      // buildSubagentList returns recent runs in registry order, so sort before
+      // capping to keep the prompt block deterministic across turns.
+      const pendingIds = new Set(pending.map((entry) => entry.runId));
+      const recentForPrompt = list.recent
+        .filter((entry) => !pendingIds.has(entry.runId))
+        .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
+        .slice(0, RECENT_PROMPT_MAX_ENTRIES);
+      if (
+        pending.length === 0 &&
+        (params.includeSpawnContext === false ||
+          (list.active.length === 0 && recentForPrompt.length === 0))
+      ) {
+        return undefined;
+      }
+      const formatEntry = (entry: (typeof list.active)[number]) =>
+        [
+          "-",
+          entry.taskName
+            ? `taskName_json=${quotePromptData(truncateUtf16Safe(entry.taskName, 64))};`
+            : undefined,
+          `session=${entry.sessionKey};`,
+          `run=${entry.runId};`,
+          `status=${entry.status};`,
+          `execution=${entry.execution.state};`,
+          entry.execution.wait ? `wait=${entry.execution.wait.kind};` : undefined,
+          entry.execution.wait?.dependencies
+            ? `wait_runs=${JSON.stringify(entry.execution.wait.dependencies.map((child) => child.runId))};`
+            : undefined,
+          entry.deliveryStatus ? `delivery=${entry.deliveryStatus};` : undefined,
+          `label_json=${quotePromptData(entry.label)};`,
+          `task_json=${quotePromptData(entry.task)}`,
+        ]
+          .filter(Boolean)
+          .join(" ");
+      const lines: string[] = [];
+      if (params.includeSpawnContext !== false && list.active.length > 0) {
+        lines.push(
+          "## Active Subagents",
+          ...list.active
+            .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
+            .slice(0, 16)
+            .map(formatEntry),
+          ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
+        );
+      }
+      if (params.includeSpawnContext !== false && recentForPrompt.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(
+          "## Recently Completed Subagents",
+          `Children that ended in the last ${recentMinutes}m, newest first:`,
+          ...recentForPrompt.map(formatEntry),
+        );
+      }
+      if (pending.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(
+          "## Child results awaiting delivery",
+          ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
+          ...(pending.length > PENDING_RESULT_MAX_ENTRIES
+            ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]
+            : []),
+        );
+      }
+      return lines.join("\n");
+    },
+  );
 }

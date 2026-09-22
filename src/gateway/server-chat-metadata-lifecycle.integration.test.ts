@@ -282,6 +282,8 @@ describe("gateway chat metadata lifecycle composition", () => {
       let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
+        expect(loadModelCatalog).toHaveBeenCalled();
+        loadModelCatalog.mockClear();
         const owner = getPreparedModelCatalogOwnerSnapshot({
           agentId: "main",
           config: nativeConfig,
@@ -369,10 +371,10 @@ describe("gateway chat metadata lifecycle composition", () => {
     { wildcard: false, invalidate: "dispose", authoritative: true },
     { wildcard: false, invalidate: "dispose", authoritative: false },
   ])(
-    "registered models.list preserves native metadata and pin authority after no-op discovery (wildcard=$wildcard, $invalidate, authoritative=$authoritative)",
+    "registered models.list preserves native metadata and pin authority after discovery (wildcard=$wildcard, $invalidate, authoritative=$authoritative)",
     async ({ wildcard, invalidate, authoritative }) => {
       const modelRef = wildcard ? "openai/*" : "openai/codex-latest";
-      // An authored picker entry without a primary model does not start native discovery.
+      // Picker preparation discovers native catalogs even without a primary model.
       const nativeConfig: OpenClawConfig = {
         agents: {
           defaults: {
@@ -383,6 +385,13 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       };
       let currentConfig = nativeConfig;
+      const readOwner = () =>
+        getPreparedModelCatalogOwnerSnapshot({
+          agentId: "main",
+          config: currentConfig,
+          readOnly: true,
+          allowGatewaySubagentBinding: true,
+        });
       const nativeModel = {
         provider: "openai",
         id: "codex-latest",
@@ -408,7 +417,8 @@ describe("gateway chat metadata lifecycle composition", () => {
           provider: "openai",
           modelId: "codex-latest",
         });
-        if (scope.config !== nativeConfig) {
+        // Native observations retain their preparation identity across public config stamps.
+        if (scope.config !== readOwner()?.observationConfig) {
           return undefined;
         }
         return !disposed && observedRevision === revision ? { accountType: "apiKey" } : undefined;
@@ -452,6 +462,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       };
       try {
         await publishOwner(nativeConfig);
+        expect(loadModelCatalog).toHaveBeenCalled();
+        const preparationCalls = loadModelCatalog.mock.calls.length;
+        loadModelCatalog.mockClear();
+        revision += 1;
         const lifecycle = await createLifecycle(() => currentConfig);
         await lifecycle.attachContext(nativeContext, sidecars.publish);
         const expectedModels = (available: boolean) =>
@@ -465,12 +479,7 @@ describe("gateway chat metadata lifecycle composition", () => {
                   available,
                 }),
               ];
-        const owner = getPreparedModelCatalogOwnerSnapshot({
-          agentId: "main",
-          config: nativeConfig,
-          readOnly: true,
-          allowGatewaySubagentBinding: true,
-        });
+        const owner = readOwner();
         if (!owner) {
           throw new Error("expected prepared native model owner");
         }
@@ -491,10 +500,10 @@ describe("gateway chat metadata lifecycle composition", () => {
             context: nativeContext,
           });
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(expected), undefined);
+          await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           const catalogs = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
           expect(catalogs?.sessionModelCatalog).toBe(catalogs?.defaultModelCatalog);
           expect(catalogs).not.toHaveProperty("metadata");
-          await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toMatchObject({
             metadata: expected,
           });
@@ -645,18 +654,13 @@ describe("gateway chat metadata lifecycle composition", () => {
             expect(events).toContain("published");
             expect(events).not.toContain("failed");
             await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
-            const replacement = getPreparedModelCatalogOwnerSnapshot({
-              agentId: "main",
-              config: nativeConfig,
-              readOnly: true,
-              allowGatewaySubagentBinding: true,
-            });
+            const replacement = readOwner();
             expect(replacement).toBeDefined();
             expect(replacement).not.toBe(owner);
             expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
             await lifecycle.read({ agentId: "main" });
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
             expect({ current: staleCurrent, models: staleModels }).toMatchObject({
               current: false,
               models: expectedModels(false),
@@ -681,12 +685,7 @@ describe("gateway chat metadata lifecycle composition", () => {
 
         if (invalidate === "stamp") {
           advancePreparedModelRuntimeConfig(currentConfig);
-          const advanced = getPreparedModelCatalogOwnerSnapshot({
-            agentId: "main",
-            config: currentConfig,
-            readOnly: true,
-            allowGatewaySubagentBinding: true,
-          });
+          const advanced = readOwner();
           expect(advanced).not.toBe(owner);
           expect(advanced?.config).toBe(currentConfig);
           expect(advanced?.pluginRegistry).toBe(owner.pluginRegistry);

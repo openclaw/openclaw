@@ -13,7 +13,9 @@ import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
 } from "../../agents/model-catalog-view.js";
+import { resolveLogicalModelCatalogEntryState } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -76,11 +78,6 @@ export async function prepareModelPickerRuntimeChoices(params: {
         });
         // Authorization keeps every observed route; metadata donors stay runtime-specific.
         const runtimeHost = await decisions.evaluateEntry(runtimeEntry, variants, runtimeId);
-        const preparedEntries = new Map<
-          | ModelAuthAvailabilityEvaluation["selectedRoute"]
-          | ModelAuthAvailabilityEvaluation["routeResolution"],
-          ModelCatalogEntry
-        >();
         const runtimeRegistered =
           runtimeId === "openclaw" ||
           decisions.pluginRegistry?.agentHarnesses.some(
@@ -93,12 +90,13 @@ export async function prepareModelPickerRuntimeChoices(params: {
           );
         return () => {
           const evaluation = evaluateNative(runtimeEntry, runtimeHost, runtimeId);
-          const projectionKey = evaluation.selectedRoute ?? evaluation.routeResolution;
-          let projected = preparedEntries.get(projectionKey);
-          if (!projected) {
-            projected = runtimeView.project(runtimeEntry, evaluation).runtimeEntry;
-            preparedEntries.set(projectionKey, projected);
-          }
+          const projected = runtimeView.readProjection(
+            runtimeEntry,
+            resolveLogicalModelCatalogEntryState({
+              evaluation,
+              routePolicy: openAIModelCatalogRoutePolicy,
+            }).routeProjection,
+          ).runtimeEntry;
           const {
             id: _id,
             name: _name,

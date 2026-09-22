@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   ensureRepositoryWorkspacePendingResultSchema,
   hasRepositoryWorkspacePendingResultSchema,
@@ -125,10 +126,13 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
   );
 }
 
-export function readWorkerWorkspaceReconcilingSessionIds(
+export function readWorkerWorkspaceReconciliationFacts(
   db: DatabaseSync,
   sessionIds: readonly string[],
-): ReadonlySet<string> {
+): {
+  placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  reconcilingSessionIds: ReadonlySet<string>;
+} {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
   const pendingResults: StateDatabase["worker_workspace_pending_results"][] = [];
   for (let offset = 0; offset < sessionIds.length; offset += 250) {
@@ -153,7 +157,7 @@ export function readWorkerWorkspaceReconcilingSessionIds(
       pendingResults.push(row);
     }
   }
-  return new Set(
+  const reconcilingSessionIds = new Set(
     pendingResults.flatMap((row) => {
       const placement = placements.get(row.session_id);
       const pending: WorkerWorkspacePendingResult = {
@@ -175,6 +179,7 @@ export function readWorkerWorkspaceReconcilingSessionIds(
         : [];
     }),
   );
+  return { placements, reconcilingSessionIds };
 }
 
 export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
@@ -237,6 +242,7 @@ export function insertWorkerWorkspacePendingResult(
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
   if (result.numAffectedRows === 1n) {
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
   const existing = executeSqliteQuerySync(
@@ -301,6 +307,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
     if (!row || !matchesWorkspaceResultClaim(placement, row, claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return row;
   };
   return {

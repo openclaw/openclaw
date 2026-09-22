@@ -1,194 +1,65 @@
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
-import { readNativeHookRelayBridgeRow } from "./native-hook-relay-bridge-query.js";
-import {
-  readNativeHookRelayBridgeRecordRow,
-  type NativeHookRelayBridgeRecord,
-} from "./native-hook-relay-bridge-record.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-bridge-record.js";
+import type {
+  NativeHookRelayBridgePruneCandidate,
+  NativeHookRelayBridgePruneResult,
+} from "./native-hook-relay-store.kernel.js";
 
 export type { NativeHookRelayBridgeRecord } from "./native-hook-relay-bridge-record.js";
 
-type NativeHookRelayBridgePruneResult = {
-  relayId: string;
-  pid: number;
-  reason: "dead-pid" | "expired";
-};
-
-type NativeHookRelayBridgeDatabase = Pick<OpenClawStateKyselyDatabase, "native_hook_relay_bridges">;
-
-type NativeHookRelayBridgeRow = OpenClawStateKyselyDatabase["native_hook_relay_bridges"];
-
-type NativeHookRelayBridgeSnapshot = {
+type NativeHookRelayBridgeStoreOptions = { stateDbPath?: string };
+type NativeHookRelayBridgeWriteParams = NativeHookRelayBridgeStoreOptions & {
   record: NativeHookRelayBridgeRecord;
-  updatedAtMs: number;
+  updatedAtMs?: number;
+  assertCurrent?: () => void;
 };
-
-type NativeHookRelayBridgePruneCandidate = {
-  snapshot: NativeHookRelayBridgeSnapshot;
-  reason: NativeHookRelayBridgePruneResult["reason"];
-};
-
-type NativeHookRelayBridgeStoreOptions = {
-  stateDbPath?: string;
-};
-
-function readNativeHookRelayBridgeSnapshot(
-  row: NativeHookRelayBridgeRow | undefined,
-): NativeHookRelayBridgeSnapshot | undefined {
-  const record = readNativeHookRelayBridgeRecordRow(row);
-  if (!record || !row || !Number.isSafeInteger(row.updated_at_ms)) {
-    return undefined;
-  }
-  return {
-    record,
-    updatedAtMs: row.updated_at_ms,
-  };
-}
-
-function readNativeHookRelayBridgeSnapshotFromDatabase(params: {
-  database: { db: DatabaseSync };
-  relayId: string;
-}): NativeHookRelayBridgeSnapshot | undefined {
-  return readNativeHookRelayBridgeSnapshot(
-    readNativeHookRelayBridgeRow(params.database.db, params.relayId),
-  );
-}
-
-function sameNativeHookRelayBridgeSnapshot(
-  left: NativeHookRelayBridgeSnapshot,
-  right: NativeHookRelayBridgeSnapshot,
-): boolean {
-  return (
-    left.updatedAtMs === right.updatedAtMs &&
-    left.record.relayId === right.record.relayId &&
-    left.record.pid === right.record.pid &&
-    left.record.hostname === right.record.hostname &&
-    left.record.port === right.record.port &&
-    left.record.token === right.record.token &&
-    left.record.expiresAtMs === right.record.expiresAtMs
-  );
-}
 
 export async function readNativeHookRelayBridgeRecord(
   params: { relayId: string } & NativeHookRelayBridgeStoreOptions,
 ): Promise<NativeHookRelayBridgeRecord | undefined> {
-  return withOpenClawStateDatabaseReadOnly(
-    (database) =>
-      readNativeHookRelayBridgeSnapshotFromDatabase({
-        database,
-        relayId: params.relayId,
-      })?.record,
-    { path: params.stateDbPath },
+  const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
+  const input = { relayId: params.relayId };
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "nativeHookRelay.read", input }),
+    { existingOnly: true },
   );
+}
+
+function persistNativeHookRelayBridgeRecord<
+  Type extends "nativeHookRelay.write" | "nativeHookRelay.renew",
+>(type: Type, params: NativeHookRelayBridgeWriteParams) {
+  const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
+  const input = { record: { ...params.record }, updatedAtMs: params.updatedAtMs ?? Date.now() };
+  const assertCurrent = params.assertCurrent;
+  return runOpenClawStateWorkerOperation(context, (scope) => scope.execute({ type, input }), {
+    assertCurrent,
+    createAdmission: () => ({
+      nativeLocations: [context.admission.databasePath],
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        if (request.stage !== "transaction") {
+          throw new Error("Native hook relay persistence requires transaction admission");
+        }
+        context.admission.assertCurrent();
+        assertCurrent?.();
+        grant();
+      }),
+    }),
+  });
 }
 
 export async function writeNativeHookRelayBridgeRecord(
-  params: {
-    record: NativeHookRelayBridgeRecord;
-    updatedAtMs?: number;
-    assertCurrent?: () => void;
-  } & NativeHookRelayBridgeStoreOptions,
+  params: NativeHookRelayBridgeWriteParams,
 ): Promise<void> {
-  const updatedAtMs = params.updatedAtMs ?? Date.now();
-  const record = params.record;
-  const { token } = record;
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      params.assertCurrent?.();
-      const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("native_hook_relay_bridges")
-          .values({
-            relay_id: record.relayId,
-            pid: record.pid,
-            hostname: record.hostname,
-            port: record.port,
-            token,
-            expires_at_ms: record.expiresAtMs,
-            updated_at_ms: updatedAtMs,
-          })
-          .onConflict((conflict) =>
-            conflict.column("relay_id").doUpdateSet({
-              pid: record.pid,
-              hostname: record.hostname,
-              port: record.port,
-              token,
-              expires_at_ms: record.expiresAtMs,
-              updated_at_ms: updatedAtMs,
-            }),
-          ),
-      );
-    },
-    { path: params.stateDbPath },
-  );
+  await persistNativeHookRelayBridgeRecord("nativeHookRelay.write", params);
 }
 
 export async function renewOrRestoreNativeHookRelayBridgeRecord(
-  params: {
-    record: NativeHookRelayBridgeRecord;
-    updatedAtMs?: number;
-    assertCurrent?: () => void;
-  } & NativeHookRelayBridgeStoreOptions,
+  params: NativeHookRelayBridgeWriteParams,
 ): Promise<boolean> {
-  const { record } = params;
-  const { token } = record;
-  const updatedAtMs = params.updatedAtMs ?? Date.now();
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      params.assertCurrent?.();
-      const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-      const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-        database,
-        relayId: record.relayId,
-      });
-      if (!current) {
-        const result = executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("native_hook_relay_bridges")
-            .values({
-              relay_id: record.relayId,
-              pid: record.pid,
-              hostname: record.hostname,
-              port: record.port,
-              token,
-              expires_at_ms: record.expiresAtMs,
-              updated_at_ms: updatedAtMs,
-            })
-            .onConflict((conflict) => conflict.column("relay_id").doNothing()),
-        );
-        return result.numAffectedRows === 1n;
-      }
-      if (current.record.pid !== record.pid || current.record.token !== token) {
-        return false;
-      }
-      const result = executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("native_hook_relay_bridges")
-          .set({
-            hostname: record.hostname,
-            port: record.port,
-            expires_at_ms: record.expiresAtMs,
-            updated_at_ms: updatedAtMs,
-          })
-          .where("relay_id", "=", record.relayId)
-          .where("pid", "=", record.pid)
-          .where("token", "=", token)
-          .where("updated_at_ms", "=", current.updatedAtMs),
-      );
-      return result.numAffectedRows === 1n;
-    },
-    { path: params.stateDbPath },
-  );
+  return persistNativeHookRelayBridgeRecord("nativeHookRelay.renew", params);
 }
 
 export async function deleteNativeHookRelayBridgeRecordIfOwned(params: {
@@ -197,28 +68,10 @@ export async function deleteNativeHookRelayBridgeRecordIfOwned(params: {
   token: string;
   stateDbPath?: string;
 }): Promise<boolean> {
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-        database,
-        relayId: params.relayId,
-      });
-      if (!current || current.record.pid !== params.pid || current.record.token !== params.token) {
-        return false;
-      }
-      const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-      const result = executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("native_hook_relay_bridges")
-          .where("relay_id", "=", params.relayId)
-          .where("pid", "=", params.pid)
-          .where("token", "=", params.token)
-          .where("updated_at_ms", "=", current.updatedAtMs),
-      );
-      return result.numAffectedRows === 1n;
-    },
-    { path: params.stateDbPath },
+  const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
+  const input = { relayId: params.relayId, pid: params.pid, token: params.token };
+  return runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "nativeHookRelay.deleteOwned", input }),
   );
 }
 
@@ -228,79 +81,39 @@ export async function pruneNativeHookRelayBridgeRecords(params: {
   nowMs?: number;
   stateDbPath?: string;
 }): Promise<NativeHookRelayBridgePruneResult[]> {
+  const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
   const nowMs = params.nowMs ?? Date.now();
-  const database = openOpenClawStateDatabase({ path: params.stateDbPath });
-  const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-  const snapshots = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("native_hook_relay_bridges").selectAll(),
-  ).rows.flatMap((row) => {
-    const snapshot = readNativeHookRelayBridgeSnapshot(row);
-    return snapshot ? [snapshot] : [];
-  });
-  const candidates: NativeHookRelayBridgePruneCandidate[] = [];
-  for (const snapshot of snapshots) {
-    if (nowMs > snapshot.record.expiresAtMs) {
-      candidates.push({ snapshot, reason: "expired" });
-      continue;
-    }
-    if (
-      snapshot.record.pid !== params.currentPid &&
-      (await params.isPidDead(snapshot.record.pid))
-    ) {
-      candidates.push({ snapshot, reason: "dead-pid" });
-    }
-  }
-  if (candidates.length === 0) {
-    return [];
-  }
-
-  return runOpenClawStateWriteTransaction(
-    (writeDatabase) => {
-      const writeDb = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(writeDatabase.db);
-      const pruned: NativeHookRelayBridgePruneResult[] = [];
-      for (const candidate of candidates) {
-        const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-          database: writeDatabase,
-          relayId: candidate.snapshot.record.relayId,
-        });
-        if (
-          !current ||
-          !sameNativeHookRelayBridgeSnapshot(current, candidate.snapshot) ||
-          (candidate.reason === "expired" && nowMs <= current.record.expiresAtMs)
-        ) {
-          continue;
-        }
-        const result = executeSqliteQuerySync(
-          writeDatabase.db,
-          writeDb
-            .deleteFrom("native_hook_relay_bridges")
-            .where("relay_id", "=", current.record.relayId)
-            .where("token", "=", current.record.token)
-            .where("updated_at_ms", "=", current.updatedAtMs),
-        );
-        if (result.numAffectedRows === 1n) {
-          pruned.push({
-            relayId: current.record.relayId,
-            pid: current.record.pid,
-            reason: candidate.reason,
-          });
-        }
+  const { currentPid, isPidDead } = params;
+  return runOpenClawStateWorkerOperation(context, async (scope) => {
+    const snapshots = await scope.execute({
+      type: "nativeHookRelay.listSnapshots",
+      input: undefined,
+    });
+    const candidates: NativeHookRelayBridgePruneCandidate[] = [];
+    for (const snapshot of snapshots) {
+      if (nowMs > snapshot.record.expiresAtMs) {
+        candidates.push({ snapshot, reason: "expired" });
+        continue;
       }
-      return pruned;
-    },
-    { path: params.stateDbPath },
-  );
+      if (snapshot.record.pid !== currentPid && (await isPidDead(snapshot.record.pid))) {
+        candidates.push({ snapshot, reason: "dead-pid" });
+      }
+    }
+    return candidates.length === 0
+      ? []
+      : scope.execute({ type: "nativeHookRelay.prune", input: { candidates, nowMs } });
+  });
 }
 
 export async function clearNativeHookRelayBridgeRecordsForTests(
   options: NativeHookRelayBridgeStoreOptions = {},
 ): Promise<void> {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-      executeSqliteQuerySync(database.db, db.deleteFrom("native_hook_relay_bridges"));
-    },
-    { path: options.stateDbPath },
-  );
+  const [{ runOpenClawStateWriteTransaction }, { clearNativeHookRelayBridgeRecordsInDatabase }] =
+    await Promise.all([
+      import("../../state/openclaw-state-db.js"),
+      import("./native-hook-relay-store.kernel.js"),
+    ]);
+  runOpenClawStateWriteTransaction(clearNativeHookRelayBridgeRecordsInDatabase, {
+    path: options.stateDbPath,
+  });
 }

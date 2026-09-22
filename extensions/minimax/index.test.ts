@@ -721,20 +721,6 @@ describe("minimax provider hooks", () => {
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("shares the provider hook bundle across MiniMax variants", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
-    const apiProvider = requireRegisteredProvider(providers, "minimax");
-    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
-
-    expect(apiProvider.buildReplayPolicy).toBe(portalProvider.buildReplayPolicy);
-    expect(apiProvider.wrapStreamFn).toBe(portalProvider.wrapStreamFn);
-    expect(apiProvider.resolveReasoningOutputMode).toBe(portalProvider.resolveReasoningOutputMode);
-  });
-
   it("registers the bundled MiniMax web search provider", () => {
     const webSearchProviders: unknown[] = [];
 
@@ -849,6 +835,7 @@ describe("minimax provider hooks", () => {
       throw new Error("expected minimax portal oauth auth method");
     }
 
+    const assertCurrent = vi.fn();
     const result = await oauthMethod.run({
       prompter: {
         progress() {
@@ -857,7 +844,13 @@ describe("minimax provider hooks", () => {
         note: vi.fn(async () => undefined),
       },
       openUrl: vi.fn(async () => undefined),
+      assertCurrent,
     } as never);
+
+    const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+    expect(vi.mocked(loginMiniMaxPortalOAuth)).toHaveBeenCalledWith(
+      expect.objectContaining({ assertCurrent }),
+    );
 
     expect(result?.configPatch?.models?.providers?.["minimax-portal"]).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",

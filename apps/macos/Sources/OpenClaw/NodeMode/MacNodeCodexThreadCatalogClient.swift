@@ -35,6 +35,11 @@ final class MacNodeCodexThreadCatalogClient: @unchecked Sendable {
 }
 
 final class CodexAppServerThreadClient: @unchecked Sendable {
+    struct Response: Sendable {
+        let data: Data
+        let sourceHomeId: String
+    }
+
     private final class CancellationState: @unchecked Sendable {
         private let lock = NSLock()
         private var cancelled = false
@@ -57,10 +62,11 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let invocation: MacNodeCodexThreadCatalog.ResolvedInvocation
         let method: String
         let requestParamsData: Data
+        let sourceHomeId: String?
         let maxLineBytes: Int
         var requestID: Int?
         var requestData: Data?
-        var continuation: CheckedContinuation<Data, Error>?
+        var continuation: CheckedContinuation<Response, Error>?
         var timer: DispatchSourceTimer?
         /// One requeue budget for the child-exit race: a failed stdin write was
         /// never delivered, so a single retry on a fresh child cannot duplicate.
@@ -71,13 +77,15 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
             method: String,
             requestParamsData: Data,
+            sourceHomeId: String?,
             maxLineBytes: Int,
-            continuation: CheckedContinuation<Data, Error>)
+            continuation: CheckedContinuation<Response, Error>)
         {
             self.token = token
             self.invocation = invocation
             self.method = method
             self.requestParamsData = requestParamsData
+            self.sourceHomeId = sourceHomeId
             self.maxLineBytes = maxLineBytes
             self.continuation = continuation
         }
@@ -98,7 +106,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         var process: ManagedProcess?
         var cleanupTask: Task<Void, Never>?
         var stdoutBuffer = Data()
-        var initialized = false
+        var sourceHomeId: String?
         var stdoutReachedEOF = false
         var lifecycle: Lifecycle = .running
 
@@ -145,14 +153,15 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
         method: String,
         requestParams: [String: Any],
+        sourceHomeId: String? = nil,
         timeoutSeconds: Double,
-        maxLineBytes: Int) async throws -> Data
+        maxLineBytes: Int) async throws -> Response
     {
         try Task.checkCancellation()
         let requestParamsData = try Self.jsonData(requestParams)
         let token = UUID()
         let cancellationState = CancellationState()
-        let result: Data = try await withTaskCancellationHandler {
+        let result: Response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.queue.async {
                     guard !cancellationState.isCancelled() else {
@@ -171,6 +180,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                         invocation: invocation,
                         method: method,
                         requestParamsData: requestParamsData,
+                        sourceHomeId: sourceHomeId,
                         maxLineBytes: max(1, maxLineBytes),
                         continuation: continuation)
                     // Callers pass the operation's remaining wall-clock deadline.
@@ -253,7 +263,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             self.startConnection(for: request)
             return
         }
-        guard connection.initialized else { return }
+        guard connection.sourceHomeId != nil else { return }
         self.sendActiveRequest(over: connection)
     }
 
@@ -340,6 +350,13 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func sendActiveRequest(over connection: Connection) {
         guard let active = self.active else { return }
+        if let sourceHomeId = active.sourceHomeId, sourceHomeId != connection.sourceHomeId {
+            self.finishActive(
+                .failure(MacNodeCodexThreadCatalog.CatalogError.invalidParams(
+                    "Codex session source changed; refresh the catalog and retry")),
+                restartConnection: false)
+            return
+        }
         do {
             if active.requestData == nil {
                 let requestID = self.takeRequestIDOnQueue()
@@ -461,13 +478,17 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         else { return }
 
         if id == connection.initializeRequestID {
-            guard message["error"] == nil, message["result"] is [String: Any] else {
+            guard message["error"] == nil,
+                  let result = message["result"] as? [String: Any],
+                  let codexHome = result["codexHome"] as? String,
+                  let sourceHomeId = try? MacNodeCodexThreadCatalog.sourceHomeId(codexHome: codexHome)
+            else {
                 self.finishActive(
                     .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                     restartConnection: true)
                 return
             }
-            connection.initialized = true
+            connection.sourceHomeId = sourceHomeId
             do {
                 try self.write(Self.initializedNotificationData(), over: connection)
                 self.sendActiveRequest(over: connection)
@@ -482,6 +503,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         guard let active = self.active, id == active.requestID else { return }
         guard message["error"] == nil,
               let result = message["result"] as? [String: Any],
+              let sourceHomeId = connection.sourceHomeId,
               let resultData = try? Self.jsonData(result)
         else {
             self.finishActive(
@@ -489,7 +511,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 restartConnection: message["error"] == nil)
             return
         }
-        self.finishActive(.success(resultData), restartConnection: false)
+        self.finishActive(
+            .success(Response(data: resultData, sourceHomeId: sourceHomeId)),
+            restartConnection: false)
     }
 
     private func handleTermination(generation: UUID) {
@@ -558,7 +582,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private func finishActive(
-        _ result: Result<Data, Error>,
+        _ result: Result<Response, Error>,
         restartConnection: Bool)
     {
         guard let active = self.active else { return }
@@ -570,7 +594,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         self.startNextIfNeeded()
     }
 
-    private func complete(_ request: PendingRequest, with result: Result<Data, Error>) {
+    private func complete(_ request: PendingRequest, with result: Result<Response, Error>) {
         request.timer?.cancel()
         request.timer = nil
         guard let continuation = request.continuation else { return }

@@ -3,13 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { createRequire, isBuiltin } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
+import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -426,27 +427,35 @@ export type PluginPackageCapture = {
 export const isPluginPackageFile = (root: string, file: string) =>
   isPathInside(root, file) && !path.relative(root, file).split(path.sep).includes("node_modules");
 
+function isCapturedPathInside(root: string, file: string): boolean {
+  return process.platform === "win32"
+    ? isPathInside(root, file)
+    : file === root ||
+        (file.startsWith(root) && (root.endsWith("/") || file.charCodeAt(root.length) === 47));
+}
+
 function isCapturedPackageFile(root: string, file: string): boolean {
   if (process.platform === "win32") {
     return isPluginPackageFile(root, file);
   }
-  if (file === root) {
-    return true;
-  }
-  if (!file.startsWith(root) || (!root.endsWith("/") && file.charCodeAt(root.length) !== 47)) {
-    return false;
-  }
-  return !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length));
+  return (
+    isCapturedPathInside(root, file) &&
+    !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length))
+  );
 }
 
 /** Retain the matched lookup root; dependency links need their own source-relative mapping. */
 export function findPluginCapturedPackage(
-  packages: Iterable<PluginPackageCapture>,
+  packages: ReadonlyMap<string, PluginPackageCapture>,
   filename: string,
+  directory: string,
 ) {
-  // The artifact producer already normalizes captured roots and dependency links.
+  // The artifact producer normalizes its directory, captured roots, and dependency links.
   const file = process.platform === "win32" ? filename : path.resolve(filename);
-  for (const owner of packages) {
+  if (!isCapturedPathInside(directory, file)) {
+    return undefined;
+  }
+  for (const owner of packages.values()) {
     if (isCapturedPackageFile(owner.capturedRoot, file)) {
       return { owner, root: owner.capturedRoot };
     }
@@ -634,21 +643,37 @@ export function createPluginPackageMetadataCapture(params: {
   };
 }
 
-const sourceCaptureDirectory = new AsyncLocalStorage<string>();
+const sourceCaptureDirectory = new AsyncLocalStorage<{ directory: string; managedRoot?: string }>();
 
 /** A compute worker's parent reclaims this scratch directory after confirmed exit. */
-export function withPluginSourceCaptureDirectory<T>(directory: string, run: () => T): T {
-  return sourceCaptureDirectory.run(directory, run);
+export function withPluginSourceCaptureDirectory<T>(
+  directory: string,
+  run: () => T,
+  managedRoot?: string,
+): T {
+  return sourceCaptureDirectory.run({ directory, managedRoot }, run);
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
 export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
-  const directory = fs.realpathSync(
-    fs.mkdtempSync(
-      path.join(sourceCaptureDirectory.getStore() ?? tmpdir(), "openclaw-plugin-build-"),
-    ),
-  );
-  fs.chmodSync(directory, 0o700);
+  const override = sourceCaptureDirectory.getStore();
+  const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
+  let created: string | undefined;
+  let directory: string;
+  try {
+    created =
+      override !== undefined
+        ? fs.mkdtempSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        : instance!.createDirectory();
+    directory = fs.realpathSync(created);
+    fs.chmodSync(directory, 0o700);
+  } catch (error) {
+    if (created) {
+      fs.rmSync(created, { recursive: true, force: true });
+    }
+    instance?.release();
+    throw error;
+  }
   const inputs = new Map<string, PluginSourceInput>();
   const pendingInputs = new Set<string>();
   const additions = new Set<string>();
@@ -702,6 +727,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     capture: captureAdmitted,
     assertModuleAvailable,
     directory,
+    outputRoot: override?.managedRoot ?? instance?.managedRoot,
     linkHost: (hostRoot: string) => {
       const modules = path.join(directory, "node_modules");
       fs.mkdirSync(modules, { recursive: true, mode: 0o700 });
@@ -711,10 +737,12 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     dispose() {
       beginDisposal();
       fs.rmSync(directory, { recursive: true, force: true });
+      instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
       await fsPromises.rm(directory, { recursive: true, force: true });
+      await instance?.releaseAsync();
     },
   };
 }

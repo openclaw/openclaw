@@ -48,12 +48,12 @@ const cases: Array<{ state: Partial<SystemAgentView>; label: string; text: strin
   },
   {
     state: { applicationStatus: "not-applied" },
-    label: "Not applied",
-    text: "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry.",
+    label: "Completion unconfirmed",
+    text: "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
   },
   {
     state: { decision: "deny", applicationStatus: "not-applied" },
-    label: "Not applied",
+    label: "Denied",
     text: "❌ OpenClaw change denied. No change was made.",
   },
   {
@@ -85,7 +85,7 @@ describe("approval terminal presentation", () => {
         systemAgentView({ applicationStatus: "not-applied" }),
         formatDecision,
       ),
-    ).toBe("Not applied");
+    ).toBe("Completion unconfirmed");
   });
 
   it("uses the resolved event's decision for channel prose", () => {

@@ -7,14 +7,14 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import * as sessionIdentity from "./session-identity-projection.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
-import * as titleReader from "./session-transcript-title-reader.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   getUserProfileDisplay: vi.fn((id: string) => ({
-    id,
+    id: id === "profile-merged-ada" ? "profile-ada" : id,
     displayName: id,
     hasAvatar: false,
     avatarRevision: "1",
@@ -48,6 +48,66 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
     { profileRelation: { profileId: "", relationship: "involving" } },
   ]) {
     expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
+  }
+});
+
+it("keeps system provenance and named conversations distinct in projected lists", async () => {
+  const cases: { key: string; fields: Partial<SessionEntry>; visible: boolean }[] = [
+    {
+      key: "agent:main:system",
+      fields: { createdActor: { type: "system" }, label: "Named probe" },
+      visible: false,
+    },
+    {
+      key: "agent:main:human",
+      fields: { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
+      visible: true,
+    },
+    {
+      key: "agent:main:label",
+      fields: { createdVia: "run", label: "Operator label" },
+      visible: true,
+    },
+    {
+      key: "agent:main:display-name",
+      fields: { createdVia: "internal", displayName: "Operator title" },
+      visible: true,
+    },
+    {
+      key: "agent:main:subject",
+      fields: { createdVia: "run", subject: "Conversation subject" },
+      visible: true,
+    },
+    {
+      key: "agent:main:whitespace",
+      fields: { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
+      visible: false,
+    },
+    { key: "agent:main:legacy", fields: {}, visible: true },
+    {
+      key: "agent:main:cron:nightly",
+      fields: { createdVia: "internal", createdActor: { type: "system" } },
+      visible: true,
+    },
+  ];
+  const store = Object.fromEntries(
+    cases.map(({ key, fields }, index) => [
+      key,
+      entry({ sessionId: key, updatedAt: cases.length - index, ...fields }),
+    ]),
+  );
+  for (const excludeSystem of [true, false, undefined]) {
+    const result = await listSessionFixture({
+      cfg,
+      storePath,
+      store,
+      opts: { excludeSystem },
+    });
+    const expected = cases
+      .filter(({ visible }) => excludeSystem !== true || visible)
+      .map(({ key }) => key);
+    expect(result.sessions.map((row) => row.key)).toEqual(expected);
+    expect(result.totalCount).toBe(expected.length);
   }
 });
 
@@ -160,6 +220,48 @@ it("preserves visible owner facets for the authenticated involvingMe filter", as
   expect(explicitRelation.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
 });
 
+it.each(["viewer", "relation", "both"] as const)(
+  "does not project extra participants when canonical owners satisfy the %s filter",
+  async (filter) => {
+    const participants = vi.spyOn(sessionIdentity, "projectSessionParticipants");
+    const store = Object.fromEntries(
+      Array.from({ length: 32 }, (_, index) => [
+        `agent:main:owned-${index}`,
+        entry({
+          sessionId: `owned-${index}`,
+          updatedAt: index + 1,
+          createdActor: { type: "human", source: "profile", id: "profile-merged-ada" },
+          participants: [{ identity: { type: "profile", id: "profile-bob" } }],
+        }),
+      ]),
+    );
+    const query = { cfg, storePath, store, opts: { limit: 1 } };
+    const all = await listSessionFixture(query);
+    const unfilteredWork = participants.mock.calls.length;
+    participants.mockClear();
+
+    const filtered = await listSessionFixture({
+      ...query,
+      opts: {
+        ...query.opts,
+        ...(filter !== "viewer"
+          ? { profileRelation: { profileId: "profile-ada", relationship: "involving" as const } }
+          : {}),
+      },
+      ...(filter !== "relation" ? { involvingActorId: "profile-ada" } : {}),
+    });
+
+    expect(filtered.sessions.map((row) => row.key)).toEqual(all.sessions.map((row) => row.key));
+    expect(filtered.owners).toEqual(all.owners);
+    expect(filtered.totalCount).toBe(32);
+    expect(filtered.sessions[0]?.owner?.actor.identity).toEqual({
+      type: "profile",
+      id: "profile-ada",
+    });
+    expect(participants.mock.calls.length).toBeLessThanOrEqual(unfilteredWork);
+  },
+);
+
 it.each([true, false])("filters canonical pin state before pagination: %s", async (pinned) => {
   const result = await listSessionFixture({
     cfg,
@@ -180,8 +282,7 @@ it.each([true, false])("filters canonical pin state before pagination: %s", asyn
   expect(result).toMatchObject({ totalCount: pinned ? 1 : 4, hasMore: !pinned });
 });
 
-it("finds sparse metadata matches beyond 200 rows before facets and pagination without transcripts", async () => {
-  const readTitles = vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch");
+it("finds sparse metadata matches beyond 200 rows before facets and pagination", async () => {
   const store: Record<string, SessionEntry> = Object.fromEntries(
     Array.from({ length: 205 }, (_, index) => [
       `agent:main:unrelated-${index}`,
@@ -229,7 +330,6 @@ it("finds sparse metadata matches beyond 200 rows before facets and pagination w
   const second = await listSessionFixture({ cfg, storePath, store, opts: { ...opts, offset: 2 } });
   expect(second.sessions.map((row) => row.sessionId)).toEqual(["match-2"]);
   expect(second).toMatchObject({ totalCount: 3, nextOffset: null, hasMore: false });
-  expect(readTitles.mock.calls).toEqual([[[]], [[]]]);
 });
 
 it("distinguishes profile involvement from creation and uses participants beyond the display summary", async () => {

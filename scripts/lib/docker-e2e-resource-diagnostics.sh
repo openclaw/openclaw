@@ -27,11 +27,11 @@ docker_e2e_resource_limit_temp_dir() {
   local template="${TMPDIR:-/tmp}/openclaw-docker-resource-limits.XXXXXX"
   if command -v mktemp >/dev/null 2>&1; then
     mktemp -d "$template"
-    return
+    return "$?"
   fi
   if [ -x /usr/bin/mktemp ]; then
     /usr/bin/mktemp -d "$template"
-    return
+    return "$?"
   fi
   echo "mktemp command not found; cannot create Docker resource-limit diagnostics" >&2
   return 127
@@ -40,11 +40,11 @@ docker_e2e_resource_limit_temp_dir() {
 docker_e2e_diagnostic_bin() {
   if command -v "$1" >/dev/null 2>&1; then
     command -v "$1"
-    return
+    return "$?"
   fi
   if [ -x "/usr/bin/$1" ]; then
     printf '%s\n' "/usr/bin/$1"
-    return
+    return "$?"
   fi
   return 1
 }
@@ -52,7 +52,7 @@ docker_e2e_diagnostic_bin() {
 docker_e2e_remove_diagnostic_dir() {
   if command -v rm >/dev/null 2>&1; then
     rm -rf "$1"
-    return
+    return "$?"
   fi
   /bin/rm -rf "$1"
 }
@@ -66,7 +66,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
   shift
   if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -eq 0 ]; then
     docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    return
+    return "$?"
   fi
 
   local diagnostic_dir=""
@@ -74,7 +74,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local tee_bin=""
   if ! tee_bin="$(docker_e2e_diagnostic_bin tee)"; then
@@ -82,7 +82,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local tail_bin=""
   if ! tail_bin="$(docker_e2e_diagnostic_bin tail)"; then
@@ -90,7 +90,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
   local stderr_file="${diagnostic_dir}/stderr"
   local stderr_fifo="${diagnostic_dir}/stderr.pipe"
@@ -102,7 +102,7 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return
+    return "$?"
   fi
 
   # Some tail implementations reopen named FIFOs passed through stdin and wait for a new writer.

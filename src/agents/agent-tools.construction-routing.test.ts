@@ -202,7 +202,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
         expect.objectContaining({
           scopeKey: liveSessionKey,
           sessionKey: policySessionKey ?? liveSessionKey,
-          notifySessionKey: liveSessionKey,
+          runSessionKey: liveSessionKey,
         }),
       );
     },

@@ -1,5 +1,6 @@
 // Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -11,10 +12,8 @@ import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../runtime.
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
-  cancelSymbol: Symbol("cancel"),
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
-  clackIsCancel: vi.fn(),
   clackLogMessage: vi.fn(),
   multiselect: vi.fn(),
   progress: {
@@ -63,10 +62,10 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: mocks.withProgress,
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
-  isCancel: mocks.clackIsCancel,
   log: { message: mocks.clackLogMessage },
 }));
 
@@ -319,8 +318,6 @@ describe("migrateApplyCommand", () => {
     mocks.multiselect.mockReset();
     mocks.clackCancel.mockReset();
     mocks.clackConfirm.mockReset();
-    mocks.clackIsCancel.mockReset();
-    mocks.clackIsCancel.mockImplementation((value) => value === mocks.cancelSymbol);
     mocks.clackLogMessage.mockReset();
     mocks.promptYesNo.mockReset();
     mocks.backupCreateCommand.mockReset();
@@ -573,7 +570,7 @@ describe("migrateApplyCommand", () => {
     });
     const skippedAuthPlan = authPlan("skipped");
     mocks.provider.plan.mockResolvedValue(skippedAuthPlan);
-    mocks.clackConfirm.mockResolvedValue(mocks.cancelSymbol);
+    mocks.clackConfirm.mockResolvedValue(CANCEL_SYMBOL);
 
     await expect(
       migrateDefaultCommand(runtime, { provider: "hermes", dryRun: true }),
@@ -695,7 +692,7 @@ describe("migrateApplyCommand", () => {
       if (acceptSkills) {
         mocks.multiselect.mockResolvedValueOnce(["skill:alpha"]);
       }
-      mocks.multiselect.mockResolvedValueOnce(mocks.cancelSymbol);
+      mocks.multiselect.mockResolvedValueOnce(CANCEL_SYMBOL);
 
       const result = await command(runtime, { provider: "codex" });
 

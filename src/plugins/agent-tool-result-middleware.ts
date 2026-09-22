@@ -39,17 +39,7 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
   if (!requested) {
     return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
   }
-  const normalized: AgentToolResultMiddlewareRuntime[] = [];
-  for (const runtime of requested) {
-    const value = normalizeAgentToolResultMiddlewareRuntime(runtime);
-    if (!value) {
-      continue;
-    }
-    if (!normalized.includes(value)) {
-      normalized.push(value);
-    }
-  }
-  return normalized;
+  return normalizeAgentToolResultMiddlewareRuntimeIds(requested);
 }
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,

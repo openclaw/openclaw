@@ -3,9 +3,9 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listPairedDevicesReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { withCurrentDevicePairingSnapshot } from "../infra/device-pairing-worker.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
-import { listBoundWebPushSubscriptions, type BoundWebPushSubscription } from "../infra/push-web.js";
+import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "../infra/push-web.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
@@ -83,17 +83,16 @@ function resolveCurrentWebPushTarget(params: {
   };
 }
 
-/** Reads every mutable authority fact in the caller's network-I/O continuation. */
+/** Resolve current recipients from the pairing owner's prepared authority facts. */
 export function listCurrentWebPushTargets(params: {
   cfg: OpenClawConfig;
   requiredScopes: readonly string[];
   visibilityScopes?: readonly string[];
-  stateDir?: string;
+  pairedDevices: readonly PairedDevice[];
+  subscriptions: readonly BoundWebPushSubscription[];
 }): CurrentWebPushTarget[] {
-  const pairedByDeviceId = new Map(
-    listPairedDevicesReadOnly(params.stateDir).map((device) => [device.deviceId, device]),
-  );
-  return listBoundWebPushSubscriptions(params.stateDir).flatMap((subscription) => {
+  const pairedByDeviceId = new Map(params.pairedDevices.map((device) => [device.deviceId, device]));
+  return params.subscriptions.flatMap((subscription) => {
     const target = resolveCurrentWebPushTarget({
       subscription,
       device: pairedByDeviceId.get(subscription.deviceId),
@@ -102,6 +101,29 @@ export function listCurrentWebPushTargets(params: {
       visibilityScopes: params.visibilityScopes,
     });
     return target ? [target] : [];
+  });
+}
+
+/** Keep both binding and pairing authority until the synchronous provider start. */
+export function withCurrentWebPushAuthority<T>(
+  stateDir: string | undefined,
+  prepare: (
+    subscriptions: BoundWebPushSubscription[],
+    pairedDevices: readonly PairedDevice[],
+  ) => { start: () => T | Promise<T> } | undefined,
+): Promise<T | undefined> {
+  return withBoundWebPushSubscriptions(stateDir, async (subscriptions, assertCurrent) => {
+    const begun = await withCurrentDevicePairingSnapshot(stateDir, (pairedDevices) => {
+      const action = prepare(subscriptions, pairedDevices);
+      return {
+        start: () => {
+          assertCurrent();
+          // Boxing lets both storage scopes release after start without retaining provider I/O.
+          return { value: action?.start() };
+        },
+      };
+    });
+    return begun ? { start: () => begun.value } : undefined;
   });
 }
 

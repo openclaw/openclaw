@@ -181,6 +181,7 @@ export function collectPluginSchemaMetadataCore(
         (entry) => entry.path,
       ),
       configUiHints: record.configUiHints,
+      configGroups: record.configGroups,
       configSchema: record.configSchema,
       originRank: nextRank,
     });

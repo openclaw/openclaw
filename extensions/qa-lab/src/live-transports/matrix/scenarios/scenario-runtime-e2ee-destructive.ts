@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createMatrixQaClient } from "../substrate/client.js";

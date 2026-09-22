@@ -347,20 +347,31 @@ function mergeToolSchemaProperties(
  * Resolves extra message-tool schema properties from channel discovery hooks.
  */
 export function resolveChannelMessageToolSchemaProperties(
-  params: ChannelMessageActionDiscoveryParams,
+  params: ChannelMessageActionDiscoveryParams & {
+    /** Internal caller-owned account selection after the usual provider scoping. */
+    resolveAccountIdForChannel?: (
+      channel: string,
+      contextualAccountId: ChannelMessageActionDiscoveryInput["accountId"],
+    ) => ChannelMessageActionDiscoveryInput["accountId"];
+  },
 ): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
   // Account IDs belong to the current provider. Other plugins must discover
   // schemas from their configured-account union, not a foreign account name.
-  const contextForPlugin = (pluginId: string) => ({
-    ...discoveryBase,
-    accountId:
+  const contextForPlugin = (pluginId: string) => {
+    const contextualAccountId =
       !currentChannel || resolveMessageActionDiscoveryChannelId(pluginId) === currentChannel
         ? params.accountId
-        : undefined,
-  });
+        : undefined;
+    return {
+      ...discoveryBase,
+      accountId: params.resolveAccountIdForChannel
+        ? params.resolveAccountIdForChannel(pluginId, contextualAccountId)
+        : contextualAccountId,
+    };
+  };
   const seenPluginIds = new Set<string>();
 
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);

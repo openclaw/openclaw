@@ -414,6 +414,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           observerLog.warn("session observer disabled after consecutive failures", {
             sessionKey: state.sessionKey,
             runId: state.runId,
+            consecutiveFailures: state.consecutiveFailures,
             error: formatErrorMessage(error),
           });
           if (final || state.finalPending || state.terminalHealth) {

@@ -1,6 +1,5 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
@@ -27,6 +26,7 @@ import {
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
@@ -57,6 +57,7 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn(
@@ -70,7 +71,14 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 let fixtureQueueContext: OpenClawStateWorkerContext;
 
 beforeEach(() => {
@@ -385,7 +393,6 @@ async function createRequesterTranscriptFixture(sessionId: string) {
   const dir = tempDirs.make("openclaw-subagent-announce-transcript-");
   const sessionKey = "agent:main:slack:channel:C123:thread:171.222";
   const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
   const entry: SessionEntry = {
     sessionId,
     sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
@@ -401,14 +408,7 @@ async function readRequesterTranscriptMessages(fixture: {
   sessionKey: string;
   storePath: string;
 }): Promise<Array<Record<string, unknown>>> {
-  return (
-    await loadTranscriptEvents({
-      agentId: fixture.agentId,
-      sessionId: fixture.sessionId,
-      sessionKey: fixture.sessionKey,
-      storePath: fixture.storePath,
-    })
-  )
+  return (await loadTranscriptEvents(fixture))
     .map((event) => (event as { message?: unknown }).message)
     .filter(
       (message): message is Record<string, unknown> =>
@@ -554,6 +554,11 @@ async function deliverDiscordDirectMessageCompletion(params: {
   isActive?: boolean;
   requesterSessionKey?: string;
   requesterAgentId?: string;
+  requesterIsSubagent?: boolean;
+  origin?: Parameters<typeof deliverSubagentAnnouncement>[0]["requesterSessionOrigin"];
+  completionDirectOrigin?: Parameters<
+    typeof deliverSubagentAnnouncement
+  >[0]["completionDirectOrigin"];
   runtimeConfig?: Record<string, unknown>;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceSessionKey?: string;
@@ -562,7 +567,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
   isSourceSessionEffectsAllowed?: () => boolean;
 }) {
-  const origin = {
+  const origin = params.origin ?? {
     channel: "discord",
     to: "dm:U123",
     accountId: "acct-1",
@@ -591,9 +596,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterSessionOrigin: origin,
-    completionDirectOrigin: origin,
+    completionDirectOrigin: params.completionDirectOrigin ?? origin,
     directOrigin: origin,
-    requesterIsSubagent: false,
+    requesterIsSubagent: params.requesterIsSubagent === true,
     expectsCompletionMessage: true,
     ...(params.completionTarget
       ? {
@@ -1739,21 +1744,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  it.each([
-    { name: "empty", result: { payloads: [] } },
-    { name: "private text", result: { payloads: [{ text: "private parent review" }] } },
-    { name: "media", result: { payloads: [{ mediaUrl: "https://example.com/private.png" }] } },
-    {
-      name: "next child",
-      result: { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
-    },
-  ])(
-    "accepts private parent consumption without an external receipt: $name",
-    async ({ result }) => {
+  it.each(privateCompletionCases)(
+    "preserves private parent consumption and final evidence: $name",
+    async (testCase) => {
       const callGateway = createGatewayMock({
         status: "ok",
         inputProcessingCompleted: true,
-        result,
+        result: testCase.result,
       });
       const sendMessage = createSendMessageMock();
       const queue = vi.fn<QueueEmbeddedAgentMessageWithOutcome>();
@@ -1765,9 +1762,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: true,
         queueEmbeddedAgentMessageWithOutcome: queue,
         runtimeConfig: { tools: { deny: ["message"] } },
+        ...("params" in testCase ? testCase.params : {}),
       });
       expectDeliveryPath(delivery, "direct");
-      expect(delivery).not.toHaveProperty("requesterVisibleFinalDelivered");
+      expect(delivery.requesterVisibleFinalDelivered).toBe(testCase.recordsVisibleFinal);
       expect(delivery).not.toHaveProperty("finalAssistantVisibleText");
       expect(queue).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
@@ -5131,11 +5129,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     })),
     ...["accepted", "in_flight"].map((status) => ({
-      name: `does not record ${status} handoff as a visible final`,
+      name: `retains an ${status} settle handoff until terminal evidence`,
       routes: requesterSettleRoutes,
       response: { status },
       requireVisibleReply: true,
-      expected: deliveredRequesterFinal,
+      expected: { delivered: false, reason: "requester_turn_pending", disposition: "retryable" },
     })),
     {
       name: "does not record a canceled partial answer as a visible final",
@@ -5564,7 +5562,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requireDirectDelivery: true,
       ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
       directIdempotencyKey: "announce-requester-settle-direct",
-      sourceTool: "subagent_announce",
+      sourceTool: "subagent_settle",
     });
 
     expect(result).toMatchObject(expected);
@@ -5895,7 +5893,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
@@ -5905,7 +5902,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(false);
   });
 

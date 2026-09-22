@@ -12,7 +12,6 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteBatchResult,
   SessionDeleteOutcome,
@@ -112,7 +111,7 @@ function createHarness(
     },
   } as ApplicationGatewaySnapshot;
   const patch = vi.fn(async (key: string) => ({ ok: true, key }));
-  const refreshReplacement = vi.fn(async () => sessionsResult([], 0));
+  const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(async (): Promise<SessionDeleteBatchResult> => ({
     deleted: [],
@@ -135,7 +134,7 @@ function createHarness(
         targets: SessionsPatchManyParams["targets"],
         patchParams: SessionsPatchManyParams["patch"],
       ) => requestSessionPatchMany(client, { targets, patch: patchParams }),
-      refreshReplacement,
+      reconcileMutation,
       delete: deleteOne,
       deleteMany,
       groupsDelete,
@@ -165,7 +164,7 @@ function createHarness(
     patch,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
-    refreshReplacement,
+    reconcileMutation,
     refreshTheme,
     replaceCurrentSession,
     request,
@@ -257,7 +256,7 @@ describe("patchSessionRows", () => {
       rows[0]!.key,
       rows[100]!.key,
     ]);
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
@@ -303,7 +302,7 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
   it("keeps ordered partial outcomes and prunes only successful archived rows", async () => {
@@ -319,7 +318,7 @@ describe("patchSessionRows", () => {
       harness.scope,
       `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
     );
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it("stops before a later chunk when the mutation scope becomes stale", async () => {
@@ -331,7 +330,7 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).toHaveBeenCalledOnce();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
   it("reports a rejected batch without refreshing", async () => {
@@ -348,7 +347,7 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).toHaveBeenCalledOnce();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, rejection);
   });
 
@@ -403,7 +402,7 @@ describe("patchSessionRows", () => {
     ).resolves.toEqual(rows.slice(0, 100));
 
     expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
       "unknown method: sessions.patchMany",
@@ -418,7 +417,7 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
       "This action requires operator.write access.",

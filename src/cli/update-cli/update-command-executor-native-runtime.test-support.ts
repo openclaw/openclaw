@@ -2,15 +2,30 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
-  commandRepair: {
+  signalExitBarrier: {
     currentModuleUrl,
-    sourceWorkerName: "update-command-repair",
-    distWorkerPath: "cli/update-cli/update-command-repair.js",
+    sourceWorkerName: "../signal-exit-barrier",
+    distWorkerPath: "cli/signal-exit-barrier.js",
+  },
+  retainedService: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-retained-service",
+    distWorkerPath: "cli/update-cli/update-command-retained-service.js",
+  },
+  sealedRuntime: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
   },
   commandRun: {
     currentModuleUrl,
     sourceWorkerName: "update-command-run",
     distWorkerPath: "cli/update-cli/update-command-run.js",
+  },
+  commandTarget: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-target",
+    distWorkerPath: "cli/update-cli/update-command-target.js",
   },
   retainedRecovery: {
     currentModuleUrl,
@@ -61,6 +76,11 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../../daemon/service-update-authority",
     distWorkerPath: "daemon/service-update-authority.js",
+  },
+  includeDelegated: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-include-delegated.test-support",
+    distWorkerPath: "test-support/update-include-delegated.js",
   },
   configIO: {
     currentModuleUrl,

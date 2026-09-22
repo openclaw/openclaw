@@ -59,10 +59,11 @@ function hasUnimportedSessionIdentity(params: {
     env: params.env,
   });
   const defaultStore = resolveSessionStorePathCore(undefined, { agentId, env: params.env });
+  const legacyRootStore = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
   const sources = new Map([
     [configuredStore, configuredStore],
     [defaultStore, defaultStore],
-    [path.join(resolveStateDir(params.env), "sessions", "sessions.json"), configuredStore],
+    [legacyRootStore, configuredStore],
   ]);
   let importedIdentity = false;
   let unimportedIdentity = false;
@@ -76,15 +77,18 @@ function hasUnimportedSessionIdentity(params: {
       const before = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
       sourceEvidence = { imported: false, sessionIds: new Set() };
       if (before) {
+        const sqlitePath = resolveSqliteTargetFromSessionStorePath(destination, {
+          agentId,
+          env: params.env,
+        }).path;
         const receipt = readDeferredPluginSessionImport({
+          cfg: params.config,
           target: {
             agentId,
             storePath,
-            sqlitePath: resolveSqliteTargetFromSessionStorePath(destination, {
-              agentId,
-              env: params.env,
-            }).path,
+            ...(storePath === legacyRootStore ? { sqlitePath } : {}),
           },
+          sqlitePath,
           env: params.env,
         });
         const parsed = readSessionStoreJson5(storePath);

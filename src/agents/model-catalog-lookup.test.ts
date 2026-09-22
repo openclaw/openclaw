@@ -63,6 +63,16 @@ describe("catalog model identity", () => {
     expect(findModelCatalogEntry([upper], { modelId: " " })).toBeUndefined();
   });
 
+  it("skips sparse catalog holes for literal and fallback matches", () => {
+    const catalog: ModelCatalogEntry[] = [];
+    catalog.length = 5;
+    catalog[2] = upper;
+
+    expect(findModelInCatalog(catalog, "custom", "Reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "missing")).toBeUndefined();
+  });
+
   it("uses provider-owned canonical aliases without applying them to other providers", () => {
     const canonical = { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" };
     const unrelated = { ...canonical, provider: "custom" };
@@ -101,10 +111,10 @@ describe("prepared thinking disablement ownership", () => {
       expected: ["none"],
     },
     {
-      name: "preserves nullable unknown metadata",
+      name: "normalizes nullable unknown metadata for the runtime",
       selected: undefined,
       prepared: null,
-      expected: null,
+      expected: undefined,
     },
     {
       name: "leaves an absent effort overlay absent",
@@ -123,7 +133,7 @@ describe("prepared thinking disablement ownership", () => {
       name: "accepts nullable metadata from the exact physical route",
       selected: ["none", "high"],
       prepared: null,
-      expected: null,
+      expected: undefined,
       routeBound: true,
     },
   ])("$name", ({ selected, prepared, expected, routeBound }) => {
@@ -147,5 +157,8 @@ describe("prepared thinking disablement ownership", () => {
     });
 
     expect(result).toEqual({ thinkingFormat: "openai", supportedReasoningEfforts: expected });
+    expect({ ...model.compat, ...result }.supportedReasoningEfforts).toEqual(
+      prepared === undefined ? selected : expected,
+    );
   });
 });

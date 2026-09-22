@@ -55,34 +55,76 @@ Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenCl
 
 When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
 
-| Field                  | Required | Type                                                                  | What it means                                                                                                                                            |
-| ---------------------- | -------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                                                                      |
-| `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                                                                           |
-| `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                                                                  |
-| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                                                                        |
-| `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                                        |
-| `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                                        |
-| `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                                            |
-| `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                                                                       |
-| `assistantVisibility`  | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                                                                        |
-| `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                                                                 |
-| `groupId`              | No       | `string`                                                              | Optional group id for grouping related choices.                                                                                                          |
-| `groupLabel`           | No       | `string`                                                              | User-facing label for that group.                                                                                                                        |
-| `groupHint`            | No       | `string`                                                              | Short helper text for the group.                                                                                                                         |
-| `onboardingFeatured`   | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry.                                                |
-| `optionKey`            | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                                                                      |
-| `cliFlag`              | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                                                                           |
-| `cliOption`            | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                                                                             |
-| `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                                                                            |
-| `personalAccount`      | No       | `boolean`                                                             | Offer this method in Connected accounts; it must stage one inline credential without importing host logins or writing shared state.                      |
-| `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                                                                             |
-| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                                                                 |
-| `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                                                                |
-| `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                                       |
-| `credentialOnly`       | No       | `boolean`                                                             | The method supports saving credentials without starter-model discovery or activation. Omitted means setup only.                                          |
-| `channelLogin`         | No       | `{ aliases?: string[] }`                                              | A fixed-input OAuth or device-code method that private chat can run. Requires `credentialOnly`; aliases enable explicit commands such as `/login codex`. |
-| `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.                                                 |
+| Field                  | Required | Type                                                                  | What it means                                                                                                                                              |
+| ---------------------- | -------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                                                                        |
+| `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                                                                             |
+| `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                                                                    |
+| `platforms`            | No       | `string[]`                                                            | Supported Gateway host platforms, such as `["darwin"]`. Omission allows every platform; an empty or invalid restriction offers the choice on none.         |
+| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                                                                          |
+| `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                                          |
+| `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                                          |
+| `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                                              |
+| `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                                                                         |
+| `assistantVisibility`  | No       | `"visible"` \| `"manual-only"` \| `"detected-only"`                   | Control picker visibility. `manual-only` permits manual selection; `detected-only` requires successful provider-owned discovery before offering the model. |
+| `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                                                                   |
+| `groupId`              | No       | `string`                                                              | Optional group id for grouping related choices.                                                                                                            |
+| `groupLabel`           | No       | `string`                                                              | User-facing label for that group.                                                                                                                          |
+| `groupHint`            | No       | `string`                                                              | Short helper text for the group.                                                                                                                           |
+| `onboardingFeatured`   | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry.                                                  |
+| `optionKey`            | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                                                                        |
+| `cliFlag`              | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                                                                             |
+| `cliOption`            | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                                                                               |
+| `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                                                                              |
+| `personalAccount`      | No       | `boolean`                                                             | Offer this method in Connected accounts; it must stage one inline credential without importing host logins or writing shared state.                        |
+| `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                                                                               |
+| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                                                                   |
+| `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                                                                  |
+| `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                                         |
+| `credentialOnly`       | No       | `boolean`                                                             | The method supports saving credentials without starter-model discovery or activation. Omitted means setup only.                                            |
+| `channelLogin`         | No       | `{ aliases?: string[] }`                                              | A fixed-input OAuth or device-code method that private chat can run. Requires `credentialOnly`; aliases enable explicit commands such as `/login codex`.   |
+| `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.                                                   |
+
+`platforms` uses Node.js platform names; unknown names are removed. The restriction
+applies before setup, login, CLI flag, and install-catalog choices are offered. It describes the host running OpenClaw,
+not the connected app or browser. It does not change saved plugin enablement or
+provider configuration. The provider still checks model and operating-system
+availability when the selected setup method runs.
+
+`assistantVisibility: "detected-only"` keeps the choice out of metadata-only
+setup, sign-in, enable, and install rows, including manual pickers. App-guided
+setup offers it only as a candidate returned by the provider's current
+`appGuidedSetup.detect` probe. Classic setup includes the provider choice only
+after `detectAvailability` succeeds. Both probes must apply the provider's
+actual model eligibility rules. Explicit CLI auth-choice selection remains
+supported and the setup method still rechecks availability before activation.
+
+For a provider whose setup methods all require detection, saved and configured
+models are also withheld from offered candidates until current discovery confirms
+the matching model. The configured model and setup-complete state remain recorded;
+an unavailable model does not turn an existing installation into fresh setup.
+Providers with an ordinary supported setup method retain their existing behavior.
+
+An optional `modelTarget: "utility"` uses the existing per-agent or default
+`utilityModel` setting; omission selects the primary role. Setup verifies the
+utility role without replacing a working primary or its runtime and credentials.
+If no regular primary is configured, the system setup assistant can use the
+explicit utility model. Automatic utility defaults never bootstrap setup. A regular
+primary takes precedence once configured, and ordinary agent readiness remains
+separate from utility setup.
+Explicit `provider-plugin:<provider>:<method>` choices retain the role declared
+for that same plugin, provider, and method. Runtime wizard metadata does not need
+to repeat the manifest's role.
+Bare provider choices also retain the role of the method selected by setup.
+An exact manifest choice ID still owns dispatch for unprefixed choices.
+
+Clients must echo `modelTarget: "utility"` when activating a utility choice.
+Missing or mismatched role acknowledgement is rejected before provider preparation,
+so older clients cannot accidentally treat a utility activation as primary-ready.
+Detection and successful activation/verification report the role. Detection keeps
+`configuredModel` and `setupComplete` primary-only, exposes an explicit `utilityModel`,
+and exposes `setupModel` only when that utility is the no-primary setup fallback.
+Verification accepts the utility target explicitly, including alongside a primary.
 
 When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
@@ -227,6 +269,39 @@ Supported evidence entries:
 | `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
 | `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
 | `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
+
+## configGroups reference
+
+`configGroups` organizes the plugin’s Settings page into titled sections. It is
+presentation metadata beside `configSchema`; it does not add configuration keys
+or change validation, defaults, or runtime behavior.
+
+```json
+{
+  "configGroups": [
+    {
+      "id": "connection",
+      "title": "Connection",
+      "order": 10,
+      "properties": ["apiKey", "endpoint"]
+    },
+    { "id": "history", "title": "History", "order": 20, "properties": ["storage"] }
+  ]
+}
+```
+
+Each entry requires a nonempty `id`, `title`, and `properties` array. Properties
+name exact immediate keys in `configSchema.properties`; they are not nested
+paths. A nested object and its descendants stay in that property’s section.
+Group ids and property assignments must be unique. Optional integer `order`
+sorts sections from lowest to highest (default `0`); ties retain manifest order.
+Properties appear in the order authored within each group.
+
+There is one level of sections, all visible by default. Settings search matches
+field names, labels, descriptions, and group titles. Unassigned properties appear
+under **Other**. Missing or invalid grouping metadata leaves the complete flat
+form available; it never hides fields or prevents the plugin from loading.
+Hosts without grouping support ignore this optional metadata.
 
 ## uiHints reference
 

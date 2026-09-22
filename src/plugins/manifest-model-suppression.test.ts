@@ -5,6 +5,8 @@ import {
   normalizeModelCatalogProviderRows,
 } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { projectModelProviderConfig } from "../config/model-provider-config.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -314,6 +316,141 @@ describe("manifest model suppression", () => {
       }),
     ).toBeUndefined();
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "native", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
+    { name: "custom", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+    { name: "private ID", baseUrl: "https://api.x.ai/v1", id: "private-model", retired: false },
+    { name: "ambiguous", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "owned logical provider", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "model override", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+  ])("applies captured physical retirement policy for $name", (scenario) => {
+    const native = { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [] };
+    const plugins: Record<string, unknown>[] = [
+      {
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        modelCatalog: {
+          providers: { xai: native },
+          suppressions: [
+            {
+              provider: "xai",
+              model: "auto",
+              retirement: { replacedBy: "current" },
+              when: { baseUrlHosts: ["api.x.ai"] },
+            },
+          ],
+        },
+      },
+    ];
+    if (scenario.name === "ambiguous") {
+      plugins.push({
+        id: "other",
+        providers: ["other"],
+        modelCatalog: { providers: { other: native } },
+      });
+    }
+    if (scenario.name === "owned logical provider") {
+      plugins.push({ id: "personal", providers: ["personal"] });
+    }
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot(plugins));
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-responses" as const,
+            baseUrl: scenario.name === "model override" ? native.baseUrl : scenario.baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: scenario.id,
+                name: scenario.id,
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl: scenario.baseUrl,
+              }),
+            ].map(({ provider: _provider, api: _api, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: scenario.id };
+    expect(resolver.hasRetirementCandidate(input)).toBe(scenario.retired);
+    const result = resolver({ ...input, baseUrl: scenario.baseUrl });
+    expect(Boolean(result?.retirement)).toBe(scenario.retired);
+    if (scenario.retired) {
+      expect(result?.errorMessage).toContain("personal/auto");
+    }
+    expect(
+      resolver({ ...input, baseUrl: scenario.baseUrl, unconditionalOnly: true }),
+    ).toBeUndefined();
+    expect(resolver({ provider: "xai", id: "auto", baseUrl: native.baseUrl })?.retirement).toEqual({
+      replacedBy: "current",
+    });
+  });
+
+  it("uses the model-level API for physical retirement candidate knowledge", () => {
+    const baseUrl = "https://api.x.ai/v1";
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "xai",
+          providers: ["xai"],
+          providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+          modelCatalog: {
+            providers: { xai: { api: "openai-responses", baseUrl, models: [] } },
+            suppressions: [
+              {
+                provider: "xai",
+                model: "auto",
+                retirement: { replacedBy: "current" },
+                when: { baseUrlHosts: ["api.x.ai"], providerConfigApiIn: ["openai-responses"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-completions" as const,
+            baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: "auto",
+                name: "Auto",
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl,
+              }),
+            ].map(({ provider: _provider, baseUrl: _baseUrl, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: "auto", baseUrl };
+    expect(resolver.hasRetirementCandidate(input)).toBe(true);
+    expect(resolver(input)).toBeUndefined();
+    const selected = projectModelProviderConfig(config, "personal", {
+      api: "openai-responses",
+      baseUrl,
+    });
+    expect(
+      buildManifestBuiltInModelSuppressionResolver({ config: selected })(input)?.retirement,
+    ).toEqual({ replacedBy: "current" });
+    Object.defineProperty(config.models.providers.personal, "models", {
+      get() {
+        throw new Error("Nonretired model knowledge must not read configured rows");
+      },
+    });
+    expect(resolver.hasRetirementCandidate({ provider: "personal", id: "private-model" })).toBe(
+      false,
+    );
   });
 
   it("keeps the OpenAI API route available while retiring the ChatGPT route", () => {

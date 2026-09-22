@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  readTranscriptStatsSync,
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -162,6 +163,7 @@ describe("SQLite session snapshots and reset content revision", () => {
         ...archive,
         absPath: scope.sessionKey,
         path: "sessions/main/parity.jsonl",
+        revisionMs: readTranscriptStatsSync(scope).lastMutationAtMs,
       });
       expect(sqlite.content).toBe(
         kind === "interactive"

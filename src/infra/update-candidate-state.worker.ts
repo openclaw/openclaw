@@ -1,4 +1,5 @@
 import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
+import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
@@ -36,8 +37,14 @@ async function snapshotCandidateState(): Promise<void> {
     input.mode === "snapshot"
       ? await snapshotUpdateCandidateState(input)
       : input.mode === "discover"
-        ? await discoverUpdateStateSchemaInspectionInProcess(input)
-        : await readUpdateStateSchemaVersionsInProcess(input);
+        ? await discoverUpdateStateSchemaInspectionInProcess({
+            ...input,
+            onProgress: createUpdateStateInspectionReporter(),
+          })
+        : await readUpdateStateSchemaVersionsInProcess({
+            ...input,
+            onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
+          });
   process.stdout.write(JSON.stringify(versions));
 }
 

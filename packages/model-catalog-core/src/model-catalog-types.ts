@@ -1,4 +1,5 @@
 // Shared model catalog data contracts for provider manifests and normalized rows.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MODEL_DATA_APIS,
   MODEL_DATA_THINKING_FORMATS,
@@ -108,6 +109,50 @@ export type ModelCatalogInput = "text" | "image" | "document";
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
+
+const OPENAI_THINKING_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+]);
+
+/** Managed API aliases retain the source adapter's reasoning contract. */
+export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
+  if (typeof api !== "string") {
+    return undefined;
+  }
+  const sourceApi = api.replace(/^openclaw-(.+)-transport$/u, "$1");
+  return OPENAI_THINKING_APIS.has(sourceApi) ? sourceApi : undefined;
+}
+
+/** Map keys describe logical choices; provider-native values retain their spelling. */
+export function listMappedModelThinkingLevels(model: {
+  api?: string | null;
+  compat?: unknown;
+}): ModelCatalogThinkingLevel[] {
+  const compat = asOptionalRecord(model.compat);
+  const efforts = compat?.supportedReasoningEfforts;
+  const api = resolveOpenAIThinkingApi(model.api);
+  const format = compat?.thinkingFormat;
+  const binaryOnly = format === "qwen" || format === "qwen-chat-template" || format === "zai";
+  if (
+    !api ||
+    (api === "openai-completions" && binaryOnly) ||
+    compat?.supportsReasoningEffort === false ||
+    (Array.isArray(efforts) && efforts.length === 0)
+  ) {
+    return [];
+  }
+  const mapping = asOptionalRecord(compat?.reasoningEffortMap);
+  const mapped = new Set(
+    Object.entries(mapping ?? {}).flatMap(([level, effort]) =>
+      typeof effort === "string" && effort.trim() ? [level.trim().toLowerCase()] : [],
+    ),
+  );
+  return MODEL_CATALOG_THINKING_LEVELS.filter((level) => mapped.has(level));
+}
+
 /** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
 /** Availability state for a model. */

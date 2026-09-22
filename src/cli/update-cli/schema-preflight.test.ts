@@ -268,7 +268,7 @@ describe("planned legacy configuration admission", () => {
           await expect(
             captureTargetDatabaseSchemaContext(env).then(() => true),
           ).rejects.toMatchObject({
-            reason: "database-schema-preflight",
+            reason: "invalid-config",
             message: expect.stringMatching(/gateway\.bind:[\s\S]*openclaw doctor --fix/),
           });
           // Exercise the real caller admission forwarding, without inspecting a live service.
@@ -300,7 +300,7 @@ describe("planned legacy configuration admission", () => {
                 { ...env, OPENCLAW_CONFIG_PATH: otherPath },
                 { legacyConfigPlan },
               ).then(() => true),
-            ).rejects.toMatchObject({ reason: "database-schema-preflight" });
+            ).rejects.toMatchObject({ reason: "invalid-config" });
           } else {
             fs.appendFileSync(scenario === "root edit" ? configPath : includePath, "\n");
             await expect(
@@ -325,7 +325,7 @@ describe("planned migration managed profile isolation", () => {
       const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
       const before = fs.readFileSync(configPath);
       const inspected = captureTargetDatabaseSchemaContext(env);
-      await expect(inspected).rejects.toMatchObject({ reason: "database-schema-preflight" });
+      await expect(inspected).rejects.toMatchObject({ reason: "invalid-config" });
       await expect(inspected).rejects.toThrow("agents.defaults.modelPolicy.allow.0:");
       await expect(inspected).rejects.toThrow("openclaw doctor --fix");
       await expect(inspected).rejects.not.toThrow(rejectedValue);
@@ -413,7 +413,7 @@ describe("planned migration managed profile isolation", () => {
           },
         });
         if (scenario === "other legacy source" || scenario === "other invalid source") {
-          await expect(inspected).rejects.toMatchObject({ reason: "database-schema-preflight" });
+          await expect(inspected).rejects.toMatchObject({ reason: "invalid-config" });
         } else {
           const context = await inspected;
           expect(context?.config.gateway?.bind).toBe(
@@ -449,7 +449,7 @@ describe("planned migration managed profile isolation", () => {
         expect(legacyConfigPlan).toBeUndefined();
         const inspected = captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
         await expect(inspected).rejects.toMatchObject({
-          reason: "database-schema-preflight",
+          reason: "invalid-config",
           message: expect.stringContaining(configPath),
         });
         await expect(inspected).rejects.toThrow("gateway.port:");

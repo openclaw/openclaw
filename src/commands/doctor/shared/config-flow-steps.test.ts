@@ -99,8 +99,11 @@ describe("doctor config flow steps", () => {
     });
 
     expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
-      authoredRaw: { mcp: { $include: "./mcp.json5" } },
-      resolvedRaw: sourceConfig,
+      sourceConfigBeforeMigrations: undefined,
+      context: {
+        authoredRaw: { mcp: { $include: "./mcp.json5" } },
+        resolvedRaw: sourceConfig,
+      },
     });
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);

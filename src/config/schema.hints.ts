@@ -8,7 +8,6 @@ import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
 import { walkConfigSchema } from "./schema.walk.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
@@ -100,7 +99,10 @@ const SECTION_DOCS_URLS = {
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "plugins.entries.*.hooks.timeoutMs": "Automatic (per hook)",
+  "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
   "gateway.cliAgents.enabled": "Default (enabled)",
+  "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
@@ -166,7 +168,7 @@ export function buildBaseHints(): ConfigUiHints {
     hints[runtimePath] = { ...hints[runtimePath], order: -2 };
     hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
-  return applyDerivedTags(applyConfigTierHints(hints));
+  return applyConfigTierHints(hints);
 }
 
 /** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */

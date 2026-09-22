@@ -1,3 +1,5 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -30,6 +32,7 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  terminalReplyExpectation?: ReplyExpectation;
   /** Exact tool authority resolved for an inbound user turn before steering. */
   toolAuthorityFingerprint?: string;
   /** Internal proof that a mismatched route recomputes to the active run's full authority. */
@@ -54,6 +57,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** User-authorized controls retain sender authority but are not answers to pending questions. */
+  allowPendingUserInputAnswer?: false;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
@@ -67,6 +72,7 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;
@@ -146,6 +152,7 @@ export type ReplyBackendHandle = {
   /** Exact authority of this concrete backend attempt, after fallback selection. */
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  readonly terminalReplyExpectation?: ReplyExpectation;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
@@ -212,9 +219,11 @@ export type ReplyMessageInjectionAttempt = {
 };
 
 type ReplyBackendQueueMessageMismatch =
+  | "input_visibility_mismatch"
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
 /** Prevents steering a turn into a run that cannot preserve its model-facing input. */

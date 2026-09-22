@@ -7,7 +7,7 @@ const readBuffer = Buffer.alloc(128 * 1024);
 
 function git(...args) {
   const output = execFileSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args],
     { maxBuffer: 64 * 1024 * 1024 },
   );

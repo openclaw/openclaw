@@ -4,7 +4,7 @@ import type {
   ChatGoalDraftMode,
   HumanMention,
 } from "../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
+import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 
@@ -137,6 +137,18 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       }
       releaseHandoff(match);
       return null;
+    },
+    retainedAttachmentIds: (attachments) => {
+      const requested = new Set(attachments.map((attachment) => attachment.id));
+      const retained = new Set<string>();
+      for (const handoff of pending.values()) {
+        for (const attachment of handoffAttachments(handoff)) {
+          if (requested.has(attachment.id)) {
+            retained.add(attachment.id);
+          }
+        }
+      }
+      return retained;
     },
     retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.

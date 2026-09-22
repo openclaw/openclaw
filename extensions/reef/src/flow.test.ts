@@ -4,14 +4,13 @@ import {
   canonicalBytes,
   generateIdentity,
   guardInstructions,
-  MemoryAuditStore,
-  MemoryReplayStore,
   open,
   sha256Hex,
   verifyReceipt,
   type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
@@ -34,13 +33,13 @@ import type { InboxEntry } from "./types.js";
 const oauthGuardModel = "gpt-5.6-terra";
 const oauthGuardResponseModel = `${oauthGuardModel}-2026-08-01`;
 
-beforeEach(() => {
-  resetFlowStoresForTests();
+beforeEach(async () => {
+  await resetFlowStoresForTests();
   setReefRuntime(createPluginRuntimeMock());
 });
 afterEach(() => {
   vi.unstubAllEnvs();
-  resetFlowStoresForTests();
+  return resetFlowStoresForTests();
 });
 
 describe("createConfiguredGuard", () => {
@@ -716,14 +715,6 @@ describe("ReefMessageFlow outbound", () => {
 });
 
 describe("ReefMessageFlow delivery-store capacity", () => {
-  beforeEach(() => {
-    resetFlowStoresForTests();
-  });
-
-  afterEach(() => {
-    resetFlowStoresForTests();
-  });
-
   it("parks after ingress without retaining bookkeeping when the delivered store fills before confirm", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();

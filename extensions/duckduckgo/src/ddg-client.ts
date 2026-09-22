@@ -1,7 +1,7 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
-import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
+import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -90,7 +90,7 @@ async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
   return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
-function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
+function parseDuckDuckGoHtml(html: string, count: number): DuckDuckGoResult[] {
   const results: DuckDuckGoResult[] = [];
   const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
   const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i;
@@ -112,6 +112,9 @@ function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
 
     if (title && url) {
       results.push({ title, url, snippet });
+      if (results.length >= count) {
+        break;
+      }
     }
   }
 
@@ -179,8 +182,9 @@ export async function runDuckDuckGoSearch(params: {
     async (response) => {
       if (!response.ok) {
         const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-        throw new Error(
+        throw new ProviderHttpError(
           `DuckDuckGo search error (${response.status}): ${detail || response.statusText}`,
+          { status: response.status },
         );
       }
 
@@ -188,7 +192,7 @@ export async function runDuckDuckGoSearch(params: {
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
-      return parseDuckDuckGoHtml(html).slice(0, count);
+      return parseDuckDuckGoHtml(html, count);
     },
   );
 

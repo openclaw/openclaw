@@ -3,10 +3,7 @@ export type { ExtensionErrorListener, ShutdownHandler } from "./runner.js";
 export { ExtensionRunner } from "./runner.js";
 export type {
   ContextUsage,
-  ExtensionAPI,
   ExtensionCommandContextActions,
-  ExtensionContext,
-  ExtensionFactory,
   ExtensionUIContext,
   InputSource,
   LoadExtensionsResult,

@@ -314,12 +314,8 @@ describe("qa multipass runtime", () => {
     const script = await renderPersistedGuestScript({
       outputDirName: "multipass-selection-test",
       runtimePair: ["openclaw", "codex"],
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channelDriver: "crabline",
+      channelId: "telegram",
       enabledPluginIds: ["browser", "memory-core", "browser"],
     });
 

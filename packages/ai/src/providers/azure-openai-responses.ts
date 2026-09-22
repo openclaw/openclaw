@@ -1,4 +1,3 @@
-// Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -12,10 +11,13 @@ import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
+  resolveOpenAISimpleReasoningEffort,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
+import {
   applyCommonResponsesParams,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -36,9 +38,8 @@ function resolveDeploymentName(
   });
 }
 
-// Azure OpenAI Responses-specific options
 interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   azureApiVersion?: string;
   azureResourceName?: string;
@@ -46,9 +47,6 @@ interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   azureDeploymentName?: string;
 }
 
-/**
- * Generate function for Azure OpenAI Responses API
- */
 export const streamAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   AzureOpenAIResponsesOptions
@@ -60,7 +58,6 @@ export const streamAzureOpenAIResponses: StreamFunction<
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model, "azure-openai-responses");
 
-  // Start async processing
   void runResponsesStreamLifecycle({
     stream,
     model,
@@ -99,12 +96,10 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   const base = buildBaseOptions(model, options, apiKey);
   const authProfileId = (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)
     ?.authProfileId;
-  const reasoningEffort = resolveResponsesReasoningEffort(model, options?.reasoning);
-
   return streamAzureOpenAIResponses(model, context, {
     ...base,
     authProfileId,
-    reasoningEffort: reasoningEffort === "max" ? "xhigh" : reasoningEffort,
+    reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
   } satisfies AzureOpenAIResponsesOptions);
 };
 

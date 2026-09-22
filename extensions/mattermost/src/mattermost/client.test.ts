@@ -1,6 +1,6 @@
-// Mattermost tests cover client plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -44,16 +44,6 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   });
 
   return { mockFetch: mockFetch as typeof fetch, calls };
-}
-
-function requestUrl(url: string | URL | Request): string {
-  if (typeof url === "string") {
-    return url;
-  }
-  if (url instanceof URL) {
-    return url.toString();
-  }
-  return url.url;
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -939,11 +929,11 @@ describe("createMattermostPost", () => {
 // ── updateMattermostPost ─────────────────────────────────────────────
 
 describe("updateMattermostPost", () => {
-  it("sends PUT to /posts/{id}", async () => {
+  it("sends PUT to /posts/{id}/patch", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
     const firstCall = requireRequestCall(calls);
-    expect(firstCall.url).toContain("/posts/post1");
+    expect(new URL(firstCall.url).pathname).toBe("/api/v4/posts/post1/patch");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
     }

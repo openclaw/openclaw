@@ -426,6 +426,109 @@ suite.define(() => {
     );
   });
 
+  it("keeps question drafts scoped, bounded, and retired with their conversation", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}settings`);
+      const storeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const result = await page.evaluate(async (store) => {
+        const parent = {
+          gatewayOwner: "question-fixture",
+          recoveryScope: "person-a",
+          scopeKey: "chat:v3:agent:main:one\u0000agent:main",
+        };
+        const scope = { ...parent, scopeKey: `questions:v1:${parent.scopeKey}` };
+        const payload = {
+          text: "",
+          attachments: [],
+          questionDrafts: [
+            {
+              itemId: "audience",
+              signature: "fixture",
+              edited: true,
+              answers: [{ selected: [], freeText: "My team" }],
+            },
+          ],
+        };
+        await store.writeDurableComposerDraft(
+          scope,
+          { ...payload, revision: 1 },
+          { expectedRevision: 0, writeId: "first" },
+        );
+        const recovery = await store.prepareDurableComposerRecovery(parent);
+        const read = await store.readDurableComposerDraft(scope);
+        const other = await store.readDurableComposerDraft({ ...scope, recoveryScope: "person-b" });
+        await store.retireDurableComposerDraft(parent);
+        const retired = await store.readDurableComposerDraft(scope);
+        const stale = await store.writeDurableComposerDraft(
+          scope,
+          { ...payload, revision: 2 },
+          { expectedRevision: 1, writeId: "late" },
+        );
+        // The owner budget evicts by updatedAt, not revision. Real writes can share
+        // one millisecond, so give each fixture row a distinct timestamp like the
+        // existing composer fence scenario, without depending on IDB key tie order.
+        const boundedScopes = Array.from({ length: 21 }, (_, index) => ({
+          ...scope,
+          scopeKey: `questions:v1:chat:v3:agent:main:bounded-${index}\u0000agent:main`,
+        }));
+        const originalNow = Date.now;
+        let now = originalNow();
+        const writes = [];
+        try {
+          Date.now = () => ++now;
+          for (const [index, boundedScope] of boundedScopes.entries()) {
+            writes.push(
+              await store.writeDurableComposerDraft(
+                boundedScope,
+                { ...payload, revision: index + 10 },
+                { expectedRevision: 0, writeId: `bounded-${index}` },
+              ),
+            );
+          }
+        } finally {
+          Date.now = originalNow;
+        }
+        const bounded = await Promise.all(
+          boundedScopes.map((boundedScope) => store.readDurableComposerDraft(boundedScope)),
+        );
+        return {
+          recovery,
+          read,
+          other,
+          retired,
+          stale,
+          oldest: bounded[0],
+          active: bounded.filter((storedDraft) => storedDraft.status === "found").length,
+          writes: writes.map((write) => write.status),
+          expireScope: {
+            ...scope,
+            scopeKey: "questions:v1:chat:v3:agent:main:bounded-20\u0000agent:main",
+          },
+        };
+      }, storeHandle);
+      expect(result.recovery).toEqual({ status: "ready", entries: [] });
+      expect(result.read).toMatchObject({
+        status: "found",
+        draft: { questionDrafts: [{ answers: [{ freeText: "My team" }] }] },
+      });
+      expect(result.other.status).toBe("not-found");
+      expect(result.retired.status).toBe("not-found");
+      expect(result.stale.status).toBe("conflict");
+      expect(result.writes).toEqual(Array.from({ length: 21 }, () => "persisted"));
+      expect(result.active).toBe(20);
+      expect(result.oldest?.status).toBe("not-found");
+      await rawDraftRecords(page, [result.expireScope], true);
+      const expired = await page.evaluate(
+        ({ store, scope }) => store.readDurableComposerDraft(scope),
+        { store: storeHandle, scope: result.expireScope },
+      );
+      expect(expired.status).toBe("not-found");
+    });
+  });
+
   it("expires drafts across abandoned credential owners on the next database open", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },

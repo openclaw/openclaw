@@ -123,7 +123,16 @@ it("acquires a long sparse context with bounded queries and preserved message or
   });
 });
 
-it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
+it.each([
+  "whole",
+  "reset",
+  "compaction",
+  "reset-compaction",
+  "leaf",
+  "opaque",
+  "opaque-compaction",
+  "leaf-compaction",
+])(
   "acquires detached %s context without native payloads or changing stored evidence",
   async (scenario) => {
     await withOpenClawTestState({ label: "model-context" }, async (state) => {
@@ -144,8 +153,8 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
         sender: { id: "synthetic-sender" },
         media: { type: "synthetic" },
       };
-      source.appendThinkingLevelChange("high");
-      source.appendModelChange("openai", "gpt-5.6-luna");
+      await source.appendThinkingLevelChange("high");
+      await source.appendModelChange("openai", "gpt-5.6-luna");
       const old = source.appendMessage({
         role: "user",
         content: "old",
@@ -206,6 +215,19 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
       }
       if (scenario === "compaction" || scenario === "reset-compaction") {
         source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
+      }
+      if (scenario === "opaque-compaction") {
+        await appendTranscriptEvent(scope, {
+          type: "opaque-synthetic",
+          id: "opaque-keep",
+          parentId: kept,
+        });
+        source.reloadPersistedTranscript();
+        source.appendCompaction("summary", "opaque-keep", 100);
+      }
+      if (scenario === "leaf-compaction") {
+        const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
+        source.appendCompaction("summary", leafMarker.id, 100);
       }
       if (scenario === "leaf") {
         source.branch(old);

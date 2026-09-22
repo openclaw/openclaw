@@ -1,4 +1,5 @@
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -54,6 +55,7 @@ it("loads browser close runtimes only for owned tabs", async () => {
       await import("./src/browser/session-tab-store.js");
     initializeBrowserSessionTabStore({
       state: {
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
         openSyncKeyedStore: (options) =>
           createPluginStateSyncKeyedStoreForTests("browser", options),
       },

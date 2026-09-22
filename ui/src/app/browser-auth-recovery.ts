@@ -10,6 +10,33 @@ import {
   resolveControlUiAuthCandidates,
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
+function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    // Navigation follows cookie-based SSO redirects without CORS/connect-src
+    // exceptions or Gateway credentials. The frame cannot run scripts or leave itself.
+    frame.setAttribute("sandbox", "allow-same-origin");
+    frame.referrerPolicy = "no-referrer";
+    frame.src = url.href;
+    const finish = () => {
+      window.clearTimeout(timeout);
+      signal.removeEventListener("abort", finish);
+      frame.remove();
+      resolve();
+    };
+    const timeout = window.setTimeout(finish, 10_000);
+    frame.addEventListener("load", finish, { once: true });
+    frame.addEventListener("error", finish, { once: true });
+    signal.addEventListener("abort", finish, { once: true });
+    document.body.append(frame);
+  });
+}
 
 /** The document owns proxy sign-in; a healthy WebSocket does not establish HTTP access. */
 export function startBrowserAuthRecovery(
@@ -66,7 +93,21 @@ export function startBrowserAuthRecovery(
             <div class="exec-approval-actions">
               <button
                 class="btn primary"
-                @click=${() => {
+                @click=${async () => {
+                  if (webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways) {
+                    const { nativeGatewaysCapability } =
+                      await import("./native-gateways.runtime.ts");
+                    if (lifetime.signal.aborted || dismissed) {
+                      return;
+                    }
+                    const native = nativeGatewaysCapability();
+                    const currentId = native?.snapshot?.currentId;
+                    if (native && currentId) {
+                      // The app owns a separate cookie store; a normal browser tab cannot renew it.
+                      native.reconnect(currentId);
+                      return;
+                    }
+                  }
                   openedSignIn = true;
                   probeResult = undefined;
                   openExternalUrlSafe(root.href);
@@ -108,18 +149,33 @@ export function startBrowserAuthRecovery(
       try {
         // This canonical endpoint never redirects. Manual mode exposes an edge
         // redirect without following it or forwarding Gateway credentials to it.
-        const response = await fetchWithControlUiAuth(
-          probeUrl.href,
-          {
-            method: "HEAD",
-            credentials: "same-origin",
-            cache: "no-store",
-            redirect: "manual",
-            signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(5_000)]),
-          },
-          authCandidates,
-          isCurrent,
-        );
+        const probe = () =>
+          fetchWithControlUiAuth(
+            probeUrl.href,
+            {
+              method: "HEAD",
+              credentials: "same-origin",
+              cache: "no-store",
+              redirect: "manual",
+              signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(5_000)]),
+            },
+            authCandidates,
+            isCurrent,
+          );
+        let response = await probe();
+        if (!isCurrent()) {
+          return;
+        }
+        if (response.type === "opaqueredirect" && !signInRequired) {
+          signInRequired = true;
+          await renewBrowserSession(probeUrl, lifetime.signal);
+          if (!isCurrent()) {
+            return;
+          }
+          // Login/error pages can also finish loading (or refuse framing).
+          // Only a fresh authenticated probe establishes renewed HTTP access.
+          response = await probe();
+        }
         if (!isCurrent()) {
           return;
         }

@@ -11,7 +11,6 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -20,7 +19,7 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -143,17 +142,12 @@ async function handleSessionGoalMutation(
       assertCurrent,
     });
     if (!committed.replayed && committed.sessionEntry) {
-      recordSessionGoalChanged({
+      await publishCommittedSessionGoalChange(context, {
         sessionKey: target.canonicalKey,
         agentId: target.agentId,
         entry: committed.sessionEntry,
         actor: gatewayClientSessionCreator(client),
         summary: `goal ${request.action}`,
-      });
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        agentId: target.agentId,
-        reason: "goal",
       });
     }
     respond(

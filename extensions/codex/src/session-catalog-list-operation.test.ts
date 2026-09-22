@@ -1,113 +1,19 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
-import type {
-  CodexSessionCatalogPage,
-  CodexSessionCatalogPageParams,
-} from "./session-catalog-types.js";
 import {
-  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createControl,
-  createGatewayApi,
-  createRuntime,
-  registerCodexSessionCatalog,
-} from "./session-catalog.test-helpers.js";
-
-function page(ids: string[], nextCursor?: string): CodexSessionCatalogPage {
-  return {
-    sessions: ids.map((threadId) => ({
-      threadId,
-      name: threadId,
-      status: "idle",
-      source: "cli",
-      archived: false,
-    })),
-    ...(nextCursor ? { nextCursor } : {}),
-  };
-}
-
-function observe<T>(promise: Promise<T>) {
-  const state = { settled: false };
-  const done = promise
-    .then(
-      (value) => ({ status: "fulfilled" as const, value }),
-      (reason: unknown) => ({ status: "rejected" as const, reason }),
-    )
-    .finally(() => {
-      state.settled = true;
-    });
-  return { state, done };
-}
-
-function fixture(homeCount = 1) {
-  const { runtime } = createRuntime();
-  const base = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => config,
-  });
-  const primary = base.homesForAgent("main")[0]!;
-  const homes = Array.from({ length: homeCount }, (_, index) => ({
-    ...primary,
-    sourceHomeId: `home-${index}`,
-    hostId: index === 0 ? "gateway:local" : `gateway:local:home-${index}`,
-    label: `Home ${index}`,
-  }));
-  const listPage =
-    vi.fn<
-      (homeId: string, params: CodexSessionCatalogPageParams) => Promise<CodexSessionCatalogPage>
-    >();
-  listPage.mockResolvedValue(page(["visible"]));
-  const snapshot = vi.fn(
-    async () => new Map(homes.map((home) => [home.sourceHomeId, new Set(["managed"])])),
-  );
-  const bindingStore = Object.assign(createCodexTestBindingStore(), {
-    managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
-  });
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore,
-    control: {
-      ...base,
-      homesForAgent: () => homes,
-      forRequest: (_agentId, source) =>
-        createControl({
-          listPage: (params) => listPage(source!.sourceHomeId, params),
-        }),
-    },
-    getRuntimeConfig: () => config,
-  });
-  const controller = new AbortController();
-  const onHost = vi.fn();
-  const publications: Promise<void>[] = [];
-  const start = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const provider = getProvider()!;
-    if (!provider.createListOperation) {
-      throw new Error("Codex list operation is unavailable");
-    }
-    return provider.createListOperation({
-      agentId: "main",
-      limitPerHost: 1,
-      hostIds: homes.map((home) => home.hostId),
-      signal: controller.signal,
-      onHost,
-      waitUntil: (completion) => {
-        publications.push(completion);
-      },
-      ...params,
-    });
-  };
-  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start };
-}
+  fixture,
+  nodeFixture,
+  observe,
+  page,
+} from "./session-catalog-list-operation.test-support.js";
+import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing.js";
+import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
+import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 describe("Codex catalog list operation", () => {
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
-    const f = fixture();
+    const f = await fixture();
     f.listPage
       .mockResolvedValueOnce({
         ...page(["keep-one"], "next"),
@@ -151,7 +57,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("closes uninitialized and paused operations without starting or reviving source work", async () => {
-    const f = fixture();
+    const f = await fixture();
     const untouched = f.start();
     expect(untouched.close()).toBeUndefined();
     await expect(untouched.next()).rejects.toThrow();
@@ -175,7 +81,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("joins a held control page after active abort before allowing closure", async () => {
-    const f = fixture();
+    const f = await fixture();
     const held = createDeferred<CodexSessionCatalogPage>();
     const started = createDeferred<void>();
     f.listPage.mockImplementation(() => {
@@ -207,7 +113,7 @@ describe("Codex catalog list operation", () => {
   it.each(["resolve", "reject"] as const)(
     "leaves an asynchronous %s publication tail with waitUntil",
     async (outcome) => {
-      const f = fixture();
+      const f = await fixture();
       const publication = createDeferred<void>();
       const published = createDeferred<void>();
       const operation = f.start({
@@ -252,7 +158,7 @@ describe("Codex catalog list operation", () => {
   );
 
   it("lets a fast home refill and publish while another home's first page stays active", async () => {
-    const f = fixture(2);
+    const f = await fixture(2);
     const first = createDeferred<CodexSessionCatalogPage>();
     const slow = createDeferred<CodexSessionCatalogPage>();
     let slowStarted = false;
@@ -299,7 +205,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("continues inline during unknown discovery and yields only after an actual empty selection", async () => {
-    const f = fixture();
+    const f = await fixture();
     const discovery = createDeferred<{ nodes: [] }>();
     const second = createDeferred<CodexSessionCatalogPage>();
     let secondStarted = false;
@@ -340,7 +246,7 @@ describe("Codex catalog list operation", () => {
   it.each(["terminal-only", "offline"] as const)(
     "yields before the next local page after a completed %s node placeholder",
     async (route) => {
-      const f = fixture();
+      const f = await fixture();
       const firstPage = createDeferred<CodexSessionCatalogPage>();
       const nodePublished = createDeferred<void>();
       const refillStarted = createDeferred<void>();
@@ -413,7 +319,7 @@ describe("Codex catalog list operation", () => {
   );
 
   it("keeps the filled operation inline after failed discovery", async () => {
-    const f = fixture();
+    const f = await fixture();
     f.listPage.mockImplementation(async (_home, params) =>
       params.cursor ? page(["visible"]) : page(["managed"], "next"),
     );
@@ -440,8 +346,8 @@ describe("Codex catalog list operation", () => {
   it.each(["resolve", "reject", "no waitUntil"] as const)(
     "keeps refill inline until a timed-out node's invocation and publication %s",
     async (outcome) => {
+      const f = await fixture();
       vi.useFakeTimers();
-      const f = fixture();
       const first = createDeferred<CodexSessionCatalogPage>();
       const second = createDeferred<CodexSessionCatalogPage>();
       const third = createDeferred<CodexSessionCatalogPage>();
@@ -550,9 +456,9 @@ describe("Codex catalog list operation", () => {
     },
   );
 
-  it("returns a complete local list at the node response deadline while its publication stays owned", async () => {
+  it("returns local hosts within 250 ms without publishing an empty cold node", async () => {
+    const f = await fixture();
     vi.useFakeTimers();
-    const f = fixture();
     const invoked = createDeferred<void>();
     const invokeResult = createDeferred<unknown>();
     vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
@@ -561,6 +467,7 @@ describe("Codex catalog list operation", () => {
     });
     const operation = f.start({
       hostIds: undefined,
+      allowPartialResults: true,
       listNodes: async () => ({
         nodes: [
           { nodeId: "remote", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
@@ -570,14 +477,15 @@ describe("Codex catalog list operation", () => {
     const advancing = observe(operation.next());
     try {
       await invoked.promise;
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(advancing.state.settled).toBe(true);
       await expect(advancing.done).resolves.toMatchObject({
         status: "fulfilled",
         value: {
           done: true,
           hosts: [
             { sessions: [{ threadId: "visible" }] },
-            { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
+            { hostId: "node:remote", pending: true, sessions: [] },
           ],
         },
       });
@@ -601,8 +509,304 @@ describe("Codex catalog list operation", () => {
     }
   });
 
+  it("serves the retained node immediately and rejects an older refresh after a newer publication", async () => {
+    const f = await nodeFixture();
+    await f.read();
+    const older = createDeferred<unknown>();
+    const newer = createDeferred<unknown>();
+    f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const first = observe(f.read());
+    const second = observe(f.read());
+    try {
+      await nextTurn();
+      expect(first.state.settled).toBe(true);
+      expect(second.state.settled).toBe(true);
+      for (const result of [first, second]) {
+        await expect(result.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: [
+            { hostId: "gateway:local" },
+            { hostId: "node:remote", sessions: [{ threadId: "original" }] },
+          ],
+        });
+      }
+      newer.resolve({ payloadJSON: JSON.stringify(page(["newer"])) });
+      await nextTurn();
+      older.resolve({ payloadJSON: JSON.stringify(page(["older"])) });
+      await Promise.all(f.publications);
+      const published = f.onHost.mock.calls.flatMap(([host]) =>
+        host.hostId === "node:remote"
+          ? host.sessions.map((row: { threadId: string }) => row.threadId)
+          : [],
+      );
+      expect(published).toContain("newer");
+      expect(published).not.toContain("older");
+      const held = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(held.promise);
+      try {
+        await expect(f.read()).resolves.toMatchObject([
+          { hostId: "gateway:local" },
+          { hostId: "node:remote", sessions: [{ threadId: "newer" }] },
+        ]);
+      } finally {
+        held.resolve({ payloadJSON: JSON.stringify(page(["final"])) });
+      }
+    } finally {
+      older.resolve({ payloadJSON: JSON.stringify(page([])) });
+      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+      await Promise.allSettled([first.done, second.done, ...f.publications]);
+    }
+  });
+
+  it("replays a newer shared snapshot before returning a list held by a local host", async () => {
+    const f = await nodeFixture();
+    await f.read();
+    const local = createDeferred<CodexSessionCatalogPage>();
+    const obsolete = createDeferred<unknown>();
+    const cachedFinalizer = createDeferred<void>();
+    f.listPage.mockReturnValueOnce(local.promise);
+    f.invoke.mockReturnValueOnce(obsolete.promise);
+    const publications: Promise<void>[] = [];
+    const onHost = vi.fn((host: { hostId: string }) =>
+      host.hostId === "node:remote" ? cachedFinalizer.promise : undefined,
+    );
+    const pending = observe(
+      f.read({
+        // oxlint-disable-next-line typescript/no-misused-promises -- Retain asynchronous JS callbacks even though the SDK declares void.
+        onHost,
+        waitUntil: (completion) => {
+          publications.push(completion);
+        },
+      }),
+    );
+    try {
+      await nextTurn();
+      f.invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify(page(["newer"])) });
+      await f.read({ hostIds: ["node:remote"], allowPartialResults: false });
+      local.resolve(page(["visible"]));
+      await expect(pending.done).resolves.toMatchObject({
+        status: "fulfilled",
+        value: [
+          { hostId: "gateway:local" },
+          { hostId: "node:remote", sessions: [{ threadId: "newer" }] },
+        ],
+      });
+      expect(onHost).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          hostId: "node:remote",
+          sessions: [expect.objectContaining({ threadId: "newer" })],
+        }),
+      );
+      obsolete.resolve({ payloadJSON: JSON.stringify(page(["obsolete"])) });
+      const tails = observe(Promise.all(publications));
+      await nextTurn();
+      expect(tails.state.settled).toBe(false);
+      cachedFinalizer.resolve();
+      await tails.done;
+    } finally {
+      cachedFinalizer.resolve();
+      local.resolve(page([]));
+      obsolete.resolve({ payloadJSON: JSON.stringify(page([])) });
+      await Promise.allSettled([pending.done, ...publications, ...f.publications]);
+    }
+  });
+
+  it.each([false, true])(
+    "delivers cold nodes across overlapping queries (newer query first: %s)",
+    async (newerFirst) => {
+      const f = await nodeFixture();
+      const older = createDeferred<unknown>();
+      const newer = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+      const firstHost = vi.fn();
+      const secondHost = vi.fn();
+      vi.useFakeTimers();
+      const first = observe(f.read({ onHost: firstHost }));
+      const second = observe(
+        f.read({ onHost: secondHost, ...(newerFirst ? { limitPerHost: 2 } : {}) }),
+      );
+      try {
+        await nextTurn();
+        await vi.advanceTimersByTimeAsync(250);
+        expect(first.state.settled).toBe(true);
+        expect(second.state.settled).toBe(true);
+        if (newerFirst) {
+          newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+          await nextTurn();
+        }
+        older.resolve({ payloadJSON: JSON.stringify(page(["first-answer"])) });
+        await nextTurn();
+        expect(firstHost).toHaveBeenCalledWith(
+          expect.objectContaining({
+            hostId: "node:remote",
+            sessions: [expect.objectContaining({ threadId: "first-answer" })],
+          }),
+        );
+        newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+        await Promise.all(f.publications);
+        expect(secondHost).toHaveBeenCalledWith(
+          expect.objectContaining({
+            hostId: "node:remote",
+            sessions: [expect.objectContaining({ threadId: "newer-answer" })],
+          }),
+        );
+      } finally {
+        older.resolve({ payloadJSON: JSON.stringify(page([])) });
+        newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+        await Promise.allSettled([first.done, second.done, ...f.publications]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([{ search: "matching" }, { limitPerHost: 2 }])(
+    "does not reuse another query's node page: %j",
+    async (query) => {
+      const f = await nodeFixture();
+      await f.read();
+      const held = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(held.promise);
+      vi.useFakeTimers();
+      const pending = observe(f.read(query));
+      try {
+        await nextTurn();
+        await vi.advanceTimersByTimeAsync(250);
+        expect(pending.state.settled).toBe(true);
+        await expect(pending.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: [
+            { hostId: "gateway:local" },
+            { hostId: "node:remote", pending: true, sessions: [] },
+          ],
+        });
+        const result = await pending.done;
+        if (result.status === "fulfilled") {
+          expect(result.value).toHaveLength(2);
+        }
+      } finally {
+        held.resolve({ payloadJSON: JSON.stringify(page(["matching"])) });
+        await pending.done;
+        await Promise.allSettled(f.publications);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["offline", "removed", "reconnected", "config", "aborted"] as const)(
+    "invalidates retained node pages and delayed publications when %s",
+    async (change) => {
+      const f = await nodeFixture();
+      await f.read();
+      const old = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(old.promise);
+      await f.read();
+      if (change === "offline") {
+        f.listNodes.mockResolvedValue({ nodes: [{ ...f.node, connected: false }] });
+      }
+      if (change === "removed") {
+        f.listNodes.mockResolvedValue({ nodes: [] });
+      }
+      if (change === "reconnected") {
+        f.listNodes.mockResolvedValue({ nodes: [{ ...f.node, connectedAtMs: 2 }] });
+      }
+      if (change === "config") {
+        f.replaceConfig();
+      }
+      if (change === "aborted") {
+        f.controller.abort();
+      }
+      const held = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(held.promise);
+      vi.useFakeTimers();
+      const pending = observe(f.read({ signal: new AbortController().signal }));
+      try {
+        await nextTurn();
+        await vi.advanceTimersByTimeAsync(250);
+        old.resolve({ payloadJSON: JSON.stringify(page(["obsolete"])) });
+        await nextTurn();
+        expect(pending.state.settled).toBe(true);
+        expect(
+          f.onHost.mock.calls.flatMap(([host]) =>
+            host.sessions.map((row: { threadId: string }) => row.threadId),
+          ),
+        ).not.toContain("obsolete");
+        const result = await pending.done;
+        expect(result.status).toBe("fulfilled");
+        if (result.status === "fulfilled" && change !== "aborted") {
+          expect(
+            result.value.flatMap((host) => host.sessions.map((row) => row.threadId)),
+          ).not.toContain("original");
+          if (change === "offline") {
+            expect(result.value[1]?.error?.code).toBe("NODE_OFFLINE");
+          }
+        }
+      } finally {
+        old.resolve({ payloadJSON: JSON.stringify(page([])) });
+        held.resolve({ payloadJSON: JSON.stringify(page([])) });
+        await pending.done;
+        await Promise.allSettled(f.publications);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["connection", "config"] as const)(
+    "does not bind a delayed inventory to a newer %s",
+    async (replacement) => {
+      const f = await nodeFixture();
+      const inventory = createDeferred<Awaited<ReturnType<typeof f.listNodes>>>();
+      const inventoryStarted = createDeferred<void>();
+      const newer = createDeferred<unknown>();
+      f.invoke
+        .mockReturnValueOnce(newer.promise)
+        .mockResolvedValueOnce({ payloadJSON: JSON.stringify(page(["obsolete"])) });
+      const first = observe(
+        f.read({
+          listNodes: () => {
+            inventoryStarted.resolve();
+            return inventory.promise;
+          },
+        }),
+      );
+      await inventoryStarted.promise;
+      if (replacement === "config") {
+        f.replaceConfig();
+      } else {
+        f.listNodes.mockResolvedValue({ nodes: [{ ...f.node, connectedAtMs: 2 }] });
+      }
+      vi.useFakeTimers();
+      const second = observe(f.read());
+      try {
+        await nextTurn();
+        inventory.resolve({ nodes: [f.node] });
+        await nextTurn();
+        await vi.advanceTimersByTimeAsync(250);
+        expect(first.state.settled).toBe(true);
+        expect(second.state.settled).toBe(true);
+        expect(
+          f.onHost.mock.calls.flatMap(([host]) =>
+            host.sessions.map((row: { threadId: string }) => row.threadId),
+          ),
+        ).not.toContain("obsolete");
+        newer.resolve({ payloadJSON: JSON.stringify(page(["current"])) });
+        await Promise.all(f.publications);
+        expect(f.onHost).toHaveBeenCalledWith(
+          expect.objectContaining({
+            hostId: "node:remote",
+            sessions: [expect.objectContaining({ threadId: "current" })],
+          }),
+        );
+      } finally {
+        inventory.resolve({ nodes: [f.node] });
+        newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+        await Promise.allSettled([first.done, second.done, ...f.publications]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("joins a started node sibling before rejecting a fatal publication failure", async () => {
-    const f = fixture();
+    const f = await fixture();
     const held = createDeferred<unknown>();
     const started = createDeferred<void>();
     vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
@@ -652,7 +856,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("disables intermediate handoff after a local page fails", async () => {
-    const f = fixture(2);
+    const f = await fixture(2);
     const surviving = createDeferred<CodexSessionCatalogPage>();
     const survivorStarted = createDeferred<void>();
     f.listPage.mockImplementation(async (home, params) => {

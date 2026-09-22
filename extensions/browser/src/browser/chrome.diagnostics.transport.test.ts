@@ -118,6 +118,25 @@ afterEach(() => {
 });
 
 describe("Chrome CDP diagnostic transport", () => {
+  it("diagnoses stale command channels with the discovered WebSocket URL", async () => {
+    const fixture = await startCdpFixture({ hold: "command" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const probing = diagnoseChromeCdp(fixture.url, 1_000, 1_000);
+      await fixture.reached.command.promise;
+      await vi.advanceTimersByTimeAsync(1_100);
+
+      await expect(probing).resolves.toMatchObject({
+        ok: false,
+        code: "websocket_health_command_timeout",
+        wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
+      });
+      await fixture.disconnected.command.promise;
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("gives the health command its full timeout after a delayed handshake", async () => {
     const fixture = await startCdpFixture({ hold: "handshake", holdCommand: true });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

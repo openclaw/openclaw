@@ -15,6 +15,11 @@ function keepAttentionFocusOnTooltip(event: FocusEvent) {
   event.stopPropagation();
 }
 
+function revealAttentionWithoutNavigation(event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 export function renderSessionAttentionIcon(
   attention: SidebarSessionAttention,
   showTooltip = false,
@@ -39,6 +44,7 @@ export function renderSessionAttentionIcon(
     aria-hidden=${label ? nothing : "true"}
     tabindex=${label ? "0" : nothing}
     @focusin=${label ? keepAttentionFocusOnTooltip : nothing}
+    @click=${label ? revealAttentionWithoutNavigation : nothing}
     >${icon}</span
   >`;
   return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
@@ -103,7 +109,7 @@ function renderSessionAttentionTooltip(
   trigger: TemplateResult,
 ) {
   const { status, preview, more } = sessionAttentionTooltipParts(attention);
-  return html`<openclaw-tooltip .content=${preview ? "" : status}>
+  return html`<openclaw-tooltip .content=${preview ? "" : status} open-on-click>
     ${trigger}
     ${
       preview
@@ -160,31 +166,41 @@ export function renderTeamSessionSlots(
   groupConflicts = 0,
 ) {
   const attention = summarizeSidebarSessionAttention(
-    rows.flatMap((row) => [
-      row.ownAttention ?? row.attention,
-      ...(includeChildren ? (row.childAttention ?? []) : []),
-    ]),
+    rows.flatMap((row) =>
+      includeChildren
+        ? [row.attention]
+        : [
+            row.ownAttention ?? row.attention,
+            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+          ],
+    ),
   );
   const active = rows.reduce(
-    (n, row) => n + Number(row.hasActiveRun) + (includeChildren ? row.runningChildCount : 0),
+    (n, row) =>
+      n +
+      Number(row.hasActiveRun) +
+      ((includeChildren ? row : row.subagentSummary)?.runningChildCount ?? 0),
     0,
   );
   const queued = rows.reduce(
     (n, row) =>
       n +
       Number(row.hasActiveRun && row.status === "queued") +
-      (includeChildren ? (row.queuedChildCount ?? 0) : 0),
+      ((includeChildren ? row : row.subagentSummary)?.queuedChildCount ?? 0),
     0,
   );
   const unread = rows.reduce(
-    (n, row) => n + Number(row.unread) + (includeChildren ? (row.unreadChildCount ?? 0) : 0),
+    (n, row) =>
+      n +
+      Number(row.unread) +
+      ((includeChildren ? row : row.subagentSummary)?.unreadChildCount ?? 0),
     0,
   );
   const failed = rows.some(
     (row) =>
       row.status === "failed" ||
       row.status === "timeout" ||
-      (includeChildren && row.failedChildCount > 0),
+      ((includeChildren ? row : row.subagentSummary)?.failedChildCount ?? 0) > 0,
   );
   const state =
     attention && attention.kind !== "none"

@@ -6,18 +6,18 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
-import { redactSystemAgentConfig } from "./config-redaction.js";
+import { redactSystemAgentConfig, resolveSystemAgentConfigSchema } from "./config-redaction.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
-  assertConfigWriteDoesNotBypassInferenceVerification,
   createNoExitRuntime,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
   formatConfigValidationLine,
   formatGatewayStatusLine,
+  getRegularAgentSetupNotice,
   isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
@@ -32,6 +32,30 @@ import type { SystemAgentOperation, SystemAgentOperationResult } from "./operati
 import { executePluginInstall } from "./plugin-install.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
+
+// Plugin CLI commands also serve terminals; this operation boundary owns the
+// smaller model budget across every write, without changing human CLI output.
+function boundedPluginReadRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  let remaining = CONFIG_GET_OUTPUT_MAX_CHARS;
+  const write = (sink: RuntimeEnv["log"], args: unknown[]) => {
+    if (remaining <= 0) {
+      return;
+    }
+    const text = args.join(" ");
+    const clipped = text.length >= remaining;
+    sink(
+      clipped
+        ? `${truncateUtf16Safe(text, remaining)}\n… (output limit reached; narrow the plugin search)`
+        : text,
+    );
+    remaining -= text.length + 1;
+  };
+  return {
+    ...runtime,
+    log: (...args) => write(runtime.log, args),
+    error: (...args) => write(runtime.error, args),
+  };
+}
 
 /** Execute a parsed OpenClaw operation after applying approval gates and audit logging. */
 export async function executeSystemAgentOperation(
@@ -63,6 +87,8 @@ export async function executeSystemAgentOperation(
               agent.id,
               agent.isDefault ? "default" : undefined,
               agent.name ? `name=${agent.name}` : undefined,
+              `model=${agent.model ?? "not configured"}`,
+              agent.utilityModel ? `utility=${agent.utilityModel}` : undefined,
               agent.workspace
                 ? `workspace=${shortenHomePath(resolveUserPath(agent.workspace))}`
                 : undefined,
@@ -78,6 +104,8 @@ export async function executeSystemAgentOperation(
       runtime.log(
         [
           `Default model: ${overview.defaultModel ?? "not configured"}`,
+          ...(overview.setupModel ? [`Setup model: ${overview.setupModel}`] : []),
+          ...(overview.utilityModel ? [`Utility model: ${overview.utilityModel}`] : []),
           `Codex: ${overview.tools.codex.found ? "found" : "not found"}`,
           `Claude Code: ${overview.tools.claude.found ? "found" : "not found"}`,
           `Gemini CLI: ${overview.tools.gemini.found ? "found" : "not found"}`,
@@ -88,23 +116,25 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "plugin-list": {
+      const boundedRuntime = boundedPluginReadRuntime(runtime);
       const runPluginsList =
         opts.deps?.runPluginsList ??
         (async (pluginRuntime: RuntimeEnv) => {
           const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
           await runPluginsListCommand({}, pluginRuntime);
         });
-      await runPluginsList(runtime);
+      await runPluginsList(boundedRuntime);
       return { applied: false };
     }
     case "plugin-search": {
+      const boundedRuntime = boundedPluginReadRuntime(runtime);
       const runPluginsSearch =
         opts.deps?.runPluginsSearch ??
         (async (query: string, pluginRuntime: RuntimeEnv) => {
           const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
           await runPluginsSearchCommand(query, {}, pluginRuntime);
         });
-      await runPluginsSearch(operation.query, runtime);
+      await runPluginsSearch(operation.query, boundedRuntime);
       return { applied: false };
     }
     case "audit":
@@ -143,8 +173,8 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "config-schema": {
-      const { buildConfigSchemaCore, lookupConfigSchema } = await import("../config/schema.js");
-      const response = buildConfigSchemaCore();
+      const { lookupConfigSchema } = await import("../config/schema.js");
+      const response = resolveSystemAgentConfigSchema();
       const path = operation.path ?? ".";
       const result = lookupConfigSchema(response, path);
       if (!result) {
@@ -168,24 +198,29 @@ export async function executeSystemAgentOperation(
           .join(", ");
         return `  - ${child.path} (${bits})`;
       });
+      const output = [
+        `Schema for ${result.path === "" ? "." : result.path}:`,
+        schema.type
+          ? `type: ${Array.isArray(schema.type) ? schema.type.join("|") : schema.type}`
+          : undefined,
+        result.hint?.label ? `label: ${result.hint.label}` : undefined,
+        result.hint?.help ? `help: ${result.hint.help}` : undefined,
+        schema.description ? `description: ${schema.description}` : undefined,
+        schema.enum
+          ? `allowed values: ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`
+          : undefined,
+        schema.default !== undefined ? `default: ${JSON.stringify(schema.default)}` : undefined,
+        ...(childLines.length > 0 ? ["keys:", ...childLines] : []),
+        result.children.length > CONFIG_SCHEMA_CHILDREN_MAX
+          ? `… +${result.children.length - CONFIG_SCHEMA_CHILDREN_MAX} more keys`
+          : undefined,
+      ]
+        .filter((line): line is string => line !== undefined)
+        .join("\n");
       runtime.log(
-        [
-          `Schema for ${result.path === "" ? "." : result.path}:`,
-          schema.type
-            ? `type: ${Array.isArray(schema.type) ? schema.type.join("|") : schema.type}`
-            : undefined,
-          schema.description ? `description: ${schema.description}` : undefined,
-          schema.enum
-            ? `allowed values: ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`
-            : undefined,
-          schema.default !== undefined ? `default: ${JSON.stringify(schema.default)}` : undefined,
-          ...(childLines.length > 0 ? ["keys:", ...childLines] : []),
-          result.children.length > CONFIG_SCHEMA_CHILDREN_MAX
-            ? `… +${result.children.length - CONFIG_SCHEMA_CHILDREN_MAX} more keys`
-            : undefined,
-        ]
-          .filter((line): line is string => line !== undefined)
-          .join("\n"),
+        output.length > CONFIG_GET_OUTPUT_MAX_CHARS
+          ? `${truncateUtf16Safe(output, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated; request a specific setting path)`
+          : output,
       );
       return { applied: false };
     }
@@ -289,10 +324,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     case "model-setup":
       runtime.log(
-        [
-          "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the candidate route, and saves only a passing setup. Then restart the host.",
-        ].join("\n"),
+        "Open Settings → Models → Connect provider. Check the connected Gateway and the selected System or agent scope in Settings before signing in. Enter credentials only in the protected sign-in controls, never in chat. Connecting another provider does not select it as the active model or require stopping the host. Model selection is separate; replacing credentials for a provider already in use can affect current work. Nothing has changed.",
       );
       return { applied: false };
     case "model-accounts":
@@ -319,7 +351,6 @@ export async function executeSystemAgentOperation(
     case "setup":
       return await executeSetup(operation, runtime, opts);
     case "config-set":
-      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       return await applyPersistentOperation({
         auditOperation: "config.set",
         operation,
@@ -331,7 +362,6 @@ export async function executeSystemAgentOperation(
         },
       });
     case "config-set-ref":
-      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
       return await applyPersistentOperation({
         auditOperation: "config.setRef",
         operation,
@@ -379,7 +409,7 @@ export async function executeSystemAgentOperation(
             ) => {
               const { runPluginUninstallCommand } =
                 await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand(pluginId, options, pluginRuntime);
+              await runPluginUninstallCommand([pluginId], options, pluginRuntime);
             });
           // A concurrent config write can retarget the default route between
           // the pre-approval check and this commit; re-verify before the
@@ -428,10 +458,20 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const createAgentForOperation =
             ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+          const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
           const result = await ctx.commit(() =>
             createAgentForOperation({
-              name: operation.agentId,
+              entry: {
+                id: operation.agentId,
+                ...(operation.name
+                  ? {
+                      name: operation.name,
+                      identity: createAgentIdentityConfig({ name: operation.name }),
+                    }
+                  : {}),
+              },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }
@@ -591,6 +631,11 @@ export async function executeSystemAgentOperation(
         requestedWorkspace: operation.workspace,
         overview,
       });
+      const setupNotice = getRegularAgentSetupNotice(overview, agentId);
+      if (setupNotice) {
+        runtime.log(setupNotice);
+        return { applied: false, message: setupNotice };
+      }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.

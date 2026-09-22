@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { describe, expect, it } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
 import {
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveHardening,
   FIRST_AUDIT_SCRUB_BYTE,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -15,8 +14,6 @@ import {
 } from "./state-migrations.audit.test-support.js";
 
 describe("legacy audit recovery byte handling", () => {
-  afterEach(resetPluginStateStoreForTests);
-
   it("blanks a zero-slack source within the fixed-size recovery inode", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, restore, sanitized, source } = audit.config;
@@ -190,13 +187,7 @@ describe("legacy audit recovery byte handling", () => {
       await audit.writeJsonLines(source, [systemAuditEvent("before archive")]);
       await audit.migrate();
       await audit.appendJsonLines(raw, [systemAuditEvent("later row")]);
-      // fs-safe applies the write mode before the migration's explicit hardening check.
-      const chmodSpy = await failChmodCall(
-        audit,
-        "recovery-chmod-probe",
-        3,
-        "simulated recovery chmod failure",
-      );
+      const chmodSpy = failArchiveHardening(audit, sanitized, "simulated recovery chmod failure");
 
       let failed: Awaited<ReturnType<typeof audit.migrate>>;
       try {

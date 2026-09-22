@@ -220,10 +220,6 @@ export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
 };
 
-export type CodexHooksListParams = {
-  cwds: string[];
-};
-
 export type CodexHooksListResponse = {
   data: JsonValue[];
   nextCursor?: string | null;

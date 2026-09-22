@@ -6,28 +6,34 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { registerClonedProjectRegistry } from "../projects/project-registry.js";
+import * as backoff from "../infra/backoff.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
+import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   ensureGitHubPublicationStore,
   insertGitHubPublicationRequest,
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
+  isGitHubPublicationExecutionOwner,
   projectGitHubPublicationResult,
 } from "./github-publication-store.js";
+import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import {
   insertRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
   claimRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
-  type RepositoryGitHubPublicationRow,
 } from "./github-repository-publication-store.js";
 import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
@@ -189,6 +195,7 @@ it.each([
         request_id: "prior-cloud-publication",
         idempotency_key: "prior",
         request_digest: "",
+        requester_authority_json: null,
         session_id: sessionId,
         session_lifecycle_revision: lifecycleRevision,
         session_key: scope.sessionKey,
@@ -234,7 +241,10 @@ it.each([
       };
       row.request_digest = repositoryGitHubPublicationDigest(row);
       insertRepositoryGitHubPublication(row, () => {});
-      const prior = claimRepositoryGitHubPublication(row, "cloud-instance", () => {});
+      const prior = claimRepositoryGitHubPublication(row, "cloud-instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       prior.recordEffect("push");
       if (scenario !== "unsettled") {
         prior.recordEffect("push", { headCommit: publishedHead });
@@ -385,6 +395,13 @@ it.each([
           requestDigest: createHash("sha256").update("local").digest("hex"),
           sessionId,
           lifecycleRevision,
+          requester: {
+            version: 1,
+            actor: { kind: "system" },
+            scopes: ["operator.admin"],
+            grant: null,
+          },
+          assertCurrent: () => {},
           now: Date.now(),
           worktree,
           identity,
@@ -392,13 +409,25 @@ it.each([
       );
       const initial = claimGitHubPublicationExecution(requestId, "local-instance");
       const execution = createGitHubPublicationExecutionStore("local-instance");
+      const requester = await restoreGitHubPublicationRequester(
+        readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
+          ?.requester_authority_json,
+        scope,
+        () => cfg,
+      );
       const published = await executeGitHubPublication({
         initial,
         ...execution,
         identity: { prepare: async () => identity, isCurrent: () => true },
-        validateAuthority: () => true,
+        validateCustody: () => isGitHubPublicationExecutionOwner(requestId, "local-instance"),
+        validateAuthority: () => {
+          requester.assertCurrent();
+          return true;
+        },
+        assertWorkflowChangesAllowed: () =>
+          assertGitHubPublicationWorkflowChangesAllowed(requester),
         projectResult: projectGitHubPublicationResult,
-      });
+      }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
       const receipt = {
         baseCommit,
@@ -478,13 +507,32 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       assertOwned();
       entered = true;
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+      const wait = vi.spyOn(backoff, "sleepWithAbort");
       await expect(
         placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {}),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_HELD",
+        outcome: { kind: "held", holder: { owner: expect.any(String), epoch: expect.any(Number) } },
+      });
+      expect(wait).not.toHaveBeenCalled();
       assertOwned();
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     });
     expect(entered).toBe(true);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+    for (const code of [
+      "OPENCLAW_STATE_LEASE_HELD",
+      "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+      "OPENCLAW_STATE_LEASE_ABORTED",
+    ] as const) {
+      const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
+        code,
+      });
+      await expect(
+        placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
+          throw operationFailure;
+        }),
+      ).rejects.toBe(operationFailure);
+    }
   });
 });

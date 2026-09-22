@@ -1,9 +1,5 @@
 import { markdownToIR, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
-import {
-  decodeTelegramHtmlEntities,
-  findTelegramHtmlEntityEnd,
-  isTelegramRichLineBreakStructuralTag,
-} from "./format-html.js";
+import { decodeTelegramHtmlEntities, isTelegramRichLineBreakStructuralTag } from "./format-html.js";
 
 export const TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX = "<code>Assistant:</code> ";
 
@@ -79,25 +75,7 @@ function appendTelegramHtmlVisibleSegment(
   segment: string,
   excluded: boolean,
 ): void {
-  let index = 0;
-  while (index < segment.length) {
-    if (segment[index] === "&") {
-      const entityEnd = findTelegramHtmlEntityEnd(segment, index);
-      if (entityEnd >= 0) {
-        const rawEntity = segment.slice(index, entityEnd + 1);
-        appendTelegramHtmlVisibleValue(projection, decodeTelegramHtmlEntities(rawEntity), excluded);
-        index = entityEnd + 1;
-        continue;
-      }
-    }
-    const codePoint = segment.codePointAt(index);
-    if (codePoint === undefined) {
-      break;
-    }
-    const character = String.fromCodePoint(codePoint);
-    appendTelegramHtmlVisibleValue(projection, character, excluded);
-    index += character.length;
-  }
+  appendTelegramHtmlVisibleValue(projection, decodeTelegramHtmlEntities(segment), excluded);
 }
 
 function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjection {

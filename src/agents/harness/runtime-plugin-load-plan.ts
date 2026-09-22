@@ -124,6 +124,11 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
     return [];
   }
   const pluginIds = new Set<string>();
+  for (const plugin of params.index.plugins) {
+    if (plugin.startup.agentHarnesses.length) {
+      pluginIds.add(plugin.pluginId);
+    }
+  }
   lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
   const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
   const providerIds = dedupePluginIds(selections.map((selection) => selection.provider));
@@ -267,11 +272,18 @@ function withRuntimePluginIdsAllowed(
   if (pluginIds.length === 0 || (!materializeAllowlist && existingAllowlist.length === 0)) {
     return config;
   }
+  const allow = dedupePluginIds([...existingAllowlist, ...pluginIds]);
+  if (
+    allow.length === existingAllowlist.length &&
+    allow.every((pluginId, index) => pluginId === existingAllowlist[index])
+  ) {
+    return config;
+  }
   return {
     ...config,
     plugins: {
       ...config?.plugins,
-      allow: dedupePluginIds([...existingAllowlist, ...pluginIds]),
+      allow,
     },
   };
 }
@@ -334,6 +346,21 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
+  if (params.purpose === "model-catalog") {
+    for (const plugin of params.metadataSnapshot.plugins) {
+      for (const runtime of plugin.activation?.onAgentHarnesses ?? []) {
+        const owners = resolveAgentHarnessOwnerPluginIds({
+          runtime,
+          provider: "",
+          config,
+          workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.metadataSnapshot,
+        });
+        pluginIds.push(...owners);
+        forceActivatedPluginIds.push(...owners);
+      }
+    }
+  }
   for (const selection of includeAgentOwners ? params.selections : []) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({

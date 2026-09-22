@@ -24,7 +24,19 @@ async function readConfiguredProviderWebSearchSupport(params: {
   client: CodexAppServerClient;
   timeoutMs: number;
   signal: AbortSignal;
+  expectedNativeModelProvider?: string;
 }): Promise<CodexNativeWebSearchSupport> {
+  if (params.expectedNativeModelProvider) {
+    // The capability RPC describes the configured provider, not a persisted thread.
+    const configured = await params.client.request(
+      "config/read",
+      { includeLayers: false },
+      { timeoutMs: params.timeoutMs, signal: params.signal },
+    );
+    if ((configured.config.model_provider ?? "openai") !== params.expectedNativeModelProvider) {
+      return "unknown";
+    }
+  }
   const response = await params.client.request(
     "modelProvider/capabilities/read",
     {},
@@ -40,6 +52,7 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   client: CodexAppServerClient;
   timeoutMs: number;
   modelProviderOverride: string | undefined;
+  expectedNativeModelProvider?: string;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
   const overrideSupport = resolveOverriddenProviderWebSearchSupport(params.modelProviderOverride);
@@ -61,6 +74,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;
+  expectedNativeModelProvider?: string;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
   const overrideSupport = resolveOverriddenProviderWebSearchSupport(params.modelProviderOverride);
@@ -84,6 +98,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
       client,
       timeoutMs: params.appServer.requestTimeoutMs,
       modelProviderOverride: params.modelProviderOverride,
+      expectedNativeModelProvider: params.expectedNativeModelProvider,
       signal: params.signal,
     });
   } catch {

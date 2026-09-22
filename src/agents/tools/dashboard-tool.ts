@@ -319,6 +319,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         }>("sessions.patch", {
           key: sessionKey,
           agentId: opts.agentId,
+          boardFace: "dashboard",
           boardPresentation: presentation,
         });
         const defaultPresentation = patched.entry.boardPresentation ?? "split";

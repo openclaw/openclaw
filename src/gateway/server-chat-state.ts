@@ -368,6 +368,7 @@ export type ToolEventRecipientRegistry = {
   add: (runId: string, connId: string) => void;
   get: (runId: string) => ReadonlySet<string> | undefined;
   markFinal: (runId: string) => void;
+  pruneExpired: (now?: number) => void;
 };
 
 export type SessionEventSubscriberRegistry = {
@@ -604,16 +605,7 @@ function createToolEventRecipientRegistryForStore(
   store: ChatRunRecordStore,
 ): ToolEventRecipientRegistry {
   let nextPruneAt = Infinity;
-  const prune = (updated: ChatRunToolRecipientState) => {
-    // Refreshes can move expiry later; a conservative lower bound avoids a
-    // full run scan on each tool event while retaining exact expiry cleanup.
-    nextPruneAt = Math.min(
-      nextPruneAt,
-      updated.finalizedAt
-        ? updated.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : updated.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS,
-    );
-    const now = Date.now();
+  const pruneExpired = (now = Date.now()) => {
     if (now < nextPruneAt) {
       return;
     }
@@ -633,6 +625,18 @@ function createToolEventRecipientRegistryForStore(
         nextPruneAt = Math.min(nextPruneAt, cutoff);
       }
     }
+  };
+
+  const prune = (updated: ChatRunToolRecipientState) => {
+    // Refreshes can move expiry later; a conservative lower bound avoids a
+    // full run scan on each tool event while retaining exact expiry cleanup.
+    nextPruneAt = Math.min(
+      nextPruneAt,
+      updated.finalizedAt
+        ? updated.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
+        : updated.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS,
+    );
+    pruneExpired();
   };
 
   const add = (runId: string, connId: string) => {
@@ -668,5 +672,5 @@ function createToolEventRecipientRegistryForStore(
     prune(entry);
   };
 
-  return { add, get, markFinal };
+  return { add, get, markFinal, pruneExpired };
 }

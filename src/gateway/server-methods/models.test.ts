@@ -39,8 +39,12 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
 };
 
 const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
+  const { buildPluginMetadataProviderFacts } =
+    await import("../../plugins/plugin-metadata-provider-facts.js");
+  const { makeEmptyPluginMetadataOwners } =
+    await import("../../plugins/current-plugin-metadata.test-support.js");
   const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
-  const plugins = [
+  const plugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] = [
     {
       id: "anthropic",
       channels: [],
@@ -130,20 +134,16 @@ const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
     normalizePluginId: (pluginId: string) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
+      ...makeEmptyPluginMetadataOwners(),
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
       providers: new Map([
         ["anthropic", ["anthropic"]],
         ["byteplus", ["byteplus"]],
         ["byteplus-plan", ["byteplus"]],
         ["github-copilot", ["github-copilot"]],
       ]),
-      modelCatalogProviders: new Map(),
       cliBackends: new Map([["claude-cli", ["anthropic"]]]),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,

@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { ensureAbsoluteDirectory } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { runCommandBuffered } from "../process/exec.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { tryReadDiskSpace } from "./disk-space.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -112,9 +113,6 @@ export async function assessInitialUpdateSnapshotCapacity(
   params: InitialSnapshotParams,
 ): Promise<UpdateStepResult> {
   const started = Date.now();
-  const warnings = [
-    "Snapshot capacity estimate incomplete: plugin copies and registered external databases are measured after staging.",
-  ];
   const step = {
     name: "snapshot-space-preflight",
     command: "snapshot-space-preflight",
@@ -131,17 +129,17 @@ export async function assessInitialUpdateSnapshotCapacity(
           candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
       );
     const diagnostics = [
-      `Initial snapshot needs ${capacity.requiredBytes} bytes for ${capacity.sqliteBytes} known SQLite-family bytes and the existing snapshot scratch allowance.`,
+      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
+      `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
       ...capacity.candidates.map(
         (candidate) =>
-          `${candidate.kind} ${candidate.directory}: ${capacity.requiredBytes} bytes needed; ${candidate.availableBytes === null ? "free space unknown" : `${candidate.availableBytes} bytes free`}.`,
+          `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
       ),
       ...families.map(
         (family) =>
-          `SQLite family ${family.path}: ${family.bytes} bytes (database, WAL, SHM, and journal).`,
+          `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       ),
     ];
-    warnings.push(...diagnostics);
     if (refused) {
       return {
         ...step,
@@ -149,10 +147,9 @@ export async function assessInitialUpdateSnapshotCapacity(
         exitCode: 1,
         stderrTail: [
           "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
-          ...warnings,
+          ...diagnostics,
           "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
         ].join("\n"),
-        warnings,
         snapshotCapacity: capacity,
       };
     }
@@ -160,19 +157,16 @@ export async function assessInitialUpdateSnapshotCapacity(
       ...step,
       durationMs: Date.now() - started,
       exitCode: 0,
-      stdoutTail:
-        "Continuing with the initial snapshot estimate; the complete inventory is checked after staging.",
-      warnings,
+      diagnostics,
     };
   } catch {
-    warnings.push(
-      "Initial snapshot capacity could not be measured; continuing to the candidate snapshot check.",
-    );
     return {
       ...step,
       durationMs: Date.now() - started,
       exitCode: 0,
-      warnings,
+      warnings: [
+        "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
+      ],
     };
   }
 }
@@ -268,7 +262,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         env: workerEnv,
       },
       async (signal) => {
-        const result = await runCommandBuffered(
+        const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
             ...resolveRuntimeWorkerArgv(
@@ -296,16 +290,24 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             baseEnv: workerEnv,
             signal,
             killGraceMs: 500,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
             maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+            terminateOnOutputLimit: true,
           },
         );
+        if (result.cleanup === "uncertain") {
+          throw Object.assign(new Error("Update snapshot worker settlement is uncertain"), {
+            cleanup: result.cleanup,
+          });
+        }
         signal.throwIfAborted();
-        if (result.code !== 0) {
+        if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
           throw new Error(
-            `Update state snapshot failed (${result.termination}): ${redactSupportString(result.stderr.toString("utf8"), { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+            `Update state snapshot failed (${result.outputLimitExceeded ? "output-limit" : result.termination}): ${redactSupportString(result.stderr, { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
           );
         }
-        return JSON.parse(result.stdout.toString("utf8")) as unknown;
+        return JSON.parse(result.stdout) as unknown;
       },
     );
   };
@@ -336,6 +338,15 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       cleanupDirectories: cleanupDirectories(),
     };
   } catch (error) {
+    if (isRecord(error) && error.cleanup === "uncertain") {
+      throw Object.assign(
+        new Error(
+          `Update snapshot cleanup could not be confirmed; retained scratch: ${cleanupDirectories().join(", ")}`,
+          { cause: error },
+        ),
+        { cleanup: "uncertain" },
+      );
+    }
     for (const ownedDirectory of cleanupDirectories()) {
       await fs.rm(ownedDirectory, { recursive: true, force: true });
     }

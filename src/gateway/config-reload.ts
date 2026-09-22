@@ -180,7 +180,6 @@ export function startGatewayConfigReloader(opts: {
     sourceConfig: OpenClawConfig;
     previousSourceConfig: OpenClawConfig;
   }) => Promise<PreparedGatewayConfigCandidate>;
-  initialInternalWriteHash?: string | null;
   readSnapshot: (activeSourceConfig: OpenClawConfig) => Promise<ConfigFileSnapshot>;
   /** Pauses restart emission synchronously when a matching disk candidate is observed. */
   onConfigCandidateObserved?: () => void;
@@ -320,7 +319,6 @@ export function startGatewayConfigReloader(opts: {
   ) => {
     candidate?.application?.settle(status);
   };
-  let startupInternalWriteHash = opts.initialInternalWriteHash ?? null;
   let lastAppliedWriteHash: string | null = null;
   let lastSourceOnly:
     | {
@@ -556,6 +554,13 @@ export function startGatewayConfigReloader(opts: {
       return { runtime, isCurrent };
     };
     assertInvokerOwned();
+    // A watcher can echo this operation's ledger change before the first checkpoint.
+    // Compare it with the candidate records, not the previous runtime generation.
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
     await checkpoint();
     await application?.prepare?.(assertCurrent);
     await checkpoint();
@@ -571,8 +576,8 @@ export function startGatewayConfigReloader(opts: {
     if (stopped) {
       throw new GatewayConfigReloadSupersededError();
     }
-    // The full checkpoint below reads candidate install records before reconciling
-    // watcher echoes. Recheck the invoking admission after asynchronous preparation.
+    // Recheck the invoking admission after asynchronous preparation. The next
+    // checkpoint reconciles watcher echoes against the captured install records.
     assertInvokerOwned();
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
     const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
@@ -637,11 +642,6 @@ export function startGatewayConfigReloader(opts: {
       currentCompareConfig,
       nextCompareConfig,
     );
-    try {
-      nextPluginInstallRecords = await readPluginInstallRecords();
-    } catch (err) {
-      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
-    }
     await checkpoint();
     assertCurrent();
     const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
@@ -855,8 +855,6 @@ export function startGatewayConfigReloader(opts: {
         ...installMetadata.forceChangedPaths,
       ],
       candidateConfig: nextConfig,
-      candidateCompareConfig: nextCompareConfig,
-      previousCompareConfig: currentCompareConfig,
       previousConfig: currentConfig,
     });
     if (pluginLifecycle) {
@@ -1102,19 +1100,6 @@ export function startGatewayConfigReloader(opts: {
       const previousObservedRawHash = lastObservedRawHash;
       const newObservedRawHash = observedRawHash !== previousObservedRawHash;
       lastObservedRawHash = observedRawHash;
-      if (startupInternalWriteHash && typeof snapshot.hash === "string") {
-        const matchesStartupWrite =
-          snapshot.valid &&
-          snapshot.hash === startupInternalWriteHash &&
-          diffConfigPaths(currentSourceConfig, snapshot.sourceConfig).length === 0;
-        // This hash comes from the startup write itself. Consume only its
-        // first source-identical watcher echo; includes can change under it.
-        startupInternalWriteHash = null;
-        if (matchesStartupWrite) {
-          await acceptCurrentRuntimeEcho(transactionEpoch, snapshot, true, assertLeaseOwned);
-          return;
-        }
-      }
       if (
         intentCandidate &&
         snapshot.valid &&
@@ -1439,9 +1424,6 @@ export function startGatewayConfigReloader(opts: {
         application?.settle("stopped");
         return;
       }
-      // A live writer notification owns any following watcher echo. Do not
-      // let the startup token discard its intent or prepared runtime metadata.
-      startupInternalWriteHash = null;
       opts.onConfigCandidateObserved?.();
       sourceObservation = {
         epoch: sourceObservation.epoch + 1,

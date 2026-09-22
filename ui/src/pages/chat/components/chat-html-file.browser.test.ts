@@ -123,7 +123,9 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(input.textContent).toContain("Unsaved draft");
     expect(button(panel, "Save").disabled).toBe(false);
     await userEvent.click(input);
-    await userEvent.keyboard("{Control>}z{/Control}");
+    await userEvent.keyboard(
+      navigator.platform === "MacIntel" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+    );
     await expect.poll(() => input.textContent).not.toContain("Unsaved draft");
   });
 

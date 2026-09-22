@@ -1,10 +1,68 @@
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
+} from "./subagent-registry-read.types.js";
+import type {
   SubagentCompletionState,
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+
+export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  return {
+    runId: entry.runId,
+    ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
+    ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
+    ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
+    childSessionKey: entry.childSessionKey,
+    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    requesterSessionKey: entry.requesterSessionKey,
+    requesterStorePath: entry.requesterStorePath,
+    controllerStorePath: entry.controllerStorePath,
+    ...(entry.collect
+      ? {
+          collect: true,
+          groupId: entry.groupId,
+          swarmRequesterSessionKey: entry.swarmRequesterSessionKey,
+        }
+      : {}),
+    ...(entry.collectorCompletion
+      ? { collectorCompletion: { status: entry.collectorCompletion.status } }
+      : {}),
+    ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
+    ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    createdAt: entry.createdAt,
+    execution: {
+      status: entry.execution.status,
+      ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
+      ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
+      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+    },
+    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
+    ...(entry.accumulatedRuntimeMs !== undefined
+      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
+      : {}),
+    ...(entry.runTimeoutSeconds !== undefined
+      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
+      : {}),
+    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    ...(entry.cleanupCompletedAt !== undefined
+      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
+      : {}),
+    ...(entry.delivery
+      ? {
+          delivery: {
+            status: entry.delivery.status,
+            ...(entry.delivery.suspendedAt !== undefined
+              ? { suspendedAt: entry.delivery.suspendedAt }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
 
 /** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
 export function projectSubagentRunForMaintenance(

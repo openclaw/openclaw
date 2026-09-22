@@ -5,7 +5,7 @@ enum NodeServiceManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
     private static let lifecycleQueue = LifecycleQueue()
     private static var launchdPlistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        LaunchAgentPlist.homeDirectoryURL
             .appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
     }
 

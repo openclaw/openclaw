@@ -1,5 +1,7 @@
 import { isJsonObject, type JsonValue } from "./protocol.js";
 
+export const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
+
 /** RPC error wrapper that preserves app-server error code and data. */
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;

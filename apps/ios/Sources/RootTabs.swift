@@ -14,6 +14,17 @@ struct RootTabs: View {
         }
     }
 
+    private struct ChatOwnerTaskIdentity: Equatable {
+        let route: String
+        let sessionKey: String
+        let routingContract: String?
+        let isConnected: Bool
+        let isRecording: Bool
+        let isAttachmentOwnerPinned: Bool
+        let newChatRequestID: Int
+        let authority: GatewayConnectConfig.ControlUIInputs?
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -134,6 +145,28 @@ struct RootTabs: View {
             .overlay(alignment: .topLeading) {
                 self.uiTestReadinessMarker
             }
+            .task(id: self.chatOwnerTaskIdentity) {
+                await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
+                guard !Task.isCancelled else { return }
+                self.appModel.chatPresentation.sync(appModel: self.appModel)
+                if let viewModel = self.appModel.chatPresentation.viewModel,
+                   self.appModel.consumeNewChatRequest(self.appModel.newChatRequestID)
+                {
+                    _ = await viewModel.startNewSession()
+                }
+            }
+    }
+
+    private var chatOwnerTaskIdentity: ChatOwnerTaskIdentity {
+        ChatOwnerTaskIdentity(
+            route: self.appModel.chatViewModelIdentityID,
+            sessionKey: self.appModel.chatSessionKey,
+            routingContract: self.appModel.chatSessionRoutingContract,
+            isConnected: self.appModel.isOperatorGatewayConnected,
+            isRecording: self.appModel.voiceNoteRecorder.ownsPendingChatAttachment,
+            isAttachmentOwnerPinned: self.appModel.chatPresentation.viewModel?.isAttachmentOwnerPinned == true,
+            newChatRequestID: self.appModel.newChatRequestID,
+            authority: self.appModel.activeGatewayConnectConfig?.controlUIInputs)
     }
 
     @ViewBuilder
@@ -186,10 +219,12 @@ struct RootTabs: View {
             .task(id: self.sidebarRefreshID) {
                 guard self.scenePhase == .active else { return }
                 await self.sidebarModel.refresh(appModel: self.appModel)
+                await self.appModel.refreshPendingApprovalInbox()
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(600))
                     guard !Task.isCancelled else { return }
                     await self.sidebarModel.refresh(appModel: self.appModel)
+                    await self.appModel.refreshPendingApprovalInbox()
                 }
             }
             .task(id: "\(self.sidebarRefreshID):events") {
@@ -215,6 +250,7 @@ struct RootTabs: View {
         [
             self.appModel.chatViewModelIdentityID,
             self.appModel.chatSessionKey,
+            String(self.appModel.operatorAuthorityGeneration),
             self.scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
     }

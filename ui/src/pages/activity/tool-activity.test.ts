@@ -86,7 +86,9 @@ describe("activity preview retention", () => {
               return process.memoryUsage().heapUsed;
             }
             function append(index, size) {
-              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + "x".repeat(size)));
+              // Keep all discarded bytes without benchmarking long-token redaction.
+              const payload = "x".repeat(2_000) + "!".repeat(size - 2_000);
+              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + payload));
               entries = updateToolActivity(entries, {
                 stream: ${JSON.stringify(kind === "tool" ? "tool" : "item")},
                 runId: "run-" + index, ts: index, receivedAt: index,

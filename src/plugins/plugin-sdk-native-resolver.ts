@@ -5,7 +5,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
-import { supportsNativeModuleAliasHooks, type BunPluginRuntime } from "./native-module-require.js";
+import { escapeRegExp } from "../shared/regexp.js";
+import {
+  isPluginSourceModulePath,
+  supportsNativeModuleAliasHooks,
+  type BunPluginRuntime,
+} from "./native-module-require.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -96,6 +101,22 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     ],
   },
 ] as const;
+const INTERNAL_CORE_EXPORTED_PACKAGE_DIRS = [
+  "media-core",
+  "normalization-core",
+  "acp-core",
+] as const;
+const BUN_NATIVE_ALIAS_FILTER = new RegExp(
+  `^(?:${[
+    "openclaw/plugin-sdk",
+    "@openclaw/plugin-sdk",
+    ...INTERNAL_CORE_PACKAGE_ALIASES.map((entry) => entry.packageName),
+    ...INTERNAL_CORE_EXPORTED_PACKAGE_DIRS.map((packageDir) => `@openclaw/${packageDir}`),
+  ]
+    .map(escapeRegExp)
+    .join("|")})(?:/|$)`,
+  "u",
+);
 let installed = false;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
@@ -109,7 +130,7 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
     case ".mjs":
       return true;
     default:
-      return false;
+      return isPluginSourceModulePath(targetPath);
   }
 }
 
@@ -247,7 +268,10 @@ function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
 ): string | undefined {
-  if (!parentUrl?.startsWith("file:")) {
+  if (
+    !parentUrl?.startsWith("file:") ||
+    (!isPluginSdkAliasSpecifier(request) && !getPluginCache().sdk.native.aliases.has(request))
+  ) {
     return undefined;
   }
   try {
@@ -307,7 +331,7 @@ function listInternalCorePackageNativeAliases(packageRoot: string): Array<{
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    ...["media-core", "normalization-core", "acp-core"].map((packageDir) => ({
+    ...INTERNAL_CORE_EXPORTED_PACKAGE_DIRS.map((packageDir) => ({
       packageName: `@openclaw/${packageDir}`,
       packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({
@@ -341,7 +365,7 @@ function installResolver(): void {
       name: "openclaw-plugin-sdk-alias",
       setup(builder) {
         builder.onResolve(
-          { filter: /^(?:openclaw|@openclaw)\/plugin-sdk\//u, namespace: "file" },
+          { filter: BUN_NATIVE_ALIAS_FILTER, namespace: "file" },
           ({ path: request, importer }) => {
             const target = resolveAliasTargetForParentPath(request, importer);
             return target ? { path: target, namespace: "file" } : undefined;
@@ -450,9 +474,8 @@ export function installOpenClawPluginSdkNativeResolver(
   const aliases = preparePluginLoaderAliases({
     modulePath: options.pluginModulePath ?? resolveLoaderModulePath(options),
     argv1: options.argv1 ?? process.argv[1],
-    moduleUrl: options.moduleUrl,
-    // Permanent native hooks require JavaScript even when the transformer prefers source.
-    pluginSdkResolution: "dist",
+    moduleUrl: options.moduleUrl ?? pathToFileURL(resolveLoaderModulePath(options)).href,
+    pluginSdkResolution: options.pluginSdkResolution,
     devSourceRoot: options.devSourceRoot,
   });
   const native = getPluginCache().sdk.native;

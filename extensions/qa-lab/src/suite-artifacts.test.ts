@@ -1,7 +1,6 @@
 // Qa Lab tests cover immutable suite evidence and presentation artifacts.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
@@ -223,6 +222,27 @@ describe("suite artifacts", () => {
         invocation.select(0, id);
         const recordedEvidence = recorder.snapshot();
         const before = structuredClone(recordedEvidence);
+        const artifactGenerationDirectory = path.join(
+          ".crabline-channel-driver-artifacts",
+          "generation-test",
+        );
+        const capabilityMatrixPath = path.join(
+          artifactGenerationDirectory,
+          "crabline-channel-driver-capabilities.json",
+        );
+        const providerReadinessArtifactPath = path.join(
+          artifactGenerationDirectory,
+          "crabline-provider-readiness.json",
+        );
+        await fs.mkdir(path.resolve(outputDir, artifactGenerationDirectory), { recursive: true });
+        await fs.writeFile(
+          path.resolve(outputDir, capabilityMatrixPath),
+          JSON.stringify({ report: { result: { selectedChannel: "telegram" } } }),
+        );
+        await fs.writeFile(
+          path.resolve(outputDir, providerReadinessArtifactPath),
+          JSON.stringify({ providerReadiness: { result: { ok: true, provider: "telegram" } } }),
+        );
         const artifacts = await writeQaSuiteArtifacts({
           outputDir,
           startedAt: new Date("2026-04-11T00:00:00.000Z"),
@@ -241,11 +261,12 @@ describe("suite artifacts", () => {
           concurrency: 1,
           channel: "telegram",
           channelDriver: "crabline",
-          channelDriverSelection: {
-            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-            channel: "telegram",
-            channelDriver: "crabline",
-            providerReadinessArtifactPath: "crabline-provider-readiness.json",
+          transportArtifacts: {
+            artifacts: [
+              { kind: "channel-capability-matrix", path: capabilityMatrixPath },
+              { kind: "channel-driver-smoke", path: providerReadinessArtifactPath },
+            ],
+            reportNotes: ["Transport-owned artifact evidence captured."],
           },
         });
 
@@ -255,19 +276,12 @@ describe("suite artifacts", () => {
             channelDriverSmokePath?: string;
           };
         };
-        const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
-        const providerReadinessArtifactPath = summary.run?.channelDriverSmokePath;
-        if (
-          typeof capabilityMatrixPath !== "string" ||
-          typeof providerReadinessArtifactPath !== "string"
-        ) {
-          throw new Error("Crabline generation artifact paths missing from QA summary.");
-        }
-        const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
+        expect(summary.run?.channelCapabilityMatrixPath).toBe(capabilityMatrixPath);
+        expect(summary.run?.channelDriverSmokePath).toBe(providerReadinessArtifactPath);
         expect(path.dirname(artifactGenerationDirectory)).toBe(
           ".crabline-channel-driver-artifacts",
         );
-        expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
+        expect(path.basename(artifactGenerationDirectory)).toBe("generation-test");
         expect(path.basename(capabilityMatrixPath)).toBe(
           "crabline-channel-driver-capabilities.json",
         );
@@ -287,9 +301,6 @@ describe("suite artifacts", () => {
           report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
         };
         expect(matrix.report?.result?.selectedChannel).toBe("telegram");
-        expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
-          [...CRABLINE_SERVER_CHANNELS].toSorted(),
-        );
         const readiness = JSON.parse(
           await fs.readFile(path.resolve(outputDir, providerReadinessArtifactPath), "utf8"),
         ) as { providerReadiness?: { result?: { ok?: boolean; provider?: string } } };

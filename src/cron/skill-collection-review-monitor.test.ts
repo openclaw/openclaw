@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
 
 describe("resolveSkillCollectionReviewMonitorSpecs", () => {
@@ -16,9 +18,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
 
-    const specs = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
-      schedulerSeed: "test-seed",
-    });
+    const specs = Array.from(
+      resolveSkillCollectionReviewMonitorSpecs(cfg, [], { schedulerSeed: "test-seed" }),
+    );
 
     expect(specs.map(({ agentId }) => agentId)).toEqual(["main", "ops", "solo"]);
     expect(specs.map(({ input }) => input.declarationKey)).toEqual([
@@ -45,9 +47,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       wakeMode: "next-heartbeat",
     });
     expect(specs[0]?.input.payload).not.toHaveProperty("toolsAllowIsDefault");
-    const repeated = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
-      schedulerSeed: "test-seed",
-    });
+    const repeated = Array.from(
+      resolveSkillCollectionReviewMonitorSpecs(cfg, [], { schedulerSeed: "test-seed" }),
+    );
     expect(repeated.map(({ input }) => input.schedule)).toEqual(
       specs.map(({ input }) => input.schedule),
     );
@@ -58,7 +60,10 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     } as unknown as OpenClawConfig;
     expect(
-      resolveSkillCollectionReviewMonitorSpecs(explicitFleet, []).map(({ agentId }) => agentId),
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(explicitFleet, []),
+        ({ agentId }) => agentId,
+      ),
     ).toEqual(["ops", "research"]);
 
     const systemAgentFleet = {
@@ -69,7 +74,10 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
     } as unknown as OpenClawConfig;
     expect(
-      resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet, []).map(({ agentId }) => agentId),
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet, []),
+        ({ agentId }) => agentId,
+      ),
     ).toEqual(["ops", "research"]);
   });
 
@@ -121,7 +129,10 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     } as OpenClawConfig;
 
     const byAgent = new Map(
-      resolveSkillCollectionReviewMonitorSpecs(cfg, []).map((spec) => [spec.agentId, spec.input]),
+      Array.from(resolveSkillCollectionReviewMonitorSpecs(cfg, []), (spec) => [
+        spec.agentId,
+        spec.input,
+      ]),
     );
 
     expect(byAgent.get("blocked")).toMatchObject({
@@ -133,6 +144,44 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       expect(byAgent.get(agentId)?.displayName).not.toContain("no-rooted-runtime");
     }
   });
+
+  it("does not create session storage while projecting an existing monitor", async () => {
+    const testState = await createOpenClawTestState({ label: "skill-review-projection" });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: {
+            main: {
+              model: "openai/gpt-blocked",
+              models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } },
+            },
+          },
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      };
+      const options = { schedulerSeed: "test-seed" };
+      const [initial] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], options);
+      const [projected] = resolveSkillCollectionReviewMonitorSpecs(
+        cfg,
+        [
+          {
+            ...initial!.input,
+            id: "existing-review",
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            state: {},
+          },
+        ],
+        options,
+      );
+      expect(projected?.input.enabled).toBe(false);
+      expect(await fs.readdir(testState.stateDir)).toEqual([]);
+    } finally {
+      await testState.cleanup();
+    }
+  });
+
   it("keeps an executable agent-scoped review alias enabled", () => {
     const cfg = {
       agents: {

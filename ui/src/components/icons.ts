@@ -1,11 +1,13 @@
 // Control UI module implements icons behavior.
 import { svg, type TemplateResult } from "lit";
+import { githubMark } from "./github-mark.ts";
 import { strokeIcon, toolIcons } from "./icons-tools.ts";
 
 // Lucide-style SVG icons rendered through the shared strokeIcon() shell,
 // which carries the stroke presentation attributes inline (see icons-tools.ts).
 
 export const icons = {
+  github: githubMark,
   repeat: strokeIcon(
     svg`<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>`,
   ),

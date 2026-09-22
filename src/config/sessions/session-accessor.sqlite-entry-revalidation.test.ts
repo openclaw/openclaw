@@ -21,8 +21,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-projection.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
+import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 
 const tempDirs = createTempDirTracker();

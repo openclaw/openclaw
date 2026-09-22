@@ -22,10 +22,12 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import {
   SKILL_WORKSHOP_MAINTENANCE_PROMPT,
@@ -45,29 +47,45 @@ const SKILL_COLLECTION_REVIEW_NO_ROOTED_RUNTIME_REASON = "no-rooted-runtime";
 function hasEligibleSkillCollectionReviewRuntime(
   cfg: OpenClawConfig,
   agentId: string,
+  manifestPlugins: ManifestModelIdNormalizationSource,
 ): boolean | undefined {
+  const normalization = { manifestPlugins, allowPluginNormalization: false } as const;
   const agentConfig = resolveAgentConfig(cfg, agentId);
   const { cfgWithAgentDefaults } = resolveCronAgentConfigFromSnapshot({
     config: cfg,
     agentConfigOverride: agentConfig,
   });
-  const defaultRef = resolveDefaultModelForAgent({ cfg: cfgWithAgentDefaults });
+  const defaultRef = resolveDefaultModelForAgent({
+    cfg: cfgWithAgentDefaults,
+    agentId,
+    ...normalization,
+  });
   const selection = resolveSubagentModelConfigSelectionResult({
     cfg,
     agentId,
     agentConfigOverride: agentConfig,
   });
   const selectedRaw = selection ? normalizeModelSelection(selection.raw) : undefined;
-  const aliasIndex = buildModelAliasIndex({ cfg, agentId, defaultProvider: defaultRef.provider });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    agentId,
+    defaultProvider: defaultRef.provider,
+    ...normalization,
+  });
   const selected = selectedRaw
     ? resolveModelRefFromString({
         cfg,
         agentId,
         aliasIndex,
+        ...normalization,
         raw: selectedRaw,
         defaultProvider: !selectedRaw.includes("/")
-          ? (inferUniqueProviderFromConfiguredModels({ cfg, agentId, model: selectedRaw }) ??
-            defaultRef.provider)
+          ? (inferUniqueProviderFromConfiguredModels({
+              cfg,
+              agentId,
+              model: selectedRaw,
+              manifestPlugins,
+            }) ?? defaultRef.provider)
           : defaultRef.provider,
       })?.ref
     : defaultRef;
@@ -108,6 +126,7 @@ function hasEligibleSkillCollectionReviewRuntime(
               cfg: cfgWithAgentDefaults,
               agentId,
               aliasIndex,
+              ...normalization,
               raw,
               defaultProvider: chain.selected.provider,
             }),
@@ -118,6 +137,7 @@ function hasEligibleSkillCollectionReviewRuntime(
 
       const candidates = resolveModelCandidateChain({
         cfg: cfgWithAgentDefaults,
+        ...normalization,
         agentId,
         provider: chain.selected.provider,
         model: chain.selected.model,
@@ -172,7 +192,7 @@ function hasStoredExecutionPreference(
   jobId: string,
 ): boolean {
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
       sessionKey: resolveCronAgentSessionKey({
         sessionKey: `cron:${jobId}`,
@@ -190,16 +210,23 @@ function hasStoredExecutionPreference(
 }
 
 /** One system-owned review job per configured agent and its Workshop directory. */
-export function resolveSkillCollectionReviewMonitorSpecs(
+export function* resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   jobs: readonly CronJob[],
   options: { schedulerSeed?: string } = {},
-): Array<{ agentId: string; input: CronJobCreate }> {
+): IterableIterator<{ agentId: string; input: CronJobCreate }> {
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
   const { retained } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
   const workshopEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
-  return listAgentIds(cfg).map((agentId) => {
-    const configuredEligibility = hasEligibleSkillCollectionReviewRuntime(cfg, agentId);
+  // Static projection consumes the selected generation, never provider load planning.
+  const manifestPlugins =
+    getCurrentPluginMetadataSnapshot({ config: cfg, allowWorkspaceScopedSnapshot: true }) ?? [];
+  for (const agentId of listAgentIds(cfg)) {
+    const configuredEligibility = hasEligibleSkillCollectionReviewRuntime(
+      cfg,
+      agentId,
+      manifestPlugins,
+    );
     const existing = retained.get(agentId);
     // Config cannot prove the execution chain while a stored session can select
     // a different model or runtime. Leave preference validation to the runner.
@@ -210,7 +237,7 @@ export function resolveSkillCollectionReviewMonitorSpecs(
         ? undefined
         : configuredEligibility;
     const enabled = workshopEnabled && hasEligibleRuntime !== false;
-    return {
+    yield {
       agentId,
       input: {
         declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
@@ -240,5 +267,5 @@ export function resolveSkillCollectionReviewMonitorSpecs(
         wakeMode: "next-heartbeat",
       },
     };
-  });
+  }
 }

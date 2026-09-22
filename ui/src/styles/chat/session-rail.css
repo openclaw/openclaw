@@ -360,16 +360,6 @@ openclaw-chat-session-rail {
   flex: 1 1 auto;
 }
 
-/* The docked form: a real column in the pane's flex row. It claims layout space
-   instead of painting over the thread, so nothing here may float, shadow, or
-   blur — those cues would read as an overlay again. */
-.chat-main--rail-docked .chat-session-rail--expanded {
-  position: static;
-  width: 100%;
-  height: 100%;
-  border-left-width: 0;
-}
-
 @media (max-width: 768px) {
   /* The ambient pill stays a small chip above the composer. */
   .chat-session-rail--pill {

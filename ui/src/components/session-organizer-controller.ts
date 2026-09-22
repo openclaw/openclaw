@@ -159,6 +159,15 @@ export class SessionOrganizerController {
     await operations?.stopCloudWorker(this.host, session, scope);
   }
 
+  async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.setSessionInvolvement(this.host, session, hidden, scope);
+  }
+
   async assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,

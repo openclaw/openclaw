@@ -15,7 +15,7 @@ function createHandshakeClient(
 ) {
   const connections: HandshakeConnection[] = [];
   const onHello = vi.fn();
-  const onConnectHello = vi.fn();
+  const onConnectHello = vi.fn(() => ({ ignored: true }));
   const onClose = vi.fn();
   const onTiming = vi.fn();
   let nextRequestId = 0;
@@ -261,6 +261,8 @@ describe("GatewayProtocolClient connect handshake", () => {
       challengeTs: 1_700_000_000_123,
       serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
     client.stop();
   });
@@ -286,6 +288,8 @@ describe("GatewayProtocolClient connect handshake", () => {
         challengeTs: 1,
         serverCapabilities: ["model-catalog-snapshot"],
         generation: 1,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
       });
       first.handlers.close(1006, "reconnect");
       await vi.advanceTimersByTimeAsync(10);
@@ -297,6 +301,8 @@ describe("GatewayProtocolClient connect handshake", () => {
         challengeTs: 1_800_000_000_000,
         serverCapabilities: [],
         generation: 2,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
       });
     } finally {
       client.stop();
@@ -325,6 +331,8 @@ describe("GatewayProtocolClient connect handshake", () => {
       challengeTs: null,
       serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
 
     client.stop();
@@ -348,6 +356,8 @@ describe("GatewayProtocolClient connect handshake", () => {
       challengeTs: null,
       serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
     secondClient.client.stop();
   });

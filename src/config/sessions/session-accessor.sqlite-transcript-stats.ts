@@ -1,13 +1,15 @@
+import { toUSVString } from "node:util";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
 function sqliteTranscriptJsonlByteSize() {
   // octet_length reads column metadata; casting to BLOB loads every overflow payload first.
-  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(OCTET_LENGTH(event_json)), 0)
+  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
@@ -104,7 +106,7 @@ export function readTranscriptStatsFromDatabase(
   );
 }
 
-export function readTranscriptStatsChunkFromDatabase(
+function readTranscriptStatsChunkFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: readonly string[],
 ): Map<string, SessionTranscriptStats> {
@@ -167,4 +169,38 @@ export function readTranscriptStatsChunkFromDatabase(
     },
     { operationLabel: "session transcript stats" },
   );
+}
+
+const SQLITE_TRANSCRIPT_STATS_POINT_QUERY_LIMIT = 10;
+const SQLITE_TRANSCRIPT_STATS_QUERY_CHUNK_SIZE = 400;
+
+/** Read ordered stats on one supplied connection, preserving duplicate and missing session IDs. */
+export function readTranscriptStatsBatchFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionIds: readonly string[],
+): SessionTranscriptStats[] {
+  // Prepared point queries avoid three-query compilation on small batches.
+  if (sessionIds.length <= SQLITE_TRANSCRIPT_STATS_POINT_QUERY_LIMIT) {
+    return sessionIds.map((sessionId) => readTranscriptStatsFromDatabase(database, sessionId));
+  }
+  // Match node:sqlite's string binding before looking up rows by their stored ID.
+  const uniqueIds = [...new Set(sessionIds.map((sessionId) => toUSVString(sessionId)))];
+  const stats = new Map<string, SessionTranscriptStats>();
+  for (
+    let offset = 0;
+    offset < uniqueIds.length;
+    offset += SQLITE_TRANSCRIPT_STATS_QUERY_CHUNK_SIZE
+  ) {
+    const chunk = uniqueIds.slice(offset, offset + SQLITE_TRANSCRIPT_STATS_QUERY_CHUNK_SIZE);
+    if (chunk.length <= SQLITE_TRANSCRIPT_STATS_POINT_QUERY_LIMIT) {
+      for (const sessionId of chunk) {
+        stats.set(sessionId, readTranscriptStatsFromDatabase(database, sessionId));
+      }
+    } else {
+      for (const [sessionId, value] of readTranscriptStatsChunkFromDatabase(database, chunk)) {
+        stats.set(sessionId, value);
+      }
+    }
+  }
+  return sessionIds.map((sessionId) => ({ ...stats.get(toUSVString(sessionId))! }));
 }

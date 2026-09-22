@@ -3,14 +3,14 @@ import { loadOfficialExternalChannelSecretContractApi } from "./official-externa
 import { createResolverContext } from "./runtime-shared.js";
 
 describe("official external channel secret contracts", () => {
-  it("collects active QQBot root and account SecretRefs for Tencent 2.0.1", () => {
+  it("binds active QQBot SecretRefs to their exact account owners", () => {
     const config = {
       channels: {
         qqbot: {
           appId: "root-app",
           clientSecret: { source: "env" as const, provider: "default", id: "QQBOT_ROOT_SECRET" },
           accounts: {
-            named: {
+            "Named.Team": {
               appId: "named-app",
               clientSecret: {
                 source: "env" as const,
@@ -27,14 +27,28 @@ describe("official external channel secret contracts", () => {
 
     api?.collectRuntimeConfigAssignments({ config, defaults: undefined, context });
 
-    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
-      "channels.qqbot.clientSecret",
-      "channels.qqbot.accounts.named.clientSecret",
+    expect(context.assignments).toEqual([
+      expect.objectContaining({
+        path: "channels.qqbot.clientSecret",
+        ownerKind: "account",
+        ownerId: "qqbot:default",
+        requiredForGateway: false,
+        disposition: "isolate",
+        ownerContractDigest: expect.any(String),
+      }),
+      expect.objectContaining({
+        path: 'channels.qqbot.accounts["Named.Team"].clientSecret',
+        ownerKind: "account",
+        ownerId: "qqbot:named-team",
+        requiredForGateway: false,
+        disposition: "isolate",
+        ownerContractDigest: expect.any(String),
+      }),
     ]);
     context.assignments[0]?.apply("resolved-root-secret");
     context.assignments[1]?.apply("resolved-named-secret");
     expect(config.channels.qqbot.clientSecret).toBe("resolved-root-secret");
-    expect(config.channels.qqbot.accounts.named.clientSecret).toBe("resolved-named-secret");
+    expect(config.channels.qqbot.accounts["Named.Team"].clientSecret).toBe("resolved-named-secret");
   });
 
   it("uses QQBOT_APP_ID only for the default account and skips inactive credentials", () => {

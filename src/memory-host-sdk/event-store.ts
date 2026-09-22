@@ -141,18 +141,6 @@ function memoryHostWorkspacePrefix(workspaceDir: string): string {
     .slice(0, WORKSPACE_HASH_BYTES);
 }
 
-function eventKeyPrefix(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:event:`;
-}
-
-function eventKeyRangeEnd(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:event;`;
-}
-
-function cursorKey(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:cursor`;
-}
-
 function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return { value, truncated: false };
@@ -301,7 +289,8 @@ export async function registerMemoryHostEvent(params: {
   if (!event) {
     throw new TypeError("Memory host event is invalid");
   }
-  const keyStartInclusive = eventKeyPrefix(params.workspaceDir);
+  const workspacePrefix = memoryHostWorkspacePrefix(params.workspaceDir);
+  const keyStartInclusive = `${workspacePrefix}:event:`;
   const recordedAt = Date.now();
   const journal: Parameters<typeof registerPluginStateSequencedJournalEntry>[0] = {
     pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
@@ -310,7 +299,7 @@ export async function registerMemoryHostEvent(params: {
       maxEntries: MAX_MEMORY_HOST_EVENT_CURSORS,
       ...(params.env ? { env: params.env } : {}),
     },
-    cursorKey: cursorKey(params.workspaceDir),
+    cursorKey: `${workspacePrefix}:cursor`,
     journalOptions: {
       namespace: MEMORY_HOST_EVENTS_NAMESPACE,
       maxEntries: maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
@@ -319,7 +308,7 @@ export async function registerMemoryHostEvent(params: {
     journalKeyPrefix: `${keyStartInclusive}1:`,
     journalKeyRange: {
       keyStartInclusive,
-      keyEndExclusive: eventKeyRangeEnd(params.workspaceDir),
+      keyEndExclusive: `${workspacePrefix}:event;`,
       valueKind: "event",
     },
     journalValue: { kind: "event", event, recordedAt },
@@ -343,11 +332,12 @@ export async function listStoredMemoryHostEvents(params: {
         ),
       )
     : (maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS);
+  const workspacePrefix = memoryHostWorkspacePrefix(params.workspaceDir);
   const query: Parameters<typeof pluginStateEntriesInKeyRange>[0] = {
     pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
     namespace: MEMORY_HOST_EVENTS_NAMESPACE,
-    keyStartInclusive: eventKeyPrefix(params.workspaceDir),
-    keyEndExclusive: eventKeyRangeEnd(params.workspaceDir),
+    keyStartInclusive: `${workspacePrefix}:event:`,
+    keyEndExclusive: `${workspacePrefix}:event;`,
     limit,
     order: "desc",
     ...(params.env ? { env: params.env } : {}),

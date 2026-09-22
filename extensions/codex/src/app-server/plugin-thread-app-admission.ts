@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { codexAppIdentityKey } from "./app-identity.js";
 import {
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
@@ -97,12 +98,12 @@ export function collectCodexPluginOwnedAppIds(inventory: CodexPluginInventory): 
 export function collectCodexReservedPluginAppIds(params: {
   policy: ResolvedCodexPluginsPolicy;
   inventory: CodexPluginInventory;
-  accountApps: readonly v2.AppInfo[];
+  accountApps: CodexAppInventorySnapshot["apps"];
 }): Set<string> {
   const reserved = new Set(
-    params.inventory.records.flatMap((record) =>
-      record.appOwnership === "proven" ? record.ownedAppIds : [],
-    ),
+    params.inventory.records
+      .flatMap((record) => (record.appOwnership === "proven" ? record.ownedAppIds : []))
+      .map(codexAppIdentityKey),
   );
   const recordsByConfigKey = new Map(
     params.inventory.records.map((record) => [record.policy.configKey, record] as const),
@@ -122,7 +123,7 @@ export function collectCodexReservedPluginAppIds(params: {
         configuredOwnerNames.has(normalizeCodexPluginOwnerName(name)),
       )
     ) {
-      reserved.add(app.id);
+      reserved.add(codexAppIdentityKey(app.id));
     }
   }
   return reserved;
@@ -139,7 +140,8 @@ export async function readCodexThreadAdmissibleAccountApps(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
 ): Promise<{
-  apps: v2.AppInfo[];
+  apps: CodexAppInventorySnapshot["apps"];
+  installedApps: CodexAppInventorySnapshot["installedApps"];
   diagnostic?: CodexPluginThreadAppAdmissionDiagnostic;
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
@@ -162,6 +164,7 @@ export async function readCodexThreadAdmissibleAccountApps(
   if (!snapshot) {
     return {
       apps: [],
+      installedApps: [],
       diagnostic: {
         code: "account_app_inventory_unavailable",
         message: "Codex account app inventory was unavailable; account apps were not exposed.",
@@ -174,21 +177,25 @@ export async function readCodexThreadAdmissibleAccountApps(
       .filter(
         (app) =>
           resolveCodexInstalledAppThreadAdmission(
-            toCodexPluginOwnedAccountApp(app),
+            toCodexPluginOwnedAccountApp(app, installedAppsById.get(app.id)),
             installedAppsById.get(app.id),
           ) !== "blocked",
       )
       .toSorted((left, right) => left.id.localeCompare(right.id)),
+    installedApps: snapshot.installedApps,
   };
 }
 
-export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedApp {
+export function toCodexPluginOwnedAccountApp(
+  app: CodexAppInventorySnapshot["apps"][number],
+  installedApp: v2.InstalledApp | undefined,
+): CodexPluginOwnedApp {
   return {
     id: app.id,
     name: app.name,
-    accessible: app.isAccessible,
-    enabled: app.isEnabled,
-    needsAuth: !app.isAccessible,
+    accessible: true,
+    enabled: installedApp?.enabled ?? false,
+    needsAuth: false,
     ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }
@@ -293,9 +300,19 @@ export function resolveCodexExplicitAppEnablement(
   // explicitly selected plugin from safely requesting thread-only enablement.
   for (const layer of layersHighestPrecedenceFirst) {
     const apps = layer.apps;
-    const app = isJsonObject(apps) ? apps[appId] : undefined;
-    if (isJsonObject(app) && Object.hasOwn(app, "enabled")) {
-      return app.enabled === true;
+    const values = isJsonObject(apps)
+      ? Object.entries(apps)
+          .filter(
+            ([id, app]) =>
+              codexAppIdentityKey(id) === codexAppIdentityKey(appId) &&
+              isJsonObject(app) &&
+              Object.hasOwn(app, "enabled"),
+          )
+          .map(([, app]) => isJsonObject(app) && app.enabled === true)
+      : [];
+    if (values.length > 0) {
+      // A conflicting alias in the same layer must not undo an explicit denial.
+      return values.every(Boolean);
     }
   }
   return undefined;

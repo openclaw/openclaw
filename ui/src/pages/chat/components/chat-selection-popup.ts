@@ -2,6 +2,7 @@
 // tears both down together when its session or presentation changes.
 import { render } from "lit";
 import { icons } from "../../../components/icons.ts";
+import { syncScrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
@@ -13,21 +14,36 @@ import {
 registerChatMessageMetadataEnglish();
 
 type ChatSelectionPopupActions = {
+  paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onAskSideChat: (selection: string) => void;
 };
 
-let activeSelectionPopup: { element: HTMLDivElement; listeners: AbortController } | null = null;
-let selectionPopupTimer: number | null = null;
+let activeSelectionPopup: {
+  element: HTMLDivElement;
+  listeners: AbortController;
+  paneId: string;
+} | null = null;
+let selectionPopupTimer: { timer: number; paneId: string } | null = null;
 
-export function removeChatSelectionPopup() {
-  if (selectionPopupTimer !== null) {
-    window.clearTimeout(selectionPopupTimer);
+export function removeChatSelectionPopup(paneId?: string) {
+  if (selectionPopupTimer && (paneId === undefined || selectionPopupTimer.paneId === paneId)) {
+    window.clearTimeout(selectionPopupTimer.timer);
     selectionPopupTimer = null;
+  }
+  if (paneId !== undefined && activeSelectionPopup?.paneId !== paneId) {
+    return;
   }
   activeSelectionPopup?.element.remove();
   activeSelectionPopup?.listeners.abort();
   activeSelectionPopup = null;
+}
+
+export function isChatSelectionPopupFocused(paneId: string): boolean {
+  return (
+    activeSelectionPopup?.paneId === paneId &&
+    activeSelectionPopup.element.contains(document.activeElement)
+  );
 }
 
 function selectionWithinChatBubble(
@@ -74,7 +90,10 @@ function positionPopup(popup: HTMLElement, anchor: DOMRect) {
   const bounds = popup.getBoundingClientRect();
   const left = anchor.left + anchor.width / 2 - bounds.width / 2;
   const above = anchor.top - bounds.height - 8;
-  const top = above >= minTop ? above : anchor.bottom + 8;
+  const below = anchor.bottom + 8;
+  const growDown =
+    popup.classList.contains("chat-annotation-editor") && below + bounds.height <= bottom;
+  const top = growDown || above < minTop ? below : above;
   popup.style.left = `${Math.max(minLeft, Math.min(left, right - bounds.width))}px`;
   popup.style.top = `${Math.max(minTop, Math.min(top, bottom - bounds.height))}px`;
 }
@@ -82,13 +101,14 @@ function positionPopup(popup: HTMLElement, anchor: DOMRect) {
 function mountPopup(
   popup: HTMLDivElement,
   anchor: DOMRect,
+  paneId: string,
   onEscape?: () => void,
   anchorElement?: HTMLElement,
 ) {
   removeChatSelectionPopup();
   document.body.appendChild(popup);
   const listeners = new AbortController();
-  activeSelectionPopup = { element: popup, listeners };
+  activeSelectionPopup = { element: popup, listeners, paneId };
   const { signal } = listeners;
   const position = () => positionPopup(popup, anchorElement?.getBoundingClientRect() ?? anchor);
   position();
@@ -162,7 +182,7 @@ function showChatSelectionPopup(
       activate(() => actions.onAskSideChat(selection.text)),
     ),
   );
-  const signal = mountPopup(popup, anchor);
+  const signal = mountPopup(popup, anchor, actions.paneId);
   document.addEventListener(
     "selectionchange",
     () => {
@@ -175,6 +195,7 @@ function showChatSelectionPopup(
 }
 
 export function showChatAnnotationEditor(options: {
+  paneId: string;
   anchorRect: DOMRect;
   anchorElement?: HTMLElement;
   sourceRange?: Range;
@@ -189,11 +210,10 @@ export function showChatAnnotationEditor(options: {
     return undefined;
   }
   const popup = document.createElement("div");
-  popup.className = "exec-approval-card exec-approval-card--inline chat-annotation-editor";
+  popup.className = "chat-annotation-editor";
   popup.setAttribute("role", "dialog");
   popup.setAttribute("aria-label", t("chat.messages.annotationEditor"));
   const input = document.createElement("textarea");
-  input.className = "input";
   input.value = options.comment;
   input.rows = 1;
   input.placeholder = t("chat.messages.annotationComment");
@@ -235,15 +255,12 @@ export function showChatAnnotationEditor(options: {
   popup.append(input, confirm, controls);
   if (options.expanded) {
     popup.classList.add("chat-annotation-editor--expanded");
-    input.rows = 4;
   }
   popup.addEventListener("keydown", (event) => {
     if (
-      event.key === "Enter" &&
-      !event.isComposing &&
-      (!popup.classList.contains("chat-annotation-editor--expanded") ||
-        event.metaKey ||
-        event.ctrlKey)
+      event.target === input &&
+      (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sendMessage, event) ||
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event))
     ) {
       event.preventDefault();
       save();
@@ -263,7 +280,25 @@ export function showChatAnnotationEditor(options: {
       }
     }
   });
-  const signal = mountPopup(popup, options.anchorRect, options.onCancel, options.anchorElement);
+  const signal = mountPopup(
+    popup,
+    options.anchorRect,
+    options.paneId,
+    options.onCancel,
+    options.anchorElement,
+  );
+  const resizeInput = () => {
+    const scrollTop = input.scrollTop;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+    input.scrollTop = scrollTop;
+    syncScrollState(input);
+    positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
+  };
+  input.addEventListener("input", resizeInput, { signal });
+  input.addEventListener("scroll", () => syncScrollState(input), { passive: true, signal });
+  window.addEventListener("resize", resizeInput, { signal });
+  resizeInput();
   if (options.sourceRange && typeof Highlight !== "undefined") {
     // Keep the passage visible as a selection after focus moves into the textarea.
     CSS.highlights.set("openclaw-comment", new Highlight(options.sourceRange));
@@ -294,12 +329,15 @@ export function handleChatSelectionPointerUp(
     return;
   }
   removeChatSelectionPopup();
-  selectionPopupTimer = window.setTimeout(() => {
-    selectionPopupTimer = null;
-    const selection = window.getSelection();
-    const source = selection ? selectionWithinChatBubble(selection, threadRoot) : null;
-    if (source && selection && threadRoot.isConnected) {
-      showChatSelectionPopup(selection.getRangeAt(0).getBoundingClientRect(), source, actions);
-    }
-  }, 0);
+  selectionPopupTimer = {
+    paneId: actions.paneId,
+    timer: window.setTimeout(() => {
+      selectionPopupTimer = null;
+      const selection = window.getSelection();
+      const source = selection ? selectionWithinChatBubble(selection, threadRoot) : null;
+      if (source && selection && threadRoot.isConnected) {
+        showChatSelectionPopup(selection.getRangeAt(0).getBoundingClientRect(), source, actions);
+      }
+    }, 0),
+  };
 }

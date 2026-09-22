@@ -6,7 +6,7 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("./worker-deploy-runtime.js", () => ({}));
-vi.mock("../cli/one-shot-output.js", () => ({ drainOneShotOutput: vi.fn() }));
+vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: vi.fn() }));
 vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: runtime.assertSupportedRuntime,
 }));

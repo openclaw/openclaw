@@ -1,8 +1,12 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn((): OpenClawConfig => ({
@@ -45,17 +49,19 @@ const runtime = vi.hoisted(() => ({
     messages,
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
-  })),
-  listSessionsFromStoreAsync: vi.fn(async () => ({ sessions: [] })),
+  listProjectedSessions: vi.fn(
+    async (_params: { projection: SessionRowProjection; opts: unknown }) => ({ sessions: [] }),
+  ),
 }));
 
 vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
 
 describe("embedded gateway stub", () => {
+  // The stub forwards this owner to the mocked shared operations without inspecting its rows.
+  const projection = {} as SessionRowProjection;
+  let unbindProjection: () => void;
   beforeEach(() => {
+    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.readChatHistoryPage.mockClear();
@@ -66,9 +72,9 @@ describe("embedded gateway stub", () => {
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
     runtime.resolveSessionStorePathCore.mockClear();
-    runtime.loadCombinedSessionStoreForGatewayCore.mockClear();
-    runtime.listSessionsFromStoreAsync.mockClear();
+    runtime.listProjectedSessions.mockClear();
   });
+  afterEach(() => unbindProjection());
 
   it("scopes embedded session lists to the requested agent", async () => {
     const callGateway = createEmbeddedCallGateway();
@@ -77,20 +83,29 @@ describe("embedded gateway stub", () => {
       params: { agentId: "work", includeGlobal: true, search: "global" },
     });
 
-    expect(runtime.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledWith(
-      { agents: { list: [{ id: "main", default: true }] } },
-      { agentId: "work", projection: "list" },
-    );
-    expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-      storePath: "/tmp/openclaw-sessions.json",
-      store: {},
+    expect(runtime.listProjectedSessions).toHaveBeenCalledWith({
+      projection,
       opts: { agentId: "work", includeGlobal: true, search: "global" },
     });
   });
 
+  it("keeps a replacement host bound when the earlier host stops", async () => {
+    const replacement = {} as SessionRowProjection;
+    const unbindReplacement = bindEmbeddedSessionRowProjection(Promise.resolve(replacement));
+    unbindProjection();
+    try {
+      await createEmbeddedCallGateway()({ method: "sessions.list" });
+      expect(runtime.listProjectedSessions.mock.calls[0]?.[0].projection).toBe(replacement);
+    } finally {
+      unbindReplacement();
+    }
+    await expect(createEmbeddedCallGateway()({ method: "sessions.list" })).rejects.toThrow(
+      "Embedded session projection is unavailable",
+    );
+  });
+
   it("resolves sessions through the gateway session resolver", async () => {
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: true,
       key: "agent:main:main",
     });
@@ -103,7 +118,7 @@ describe("embedded gateway stub", () => {
 
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      projection,
       client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
     });
@@ -114,7 +129,7 @@ describe("embedded gateway stub", () => {
       { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
       { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
     ];
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: true,
       ambiguous: true,
       candidates,
@@ -127,7 +142,7 @@ describe("embedded gateway stub", () => {
   });
 
   it("throws resolver errors for unresolved sessions", async () => {
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: false,
       error: { message: "No session found: missing" },
     });
@@ -204,7 +219,7 @@ describe("embedded gateway stub", () => {
         sessionKey: "main",
         config: cfg,
       });
-      expect(runtime.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
+      expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
       expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
         agentId,
         query: "needle",

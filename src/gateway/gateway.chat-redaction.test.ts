@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
@@ -13,11 +14,7 @@ import {
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
-import {
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-  startGatewayWithClient,
-} from "./test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type TextMessage = {
@@ -95,14 +92,16 @@ describe("registered Control UI chat redaction", () => {
       gateway: { auth: { mode: "token", token } },
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
-    const port = await getGatewayE2ePortBlock();
+    const configPath = await createGatewayConfigPath(home.tempHome);
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
     gateway = await startGatewayWithClient({
       cfg,
-      port,
+      portClaim,
       clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       origin: `http://127.0.0.1:${port}`,
-      configPath: await createGatewayConfigPath(home.tempHome),
+      configPath,
       token,
       clientDisplayName: "chat-redaction-test",
     });

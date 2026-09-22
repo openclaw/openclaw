@@ -1,6 +1,9 @@
 import path from "node:path";
 import { vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -8,9 +11,17 @@ import {
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -87,18 +98,35 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     sessionKey: SESSION_KEY,
     storePath: path.join(root, "sessions.json"),
   };
-  await upsertSessionEntryCore(sessionTarget, {
+  const entry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
+  };
+  // Placement fixtures do not own the automatic retention scheduler.
+  await patchSessionEntryCore(sessionTarget, () => entry, {
+    fallbackEntry: entry,
+    skipMaintenance: true,
   });
   SessionManager.open(sessionTarget);
   sessionFile = SESSION_KEY;
 }
 
-export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
+export function cleanupWorkerTurnLauncherTest(): Promise<void>;
+export function cleanupWorkerTurnLauncherTest(options: {
+  reuseReadWorkers: boolean;
+}): Promise<void>;
+export async function cleanupWorkerTurnLauncherTest(
+  options: { reuseReadWorkers?: boolean } = {},
+): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();
+  if (options.reuseReadWorkers) {
+    // Retain reader execution only; this case's native handles and admission still close.
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();
@@ -116,6 +144,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
+  | "waitForAdmissionNode"
   | "redispatchReclaimed"
   | "resolveWorkspace"
   | "workspaceOperations";
@@ -125,6 +154,7 @@ export function createWorkerSessionTurnPlacementProvider(
     Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
+    waitForAdmissionNode: async () => {},
     reconcileActivePlacement: async () => {
       throw new Error("unexpected active placement reconciliation");
     },
@@ -139,6 +169,13 @@ export function createWorkerSessionTurnPlacementProvider(
 
 export function openSessionManager(): SessionManager {
   return SessionManager.open(sessionTarget);
+}
+
+export function readWorkerTurnTranscriptStorageRows() {
+  const transcriptDatabase = openOpenClawAgentDatabase(
+    toDatabaseOptions(resolveSqliteReadScope(sessionTarget)),
+  );
+  return readTranscriptStorageRows(transcriptDatabase, sessionTarget.sessionId);
 }
 
 export async function dispatchInitialWorkerPlacement(params: {
@@ -273,7 +310,10 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
       openclawVersion: "2026.7.2",
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
       installKind: "bundle",
     },
     ownerEpoch: OWNER_EPOCH,
@@ -443,11 +483,12 @@ export async function withWorkerCompactionAdoption<T>(
       admittedRunContext,
       sessionTarget: { ...sessionTarget, ...writerFence },
     };
-    const sessionPromptState = createEmbeddedRunSessionPromptState({
+    await using sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: sessionTarget.agentId,
       resolvedSessionKey: sessionTarget.sessionKey,
       lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      onInterrupt: () => {},
     });
     const unexpected = async (): Promise<never> => {
       throw new Error("unexpected context-engine execution during successor acceptance");

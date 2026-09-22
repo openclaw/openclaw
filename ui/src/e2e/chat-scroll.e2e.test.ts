@@ -54,6 +54,44 @@ suite.define(() => {
       const originalTop = await thread.evaluate((element) => element.scrollTop);
       const composerBounds = await input.boundingBox();
 
+      // Chromium's blocked-input warning must not crash while resolving the
+      // conversation's listener. Age trusted input instead of stalling the UI.
+      const devtools = await page.context().newCDPSession(page);
+      await devtools.send("Log.enable");
+      await devtools.send("Log.startViolationsReport", {
+        config: [{ name: "blockedEvent", threshold: 1 }],
+      });
+      const threadBounds = await thread.boundingBox();
+      if (!threadBounds) {
+        throw new Error("Expected a visible transcript");
+      }
+      const crash = Promise.withResolvers<never>();
+      let rendererCrashed = false;
+      const onCrash = () => {
+        rendererCrashed = true;
+        crash.reject(new Error("Renderer crashed on delayed transcript wheel"));
+      };
+      page.on("crash", onCrash);
+      try {
+        await Promise.race([
+          devtools.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: threadBounds.x + threadBounds.width / 2,
+            y: threadBounds.y + threadBounds.height / 2,
+            deltaX: 0,
+            deltaY: -1,
+            timestamp: Date.now() / 1_000 - 2,
+          }),
+          crash.promise,
+        ]);
+        expect(await thread.evaluate((element) => element.isConnected)).toBe(true);
+      } finally {
+        page.off("crash", onCrash);
+        if (!rendererCrashed) {
+          await devtools.detach();
+        }
+      }
+
       await composer.hover();
       await page.mouse.wheel(0, -300);
       await expect
@@ -77,6 +115,7 @@ suite.define(() => {
       await page.mouse.wheel(200, 0);
       await waitForChatScrollIdle(page);
       expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeFooter);
+      await page.waitForTimeout(201); // Start a second gesture beyond the 200 ms burst window.
       await page.mouse.wheel(0, -200);
       await expect
         .poll(() => thread.evaluate((element) => element.scrollTop))
@@ -86,6 +125,9 @@ suite.define(() => {
       const progress = page.locator(
         ".session-progress-card--composer .session-progress-card__body",
       );
+      await expect
+        .poll(() => page.locator(".session-progress-card--composer").getAttribute("open"))
+        .toBeNull();
       await page.locator(".session-progress-card--composer > summary").click();
       await progress.waitFor();
       await waitForChatScrollIdle(page);

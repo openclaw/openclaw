@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
@@ -79,6 +80,7 @@ function renderOptionBody(option: WizardStepOption, presentation?: "channels", s
 }
 
 function renderSignIn(step: WizardStep) {
+  // Authorization URLs are actions, not documents for inline readers or metadata fetches.
   const deviceCode = step.deviceCode;
   const copyLabel = t(deviceCode ? "modelSetup.wizard.copyCode" : "modelSetup.wizard.copyLink");
   const copyValue = deviceCode?.code ?? step.externalUrl;
@@ -87,8 +89,8 @@ function renderSignIn(step: WizardStep) {
       <p class="muted">${deviceCode?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
       ${deviceCode ? html`<code class="wizard-step__sign-in-code">${deviceCode.code}</code>` : nothing}
       <div class="wizard-step__actions">
-        ${step.externalUrl ? html`<a class="btn primary wizard-step__external-link" href=${step.externalUrl} target="_blank" rel="noreferrer">${t("modelSetup.wizard.openSignIn")}</a>` : nothing}
-        ${copyValue ? html`<button type="button" class="btn" @click=${(event: Event) => void handleCopyButton(event, copyValue, copyLabel)}><span data-copy-label>${copyLabel}</span></button>` : nothing}
+        ${step.externalUrl ? html`<a class="btn primary wizard-step__external-link" data-link-reader-external href=${step.externalUrl} target="_blank" rel="noreferrer">${t("modelSetup.wizard.openSignIn")}</a>` : nothing}
+        ${copyValue ? keyed(copyValue, html`<button type="button" class="btn" @click=${(event: Event) => void handleCopyButton(event, copyValue, copyLabel)}><span data-copy-label>${copyLabel}</span></button>`) : nothing}
       </div>
       <div class="muted" role="status" aria-live="polite">${t("modelSetup.wizard.waiting")}</div>
       ${deviceCode?.expiresInMinutes ? html`<div class="muted">${t("modelSetup.wizard.expires", { count: String(deviceCode.expiresInMinutes) })}</div>` : nothing}

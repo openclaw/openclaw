@@ -1,5 +1,6 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -174,11 +175,21 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
 
   const reconcile = async (mode?: "startup"): Promise<void> => {
     if (mode === "startup") {
-      // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
-      for (const { environmentId, state } of placements.listForReconcile()) {
-        if (environmentId && state !== "failed" && state !== "reclaimed") {
-          await environments.reconcileEnvironment(environmentId);
-        }
+      // Drain the bounded environment pass before recovering placement authority or results.
+      // Unowned teardown remains in the service-owned sweep.
+      const reconciled = await runTasksWithConcurrency({
+        tasks: placements
+          .listForReconcile()
+          .flatMap(({ environmentId, state }) =>
+            environmentId && state !== "failed" && state !== "reclaimed"
+              ? [() => environments.reconcileEnvironment(environmentId)]
+              : [],
+          ),
+        limit: 8,
+        errorMode: "stop",
+      });
+      if (reconciled.hasError) {
+        throw reconciled.firstError;
       }
     } else {
       await environments.reconcileOnce();
@@ -211,7 +222,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             exactEnvironment.state === "provisioning" ||
             exactEnvironment.state === "bootstrapping" ||
             ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
-              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+              supportsCurrentWorkerLaunch(exactEnvironment.bootstrapReceipt)))
         ) {
           // Transient provider or node-enrollment failure retains its exact durable operation.
           continue;

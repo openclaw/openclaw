@@ -4,6 +4,26 @@ import Testing
 
 @Suite("ChatToolActivity")
 struct ChatToolActivityTests {
+    @Test func `prepared unknown outcome does not become finished from raw result presence`() {
+        var item = ChatToolActivityItem(
+            id: "call", name: "read", arguments: nil, details: nil,
+            resultText: "result", state: .finished, liveDiffStat: nil)
+        item.activity = OpenClawAgentActivityItem(
+            itemId: "tool:call", toolCallId: "call", kind: "tool", phase: "end",
+            title: "Read — outcome unknown", name: "read", status: nil,
+            hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        #expect(item.displayState == .unavailable)
+        #expect(!item.isPending)
+        #expect(item.resultText == "result")
+        item.activity = OpenClawAgentActivityItem(
+            itemId: "tool:call", toolCallId: "call", kind: "tool", phase: "end",
+            title: "Read", name: "read", status: "blocked",
+            hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        #expect(item.displayState == .blocked)
+        #expect(!item.isError)
+        #expect(!item.isPending)
+    }
+
     @Test func `pairs call and result by ID`() {
         let items = ChatToolActivity.items(
             calls: [self.content(type: "toolCall", id: "call-1", name: "exec")],

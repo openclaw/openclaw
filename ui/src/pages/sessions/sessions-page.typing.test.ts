@@ -129,7 +129,7 @@ describe("Sessions page typing ownership", () => {
         if (timing !== "unsubscribed") {
           emitEvent(sessionChangedEvent("agent:main:changed"));
           if (timing === "queued") {
-            await vi.advanceTimersByTimeAsync(200);
+            await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
@@ -157,9 +157,21 @@ describe("Sessions page typing ownership", () => {
         active.resolve(result("agent:main:retired"));
         await loading;
         if (hidden) {
+          await vi.advanceTimersByTimeAsync(1_000);
           expect(filteredCalls).toBe(1);
           visibility.mockReturnValue("visible");
           document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(0);
+        } else if (!resubscribe || timing === "queued") {
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(filteredCalls).toBe(1);
+          if (resubscribe) {
+            expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe(
+              "agent:main:retired",
+            );
+          }
+          await vi.advanceTimersByTimeAsync(1);
+        } else {
           await vi.advanceTimersByTimeAsync(0);
         }
         expect(filteredCalls).toBe(resubscribe ? 2 : 1);
@@ -240,9 +252,6 @@ describe("Sessions page typing ownership", () => {
       const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
         if (method === "sessions.patch") {
           return patch.promise;
-        }
-        if (method === "sessions.compaction.list") {
-          return { checkpoints: [] };
         }
         expect(method).toBe("sessions.list");
         if (params?.includeUnknown !== false) {

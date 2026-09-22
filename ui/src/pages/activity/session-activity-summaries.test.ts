@@ -62,7 +62,7 @@ it("backfills eligible mixed rows and refuses retries for visible read-only sess
     };
   });
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() =>
     expect(state.result?.sessions[0]?.activitySummary?.state).toBe("updating"),
   );
@@ -100,7 +100,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
     };
   });
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() => expect(batches).toHaveLength(1));
   const staleRow = sessions[20]!;
   currentRows = sessions.map((session, index) => ({
@@ -110,7 +110,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
       canEnsure: index !== 20,
     },
   }));
-  state.load(client, filters, "refresh");
+  void state.load(client, filters, "refresh");
   await vi.waitFor(() => expect(state.result?.sessions[20]).toEqual(currentRows[20]));
   state.retrySummary(staleRow);
   state.retrySummary(state.result!.sessions[20]!);
@@ -122,7 +122,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
       activitySummary: Object.assign({}, session.activitySummary, { canEnsure: true }),
     }),
   );
-  state.load(client, filters, "refresh");
+  void state.load(client, filters, "refresh");
   await vi.waitFor(() => expect(batches).toHaveLength(3));
   expect(batches[2]).toEqual([staleRow.key]);
   expect(request).toHaveBeenCalledTimes(6);
@@ -149,7 +149,7 @@ it("backfills visible missing recaps in bounded batches without repeating reads 
     };
   });
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() =>
     expect(
       state.result?.sessions.every((entry) => entry.activitySummary?.state === "updating"),
@@ -160,7 +160,7 @@ it("backfills visible missing recaps in bounded batches without repeating reads 
     sessions.map((entry) => entry.key),
   );
   expect(state.result?.totalCount).toBe(25);
-  state.load(client, filters);
+  void state.load(client, filters);
   expect(batches).toHaveLength(2);
   state.hostDisconnected();
 });
@@ -180,7 +180,7 @@ it("keeps cached recaps readable without requesting generation on a read-only co
   ]);
   const request = vi.spyOn(client, "request").mockResolvedValue(result);
   const state = controller();
-  state.load(client, filters, "query", false);
+  void state.load(client, filters, "query", false);
   await vi.waitFor(() => expect(state.result).toEqual(result));
   state.retrySummary(state.result!.sessions[1]!);
   expect(request).toHaveBeenCalledTimes(1);
@@ -204,9 +204,9 @@ it("does not let a delayed backfill response overwrite a newer session-list reca
     .mockReturnValueOnce(pending)
     .mockResolvedValueOnce(listing([newRow]));
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-  state.load(client, filters, "refresh");
+  void state.load(client, filters, "refresh");
   await vi.waitFor(() => expect(state.result?.sessions[0]).toEqual(newRow));
   finish({ sessions: [{ ...oldRow, activitySummary: { state: "updating", canEnsure: true } }] });
   await pending;
@@ -233,9 +233,9 @@ it("backfills newly visible sessions after the current batch settles", async () 
     });
   const state = controller();
   try {
-    state.load(client, filters, "query", true);
+    void state.load(client, filters, "query", true);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    state.load(client, filters, "refresh");
+    void state.load(client, filters, "refresh");
     await vi.waitFor(() => expect(state.result?.sessions).toEqual([first, added]));
     finish({
       sessions: [{ ...first, activitySummary: { state: "updating", canEnsure: true } }],
@@ -289,7 +289,7 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
     const state = controller();
     try {
       state.hostConnected();
-      state.load(client, filters, "query", true);
+      void state.load(client, filters, "query", true);
       await vi.waitFor(() => expect(held).toBe(true));
       if (visibilityState !== "hidden") {
         visibilityState = "hidden";
@@ -333,7 +333,7 @@ it("retains a failed recap and retries it without turning the session list into 
       sessions: [{ ...source, activitySummary: { ...source.activitySummary, state: "updating" } }],
     });
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() =>
     expect(state.result?.sessions[0]?.activitySummary?.state).toBe("unavailable"),
   );
@@ -359,9 +359,9 @@ it("stops queued backfill batches when write access is revoked", async () => {
     .mockResolvedValueOnce(listing(sessions))
     .mockReturnValueOnce(pending);
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-  state.load(client, filters, "query", false);
+  void state.load(client, filters, "query", false);
   finish({
     sessions: sessions.slice(0, 20).map(({ key, agentId }) => ({
       key,
@@ -401,7 +401,7 @@ it("keeps an explicit retry queued while another visible batch is pending", asyn
       ],
     });
   const state = controller();
-  state.load(client, filters, "query", true);
+  void state.load(client, filters, "query", true);
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   state.retrySummary(state.result!.sessions[0]!);
   finish({

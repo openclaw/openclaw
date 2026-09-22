@@ -1,9 +1,9 @@
 // Memory Core owns memory watcher resources and their degraded lifecycle.
 import fsSync from "node:fs";
+import type { FSWatcher } from "chokidar";
 import { getFileWatchCapacityCode } from "openclaw/plugin-sdk/file-access-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureUnit,
@@ -26,10 +26,22 @@ export type LinuxMemoryDirectoryWatcher = {
   ino: number;
 };
 
-export abstract class MemoryManagerWatchResources extends MemoryManagerSyncBase {
+export abstract class MemoryFileWatchResources {
+  protected closed = false;
+  protected watcher: FSWatcher | null = null;
+  protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
+
+  constructor(
+    protected readonly agentId: string,
+    private readonly onUnavailable: () => void,
+  ) {}
   protected readonly nativeMemoryWatchPairs: NativeMemoryWatchPair[] = [];
   private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected memoryWatchCapacityDegraded = false;
+
+  get capacityDegraded(): boolean {
+    return this.memoryWatchCapacityDegraded;
+  }
 
   protected scheduleMemoryWatchPressureStartupCheck(): void {
     if (
@@ -132,6 +144,7 @@ export abstract class MemoryManagerWatchResources extends MemoryManagerSyncBase 
       return true;
     }
     this.memoryWatchCapacityDegraded = true;
+    this.onUnavailable();
     this.closeNativeMemoryWatchPairs();
     const watcher = this.watcher;
     if (watcher) {

@@ -13,7 +13,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { readSkillReviewOutcomes } from "../skills/workshop/collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "../skills/workshop/collection-review-state.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -331,7 +331,7 @@ describe("Gateway automatic Workshop learning", () => {
             expect(laterTranscript).toContain(laterMessage);
             expect(laterTranscript).toContain(laterReply);
             await expect
-              .poll(() => Object.values(readSkillReviewOutcomes().experienceReviews).length, {
+              .poll(() => Object.values(readSkillCuratorReviewStatus().experienceReviews).length, {
                 timeout: 80_000,
                 interval: 100,
               })
@@ -347,7 +347,7 @@ describe("Gateway automatic Workshop learning", () => {
                 providerRequests,
                 laterForegroundRequests,
                 reviewRequests,
-                outcomes: readSkillReviewOutcomes().experienceReviews,
+                outcomes: readSkillCuratorReviewStatus().experienceReviews,
                 originalSkill,
                 originalSupport,
                 skill,

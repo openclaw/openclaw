@@ -646,6 +646,62 @@ describe("run-oxlint", () => {
   );
 
   it.each([
+    { name: "Linux CI", env: { CI: "true" }, chunkSize: 16 },
+    { name: "GitHub Actions", env: { GITHUB_ACTIONS: "true" }, chunkSize: 16 },
+    { name: "three CPUs", logicalCpuCount: 3, chunkSize: 8 },
+    { name: "below capacity threshold", memoryCapacityBytes: 15 * 1024 ** 3 - 1, chunkSize: 8 },
+    { name: "ancestor memory cap", memoryCapacityBytes: 8 * 1024 ** 3, chunkSize: 8 },
+    { name: "unknown capacity", memoryCapacityBytes: null, chunkSize: 8 },
+    { name: "local Linux", env: {}, chunkSize: 8 },
+    { name: "macOS", platform: "darwin", chunkSize: 8 },
+    { name: "Windows", platform: "win32", chunkSize: 8 },
+    { name: "explicit stripes", splitExtensions: true, chunkSize: 8 },
+    {
+      name: "explicit serial",
+      env: { CI: "true", OPENCLAW_OXLINT_SHARDS_SERIAL: "1" },
+      chunkSize: 8,
+    },
+  ] as const)("preserves complete plugin coverage with $name batches", (scenario) => {
+    const directories = Array.from(
+      { length: 17 },
+      (_, index) => `plugin-${String(index).padStart(2, "0")}`,
+    );
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        env: { CI: "true" },
+        platform: "linux",
+        ...scenario,
+        hostResources: {
+          totalMemoryBytes: 16 * 1024 ** 3,
+          logicalCpuCount: scenario.logicalCpuCount ?? 4,
+          memoryCapacityBytes:
+            "memoryCapacityBytes" in scenario ? scenario.memoryCapacityBytes : 15 * 1024 ** 3,
+        },
+        readDir: (target) =>
+          target.endsWith("/extensions")
+            ? ([
+                ...directories
+                  .toReversed()
+                  .map((name) => ({ name, isDirectory: () => true, isFile: () => false })),
+                { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
+                { name: "notes.md", isDirectory: () => false, isFile: () => true },
+              ] as never)
+            : [],
+      }),
+      new Set(["extensions"]),
+    );
+    expect(shards.map((shard) => shard.args.slice(2).length)).toEqual(
+      scenario.chunkSize === 16 ? [1, 16, 1] : [1, 8, 8, 1],
+    );
+    expect(shards.flatMap((shard) => shard.args.slice(2))).toEqual([
+      "extensions/root.test.ts",
+      ...directories.map((directory) => `extensions/${directory}`),
+    ]);
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards(shards)).toBe(true);
+  });
+
+  it.each([
     { name: "explicit full speed", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "full" } },
     { name: "explicit fast mode", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "fast" } },
     { name: "explicit parallel", memoryGiB: 16, env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" } },
@@ -685,12 +741,14 @@ describe("run-oxlint", () => {
 
   it.each([
     { platform: "linux", env: { CI: "true" } },
+    { platform: "linux", env: {} },
+    { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
     { platform: "darwin", env: {} },
     { platform: "win32", env: {} },
   ] as const)(
-    "bounds small-host core Programs without losing targets on $platform",
+    "preserves the published updater's automatic full-lint plan on $platform with $env",
     ({ platform, env }) => {
-      const directories = ["alpha", "beta", "delta", "epsilon", "gamma", "zeta"];
+      const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
       const cwd = createTempDir("openclaw-oxlint-core-memory-");
       for (const directory of directories) {
         mkdirSync(join(cwd, "src", directory), { recursive: true });
@@ -706,7 +764,13 @@ describe("run-oxlint", () => {
         new Set(["core"]),
       );
 
-      expect(shards).toHaveLength(5);
+      expect(shards.map((shard) => shard.args.slice(2))).toEqual([
+        ["src/agents", "src/zeta"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta", "ui"],
+        ["src/gateway", "packages"],
+        ["src/infra"],
+      ]);
       expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
         true,
       );
@@ -747,29 +811,32 @@ describe("run-oxlint", () => {
     expect(extension.oxlintArgs).toEqual([]);
   });
 
-  it("aggregates split core targets into deterministic disjoint Programs", () => {
+  it("isolates large core targets while preserving disjoint stripe coverage", () => {
     const shards = createOxlintShards({
       cwd: "/repo",
       splitCore: true,
       readDir: () =>
         [
-          { name: "alpha", isDirectory: () => true, isFile: () => false },
-          { name: "beta", isDirectory: () => true, isFile: () => false },
-          { name: "gamma", isDirectory: () => true, isFile: () => false },
+          { name: "agents", isDirectory: () => true, isFile: () => false },
+          { name: "gateway", isDirectory: () => true, isFile: () => false },
+          { name: "infra", isDirectory: () => true, isFile: () => false },
+          { name: "misc", isDirectory: () => true, isFile: () => false },
         ] as never,
     }).filter((shard) => shard.name.startsWith("core:"));
-    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+    const stripes = [1, 2, 3].map((index) =>
+      selectCoreOxlintStripe(shards, { index, total: 3 }, { isolateLargeTargets: true }),
+    );
 
-    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
-      ["core:stripe:1"],
-      ["core:stripe:2"],
-      ["core:stripe:3"],
-    ]);
-    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const programs = stripes.flat();
+    for (const target of ["src/agents", "src/gateway", "src/infra", "ui"]) {
+      const program = programs.find((shard) => shard.args.slice(2).includes(target));
+      expect(program?.args).toEqual(["--tsconfig", "config/tsconfig/oxlint.core.json", target]);
+    }
+    const stripeTargets = programs.flatMap((stripe) => stripe.args.slice(2));
     const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
     expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
     expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
-    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(selectCoreOxlintStripe(shards, { index: 7, total: 7 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");

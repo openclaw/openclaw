@@ -122,7 +122,13 @@ For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr
 
 ### An HTTP server needs authorization
 
-Set `auth: "oauth"` plus any required `oauth` metadata, then:
+Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
+
+**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a probe or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
+
+Browser sign-in requires Settings on the Gateway's own loopback address or its published Tailscale address. Older Gateways and unsupported addresses keep the terminal instructions. Servers with an existing auth-profile mapping or per-requester identity use that account's sign-in path instead; Settings does not create a second credential for them.
+
+If **Sign in** is unavailable, or the server's registered client accepts only the CLI callback, run this on the installation that owns the connector:
 
 ```bash
 openclaw mcp login <name>

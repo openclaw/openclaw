@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
@@ -56,7 +58,14 @@ it.each([
     }
     return true;
   });
+  const previousLoggerOverride = loggingState.overrideSettings;
   try {
+    // Logical platform mocks must not initialize a host-specific logging temp root.
+    setLoggerOverride({
+      file: path.join(root, "diagnostic.log"),
+      level: "silent",
+      consoleLevel: "silent",
+    });
     await withSyntheticDiagnosticEnv(routing, async () => {
       const reports: Array<{ command: string; report: unknown }> = [];
       const capture = (command: string, env?: NodeJS.ProcessEnv) => {
@@ -169,6 +178,7 @@ it.each([
       }
     });
   } finally {
+    setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
     await rm(root, { recursive: true, force: true });
   }
 });

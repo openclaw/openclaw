@@ -21,6 +21,8 @@ import {
   isOutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -35,7 +37,7 @@ import {
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
@@ -199,7 +201,24 @@ function summarizeVisibleRouteReplyDelivery(
  * are set.
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const { payload, ...route } = params;
+  return await routeReplyOperation(route, { kind: "raw", payload });
+}
+
+/** Routes a prepared reply without reinterpreting its text as delivery directives. */
+export async function routePreparedReply(
+  params: Omit<RouteReplyParams, "payload"> & { plan: OutboundPayloadPlan },
+): Promise<RouteReplyResult> {
+  const { plan, ...route } = params;
+  return await routeReplyOperation(route, { kind: "prepared", plan });
+}
+
+async function routeReplyOperation(
+  params: Omit<RouteReplyParams, "payload">,
+  operation: ReplyDispatchOperation,
+): Promise<RouteReplyResult> {
+  const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
   if (shouldSuppressReasoningPayload(payload)) {
     return {
       ok: true,
@@ -246,7 +265,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
     ...normalized,
-    text: formatBtwTextForExternalDelivery(normalized),
+    text: operation.kind === "raw" ? formatBtwTextForExternalDelivery(normalized) : normalized.text,
   };
 
   const text = externalPayload.text ?? "";
@@ -332,16 +351,20 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     replyTransport && Object.hasOwn(replyTransport, "threadId")
       ? (replyTransport.threadId ?? null)
       : (threadId ?? null);
+  const inferredReplyTarget = replyTransport?.replyToIdSource === "implicit";
   const deliveryPayload = copyReplyPayloadMetadata(normalized, {
     ...externalPayload,
-    replyToId: resolvedReplyToId,
+    replyToId: inferredReplyTarget ? undefined : resolvedReplyToId,
   });
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { durableMessageBatchMayHaveReachedRecipient, sendDurableMessageBatchCore } =
-      await loadDeliverRuntime();
+    const {
+      durableMessageBatchMayHaveReachedRecipient,
+      sendDurableMessageBatchCore,
+      sendStructuredDurableMessageBatchCore,
+    } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -355,12 +378,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const send = await sendDurableMessageBatchCore({
+    const sendParams = {
       cfg,
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
-      payloads: [deliveryPayload],
       replyPayloadSendingHook: {
         kind: params.replyKind,
         channel: channelId,
@@ -376,6 +398,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         },
       },
       replyToId: resolvedReplyToId ?? null,
+      ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
@@ -398,7 +421,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               ...(params.groupId ? { groupId: params.groupId } : {}),
             }
           : undefined,
-    });
+    } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
+    const send =
+      operation.kind === "prepared"
+        ? await sendStructuredDurableMessageBatchCore({
+            ...sendParams,
+            plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
+          })
+        : await sendDurableMessageBatchCore({ ...sendParams, payloads: [deliveryPayload] });
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(
         send.status === "failed" ? [] : send.results,

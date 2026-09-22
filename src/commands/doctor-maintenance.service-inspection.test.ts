@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { printDaemonStatus } from "../cli/daemon-cli/status.print.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { execFileUtf8 } from "../daemon/exec-file.js";
+import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
 import { inspectSystemLaunchDaemonOwnership } from "../daemon/launchd-system.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
@@ -24,6 +25,19 @@ vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
     .mockRejectedValue(new Error("Unexpected private-peer opening in unavailable-broker fixture")),
 }));
 vi.mock("../daemon/exec-file.js", () => ({ execFileUtf8: vi.fn() }));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec: vi.fn<typeof import("../process/exec.js").runExec>(async (command, args, options) => {
+    if (
+      command !== "/usr/bin/plutil" ||
+      typeof options !== "object" ||
+      options.input === undefined
+    ) {
+      throw new Error("Unexpected subprocess in service-inspection fixture");
+    }
+    return decodeLaunchAgentPlistFixture(options.input, args[1]);
+  }),
+}));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
   shouldManageGatewayService: async () => true,
@@ -97,6 +111,15 @@ it.each([
       path.join(unitDir, "openclaw-gateway.service"),
       "[Service]\nExecStart=/usr/bin/node /opt/openclaw/openclaw.mjs gateway\n",
     );
+  } else {
+    const plistDir = path.join(home, "Library/LaunchAgents");
+    await fs.mkdir(plistDir, { recursive: true });
+    await fs.writeFile(
+      path.join(plistDir, "ai.openclaw.gateway.plist"),
+      `<plist><dict><key>Label</key><string>ai.openclaw.gateway</string>
+      <key>ProgramArguments</key><array><string>/usr/bin/node</string>
+      <string>/opt/openclaw/openclaw.mjs</string><string>gateway</string></array></dict></plist>`,
+    );
   }
   vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
     if (scenario.reason === "service-manager-access-denied") {
@@ -143,11 +166,19 @@ it.each([
     throw new Error(`Unexpected native command: ${command}`);
   });
   const service = resolveGatewayService();
-  await expect
-    .soft(service.readCommand(process.env, { requireEffective: true }))
-    .rejects.toMatchObject({
-      reason: scenario.reason,
+  if (scenario.platform === "linux") {
+    await expect
+      .soft(service.readCommand(process.env, { requireEffective: true }))
+      .rejects.toMatchObject({
+        reason: scenario.reason,
+      });
+  } else {
+    await expect(
+      service.readCommand(process.env, { requireEffective: true }),
+    ).resolves.toMatchObject({
+      programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
+  }
   if (scenario.reason === "launchd-system-domain-unavailable") {
     await expect
       .soft(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway"))
@@ -163,18 +194,28 @@ it.each([
     jsonMode: true,
     phase: "inspect",
   });
-  expect(inspection).toMatchObject({
-    inspected: false,
+  expect.soft(inspection).toMatchObject({
     stopped: false,
     serviceMutationAllowed: false,
+    serviceUpdateVerdict: { kind: "unavailable", inspectionReason: scenario.reason },
   });
-  expect.soft(inspection.blockMessage).toContain(scenario.message);
-  const maintenance = beginDoctorMaintenance({
+  expect.soft(inspection.blockMessage).toBeUndefined();
+  expect.soft(inspection.serviceMutationSkipMessage).toContain(scenario.message);
+  const maintenance = await beginDoctorMaintenance({
     root: home,
     options: { repair: true },
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   });
-  await expect.soft(maintenance).rejects.toThrow(scenario.message);
+  try {
+    expect(maintenance).toBeDefined();
+    expect(maintenance?.warnings).toEqual([
+      expect.stringContaining("Restart the Gateway you launched manually after the update."),
+    ]);
+    expect(maintenance?.warnings?.[0]).toContain(scenario.message);
+    await maintenance?.finish({});
+  } finally {
+    await maintenance?.release();
+  }
 
   const state = await readGatewayServiceState(service, { env: process.env });
   expect.soft(state).toMatchObject({ inspectionReason: scenario.reason });
@@ -204,7 +245,6 @@ it.each([
     "Gateway/state coordinators and agent-database lease checks",
     "https://docs.openclaw.ai/gateway#existing-system-launchdaemons",
   ]) {
-    await expect.soft(maintenance).rejects.toThrow(hint);
     expect.soft(output).toContain(hint);
   }
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();

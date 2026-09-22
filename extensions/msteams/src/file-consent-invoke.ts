@@ -1,4 +1,3 @@
-// Msteams plugin module implements file consent invoke behavior.
 import { formatUnknownError } from "./errors.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";

@@ -154,14 +154,14 @@ describe("resolveModelSelection", () => {
 });
 
 describe("buildModelSelectionCallbackData", () => {
-  it("uses standard callback when under limit and compact callback when needed", () => {
+  it("uses standard callbacks when they fit and opaque callbacks otherwise", () => {
     expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
       "mdl_sel_openai/gpt-4.1",
     );
     const longModel = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
-    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", model: longModel })).toBe(
-      `mdl_sel/${longModel}`,
-    );
+    expect(
+      buildModelSelectionCallbackData({ provider: "amazon-bedrock", model: longModel }),
+    ).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
   });
 
   it("keeps oversized provider-scoped models selectable within Telegram's callback limit", () => {
@@ -496,16 +496,44 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
-  it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
-    const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+  it("does not redirect a captured button when its model moves to another provider", () => {
+    const provider = "provider-with-a-long-name";
+    const model = `shared-model-${"x".repeat(35)}`;
+    expect(Buffer.byteLength(`mdl_sel_${provider}/${model}`, "utf8")).toBe(82);
+    expect(Buffer.byteLength(`mdl_sel/${model}`, "utf8")).toBe(56);
     const result = buildModelsKeyboard({
-      provider: "amazon-bedrock",
+      provider,
       models: [model],
       currentPage: 1,
       totalPages: 1,
     });
 
-    expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel/${model}`);
+    const button = result[0]?.[0];
+    if (!button) {
+      throw new Error("Expected a model button");
+    }
+    const callback = parseModelCallbackData(button.callback_data);
+    expect(callback?.type).toBe("select-ref");
+    if (callback?.type !== "select-ref") {
+      throw new Error("Expected an opaque model callback");
+    }
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider, "replacement-provider"],
+        byProvider: new Map([
+          [provider, new Set([model])],
+          ["replacement-provider", new Set([model])],
+        ]),
+      }),
+    ).toEqual({ kind: "resolved", provider, model });
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: ["replacement-provider"],
+        byProvider: new Map([["replacement-provider", new Set([model])]]),
+      }),
+    ).toEqual({ kind: "ambiguous", model: callback.digest, matchingProviders: [] });
   });
 });
 

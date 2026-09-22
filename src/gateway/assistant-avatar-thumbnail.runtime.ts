@@ -2,7 +2,7 @@ import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { createImageProcessor } from "../media/image-ops.js";
+import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import {
@@ -45,14 +45,7 @@ async function createAvatarThumbnail(
   // Preserve animation/vector bytes; Rastermill's PNG output contains only one frame.
   if (["image/png", "image/jpeg", "image/webp"].includes(mime)) {
     const detectedMime = (await fileTypeFromBuffer(body))?.mime;
-    // Rastermill's probe has no animation flag. RFC 9649 §2.7 puts the WebP
-    // VP8X animation bit at byte 20: https://www.rfc-editor.org/rfc/rfc9649.html#section-2.7
-    const animatedWebp =
-      detectedMime === "image/webp" &&
-      body.length >= 21 &&
-      body.toString("ascii", 12, 16) === "VP8X" &&
-      (body.readUInt8(20) & 0x02) !== 0;
-    if (detectedMime === "image/apng" || animatedWebp) {
+    if (detectedMime === "image/apng" || isAnimatedWebpBuffer(body)) {
       return createHttpImageRepresentation(body, contentType);
     }
     body = (

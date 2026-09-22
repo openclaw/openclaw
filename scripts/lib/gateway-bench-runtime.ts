@@ -39,6 +39,7 @@ export const STALLED_CATALOG_MODEL_ID = "bench-model";
 
 export const BASE_GATEWAY_BENCH_CONFIG = {
   browser: { enabled: false },
+  update: { checkOnStart: false },
   // Loopback listener binding does not suppress LAN discovery.
   discovery: { mdns: { mode: "off" } },
   gateway: {
@@ -269,6 +270,7 @@ export function createGatewayBenchEnv(
   options: {
     caseEnv?: Record<string, string> | undefined;
     restartTrace?: boolean | undefined;
+    startupTrace?: boolean | undefined;
   },
 ): NodeJS.ProcessEnv {
   return {
@@ -284,11 +286,10 @@ export function createGatewayBenchEnv(
     npm_config_update_notifier: "false",
     OPENCLAW_CONFIG_PATH: configPath,
     ...(options.restartTrace ? { OPENCLAW_GATEWAY_RESTART_TRACE: "1" } : {}),
-    OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+    ...(options.startupTrace !== false ? { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" } : {}),
     OPENCLAW_HOME: root,
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...options.caseEnv,
   };
 }

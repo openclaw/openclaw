@@ -32,6 +32,7 @@ export type PluginPathCacheEntry = {
   realpath?: string | null;
   nativeRealpath?: string | null;
   stat?: fs.Stats | null;
+  statError?: unknown;
   lstat?: fs.Stats | null;
 };
 

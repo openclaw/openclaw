@@ -1,7 +1,9 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -37,7 +39,7 @@ import {
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
@@ -116,6 +118,14 @@ describe("built-in session tool role authority", () => {
   it.each(["live", "missing", "retired"] as const)(
     "visible forks preserve an active first turn only with live requester authority (%s)",
     async (lifetime) => {
+      const runtimeChoice = vi
+        .spyOn(modelRuntimeChoice, "preparePublishedModelRuntimeChoice")
+        .mockImplementation(async ({ runtimeId, preferredRuntimeId }) => ({
+          kind: "ready",
+          runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+          validate: () => undefined,
+        }));
+      onTestFinished(() => runtimeChoice.mockRestore());
       await withSessionToolsFixture(async (cfg) => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
@@ -182,9 +192,9 @@ describe("built-in session tool role authority", () => {
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
-        const { chatHandlers } = await import("./server-methods/chat.js");
+        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
         const startChild = vi
-          .spyOn(chatHandlers, "chat.send")
+          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
           .mockImplementation(async ({ respond }) => {
             respond(true, { status: "started", runId: "fork-child-run" });
           });
@@ -667,10 +677,12 @@ describe("built-in session tool role authority", () => {
       if (!scope) {
         throw new Error("expected local Gateway scope");
       }
+      const reader = roleClient("view", "reader-profile");
+      reader.connect.scopes = ["operator.read"];
       await withPluginRuntimeGatewayRequestScope(
         {
           ...scope,
-          client: sharingPolicyClient({ user: "reader-profile", scopes: ["operator.read"] }),
+          client: reader,
         },
         async () => {
           await expect(

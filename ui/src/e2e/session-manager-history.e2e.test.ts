@@ -99,10 +99,14 @@ suite.define(() => {
         const result = page.locator(".sessions-transcript-search__result");
         await result.waitFor({ state: "visible", timeout: 10_000 });
         expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
-          agentId: "main",
           limit: 25,
           query: "deployment history",
-          sessionKeys: [main.key, research.key],
+          scope: {
+            agentId: "main",
+            includeGlobal: true,
+            includeUnknown: false,
+            configuredAgentsOnly: true,
+          },
         });
         await result.click();
         await expect

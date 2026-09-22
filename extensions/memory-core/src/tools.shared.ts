@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools.shared behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,

@@ -51,7 +51,7 @@ vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import { createTalkClientAgentConsultRunner } from "../talk-client-agent-consult.js";
+import { createTalkClientAgentConsultRunner } from "../talk/client-agent-consult.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {

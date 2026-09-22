@@ -8,6 +8,7 @@ import {
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
+  writeCronStoreSnapshot,
 } from "./service.test-harness.js";
 import type { CronAddResult } from "./service/state.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
@@ -143,6 +144,15 @@ describe("CronService declarative jobs", () => {
         id: created.id,
       });
 
+      await cron.update(created.id, { state: { consecutiveErrors: 2 } });
+      const alreadyEnabled = declarativeResult(
+        await cron.add(declaration(), { enabledExplicit: true }),
+      );
+      expect(alreadyEnabled).toMatchObject({
+        updated: false,
+        job: { enabled: true, state: { consecutiveErrors: 2 } },
+      });
+
       await cron.update(created.id, {
         enabled: false,
         state: {
@@ -202,6 +212,63 @@ describe("CronService declarative jobs", () => {
     }
   });
 
+  it.each(["auto-disabled", "stream-exhausted"] as const)(
+    "resets %s state when a declaration explicitly re-enables the job",
+    async (failure) => {
+      const { storePath } = await makeStorePath();
+      const input = declaration({
+        delivery: { mode: "none" },
+        ...(failure === "stream-exhausted"
+          ? { schedule: { kind: "stream" as const, command: ["node", "events.mjs"] } }
+          : {}),
+      });
+      const writer = createCronService(storePath);
+      const created = declarativeResult(await writer.add(input));
+      writer.stop();
+      const job = (await loadCronStore(storePath)).jobs[0]!;
+      job.enabled = failure === "stream-exhausted";
+      job.state.consecutiveErrors = 10;
+      job.state.scheduleErrorCount = 3;
+      if (failure === "auto-disabled") {
+        job.state.autoDisabled = {
+          reason: "consecutive-failures",
+          atMs: Date.now(),
+          consecutiveErrors: 10,
+        };
+      } else {
+        job.state.streamRestartExhausted = true;
+        job.state.streamConsecutiveFailures = 5;
+        job.state.streamError = "source exited repeatedly";
+      }
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const cron = createCronService(storePath);
+      try {
+        const unchanged = declarativeResult(await cron.add(input, { enabledExplicit: false }));
+        expect(unchanged).toMatchObject({ updated: false, job: { enabled: job.enabled } });
+        expect(unchanged.job.state).toEqual(job.state);
+
+        const enabled = declarativeResult(await cron.add(input, { enabledExplicit: true }));
+        expect(enabled).toMatchObject({
+          id: created.id,
+          updated: true,
+          job: { enabled: true, state: { consecutiveErrors: 0, scheduleErrorCount: 0 } },
+        });
+        const persisted = (await loadCronStore(storePath)).jobs[0]!;
+        expect(persisted.state.autoDisabled).toBeUndefined();
+        expect(persisted.state.streamRestartExhausted).toBeUndefined();
+        if (failure === "stream-exhausted") {
+          expect(persisted.state.streamConsecutiveFailures).toBe(0);
+          expect(persisted.state.streamError).toBeUndefined();
+        }
+        expect(declarativeResult(await cron.add(input, { enabledExplicit: true })).updated).toBe(
+          false,
+        );
+      } finally {
+        cron.stop();
+      }
+    },
+  );
+
   it("persists an ineligible review and reconciles recovery without replacing its job", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
@@ -212,7 +279,10 @@ describe("CronService declarative jobs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const project = () => resolveSkillCollectionReviewMonitorSpecs(cfg, [])[0]!.input;
+    const project = () => {
+      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
+      return spec!.input;
+    };
     await cron.start();
     try {
       const created = declarativeResult(
@@ -301,6 +371,7 @@ describe("CronService declarative jobs", () => {
       store: {},
       skillLibrarySelections: job.skillLibrarySelections,
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
     const restarted = resolveCronSession({
@@ -311,6 +382,7 @@ describe("CronService declarative jobs", () => {
       store: { "agent:ops:cron:test": first.sessionEntry },
       skillLibrarySelections: [],
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
   });

@@ -1,4 +1,3 @@
-// Feishu plugin module implements sequential key behavior.
 import {
   isAbortRequestText,
   isBtwRequestText,

@@ -250,8 +250,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "broken",
           service: {
-            id: "broken",
+            id: " broken ",
             start: brokenStart,
           },
           source: "test",
@@ -260,6 +261,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "healthy-sibling",
           service: { id: "healthy-sibling", start: siblingStart },
           source: "test",
           origin: "workspace" as const,

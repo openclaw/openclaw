@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
+import { startCronClone } from "../../lib/cron/index.ts";
 import {
   createContext,
   createGateway,
@@ -46,6 +47,55 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("does not treat an accepted edit as completion of a newer clone", async () => {
+    const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
+    const saved = createDeferred<CronJob>();
+    const fallback = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([job]);
+      }
+      if (method === "cron.update") {
+        return saved.promise;
+      }
+      return fallback(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    try {
+      await waitForCronPage(() =>
+        expect(page.querySelector('[data-test-id="cron-row-earlier-edit"]')).not.toBeNull(),
+      );
+      (page.querySelector('[data-test-id="cron-row-earlier-edit"]') as HTMLElement).click();
+      await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
+      (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
+      await waitForCronPage(() =>
+        expect(request).toHaveBeenCalledWith("cron.update", expect.anything()),
+      );
+      // Exercise controller intent replacement; the ordinary clone button is busy-disabled.
+      startCronClone(page.cron, job);
+      page.cron.cronCreateOpen = true;
+      page.requestUpdate();
+      await page.updateComplete;
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+      const draft = page.cron.cronForm;
+      saved.resolve({ ...job, name: "Earlier edit saved" });
+      await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
+      await page.updateComplete;
+      expect(page.cron.cronCreateOpen).toBe(true);
+      expect(page.cron.cronEditingJob).toBeNull();
+      expect(page.cron.cronForm).toBe(draft);
+      expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+        "Garden reminder copy",
+      );
+    } finally {
+      saved.resolve(job);
+      page.remove();
+    }
+  });
+
   it.each([
     { selector: "#cron-name", text: "QA smoke" },
     { selector: "#cron-payload-text", text: "Write a summary" },

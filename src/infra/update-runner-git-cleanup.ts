@@ -30,7 +30,10 @@ export async function cleanupGitPreflight(
   // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
   // Keep cleanup commands in the owned process tree with their existing bounded budget.
   const cleanupSignal = new AbortController().signal;
-  const cleanupTimeoutMs = Math.min(options.timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS);
+  const cleanupTimeoutMs = Math.min(
+    options.timeoutMs ?? PREFLIGHT_CLEANUP_TIMEOUT_MS,
+    PREFLIGHT_CLEANUP_TIMEOUT_MS,
+  );
   const runCleanupCommand: CommandRunner = (argv, commandOptions) =>
     options.runCommand(argv, {
       ...commandOptions,

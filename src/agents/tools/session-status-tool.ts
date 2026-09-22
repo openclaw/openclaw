@@ -3,7 +3,6 @@
  *
  * Reports and updates session runtime state, model overrides, visibility, task status, and delivery context.
  */
-import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type {
@@ -12,17 +11,8 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import {
-  patchSessionEntryWithKey,
-  resolveSessionStorePathCore,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import {
-  isPluginMetadataSnapshotCompatible,
-  resolvePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildAgentMainSessionKey,
@@ -30,7 +20,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
   getSessionStateVersion,
   listSessionStateEventsSince,
@@ -45,11 +34,11 @@ import {
 } from "../../tasks/task-status.js";
 import {
   deliveryContextFromSession,
-  normalizeDeliveryContext,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -59,14 +48,8 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
-import {
-  buildModelAliasIndex,
-  modelKey,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalogCore,
-} from "../model-selection.js";
-import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
@@ -74,19 +57,17 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import {
-  normalizeToolModelOverride,
-  readNonNegativeIntegerParam,
-  readToolStringParam,
-} from "./common.js";
+import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
   callAgentToolGatewayRequest,
+  hasGatewayToolRoutingContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import { patchSessionStatusModel } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -466,106 +447,6 @@ function formatSessionTaskLine(params: {
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
-async function resolveModelOverride(params: {
-  cfg: OpenClawConfig;
-  raw: string;
-  sessionEntry?: SessionEntry;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<
-  | { kind: "reset" }
-  | {
-      kind: "set";
-      provider: string;
-      model: string;
-      isDefault: boolean;
-    }
-> {
-  const raw = normalizeToolModelOverride(params.raw);
-  if (!raw) {
-    return { kind: "reset" };
-  }
-
-  const configDefault = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: currentProvider,
-  });
-  const catalog = await loadPublishedPreparedModelCatalog({
-    config: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    readOnly: true,
-    ...(params.sessionEntry?.spawnedWorkspaceDir
-      ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
-      : {}),
-  });
-  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
-  const manifestMetadataSnapshot =
-    params.metadataSnapshot &&
-    params.metadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: params.metadataSnapshot,
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-    })
-      ? params.metadataSnapshot
-      : resolvePluginMetadataSnapshot({
-          config: params.cfg,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          env: process.env,
-        });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot,
-  };
-  const policy = createModelVisibilityPolicy({
-    cfg: params.cfg,
-    catalog,
-    defaultProvider: currentProvider,
-    defaultModel: currentModel,
-    agentId: params.agentId,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
-
-  const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    raw,
-    defaultProvider: currentProvider,
-    aliasIndex,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
-  if (!resolved) {
-    throw new Error(`Unrecognized model "${raw}".`);
-  }
-  const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (!policy.allows(resolved.ref)) {
-    throw new Error(`Model "${key}" is not allowed.`);
-  }
-  const isDefault =
-    resolved.ref.provider === configDefault.provider && resolved.ref.model === configDefault.model;
-  return {
-    kind: "set",
-    provider: resolved.ref.provider,
-    model: resolved.ref.model,
-    isDefault,
-  };
-}
-
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   requesterAgentIdOverride?: string;
@@ -594,6 +475,7 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const gatewayScoped = opts?.callGateway !== undefined || hasGatewayToolRoutingContext();
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const {
         cfg,
@@ -971,96 +853,19 @@ export function createSessionStatusTool(opts?: {
           const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
-            const selection = await resolveModelOverride({
+            const patched = await patchSessionStatusModel({
               cfg,
-              raw: modelRaw,
-              sessionEntry: scopedResolved.entry,
               agentId,
               agentDir: selectedAgentDir,
               workspaceDir: selectedWorkspaceDir,
+              storePath,
+              raw: modelRaw,
+              resolved: scopedResolved,
               metadataSnapshot: opts?.metadataSnapshot,
+              gatewayCall: gatewayScoped ? gatewayCall : undefined,
             });
-            const modelSelection =
-              selection.kind === "reset"
-                ? {
-                    provider: configured.provider,
-                    model: configured.model,
-                    isDefault: true,
-                  }
-                : {
-                    provider: selection.provider,
-                    model: selection.model,
-                    isDefault: selection.isDefault,
-                  };
-            const nextEntry: SessionEntry = { ...scopedResolved.entry };
-            const currentProvider =
-              scopedResolved.entry.providerOverride?.trim() ||
-              scopedResolved.entry.modelProvider?.trim() ||
-              configured.provider;
-            const applied = applyModelOverrideWithAuthProfileCompatibility({
-              cfg,
-              agentDir: selectedAgentDir,
-              entry: nextEntry,
-              currentProvider,
-              selection: modelSelection,
-              explicitDefaultSelection: modelSelection.isDefault,
-              markLiveSwitchPending: true,
-            });
-            if (applied.updated) {
-              const patchResult = await patchSessionEntryWithKey(
-                {
-                  agentId,
-                  sessionKey: scopedResolved.key,
-                  storePath,
-                },
-                (entry, context) => {
-                  const persistedEntryPatch: SessionEntry = { ...entry };
-                  applyModelOverrideWithAuthProfileCompatibility({
-                    cfg,
-                    agentDir: selectedAgentDir,
-                    entry: persistedEntryPatch,
-                    currentProvider:
-                      entry.providerOverride?.trim() ||
-                      entry.modelProvider?.trim() ||
-                      configured.provider,
-                    selection: modelSelection,
-                    explicitDefaultSelection: modelSelection.isDefault,
-                    markLiveSwitchPending: true,
-                  });
-                  if (
-                    !persistedEntryPatch.sessionId.trim() &&
-                    !context.existingEntry?.sessionId?.trim()
-                  ) {
-                    persistedEntryPatch.sessionId = randomUUID();
-                  }
-                  return persistedEntryPatch;
-                },
-                {
-                  fallbackEntry: scopedResolved.persisted ? undefined : scopedResolved.entry,
-                  replaceEntry: true,
-                },
-              );
-              if (!patchResult) {
-                throw new Error(`Unknown sessionKey: ${scopedResolved.key}`);
-              }
-              const persistedEntry = patchResult.entry;
-              scopedResolved = {
-                entry: persistedEntry,
-                key: patchResult.sessionKey,
-                persisted: true,
-              };
-              triggerSessionPatchHook({
-                cfg,
-                sessionEntry: persistedEntry,
-                sessionKey: patchResult.sessionKey,
-                patch: {
-                  key: patchResult.sessionKey,
-                  model:
-                    selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
-                },
-              });
-              changedModel = true;
-            }
+            scopedResolved = patched.resolved;
+            changedModel = patched.changedModel;
           }
 
           const activeModelId = opts?.activeModelId?.trim();
@@ -1155,18 +960,14 @@ export function createSessionStatusTool(opts?: {
             resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
             resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-            resolveDefaultThinkingLevel: () =>
-              resolveThinkingDefaultWithRuntimeCatalogCore({
+            resolveDefaultThinkingLevel: async (selection) =>
+              resolveThinkingDefault({
                 cfg,
-                provider: providerForCard,
-                model: defaultModelForCard,
-                loadRuntimeCatalog: () =>
-                  loadPublishedPreparedModelCatalog({
-                    config: cfg,
-                    agentId,
-                    agentDir: selectedAgentDir,
-                    readOnly: true,
-                  }),
+                agentId,
+                provider: selection?.provider ?? providerForCard,
+                model: selection?.model ?? defaultModelForCard,
+                agentRuntime: selection?.agentRuntime,
+                catalog: thinkingCatalog,
               }),
             isGroup,
             defaultGroupActivation: () => "mention",

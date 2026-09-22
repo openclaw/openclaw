@@ -8,7 +8,7 @@ import {
   notifyGatewayObservers,
 } from "../../app/gateway-observers.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;

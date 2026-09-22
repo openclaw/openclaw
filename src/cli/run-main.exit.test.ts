@@ -254,8 +254,8 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging.js", async () => ({
-  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+vi.mock("../logging/console.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging/console.js")>("../logging/console.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
 }));
 
@@ -2449,15 +2449,22 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("reads source-only proxy config before doctor lint owns plugin-aware validation", async () => {
+  it.each([
+    ["lint", ["--lint", "--json"]],
+    ["repair", ["--fix", "--non-interactive"]],
+    ["diagnosis", []],
+  ])("reads source-only proxy config before Doctor %s owns state access", async (_mode, args) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor-lint" } });
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor" } });
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Shared state requires Doctor repair");
+    });
 
-    await runCli(["node", "openclaw", "doctor", "--lint", "--json"]);
+    await runCli(["node", "openclaw", "doctor", ...args]);
 
     expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor" });
   });
 
   it.each([

@@ -24,6 +24,7 @@ import {
   validateClawHubBootstrapEvidence,
   verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
+import { verifyPreparedNpmRegistry } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -104,6 +105,76 @@ afterEach(() => {
 describe("verifyBetaRelease workflow outcomes", () => {
   const version = "2026.5.10-beta.3";
 
+  function historicalFixture(conclusion: string, overrides: Record<string, unknown> = {}) {
+    const originalRef = "release-publish/aaaaaaaaaaaa-123";
+    const fixture = workflowFixture({ headBranch: originalRef, conclusion, attempt: 2 }, false);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA", "a".repeat(40));
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT", "1");
+    const original = JSON.parse(readFileSync(join(fixture.binDir, "run.json"), "utf8"));
+    writeFileSync(
+      join(fixture.binDir, "attempt.json"),
+      JSON.stringify({
+        ...original,
+        databaseId: 44,
+        attempt: 1,
+        headSha: "a".repeat(40),
+        conclusion: "success",
+        url: "https://example.invalid/runs/44/attempts/1",
+        ...overrides,
+      }),
+    );
+    return fixture;
+  }
+
+  it.each(["success", "failure"])(
+    "records the original npm attempt after a later %s rerun",
+    async (conclusion) => {
+      const fixture = historicalFixture(conclusion);
+
+      await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+      expect(
+        JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+      ).toEqual([
+        expect.objectContaining({
+          id: "44",
+          runAttempt: 1,
+          url: "https://example.invalid/runs/44/attempts/1",
+        }),
+      ]);
+      expect(
+        JSON.parse(
+          readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+        ),
+      ).toMatchObject({ children: { openclawNpm: { runAttempt: "1", conclusion: "success" } } });
+    },
+  );
+
+  it.each([
+    { attempt: 2 },
+    { databaseId: 45 },
+    { headSha: "b".repeat(40) },
+    { conclusion: "failure" },
+    { jobs: [{ name: "publish_openclaw_npm", conclusion: "failure" }] },
+  ])("rejects changed or unsuccessful historical publisher evidence: %j", async (overrides) => {
+    const fixture = historicalFixture("success", overrides);
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow();
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
+  it("retains the original npm publisher when a recovery parent uses newer tooling", async () => {
+    const originalRef = "release-publish/aaaaaaaaaaaa-123";
+    const fixture = workflowFixture({ headBranch: originalRef }, false);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
+
+    await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+    expect(
+      JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+    ).toEqual([expect.objectContaining({ id: "44", label: "OpenClaw NPM Release" })]);
+  });
+
   function workflowFixture(
     overrides: Record<string, unknown> = {},
     telegram = true,
@@ -180,7 +251,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     print({version: npm.version, "dist-tags": npm.tags[name], "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/package.tgz"});
   }
 } else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
-  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
+  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), args.includes("--attempt") ? "attempt.json" : "run.json")));
 } else if (args[0] === "api" && args[1].endsWith("/actions/runs/34")) {
   process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "bootstrap.json")));
 } else if (args[0] === "api" && args[1].includes("/actions/runs/34/artifacts?")) {
@@ -217,7 +288,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     // Keep the production retry budget; only the isolated fixture's clock advances.
     writeFileSync(
       timers,
-      `const delay = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => delay(fn, 0, ...args);\n${preload}`,
+      `let now = Date.now(); Date.now = () => now; const delay = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => { now += ms; return delay(fn, 0, ...args); };\n${preload}`,
     );
     return spawnSync(
       testNodeExecPath,
@@ -245,6 +316,73 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       },
     );
   }
+
+  it.each(["missing", "conflicting", "exact"])(
+    "requires the parent's qualified plugin bytes when registry metadata is healthy: %s",
+    async (tarballState) => {
+      const name = "@openclaw/demo";
+      const fixture = workflowFixture({}, true, undefined, {
+        version,
+        distTag: "beta",
+        tags: { openclaw: { beta: version }, [name]: { beta: version } },
+      });
+      const bytes = Buffer.from("qualified plugin bytes");
+      const tarballPath = join(fixture.rootDir, "qualified.tgz");
+      writeFileSync(tarballPath, bytes);
+      let tarballReads = 0;
+      const options = {
+        rootDir: fixture.rootDir,
+        pluginNpmReadback: {
+          evidence: [],
+          verify: async (packageName: string) => {
+            await verifyPreparedNpmRegistry({
+              packageName,
+              version,
+              publishTags: ["beta"],
+              route: "npm-oidc",
+              tarballPath,
+              allowMissing: false,
+              fetchImpl: async (url: string) => {
+                if (url.endsWith(".tgz")) {
+                  tarballReads += 1;
+                  return tarballState === "missing"
+                    ? new Response(null, { status: 404 })
+                    : new Response(
+                        tarballState === "conflicting" ? Buffer.alloc(bytes.length) : bytes,
+                      );
+                }
+                return Response.json({
+                  name,
+                  "dist-tags": { beta: version },
+                  versions: {
+                    [version]: {
+                      name,
+                      version,
+                      dist: {
+                        integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+                        shasum: createHash("sha1").update(bytes).digest("hex"),
+                        tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
+                      },
+                    },
+                  },
+                });
+              },
+            });
+          },
+        },
+      };
+      const verification = verifyBetaRelease(fixture.args, options);
+      if (tarballState === "exact") {
+        await verification;
+      } else {
+        await expect(verification).rejects.toThrow(
+          tarballState === "missing" ? "HTTP 404" : "bytes differ",
+        );
+      }
+      expect(tarballReads).toBe(1);
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(tarballState === "exact");
+    },
+  );
 
   it.each(["E404", "ETARGET"])(
     "retains CLI diagnostics after core npm %s exhaustion without a success receipt",
@@ -279,7 +417,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(commands).toHaveLength(30);
+      expect(commands).toHaveLength(90);
       expect(commands.every((args) => args[0] === "npm" && args[1] === "view")).toBe(true);
     },
   );
@@ -1335,7 +1473,39 @@ describe("runNpmViewWithRetry", () => {
 
     expect(calls).toHaveLength(3);
     expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
-    expect(delays).toEqual([1000, 2000]);
+    expect(delays).toEqual([10000, 10000]);
+  });
+
+  it("waits beyond the previous attempt budget for core registry propagation", async () => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    let reads = 0;
+    const result = runNpmViewWithRetry(["view", "openclaw@2026.5.10", "version"], {
+      run: () => {
+        reads += 1;
+        if (Date.now() - started < 600_000) {
+          throw Object.assign(new Error("not visible"), { code: "E404" });
+        }
+        return "2026.5.10";
+      },
+    });
+    const verified = expect(result).resolves.toBe("2026.5.10");
+    await vi.advanceTimersByTimeAsync(600_000);
+    await verified;
+    expect(reads).toBe(61);
+  });
+
+  it("honors the shared timeout without retrying publication", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", "25000");
+    const run = vi.fn(() => {
+      throw Object.assign(new Error("not visible"), { code: "E404" });
+    });
+    const result = runNpmViewWithRetry(["view", "openclaw@2026.5.10", "version"], { run });
+    const rejected = expect(result).rejects.toThrow("Retry readback, not publication.");
+    await vi.advanceTimersByTimeAsync(25_000);
+    await rejected;
+    expect(run).toHaveBeenCalledTimes(3);
   });
 
   it("fails a timed-out npm read after one attempt and reaps the child", async () => {

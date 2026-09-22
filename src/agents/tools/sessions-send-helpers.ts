@@ -11,14 +11,7 @@ import { resolveSessionConversationRef } from "../../channels/plugins/session-co
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
-export {
-  isAnnounceSkip,
-  isNonDeliverableSessionsReply,
-  isReplySkip,
-} from "./sessions-send-tokens.js";
-
-const DEFAULT_AGENTNG_PONG_TURNS = 5;
-const MAX_PING_PONG_TURNS = 20;
+export { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 export type AnnounceTarget = {
   channel: string;
@@ -152,9 +145,4 @@ export function buildAgentToAgentAnnounceContext(params: {
     "After this reply, the agent-to-agent conversation is over.",
   ].filter(Boolean);
   return lines.join("\n");
-}
-
-/** Resolves the fixed A2A ping-pong turn limit with a hard runtime cap. */
-export function resolvePingPongTurns() {
-  return Math.min(MAX_PING_PONG_TURNS, DEFAULT_AGENTNG_PONG_TURNS);
 }

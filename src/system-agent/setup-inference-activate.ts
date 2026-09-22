@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
@@ -52,6 +52,7 @@ import {
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
   validateSetupInferenceOwnerEvidence,
+  validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
   withPreparedSetupCredentialAccess,
@@ -93,6 +94,18 @@ function resolveRouteModelRef(ctx: StageContext, defaultModelRef: string): strin
 
 async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
   const { params, cfg } = ctx;
+  const hasProviderTarget =
+    params.kind.startsWith("saved-auth:") ||
+    parseProviderAutoSetupChoiceId(params.kind) ||
+    params.kind === "existing-model" ||
+    params.kind === "provider-auth" ||
+    params.kind === "api-key";
+  const roleError = hasProviderTarget
+    ? undefined
+    : validateSetupModelTarget(undefined, params.modelTarget);
+  if (roleError) {
+    return roleError;
+  }
   if (params.kind.startsWith("saved-auth:")) {
     const profileId = parseSavedAuthSetupProfileId(params.kind);
     if (!profileId) {
@@ -111,11 +124,16 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         params.agentId,
         {
           loadAuthProfileStoreForRuntime: ctx.deps.loadAuthProfileStoreForRuntime,
+          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
         },
         ctx.snapshot,
       );
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
+      }
+      const routeRoleError = validateSetupModelTarget(route.modelTarget, params.modelTarget);
+      if (routeRoleError) {
+        return routeRoleError;
       }
       const requested = params.modelRef?.trim();
       if (requested && normalizeAgentModelRefForConfig(requested) !== route.modelLabel) {
@@ -125,6 +143,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
       }
       return {
         modelRef: route.modelLabel,
+        ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
         config: cfg,
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
       };
@@ -335,11 +354,12 @@ async function verifyAndActivateCandidate(
           workspaceDir: ctx.workspace,
         });
   const providerPatch = createMergePatch(cfg, stripPendingPluginInstallRecords(prepared));
-  const selectModel =
+  const selectModel: (config: OpenClawConfig, previousConfig: OpenClawConfig) => OpenClawConfig =
     params.kind === "existing-model"
       ? (config: OpenClawConfig) => config
       : await createSystemAgentModelSelectionUpdater({
           model: staged.modelRef,
+          ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
           ...(params.agentId ? { targetAgentId: routeAgentId } : {}),
           ...(staged.agentRuntimeId ? { agentRuntimeId: staged.agentRuntimeId } : {}),
           runtimeInDefaults: !params.agentId && !hasResolvedRosterBeforeMigrations(snapshot),
@@ -351,7 +371,7 @@ async function verifyAndActivateCandidate(
       // SAFETY: The patch is derived from typed configs and preserves their config shape.
       patched = applyMergePatch(base, providerPatch) as OpenClawConfig;
     }
-    const selected = selectModel(patched);
+    const selected = selectModel(patched, base);
     return staged.pendingPluginInstalls
       ? { ...selected, plugins: { ...selected.plugins, installs: staged.pendingPluginInstalls } }
       : selected;
@@ -382,6 +402,7 @@ async function verifyAndActivateCandidate(
     generation?.metadataSnapshot ??
     resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env });
   const routeDeps = {
+    ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
     loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
   };
@@ -573,7 +594,9 @@ async function verifyAndActivateCandidate(
     };
     await commitSetupInferenceActivation({
       preserveWorkingConnection: Boolean(
-        savedCredential?.setup?.replacement || baselineRoute.route,
+        savedCredential?.setup?.replacement ||
+        baselineRoute.route ||
+        resolveAgentEffectiveModelPrimary(cfg, routeAgentId),
       ),
       assertCurrent: () => throwIfSetupInferenceCancelled(params),
       activate: activateCredential,
@@ -584,7 +607,9 @@ async function verifyAndActivateCandidate(
   } else {
     await revalidate(await readSnapshot());
   }
-  const lines = [`Inference verified: ${staged.modelRef}`];
+  const lines = [
+    `${staged.modelTarget === "utility" ? "Utility inference" : "Inference"} verified: ${staged.modelRef}`,
+  ];
   if (params.surface === "gateway" && params.recordSetupAudit !== false) {
     const after = await readSnapshot().catch(() => null);
     try {
@@ -605,6 +630,7 @@ async function verifyAndActivateCandidate(
   return {
     ok: true,
     modelRef: staged.modelRef,
+    ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: turn.latencyMs,
     lines,
   };

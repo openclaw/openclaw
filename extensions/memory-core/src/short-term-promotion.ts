@@ -243,9 +243,6 @@ export async function rankShortTermPromotionCandidates(
 }
 
 export {
-  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  DEFAULT_PROMOTION_MIN_SCORE,
-  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   type PromotionCandidate,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,

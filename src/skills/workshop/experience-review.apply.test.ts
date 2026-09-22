@@ -34,7 +34,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillReviewOutcomes } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { runSkillExperienceReview as runCapturedExperienceReview } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
@@ -167,7 +167,7 @@ describe("experience review maintenance", () => {
       release.resolve();
       expect(await settled).toMatchObject({ message: "gateway runtime reset" });
       await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(content);
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
         error: expect.stringContaining("gateway runtime reset"),
       });
@@ -208,7 +208,7 @@ describe("experience review maintenance", () => {
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(registration).toHaveBeenCalledOnce();
       expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
         error: "SessionTranscriptReadFenceError: Completed-turn transcript anchor changed",
       });
@@ -354,7 +354,7 @@ describe("experience review maintenance", () => {
       } else {
         await expect(review).rejects.toThrow("source");
       }
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: change === "append" ? "completed" : "failed",
       });
       expect(retainedAssertion).toBeDefined();
@@ -595,12 +595,12 @@ describe("experience review maintenance", () => {
       );
       await expect(fs.stat(skillFile)).rejects.toMatchObject({ code: "ENOENT" });
       if (error) {
-        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+        expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
           outcome: "failed",
           error: expect.stringContaining(error),
         });
       } else {
-        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+        expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
           outcome: "proposed",
           proposalId: manifest.proposals[0]?.id,
         });
@@ -666,7 +666,7 @@ describe("experience review maintenance", () => {
         config,
       });
 
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: mode === "auto" ? "completed" : "nothing",
         usage: { inputTokens: 12_243, cachedInputTokens: 12_000, outputTokens: 91 },
       });
@@ -804,7 +804,7 @@ describe("experience review maintenance", () => {
         path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md"),
       ),
     ).rejects.toThrow();
-    expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
       outcome: "proposed",
     });
   });

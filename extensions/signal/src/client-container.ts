@@ -30,6 +30,7 @@ type ContainerRpcOptions = {
   timeoutMs?: number;
   maxResponseBytes?: number;
   maxAttachmentBytes?: number;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type ContainerWebSocketMessage = {
@@ -345,6 +346,7 @@ async function containerRestRequest<T = unknown>(
   }
 
   return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    opts.assertDirectAdapterHandoff?.();
     const res = await fetchImpl(url, { ...init, signal });
     if (res.status === 204) {
       return undefined as T;
@@ -657,19 +659,18 @@ function normalizeContainerQuoteText(raw: unknown): string | undefined {
 /**
  * Send message via bbernhard container REST API.
  */
-async function containerSendMessage(params: {
-  baseUrl: string;
-  account: string;
-  recipients: string[];
-  message: string;
-  textStyles?: Array<{ start: number; length: number; style: string }>;
-  attachments?: string[];
-  maxAttachmentBytes?: number;
-  quoteTimestamp?: number;
-  quoteAuthor?: string;
-  quoteMessage?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
+async function containerSendMessage(
+  params: ContainerRpcOptions & {
+    account: string;
+    recipients: string[];
+    message: string;
+    textStyles?: Array<{ start: number; length: number; style: string }>;
+    attachments?: string[];
+    quoteTimestamp?: number;
+    quoteAuthor?: string;
+    quoteMessage?: string;
+  },
+): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
     message: params.message,
     number: params.account,
@@ -703,7 +704,7 @@ async function containerSendMessage(params: {
 
   const result = await containerRestRequest<{ timestamp?: unknown }>(
     "/v2/send",
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+    params,
     "POST",
     payload,
   );
@@ -715,17 +716,17 @@ async function containerSendMessage(params: {
 /**
  * Send typing indicator via bbernhard container REST API.
  */
-async function containerSendTyping(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  stop?: boolean;
-  timeoutMs?: number;
-}): Promise<boolean> {
+async function containerSendTyping(
+  params: ContainerRpcOptions & {
+    account: string;
+    recipient: string;
+    stop?: boolean;
+  },
+): Promise<boolean> {
   const method = params.stop ? "DELETE" : "PUT";
   await containerRestRequest(
     `/v1/typing-indicator/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+    params,
     method,
     { recipient: params.recipient },
   );
@@ -735,41 +736,36 @@ async function containerSendTyping(params: {
 /**
  * Send read receipt via bbernhard container REST API.
  */
-async function containerSendReceipt(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  timestamp: number;
-  type?: "read" | "viewed";
-  timeoutMs?: number;
-}): Promise<boolean> {
-  await containerRestRequest(
-    `/v1/receipts/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    {
-      recipient: params.recipient,
-      timestamp: params.timestamp,
-      receipt_type: params.type ?? "read",
-    },
-  );
+async function containerSendReceipt(
+  params: ContainerRpcOptions & {
+    account: string;
+    recipient: string;
+    timestamp: number;
+    type?: "read" | "viewed";
+  },
+): Promise<boolean> {
+  await containerRestRequest(`/v1/receipts/${encodeURIComponent(params.account)}`, params, "POST", {
+    recipient: params.recipient,
+    timestamp: params.timestamp,
+    receipt_type: params.type ?? "read",
+  });
   return true;
 }
 
 /**
  * Add or remove a message reaction via the bbernhard container REST API.
  */
-async function containerSendReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-  remove?: boolean;
-}): Promise<{ timestamp?: number }> {
+async function containerSendReaction(
+  params: ContainerRpcOptions & {
+    account: string;
+    recipient: string;
+    emoji: string;
+    targetAuthor: string;
+    targetTimestamp: number;
+    groupId?: string;
+    remove?: boolean;
+  },
+): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
     recipient: params.recipient,
     reaction: params.emoji,
@@ -783,7 +779,7 @@ async function containerSendReaction(params: {
 
   const result = await containerRestRequest<{ timestamp?: number }>(
     `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+    params,
     params.remove ? "DELETE" : "POST",
     payload,
   );
@@ -850,17 +846,15 @@ export async function containerRpcRequest<T = unknown>(
       );
       const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
       const result = await containerSendMessage({
-        baseUrl: opts.baseUrl,
+        ...opts,
         account: (p.account as string) ?? "",
         recipients: finalRecipients,
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
-        maxAttachmentBytes: opts.maxAttachmentBytes,
         quoteTimestamp,
         quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
         quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
-        timeoutMs: opts.timeoutMs,
       });
       return result as T;
     }
@@ -871,11 +865,10 @@ export async function containerRpcRequest<T = unknown>(
           ((p.groupId as string | undefined) ? formatGroupIdForContainer(p.groupId as string) : ""),
       );
       await containerSendTyping({
-        baseUrl: opts.baseUrl,
+        ...opts,
         account: (p.account as string) ?? "",
         recipient,
         stop: p.stop as boolean | undefined,
-        timeoutMs: opts.timeoutMs,
       });
       return undefined as T;
     }
@@ -883,12 +876,11 @@ export async function containerRpcRequest<T = unknown>(
     case "sendReceipt": {
       const recipient = stripUuidPrefix((p.recipient as string[] | undefined)?.[0] ?? "");
       await containerSendReceipt({
-        baseUrl: opts.baseUrl,
+        ...opts,
         account: (p.account as string) ?? "",
         recipient,
         timestamp: p.targetTimestamp as number,
         type: p.type as "read" | "viewed" | undefined,
-        timeoutMs: opts.timeoutMs,
       });
       return undefined as T;
     }
@@ -901,14 +893,13 @@ export async function containerRpcRequest<T = unknown>(
       // For groups, pass the formatted group ID as recipient.
       const effectiveRecipient = formattedGroupId || recipient || "";
       const reactionParams = {
-        baseUrl: opts.baseUrl,
+        ...opts,
         account: (p.account as string) ?? "",
         recipient: effectiveRecipient,
         emoji: (p.emoji as string) ?? "",
         targetAuthor: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
         targetTimestamp: p.targetTimestamp as number,
         groupId: formattedGroupId,
-        timeoutMs: opts.timeoutMs,
         remove: Boolean(p.remove),
       };
       return (await containerSendReaction(reactionParams)) as T;

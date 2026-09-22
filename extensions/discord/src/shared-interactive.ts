@@ -1,4 +1,3 @@
-// Discord plugin module implements shared interactive behavior.
 import {
   legacyInteractiveReplyToPresentation,
   resolveMessagePresentationActionValue,

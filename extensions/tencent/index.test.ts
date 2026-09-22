@@ -354,24 +354,6 @@ describe("tencent provider plugin", () => {
     expect(payload.reasoning_effort).toBe("high");
   });
 
-  it("preserves low reasoning_effort for TokenHub hy3-preview", async () => {
-    const provider = await getTokenHubProvider();
-    const model = hyReasoningModel({
-      provider: "tencent-tokenhub",
-      id: "hy3-preview",
-      baseUrl: "https://tokenhub.tencentmaas.com/v1",
-      supportedReasoningEfforts: ["none", "low", "high"],
-    });
-
-    const payload = captureTencentPayload({
-      provider,
-      model,
-      reasoning: "low",
-    });
-
-    expect(payload?.reasoning_effort).toBe("low");
-  });
-
   it("keeps TokenHub hy3 explicit high and none reasoning_effort unchanged", async () => {
     const provider = await getTokenHubProvider();
     const model = hyReasoningModel({

@@ -2,6 +2,12 @@ import { vi } from "vitest";
 import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 
 const mocks = vi.hoisted(() => ({
+  captureTransportArtifacts: vi.fn(async () => ({
+    artifacts: [
+      { kind: "channel-capability-matrix" as const, path: "capabilities.json" },
+      { kind: "channel-driver-smoke" as const, path: "readiness.json" },
+    ],
+  })),
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
   fetchWithSsrFGuard: vi.fn(async () => ({
     response: new Response(null, { status: 204 }),
@@ -36,8 +42,8 @@ vi.mock("./gateway-child.js", () => ({
     stop: async () => ({ process: "confirmed-stopped", errors: [] }),
   }),
 }));
-vi.mock("./crabline-transport.js", () => ({
-  createQaCrablineTransportAdapter: vi.fn(async () => ({
+vi.mock("./crabline-transport.js", () => {
+  const createTransport = vi.fn(async () => ({
     id: "telegram",
     label: "Crabline Telegram",
     accountId: "sut",
@@ -54,9 +60,14 @@ vi.mock("./crabline-transport.js", () => ({
     }),
     handleAction: vi.fn(async () => {}),
     createReportNotes: () => [],
-    cleanup: vi.fn(async () => {}),
-  })),
-}));
+    captureArtifacts: mocks.captureTransportArtifacts,
+    cleanupAfterGatewayStop: vi.fn(async () => {}),
+  }));
+  return {
+    createQaCrablineTransportAdapter: createTransport,
+    createQaCrablineTransportDefinition: createTransport,
+  };
+});
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
 }));

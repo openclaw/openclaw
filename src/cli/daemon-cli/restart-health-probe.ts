@@ -10,6 +10,7 @@ import { classifyGatewayConnectFailure } from "../../../packages/gateway-protoco
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadStoredOperatorDeviceAuthToken } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
@@ -19,6 +20,7 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -29,6 +31,39 @@ import type {
   UnavailablePluginHealthSummary,
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
+
+const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+
+export async function readGatewayStartupPhase(params: {
+  configuredProbe: ConfiguredGatewayLocalProbe;
+  port: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const response = await params.configuredProbe.requestHttp({
+    host: "127.0.0.1",
+    pathname: "/startupz",
+    port: params.port,
+    timeoutMs: Math.min(
+      params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+      GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+    ),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (response?.statusCode !== 503) {
+    return undefined;
+  }
+  try {
+    const startup = asOptionalRecord(JSON.parse(response.body));
+    return startup?.status === "starting" &&
+      typeof startup.pendingReason === "string" &&
+      startup.pendingReason.trim()
+      ? formatGatewayRestartProbeError(startup.pendingReason)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type GatewayRestartProbeAuth = {
   token?: string;
@@ -76,7 +111,10 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/healthz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
+          timeoutMs: Math.min(
+            remainingMs,
+            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          ),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -85,7 +123,10 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/readyz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
+          timeoutMs: Math.min(
+            remainingMs,
+            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          ),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -243,17 +284,30 @@ export async function confirmGatewayReachable(params: {
   try {
     const context = params.config
       ? { config: params.config, auth: params.auth }
-      : await resolveGatewayRestartProbeContext(params.env);
+      : await resolveGatewayRestartProbeContext(params.env, undefined, params.signal);
+    params.signal?.throwIfAborted();
     const auth = params.auth ?? context.auth;
     const configuredProbe =
       params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
     const target = await configuredProbe.resolveWebSocketTarget(params.port, params.signal);
+    params.signal?.throwIfAborted();
     if (!target) {
-      return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
+      return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
     const authNone = context.config.gateway?.auth?.mode === "none";
+    const identity =
+      authNone || auth?.token || auth?.password
+        ? null
+        : loadDeviceIdentityIfPresent({ env: params.env });
+    const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
+      identity,
+      undefined,
+      "read-only",
+      params.env,
+    );
     // Readiness is first-party local control. CLI shared auth preserves read scopes;
-    // auth-none uses the existing loopback backend contract without pairing a device.
+    // auth-none uses the loopback backend contract. Other modes may reuse an
+    // existing paired identity; the read-only client never creates or changes it.
     params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
@@ -267,9 +321,10 @@ export async function confirmGatewayReachable(params: {
       clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
       mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
       requireLocalBackendSharedAuth: authNone,
-      deviceIdentity: null,
+      deviceIdentity: preparedDeviceAuth ? identity : null,
+      preparedDeviceAuth: preparedDeviceAuth ?? undefined,
       sharedStateMode: "read-only",
-      timeoutMs: params.timeoutMs ?? 3_000,
+      timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
@@ -291,9 +346,7 @@ export async function confirmGatewayReachable(params: {
       (isGatewayAuthRejection(error.message) ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
-    if (result.reachable) {
-      result.gatewayBuildId ??= null;
-    } else {
+    if (!result.reachable) {
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }
@@ -308,7 +361,10 @@ export type GatewayRestartProbeContext = {
 
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
+  explicitAuth?: GatewayRestartProbeAuth,
+  signal?: AbortSignal,
 ): Promise<GatewayRestartProbeContext> {
+  signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
     env: mergedEnv,
@@ -318,11 +374,14 @@ export async function resolveGatewayRestartProbeContext(
   })
     .readBestEffortConfig()
     .catch((): OpenClawConfig => ({}));
+  signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
     mode: "local",
     env: mergedEnv,
+    explicitAuth,
   });
+  signal?.throwIfAborted();
   return { auth: resolved.auth, config: cfg };
 }
 

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements message line behavior.
 import {
   getPrimaryIdentityId,
   getReplyContext,

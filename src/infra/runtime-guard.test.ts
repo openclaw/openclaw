@@ -47,7 +47,7 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
   return await importOriginal<typeof import("../logging/json-console-line.js")>();
 });
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
-vi.mock("../cli/one-shot-output.js", () => ({ drainOneShotOutput: state.drain }));
+vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: state.drain }));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 

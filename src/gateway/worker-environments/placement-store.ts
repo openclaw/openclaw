@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -10,6 +12,7 @@ import {
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
   isCurrentPlacementTurnClaim,
   nextGeneration,
@@ -57,9 +60,10 @@ import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
-  readWorkerWorkspaceReconcilingSessionIds,
+  readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import type { PreparedEnvironmentSelection } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -125,13 +129,17 @@ function updateTransition(
         .where("state", "=", "attached")
         .where("destroy_requested_at_ms", "is", null)
         .where("owner_epoch", "=", updated.activeOwnerEpoch)
-        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId])),
+        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
+        .returning("last_activated_at_ms"),
     );
-    if (activated.numAffectedRows !== 1n) {
+    if (activated.rows.length !== 1) {
       throw new Error(
         `Worker session placement ${current.sessionId} lost its attached environment`,
       );
     }
+    publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
+      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+    });
   }
   return updated;
 }
@@ -149,26 +157,22 @@ export function createWorkerSessionPlacementStore(
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
   };
   const { read, write } = runtime;
-  const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
+  const workspaceResultConflicts = new Map<
+    string,
+    {
+      conflict: WorkerWorkspaceResultConflict;
+      placement: WorkerSessionPlacementRecord;
+      claim: WorkerSessionTurnClaim;
+    }
+  >();
   const withWorkspaceResultConflict = (
     record: WorkerSessionPlacementRecord | undefined,
   ): WorkerSessionPlacementRecord | undefined => {
     if (!record) {
       return undefined;
     }
-    const conflict = workspaceResultConflicts.get(record.sessionId);
+    const conflict = workspaceResultConflicts.get(record.sessionId)?.conflict;
     return conflict ? { ...record, workspaceResultConflict: conflict } : record;
-  };
-
-  const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
-    const db = read();
-    const current = find(db, required(claim.sessionId, "session id"));
-    if (
-      !current ||
-      (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
-    ) {
-      throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
-    }
   };
 
   const store = {
@@ -185,6 +189,64 @@ export function createWorkerSessionPlacementStore(
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
+    },
+
+    async readProjection(sessionIds: readonly string[]): Promise<WorkerSessionPlacementProjection> {
+      const requestedIds = new Map(sessionIds.map((id) => [id, required(id, "session id")]));
+      const ids = [...new Set(requestedIds.values())];
+      const conflicts = new Map(
+        ids.flatMap((id) => {
+          const conflict = workspaceResultConflicts.get(id);
+          return conflict ? [[id, conflict] as const] : [];
+        }),
+      );
+      const result = await executeExistingOpenClawStateRead(
+        { path },
+        {
+          type: "workers.placementProjection",
+          sessionIds: ids,
+          conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
+            placement: {
+              sessionId: placement.sessionId,
+              generation: placement.generation,
+              environmentId: placement.environmentId,
+              activeOwnerEpoch: placement.activeOwnerEpoch,
+            },
+            claim: { ...claim },
+          })),
+        },
+      );
+      if (!result || !result.ok || result.type !== "workers.placementProjection") {
+        throw new Error("Worker placement projection source is unavailable");
+      }
+      const { projection, conflictSessionIds } = result.result;
+      const placements = new Map(projection.placements);
+      for (const [id, captured] of conflicts) {
+        const record = placements.get(id);
+        if (record && conflictSessionIds.has(id) && workspaceResultConflicts.get(id) === captured) {
+          placements.set(id, { ...record, workspaceResultConflict: captured.conflict });
+        }
+      }
+      const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
+        const requested = new Map<string, T>();
+        for (const [original, normalized] of requestedIds) {
+          const value = records.get(normalized);
+          if (value !== undefined) {
+            requested.set(original, value);
+          }
+        }
+        return requested;
+      };
+      return {
+        ...projection,
+        placements: byRequestedId(placements),
+        moves: byRequestedId(projection.moves),
+        workspaceResultReconcilingSessionIds: new Set(
+          [...requestedIds].flatMap(([original, normalized]) =>
+            projection.workspaceResultReconcilingSessionIds.has(normalized) ? [original] : [],
+          ),
+        ),
+      };
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
@@ -213,7 +275,7 @@ export function createWorkerSessionPlacementStore(
       const normalizedIds = [
         ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
       ];
-      return readWorkerWorkspaceReconcilingSessionIds(read(), normalizedIds);
+      return readWorkerWorkspaceReconciliationFacts(read(), normalizedIds).reconcilingSessionIds;
     },
 
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
@@ -246,9 +308,17 @@ export function createWorkerSessionPlacementStore(
       claim: WorkerSessionTurnClaim,
       conflict: WorkerWorkspaceResultConflict | undefined,
     ): void {
-      requireClaimOwner(claim);
+      const db = read();
+      const current = find(db, required(claim.sessionId, "session id"));
+      if (
+        !current ||
+        (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
+      ) {
+        throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
+      }
       if (!conflict) {
         workspaceResultConflicts.delete(claim.sessionId);
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
         return;
       }
       const paths = conflict.paths.map(exactConflictPath);
@@ -259,10 +329,12 @@ export function createWorkerSessionPlacementStore(
       ) {
         throw new Error("Cloud workspace result conflict projection is invalid");
       }
-      workspaceResultConflicts.set(
-        claim.sessionId,
-        projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
-      );
+      workspaceResultConflicts.set(claim.sessionId, {
+        conflict: projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
+        placement: current,
+        claim: { ...claim },
+      });
+      sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
     },
 
     bindPreparedEnvironment(
@@ -601,16 +673,18 @@ export function createWorkerSessionPlacementStore(
       return current;
     },
 
-    listForReconcile(): WorkerSessionPlacementRecord[] {
+    listForReconcile(sessionKey?: string): WorkerSessionPlacementRecord[] {
       const db = read();
+      let select = query(db)
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("state", "not in", ["local", "reclaimed"]);
+      if (sessionKey !== undefined) {
+        select = select.where("session_key", "=", sessionKey);
+      }
       return executeSqliteQuerySync(
         db,
-        query(db)
-          .selectFrom("worker_session_placements")
-          .selectAll()
-          .where("state", "not in", ["local", "reclaimed"])
-          .orderBy("updated_at_ms")
-          .orderBy("session_id"),
+        select.orderBy("updated_at_ms").orderBy("session_id"),
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
 
@@ -620,6 +694,18 @@ export function createWorkerSessionPlacementStore(
         db,
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+    },
+
+    async readChangeSnapshot() {
+      const reply = await executeExistingOpenClawStateRead(
+        { path },
+        { type: "workerPlacements.changeSnapshot" },
+        { current: true },
+      );
+      if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {
+        throw new Error("Worker placement change snapshot is unavailable");
+      }
+      return reply.placements;
     },
   };
   attachWorkerTurnExecutionIdentityStore(store, path);

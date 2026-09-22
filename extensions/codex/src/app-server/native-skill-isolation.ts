@@ -17,10 +17,14 @@ const MAX_PERSONAL_SKILL_ENTRIES = 10_000;
 const nativeSkillIsolationByClient = new WeakMap<
   CodexAppServerClient,
   {
-    key: string;
-    result: Promise<CodexNativeSkillIsolation | undefined>;
-    settled: boolean;
-    signal?: AbortSignal;
+    revision: number;
+    snapshot?: {
+      key: string;
+      revision: number;
+      result: Promise<CodexNativeSkillIsolation | undefined>;
+      settled: boolean;
+      signal?: AbortSignal;
+    };
   }
 >();
 
@@ -211,25 +215,45 @@ export async function resolveCodexNativeSkillIsolation(params: {
     params.home?.trim() || process.env.HOME?.trim() || "",
     params.userProfile?.trim() || process.env.USERPROFILE?.trim() || "",
   ]);
-  const cached = nativeSkillIsolationByClient.get(params.client);
-  if (cached?.key === key && (cached.settled || cached.signal === params.signal)) {
-    const isolation = await cached.result;
-    params.signal?.throwIfAborted();
-    return isolation;
+  let cache = nativeSkillIsolationByClient.get(params.client);
+  if (!cache) {
+    cache = { revision: 0 };
+    nativeSkillIsolationByClient.set(params.client, cache);
+    const clientCache = cache;
+    params.client.addNotificationHandler((notification) => {
+      if (notification.method === "skills/changed") {
+        clientCache.revision += 1;
+        clientCache.snapshot = undefined;
+      }
+    });
   }
-  const result = resolveUncachedCodexNativeSkillIsolation(params);
-  const entry = { key, result, settled: false, signal: params.signal };
-  nativeSkillIsolationByClient.set(params.client, entry);
-  try {
-    const isolation = await result;
-    entry.settled = true;
+  for (;;) {
     params.signal?.throwIfAborted();
-    return isolation;
-  } catch (error) {
-    if (nativeSkillIsolationByClient.get(params.client)?.result === result) {
-      nativeSkillIsolationByClient.delete(params.client);
+    let snapshot = cache.snapshot;
+    if (snapshot?.key !== key || (!snapshot.settled && snapshot.signal !== params.signal)) {
+      snapshot = {
+        key,
+        revision: cache.revision,
+        result: resolveUncachedCodexNativeSkillIsolation(params),
+        settled: false,
+        signal: params.signal,
+      };
+      cache.snapshot = snapshot;
     }
-    throw error;
+    try {
+      const isolation = await snapshot.result;
+      snapshot.settled = true;
+      params.signal?.throwIfAborted();
+      // A notification can invalidate even a scan that has not settled yet.
+      if (snapshot.revision === cache.revision) {
+        return isolation;
+      }
+    } catch (error) {
+      if (cache.snapshot === snapshot) {
+        cache.snapshot = undefined;
+      }
+      throw error;
+    }
   }
 }
 

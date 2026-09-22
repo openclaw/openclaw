@@ -64,7 +64,9 @@ liveness, perform network requests, or infer missing provider facts. Return:
   inbound claim handler.
 - `{ kind: "unavailable" }` when authoritative owner state is temporarily
   unavailable and the caller should retry.
-- `null` when the supplied identity is invalid or cannot be authorized.
+- `null` when the supplied identity is invalid or cannot be authorized, including
+  an account that has been removed or disabled. Retained conversation history
+  for that account must not make active-account listings fail.
 - `undefined` to delegate to core's generic owner resolution.
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
@@ -97,7 +99,7 @@ should cover at least one supported and one unsupported account through the
 `ChannelPlugin["conversationBindings"]` contract exported by
 `openclaw/plugin-sdk/channel-core`.
 
-Binding ids are local to a channel and account. `SessionBindingService.touch(bindingId, at?, scope?)`
+Binding ids are local to a channel and account. `SessionBindingService.touchAsync(bindingId, at?, scope?)`
 and `unbind({ bindingId, reason, scope })` accept an optional `{ channel, accountId }`
 scope to select that owner. For an individual mutation, pass the existing binding's
 `conversation` as the scope. For example, to detach a resolved binding:
@@ -111,7 +113,7 @@ await getSessionBindingService().unbind({
 ```
 
 Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runtime`.
-For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
+For activity updates, await `service.touchAsync(binding.bindingId, at, binding.conversation)`.
 Omit scope only for intentional global cleanup or an existing legacy cross-channel
 operation. Scope does not change binding ids or require a new adapter method.
 

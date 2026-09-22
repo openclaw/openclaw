@@ -2,6 +2,7 @@
 // Binds Full Release Validation run metadata to its supported evidence manifest.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import {
   normalizePublicationIntent,
@@ -543,7 +544,7 @@ async function main() {
   if (!manifestPath) {
     throw new Error("MANIFEST_FILE is required.");
   }
-  const run = JSON.parse(readFileSync(0, "utf8"));
+  const run = JSON.parse(await text(process.stdin));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const trustedMainRef = process.env.TRUSTED_MAIN_REF ?? "refs/remotes/origin/main";
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";

@@ -10,28 +10,40 @@ import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-bac
 import { registerBoardWebsiteEnglish } from "../../ui/src/i18n/locales/en-board-website.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
+import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
+import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
-import { registerGitHubPreviewEnglish } from "../../ui/src/i18n/locales/en-github-preview.ts";
+import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
+import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
+import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
+import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
+import { registerSidebarAttentionEnglish } from "../../ui/src/i18n/locales/en-sidebar-attention.ts";
 import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
+import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
+import { registerUsageEnglish } from "../../ui/src/i18n/locales/en-usage.ts";
 import { en } from "../../ui/src/i18n/locales/en.ts";
 import {
   mergeControlUiTranslationMaps,
@@ -55,33 +67,45 @@ const sourceFiles = [
   "en-board-website.ts",
   "en-browser.ts",
   "en-chat-ci.ts",
+  "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
+  "en-chat-provider-review.ts",
+  "en-code-blocks.ts",
+  "en-command-palette.ts",
   "en-cron.ts",
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
   "en-dreaming.ts",
-  "en-github-preview.ts",
+  "en-file-preview.ts",
   "en-login.ts",
+  "en-link-reader.ts",
+  "en-github.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-model-setup.ts",
+  "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
+  "en-portals.ts",
   "en-settings.ts",
+  "en-sidebar-attention.ts",
   "en-skill-library.ts",
   "en-skill-workshop.ts",
+  "en-skills-browser.ts",
   "en-systems.ts",
   "en-update-actions.ts",
   "en-transcripts.ts",
+  "en-usage.ts",
 ];
 
 export function loadControlUiSourceCatalog(): TranslationMap {
   const newSession: TranslationMap = {};
-  for (const [key, value] of Object.entries(en.newSession)) {
+  for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;
     if (key === "worktree") {
       for (const workspaceKey of [
@@ -91,6 +115,16 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       ] as const) {
         newSession[workspaceKey] = registerNewSessionSetupEnglish.catalog.newSession[workspaceKey];
       }
+    }
+  }
+  const sessionsView: TranslationMap = {};
+  for (const [key, value] of Object.entries(en.sessionsView)) {
+    sessionsView[key] = value;
+    if (key === "searchPlaceholder") {
+      Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
+    }
+    if (key === "assignToMe") {
+      Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
   const boardWidget: TranslationMap = {};
@@ -107,11 +141,23 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     // Preserve partial-fragment key order while keeping shared labels eager.
     {
       ...en,
-      chat: { ...en.chat, messages: registerChatMessageMetadataEnglish.catalog.chat.messages },
+      custodian: { ...registerPluginManagementEnglish.catalog.custodian, ...en.custodian },
+      chat: {
+        ...en.chat,
+        commands: registerCommandPaletteEnglish.catalog.chat.commands,
+        welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
+        messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+      },
+      agentTools: { ...registerGitHubEnglish.catalog.agentTools, ...en.agentTools },
       board: { ...en.board, widget: boardWidget },
       newSession,
+      sessionsView,
+      shortcutsOverlay: registerCommandPaletteEnglish.catalog.shortcutsOverlay,
+      commandPalette: registerCommandPaletteEnglish.catalog.commandPalette,
+      palette: registerCommandPaletteEnglish.catalog.palette,
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
+      attention: registerSidebarAttentionEnglish.catalog.attention,
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
@@ -119,24 +165,33 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerBackgroundTasksEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCiEnglish.catalog,
+    registerChatGoalsEnglish.catalog,
+    registerChatProviderReviewEnglish.catalog,
+    registerCodeBlocksEnglish.catalog,
     registerCronEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,
-    registerGitHubPreviewEnglish.catalog,
+    registerFilePreviewEnglish.catalog,
     registerLoginEnglish.catalog,
+    registerLinkReaderEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,
     registerModelControlsEnglish.catalog,
+    registerModelSetupEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
+    registerPortalsEnglish.catalog,
     registerSettingsEnglish.catalog,
+    registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,
+    registerSkillsBrowserEnglish.catalog,
     registerSystemsEnglish.catalog,
     registerUpdateActionsEnglish.catalog,
     registerTranscriptsEnglish.catalog,
+    registerUsageEnglish.catalog,
     loadControlUiCoreHintCatalog(),
   );
 }

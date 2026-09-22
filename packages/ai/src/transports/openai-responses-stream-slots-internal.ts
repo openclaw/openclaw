@@ -1,9 +1,15 @@
 import type { ResponseReasoningItem } from "openai/resources/responses/responses.js";
-import type { TextContent } from "../types.js";
+import type { AssistantMessage, TextContent } from "../types.js";
+import {
+  isResponsesProviderTool,
+  ResponsesOutputIdentityError,
+} from "./openai-responses-stream-errors.js";
 import type {
+  ResponsesEventSink,
   ResponsesThinkingBlock,
   TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
+import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
 export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
   | {
@@ -45,8 +51,15 @@ type ResponsesOutputState = {
 
 export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
 
-export function createResponsesOutputTracker() {
+export function createResponsesOutputTracker(params: {
+  output: Pick<AssistantMessage, "content">;
+  canRetryIdentityConflict?: () => boolean;
+}) {
   const outputs = new Map<string | number, ResponsesOutputState>();
+  let currentEventType = "unknown";
+  let providerToolObserved = false;
+  let visibleTextEmitted = false;
+  let terminalAllowsRetry = false;
   const identity = (item: ResponsesOutputIdentityItem): string | undefined => {
     if ((item.type === "reasoning" || item.type === "message") && item.id) {
       return `${item.type}:${item.id}`;
@@ -71,11 +84,61 @@ export function createResponsesOutputTracker() {
       output.type !== item.type ||
       (output.callId && item.call_id && output.callId !== item.call_id)
     ) {
-      throw new Error("Responses stream changed output item identity");
+      throw new ResponsesOutputIdentityError({
+        outputIndex,
+        expectedType: output.type,
+        actualType: item.type,
+        completed: output.completed,
+        completedToolCall: [...outputs.values()].some(
+          (candidate) => candidate.type === "function_call" && candidate.completed,
+        ),
+        eventType: currentEventType,
+        retrySafe:
+          params.canRetryIdentityConflict?.() === true &&
+          !providerToolObserved &&
+          !visibleTextEmitted &&
+          terminalAllowsRetry &&
+          !params.output.content.some((block) => block.type === "text" && block.text.length > 0),
+      });
     }
     return output;
   };
   return {
+    trackStream(sink: ResponsesEventSink): ResponsesEventSink {
+      return {
+        push(event) {
+          // A later snapshot can clear text that has already reached the consumer.
+          visibleTextEmitted ||=
+            (event.type === "text_delta" && event.delta.length > 0) ||
+            (event.type === "text_end" && event.content.length > 0);
+          sink.push(event);
+        },
+      };
+    },
+    observeEvent(event: OpenAIResponsesStreamEvent): void {
+      currentEventType = event.type;
+      // An earlier conflict cannot establish whether a later terminal will reject the response.
+      terminalAllowsRetry = false;
+      if (
+        event.type === "response.output_item.added" ||
+        event.type === "response.output_item.done"
+      ) {
+        providerToolObserved ||= isResponsesProviderTool(event.item);
+      } else if (event.type === "response.completed" || event.type === "response.incomplete") {
+        let terminalHasRefusal = false;
+        for (const item of event.response.output ?? []) {
+          providerToolObserved ||= isResponsesProviderTool(item);
+          terminalHasRefusal ||=
+            item.type === "message" && (item.content ?? []).some((part) => part.type === "refusal");
+        }
+        terminalAllowsRetry =
+          event.type === "response.completed" &&
+          event.response.status === "completed" &&
+          event.response.error == null &&
+          event.response.incomplete_details == null &&
+          !terminalHasRefusal;
+      }
+    },
     get,
     set(
       item: ResponsesOutputIdentityItem,
@@ -160,6 +223,15 @@ export function createResponsesOutputSlotTracker<TSlot extends { type: string }>
     get(event: object): TSlot | undefined {
       const outputIndex = readResponsesOutputIndex(event);
       return outputIndex === undefined ? unindexed : indexed.get(outputIndex);
+    },
+    resolveOutputItem(event: object, item: { type: string }): TSlot | undefined {
+      if (item.type === "reasoning") {
+        return this.resolve(event, "thinking");
+      }
+      if (item.type === "message") {
+        return this.resolve(event, "text");
+      }
+      return readResponsesOutputIndex(event) === undefined ? undefined : this.get(event);
     },
     values(): TSlot[] {
       return [...new Set([...indexed.values(), ...(unindexed ? [unindexed] : [])])];

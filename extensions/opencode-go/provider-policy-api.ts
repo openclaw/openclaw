@@ -37,21 +37,6 @@ export function resolveOpencodeGoThinkingProfile(
   context?: Pick<ProviderDefaultThinkingPolicyContext, "api" | "reasoning" | "compat">,
 ): ProviderThinkingProfile | undefined {
   const normalized = modelId.trim().toLowerCase();
-  if (normalized === "deepseek-v4-flash") {
-    return {
-      levels: [{ id: "off" }, { id: "low" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
-    };
-  }
-  if (normalized === "deepseek-v4-pro") {
-    return {
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
-    };
-  }
-  if (normalized === "kimi-k3") {
-    return { levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" };
-  }
   if (KIMI_K2_MODEL_IDS.has(normalized)) {
     return KIMI_K2_THINKING_PROFILE;
   }

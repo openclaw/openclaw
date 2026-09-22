@@ -151,7 +151,13 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
       expect(hasIssue(audit, code)).toBe(expected);
       expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
         env,
-        ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode,LoadState"],
+        [
+          "show",
+          unitName,
+          "--no-page",
+          "--property",
+          "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+        ],
         321,
       );
     } finally {
@@ -224,7 +230,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
             unitName,
             "--no-page",
             "--property",
-            "After,Wants,RestartUSec,KillMode,LoadState",
+            "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
           ],
           321,
         );
@@ -282,6 +288,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
           `Wants=basic.target ${continuation}network-online.target`,
           `RestartSec=${continuation}5s`,
           `KillMode=${continuation}mixed`,
+          `TimeoutStopSec=${continuation}330`,
         ]);
         const audit = await auditGatewayServiceConfig({
           env: { HOME: home },

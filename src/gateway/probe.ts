@@ -69,6 +69,7 @@ export type GatewayProbeServerSummary = {
 
 export type GatewayProbeResult = {
   ok: boolean;
+  startupPhase?: string;
   /** Set only after a Gateway hello or a correlated protocol response. */
   gatewayReached?: true;
   url: string;
@@ -319,13 +320,13 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = opts.suppressStoredDeviceAuth
         ? null
         : deviceAuthScope
-          ? loadOriginDeviceTokenReadOnly({
+          ? await loadOriginDeviceTokenReadOnly({
               gatewayScope: deviceAuthScope,
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
             })
-          : loadDeviceAuthTokenReadOnly({
+          : await loadDeviceAuthTokenReadOnly({
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,

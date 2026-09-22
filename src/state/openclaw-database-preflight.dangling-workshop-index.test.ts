@@ -6,6 +6,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,7 +17,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("dangling Workshop index preflight", () => {
-  it("admits the exact defect for Doctor without mutating the source", async () => {
+  it("admits the exact defect only for Doctor without mutating the source", async () => {
     const stateDir = tempDirs.make("openclaw-preflight-dangling-workshop-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const statePath = openOpenClawStateDatabase({ env }).path;
@@ -54,10 +55,17 @@ describe("dangling Workshop index preflight", () => {
         .map((name) => [name, fs.readFileSync(path.join(sourceDir, name))]);
     const before = snapshot();
 
+    const runtime = await preflightOpenClawDatabaseSchemas({ env, scope: "state" });
+    expect(runtime.indeterminate).toEqual([
+      expect.objectContaining({ reason: expect.stringMatching(/openclaw doctor --fix/) }),
+    ]);
+    expect(snapshot()).toEqual(before);
+
     await expect(
       preflightOpenClawDatabaseSchemas({
         env,
         scope: "state",
+        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
         supportedVersions: {
           state: OPENCLAW_STATE_SCHEMA_VERSION,
           agent: OPENCLAW_AGENT_SCHEMA_VERSION,

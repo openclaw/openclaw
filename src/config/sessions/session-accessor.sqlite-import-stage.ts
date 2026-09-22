@@ -20,7 +20,7 @@ import {
   type SessionTranscriptTreeNode,
 } from "./transcript-tree.js";
 
-type StagedTranscriptRow = { seq: number; eventJson: string; createdAt: number | null };
+type StagedTranscriptRow = { seq: number; eventJson: string };
 
 export function withSqliteSessionImportStage<T>(run: (stage: SqliteSessionImportStage) => T): T {
   const directory = createPrivateSqliteTempDirectorySync(os.tmpdir(), "openclaw-session-import-");
@@ -36,7 +36,7 @@ export function withSqliteSessionImportStage<T>(run: (stage: SqliteSessionImport
       PRAGMA temp_store = FILE;
       CREATE TABLE rows (
         source INTEGER NOT NULL, seq INTEGER NOT NULL, event_json TEXT NOT NULL,
-        created_at INTEGER, PRIMARY KEY (source, seq)
+        PRIMARY KEY (source, seq)
       ) WITHOUT ROWID;
       CREATE TABLE seen (hash BLOB NOT NULL, event_json TEXT NOT NULL);
       CREATE INDEX seen_hash ON seen(hash);
@@ -65,9 +65,9 @@ export class SqliteSessionImportStage {
   private rejected = false;
 
   constructor(private readonly database: DatabaseSync) {
-    this.insert = database.prepare("INSERT INTO rows VALUES (?, ?, ?, ?)");
+    this.insert = database.prepare("INSERT INTO rows VALUES (?, ?, ?)");
     this.read = database.prepare(
-      "SELECT seq, event_json AS eventJson, created_at AS createdAt FROM rows WHERE source = ? ORDER BY seq",
+      "SELECT seq, event_json AS eventJson FROM rows WHERE source = ? ORDER BY seq",
     );
     this.findSeen = database.prepare(
       "SELECT 1 FROM seen WHERE hash = ? AND event_json = ? LIMIT 1",
@@ -75,8 +75,8 @@ export class SqliteSessionImportStage {
     this.insertSeen = database.prepare("INSERT INTO seen VALUES (?, ?)");
   }
 
-  append(source: number, seq: number, eventJson: string, createdAt: number | null): void {
-    this.insert.run(source, seq, eventJson, createdAt);
+  append(source: number, seq: number, eventJson: string): void {
+    this.insert.run(source, seq, eventJson);
   }
 
   rows(source: number): Iterable<StagedTranscriptRow> {

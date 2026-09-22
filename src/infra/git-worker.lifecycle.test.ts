@@ -534,9 +534,14 @@ describe("Git operation host lifecycle", () => {
     },
   );
 
-  it.each(["abort", "close"] as const)(
-    "joins the real Git fetch before %s settles",
-    async (ending) => {
+  it.each([
+    { ending: "abort", transport: "managed" },
+    { ending: "close", transport: "managed" },
+    { ending: "abort", transport: "caller" },
+    { ending: "close", transport: "caller" },
+  ] as const)(
+    "joins the real Git fetch before $ending settles with $transport transport",
+    async ({ ending, transport }) => {
       const root = tempDirs.make("openclaw-git-worker-child-");
       const { clone, commit } = await partialClone(root);
       const connected = createDeferredCore();
@@ -564,7 +569,16 @@ describe("Git operation host lifecycle", () => {
       const pending = settle(
         runGitWorkerOperation(
           { type: "worktree.git-size", input: { repoRoot: clone, ref: commit } },
-          { signal: abort.signal },
+          {
+            signal: abort.signal,
+            git:
+              transport === "caller"
+                ? {
+                    text: gitExec.executeGitCommandBytes,
+                    buffered: gitExec.executeGitCommandBuffered,
+                  }
+                : undefined,
+          },
         ),
       );
       let gitPid: number | undefined;
@@ -608,6 +622,142 @@ describe("Git operation host lifecycle", () => {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
+      }
+    },
+  );
+
+  it.each(["text", "buffered"] as const)(
+    "captures caller %s policy before a queued sizing request can be changed",
+    async (transport) => {
+      const root = tempDirs.make("openclaw-caller-git-admission-");
+      const repo = await repository(root);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let held = false;
+      const first = settle(
+        runGitWorkerOperation(
+          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
+          {
+            git: {
+              text: async (cwd, args, options) => {
+                if (!held) {
+                  held = true;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return await gitExec.executeGitCommandBytes(cwd, args, options);
+              },
+              buffered: gitExec.executeGitCommandBuffered,
+            },
+          },
+        ),
+      );
+      const pending: Promise<unknown>[] = [first];
+      try {
+        await within(
+          Promise.race([
+            entered.promise,
+            first.then(() => {
+              throw new Error("Sizing ended before the predecessor was held");
+            }),
+          ]),
+        );
+        const calls = { text: 0, buffered: 0 };
+        const executors: NonNullable<GitWorkerOperationOptions["git"]> = {
+          text: async (cwd, args, options) => {
+            calls.text++;
+            return await gitExec.executeGitCommandBytes(cwd, args, options);
+          },
+          buffered: async (cwd, args, options) => {
+            calls.buffered++;
+            return await gitExec.executeGitCommandBuffered(cwd, args, options);
+          },
+        };
+        const second = settle(
+          runGitWorkerOperation(
+            { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
+            { git: executors },
+          ),
+        );
+        pending.push(second);
+        executors[transport] = async () => {
+          throw new Error("queued caller replaced Git policy");
+        };
+        expect(calls).toEqual({ text: 0, buffered: 0 });
+        release.resolve();
+        expect(await within(first)).toEqual({ rejected: false, value: 4096 });
+        expect(await within(second)).toEqual({ rejected: false, value: 4096 });
+        expect(calls.text).toBeGreaterThan(0);
+        expect(calls.buffered).toBeGreaterThan(0);
+      } finally {
+        release.resolve();
+        await Promise.all(pending);
+      }
+    },
+  );
+
+  it.each(["text", "buffered"] as const)(
+    "revalidates authority before caller %s execution and preserves the host error",
+    async (transport) => {
+      const root = tempDirs.make("openclaw-caller-git-authority-");
+      const repo = await repository(root);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const revoked = new Error("caller Git authority revoked");
+      let current = true;
+      const trace = path.join(root, "git-trace.jsonl");
+      vi.stubEnv("GIT_TRACE2_EVENT", trace);
+      const waitForRevocation = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const pending = settle(
+        runGitWorkerOperation(
+          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
+          {
+            assertCurrent: () => {
+              if (!current) {
+                throw revoked;
+              }
+            },
+            git: {
+              text: async (cwd, args, options) => {
+                if (transport === "text") {
+                  await waitForRevocation();
+                }
+                return await gitExec.executeGitCommandBytes(cwd, args, options);
+              },
+              buffered: async (cwd, args, options) => {
+                if (transport === "buffered") {
+                  await waitForRevocation();
+                }
+                return await gitExec.executeGitCommandBuffered(cwd, args, options);
+              },
+            },
+          },
+        ),
+      );
+      try {
+        await within(
+          Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error("Sizing ended before caller Git was held");
+            }),
+          ]),
+        );
+        current = false;
+        release.resolve();
+        const result = await within(pending);
+        expect(result.rejected && result.error).toBe(revoked);
+        const starts = (await exists(trace))
+          ? await traceStarts(trace, transport === "text" ? "rev-parse" : "rev-list")
+          : [];
+        expect(starts).toHaveLength(0);
+      } finally {
+        current = false;
+        release.resolve();
+        await pending;
       }
     },
   );

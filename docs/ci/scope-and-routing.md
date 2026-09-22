@@ -9,12 +9,22 @@ read_when:
 This page is an index. Scope and routing is documented on four pages, one per
 reader job. Open the page that matches your task.
 
+Docker seed and QA Smoke use owner paths on `main`; pull requests and exact-head
+PR fallbacks omit those proofs while retaining unit/boundary checks. Control UI
+performance uses its UI/build/import owners. Ordinary manual and release
+validation retain the Docker survivor and full QA Smoke profile independently of
+changed paths. Coalesced main pushes have no automatic proof catch-up; see
+[selection](/ci/scope-and-routing/selection) and
+[manual dispatches](/ci/scope-and-routing/manual-dispatches).
+
 | Page                                                                | Read it when                                                                                   |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [Scope selection](/ci/scope-and-routing/selection)                  | Why a lane was or was not selected: changed-scope detection and the per-area routing rules.    |
 | [Node test lanes](/ci/scope-and-routing/node-test-lanes)            | How the slowest Node test families are split, balanced, packed, and cached.                    |
 | [Job budgets and platform lanes](/ci/scope-and-routing/job-budgets) | UI shards, concurrency and matrix budgets, lint memory policy, Android rows, and sticky disks. |
 | [Manual dispatches](/ci/scope-and-routing/manual-dispatches)        | Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe.            |
+
+Short hybrid jobs use a [bounded hosted offload](/ci/capacity#bounded-hybrid-hosted-offload): the complete selected base must fit 40 hosted rows before up to five more move from Blacksmith. Coverage selection remains unchanged.
 
 ## Where each section moved
 

@@ -55,10 +55,10 @@ describe("chat pane placement restart", () => {
         }
         return { ok: true };
       });
-      const refreshReplacement = vi.fn(async () => null);
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane, state } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["sessions.dispatch", "sessions.reclaim"],
@@ -146,7 +146,7 @@ describe("chat pane placement restart", () => {
           expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
         }
         expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
-        expect(refreshReplacement).toHaveBeenCalledWith("main");
+        expect(reconcileMutation).toHaveBeenCalledWith("main");
       } finally {
         recovery.resolve({ ok: true });
       }

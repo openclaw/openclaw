@@ -311,6 +311,23 @@ a saved policy is not proof that the running Gateway applied it.
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
 
+    Bundled custom API-key methods can use `captureProviderApiKey` and
+    `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
+    when vendor prompts or validation need to stay between auth steps.
+    `captureProviderApiKey(ctx, options)` accepts the existing token/provider,
+    environment, and prompt options. It returns the resolved `apiKey` for
+    validation alongside the original storage `input` and `mode`, without
+    saving credentials. Build returned profiles from `input` and `mode` so
+    SecretRefs remain references. The helper preserves the context's staged
+    workspace and secret-storage prompt preference.
+
+    `persistProviderApiKey(ctx, profileId, { provider, resolved, metadata })`
+    accepts an already resolved non-interactive key. It leaves profile-sourced
+    credentials unchanged, returns `false` if credential conversion fails,
+    and propagates persistence errors. Keep vendor checks before this call;
+    apply auth-profile config and model defaults afterward through their
+    existing owners. Neither helper chooses an endpoint or model.
+
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
 

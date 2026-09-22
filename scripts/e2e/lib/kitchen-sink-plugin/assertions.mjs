@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
@@ -436,7 +437,42 @@ function assertCutoverPreinstalled() {
   }
 }
 
-function assertInstalled() {
+// The sweep deletes captured inspection JSON on exit; retain only the failed plugin's cause.
+async function describeInspectionFailure(report) {
+  try {
+    const redactorPath =
+      process.env.OPENCLAW_E2E_REDACTOR_MODULE ||
+      path.join(process.cwd(), "dist", "plugin-sdk", "logging-core.js");
+    const { redactSensitiveText } = await import(pathToFileURL(redactorPath).href);
+    const bounded = (value, limit) => {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      // Redact the complete field before shortening it, including credentials spanning the limit.
+      const redacted = redactSensitiveText(value, { mode: "tools" });
+      return redacted.length > limit ? `${redacted.slice(0, limit)}…` : redacted;
+    };
+    const plugin = report.plugin;
+    const diagnostics = (Array.isArray(report.diagnostics) ? report.diagnostics : []).filter(
+      (entry) => entry?.level === "error" && (!entry.pluginId || entry.pluginId === plugin?.id),
+    );
+    return `\ninspection failure details: ${JSON.stringify({
+      id: bounded(plugin?.id, 128),
+      source: bounded(plugin?.source, 1024),
+      error: bounded(plugin?.error, 2048),
+      diagnostics: diagnostics.slice(0, 10).map((entry) => ({
+        message: bounded(entry.message, 512),
+        source: bounded(entry.source, 256),
+      })),
+      omittedDiagnostics: Math.max(0, diagnostics.length - 10),
+    })}`;
+  } catch {
+    // A missing or broken redactor must not expose raw inspection data or change the failure.
+    return "\n[inspection details omitted: canonical redaction unavailable]";
+  }
+}
+
+async function assertInstalled() {
   const pluginId = process.env.KITCHEN_SINK_ID;
   const spec = process.env.KITCHEN_SINK_SPEC;
   const source = process.env.KITCHEN_SINK_SOURCE;
@@ -458,7 +494,7 @@ function assertInstalled() {
   }
   if (!allInspectPlugin.plugin?.enabled || allInspectPlugin.plugin?.status !== "loaded") {
     throw new Error(
-      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}`,
+      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}${await describeInspectionFailure(allInspectPlugin)}`,
     );
   }
   if (plugin.status !== "loaded") {
@@ -469,7 +505,7 @@ function assertInstalled() {
   }
   if (!inspect.plugin?.enabled || inspect.plugin?.status !== "loaded") {
     throw new Error(
-      `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
+      `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}${await describeInspectionFailure(inspect)}`,
     );
   }
 
@@ -671,4 +707,4 @@ const fn = commands[command];
 if (!fn) {
   throw new Error(`unknown kitchen-sink assertion command: ${command}`);
 }
-fn();
+await fn();

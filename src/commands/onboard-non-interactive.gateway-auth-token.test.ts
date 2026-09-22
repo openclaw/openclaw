@@ -72,7 +72,7 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
       expect(cfg?.gateway?.bind).toBe("loopback");
-      expect(cfg?.tools?.profile).toBe("coding");
+      expect(cfg?.tools?.profile).toBe("full");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
       expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });

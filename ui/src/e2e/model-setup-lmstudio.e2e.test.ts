@@ -2,8 +2,9 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI LM Studio setup mocked Gateway E2E",
@@ -48,7 +49,11 @@ suite.define(() => {
           setupComplete: false,
         };
         const modelRef = "lmstudio/qwen3-8b-instruct";
-        const gateway = await installMockGateway(page, {
+        const globalModel = "openai/gpt-5";
+        const initialConfig = { agents: { defaults: { model: globalModel } } };
+        const gateway = await installSetupGateway(page, {
+          agentModel: globalModel,
+          models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -58,6 +63,14 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
+            "config.get": {
+              config: initialConfig,
+              sourceConfig: initialConfig,
+              hash: "before-local-activation",
+              raw: JSON.stringify(initialConfig),
+              valid: true,
+              issues: [],
+            },
             "openclaw.setup.detect": initialDetection,
             "openclaw.setup.prepare.start": {
               sessionId: "lmstudio-prepare-session",
@@ -122,7 +135,7 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         const lmStudioRow = page.locator('[data-prepare-choice="lmstudio"]');
         await lmStudioRow.getByRole("button", { name: "Connect server" }).waitFor();
@@ -209,20 +222,63 @@ suite.define(() => {
           });
         }
 
-        await gateway.setMethodResponse("openclaw.setup.detect", {
-          ...initialDetection,
-          candidates: [],
-          configuredModel: modelRef,
-          setupComplete: true,
+        // Activation publishes agent defaults and the configured catalog. Models
+        // reads those owners on return, not the retired setup current-model panel.
+        const config = {
+          agents: {
+            defaults: initialConfig.agents.defaults,
+            entries: { main: { model: { primary: modelRef } } },
+          },
+        };
+        await gateway.setMethodResponse("config.get", {
+          config,
+          sourceConfig: config,
+          hash: "lmstudio-activated",
+          raw: JSON.stringify(config),
+          valid: true,
+          issues: [],
         });
+        await gateway.setMethodResponse("models.list", {
+          models: [
+            { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+            {
+              id: "qwen3-8b-instruct",
+              name: "qwen3-8b-instruct",
+              provider: "lmstudio",
+              available: true,
+            },
+          ],
+        });
+        await gateway.setMethodResponse("models.authStatus", {
+          ts: 2,
+          providerCapabilities: [],
+          providers: [
+            { provider: "lmstudio", displayName: "LM Studio", status: "static", profiles: [] },
+          ],
+        });
+        await gateway.emitGatewayEvent("config.changed", {});
         await page.setViewportSize({ height: 900, width: 1280 });
-        await page.getByRole("button", { name: "Stay in settings" }).click();
-        const currentConnection = page.locator(".model-setup__current");
+        await page.getByRole("button", { name: "Return to Models" }).click();
+        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
+        const currentConnection = page.locator('[data-provider-id="lmstudio"]');
         await currentConnection.getByText("LM Studio", { exact: true }).waitFor();
-        await currentConnection.getByText("qwen3-8b-instruct", { exact: true }).waitFor();
+        const defaultPicker = page
+          .locator(".model-providers__defaults openclaw-select-picker")
+          .first();
+        await defaultPicker.locator(".picker-select__trigger").click();
+        await defaultPicker
+          .locator('[role="option"][data-value="lmstudio/qwen3-8b-instruct"]')
+          .waitFor({ state: "visible" });
+        await defaultPicker.locator(".picker-select__trigger").click();
         await expect
           .poll(() => currentConnection.locator('[data-provider-icon="lmstudio"]').count())
           .toBe(1);
+        await expect
+          .poll(() =>
+            pickerValue(page.locator(".model-providers__defaults openclaw-select-picker").first()),
+          )
+          .toBe(globalModel);
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",

@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
@@ -269,9 +273,11 @@ describe("reconcileSkillCollectionReviewJobs", () => {
           ...preferences,
         },
       );
+      closeOpenClawAgentDatabasesForTest();
       await expect(reconcileSkillCollectionReviewJobs({ cron, cfg, logger })).resolves.toEqual({
         ok: true,
       });
+      expect(Boolean(getOpenClawAgentDatabaseIfOpen({ agentId: "main" }))).toBe(false);
       const [retained] = await cron.list({ includeDisabled: true });
       expect(retained).toMatchObject({ id: existing.id, enabled: true });
       expect(retained?.displayName).not.toContain("no-rooted-runtime");

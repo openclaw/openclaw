@@ -1,6 +1,18 @@
+import { afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+
+const profileSubscriptions = new Set<() => void>();
+afterEach(() => {
+  for (const stop of profileSubscriptions) {
+    stop();
+  }
+  profileSubscriptions.clear();
+});
 
 export function sharingPolicyClient(params: {
   user?: string;
@@ -91,5 +103,9 @@ export function roleClient(
 ): GatewayClient {
   const profile = ensureProfileForEmail(`${label}@example.test`);
   setUserProfileRole(profile.id, role);
-  return sharingPolicyClient({ user: profile.id });
+  const client = sharingPolicyClient({ user: profile.id }) as GatewayWsClient;
+  const refresh = () => prepareGatewayRecipientProfile(client);
+  refresh();
+  profileSubscriptions.add(onUserProfilesChanged(refresh));
+  return client;
 }

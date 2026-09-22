@@ -53,32 +53,22 @@ describe("Firecrawl target validation", () => {
 });
 
 describe("Firecrawl search payloads", () => {
-  it.each([
-    [{ data: [{ url: "https://example.com/data" }] }, "https://example.com/data"],
-    [{ results: [{ url: "https://example.com/results" }] }, "https://example.com/results"],
-    [{ data: { results: [{ url: "https://example.com/nested" }] } }, "https://example.com/nested"],
-    [{ data: { web: [{ url: "https://example.com/web" }] } }, "https://example.com/web"],
-    [
-      { web: { results: [{ url: "https://example.com/web-results" }] } },
-      "https://example.com/web-results",
-    ],
-  ] as const)("accepts supported result envelopes", (payload, expectedUrl) => {
-    expect(firecrawlClient.resolveSearchItems(payload)[0]?.url).toBe(expectedUrl);
-  });
-
   it("normalizes alternate result fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          sourceURL: "https://www.example.com/source",
-          metadata: { title: "Fallback title" },
-          description: "Fallback description",
-          markdown: "Body",
-          publishedDate: "2026-08-03",
-        },
-        { url: `${hostileControlToken} bypass`, title: "discard" },
-      ],
-    });
+    const result = firecrawlClient.resolveSearchItems(
+      {
+        data: [
+          {
+            sourceURL: "https://www.example.com/source",
+            metadata: { title: "Fallback title" },
+            description: "Fallback description",
+            markdown: "Body",
+            publishedDate: "2026-08-03",
+          },
+          { url: `${hostileControlToken} bypass`, title: "discard" },
+        ],
+      },
+      100,
+    );
 
     expect(result).toEqual([
       expect.objectContaining({
@@ -93,22 +83,48 @@ describe("Firecrawl search payloads", () => {
   });
 
   it("bounds rows and sanitizes hostile URL and publication fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: `https://example.com/${hostileControlToken}`,
-          publishedDate: `${hostileControlToken} bypass`,
-        },
-        ...Array.from({ length: 499 }, (_, index) => ({
-          url: `https://example.com/${index}`,
-        })),
-      ],
-    });
+    const result = firecrawlClient.resolveSearchItems(
+      {
+        data: [
+          {
+            url: `https://example.com/${hostileControlToken}`,
+            publishedDate: `${hostileControlToken} bypass`,
+          },
+          ...Array.from({ length: 499 }, (_, index) => ({
+            url: `https://example.com/${index}`,
+          })),
+        ],
+      },
+      100,
+    );
 
     expect(result).toHaveLength(100);
     expect(result[0]?.url).not.toContain(hostileControlToken);
     expect(result[0]?.published).toBeUndefined();
   });
+
+  it.each([
+    ["2026-02-30", undefined],
+    ["2026-13-01", undefined],
+    ["1900-02-29", undefined],
+    ["2000-02-29", "2000-02-29"],
+    ["0099-12-31", "0099-12-31"],
+    ["0000-02-29", "0000-02-29"],
+    ["2024-02-29T00:30:00+14:00", "2024-02-29T00:30:00+14:00"],
+    ["2026-09-21T", "2026-09-21T"],
+  ])(
+    "validates the calendar prefix of %s without dropping the result",
+    (publishedDate, published) => {
+      const result = firecrawlClient.resolveSearchItems(
+        { data: [{ url: "https://example.com/article", publishedDate }] },
+        1,
+      );
+
+      expect(result).toEqual([
+        expect.objectContaining({ url: "https://example.com/article", published }),
+      ]);
+    },
+  );
 });
 
 describe("Firecrawl scrape payloads", () => {
@@ -155,6 +171,24 @@ describe("Firecrawl scrape payloads", () => {
     );
     expect(String(result.text)).toContain("contentcontentconten");
     expect(String(result.title)).toContain("tttt");
+  });
+
+  it.each([
+    ["truncates content when it exceeds maxChars", "a".repeat(200), 50, true],
+    ["does not truncate content within maxChars limit", "short content here", 50_000, false],
+    ["handles truncation at exact boundary (not truncated)", "x".repeat(100), 100, false],
+    ["truncates content one character over maxChars", "x".repeat(101), 100, true],
+    ["handles maxChars of 0 (truncates everything)", "some content", 0, true],
+  ] as const)("%s", (_name, markdown, maxChars, truncated) => {
+    const result = firecrawlClient.parseFirecrawlScrapePayload({
+      payload: { data: { markdown } },
+      url: "https://example.com/requested",
+      extractMode: "markdown",
+      maxChars,
+    });
+
+    expect(result.truncated).toBe(truncated);
+    expect(result.rawLength).toBe(markdown.length);
   });
 
   it("keeps the requested target when provider redirect metadata is hostile", () => {

@@ -1,4 +1,5 @@
 import type { DesktopObserveResult, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { DesktopConnectionHandle, DesktopSizingMode } from "./desktop-client.ts";
 
 export type DesktopAppId = WorkerDesktopAppId;
@@ -15,11 +16,20 @@ export type ObservedDesktopConnection = PendingDesktopConnection & {
   observed: DesktopObserveResult;
 };
 
+export function releaseDesktopObservation(
+  client: Pick<GatewayBrowserClient, "request">,
+  wsPath: string,
+): void {
+  // Ticket expiry still bounds server resources if this cleanup cannot reach the Gateway.
+  void client.request("desktop.release", { wsPath }).catch(() => undefined);
+}
+
 /** Owns viewer handoff and bounded retention while the Desktop presenter is hidden. */
 export class DesktopConnectionHandoff {
   private current: DesktopConnectionHandle | null = null;
   private retained: DesktopConnectionHandle | null = null;
   private connected = false;
+  private abandonObservation: (() => void) | undefined;
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
 
   get handle(): DesktopConnectionHandle | null {
@@ -34,6 +44,9 @@ export class DesktopConnectionHandoff {
     this.current = null;
     this.retained = retained;
     this.connected = false;
+    const abandon = this.abandonObservation;
+    this.abandonObservation = undefined;
+    abandon?.();
     if (current !== retained) {
       current?.disconnect();
     }
@@ -72,6 +85,10 @@ export class DesktopConnectionHandoff {
     this.current = handle;
   }
 
+  retainObservation(abandon: () => void): void {
+    this.abandonObservation = abandon;
+  }
+
   setSizingMode(mode: DesktopSizingMode): void {
     // Preparation hides the input handle, but sizing still belongs to the
     // current viewer. Never update the retained, retired controller.
@@ -80,6 +97,7 @@ export class DesktopConnectionHandoff {
 
   markConnected(): void {
     // A returned handle or observe result is not the RFB authentication boundary.
+    this.abandonObservation = undefined;
     this.connected = true;
     const retained = this.retained;
     this.retained = null;

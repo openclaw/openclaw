@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
@@ -20,13 +21,17 @@ import {
   requireNodeWorkerProcessIdentity,
 } from "../../node-host/node-worker-process-identity.js";
 import * as commandRunner from "../../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entrypoint.test-support.js";
 
 // Vitest cancellation ends its wrapper before the body unwinds. Keep the
 // authority database and scratch inputs until that original body has joined.
 const fixture = createFixtureLifetime();
+const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => fixture.cleanup());
 
 async function closeLegacyFixture(
@@ -45,7 +50,18 @@ function assertLegacyCommandJoined(
   result: Awaited<ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>> | undefined,
 ) {
   if (result?.cleanup === "uncertain") {
-    throw new Error("Legacy finalizer process cleanup is unverified");
+    throw new Error("Legacy finalizer process cleanup is unverified", {
+      cause: {
+        pid: result.pid,
+        code: result.code,
+        signal: result.signal,
+        termination: result.termination,
+        cleanup: result.cleanup,
+        killed: result.killed,
+        stdoutTail: result.stdout.slice(-8192),
+        stderrTail: result.stderr.slice(-8192),
+      },
+    });
   }
 }
 
@@ -61,6 +77,7 @@ const scenarios = [
   "grantless-scratch-owned",
   "grantless-scratch-owned-incumbent",
   "grantless-scratch-owned-parent-git",
+  "grantless-scratch-owned-parent-completed",
   "grantless-scratch-owned-parent-npm",
   "grantless-scratch-owned-parent-pnpm-root-move",
   "grantless-scratch-owned-parent-git-root-switch",
@@ -79,6 +96,66 @@ it.for(scenarios)(
   "shipped legacy grant completes migrated finalization and native restart: %s",
   { timeout: 90_000 },
   (scenario, { signal }) => runLegacyFinalizationScenario(scenario, signal),
+);
+
+it(
+  "reports migrated finalizer capabilities through its real validation entrypoint",
+  { timeout: 90_000 },
+  ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
+      const configPath = path.join(scratch, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+      let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+      try {
+        command = commandRunner.runUtf8CommandWithTimeout(
+          [
+            testNodeExecPath,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+              testNodeExecPath,
+            ),
+            JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+            "--check",
+          ],
+          {
+            env: {
+              ...process.env,
+              HOME: scratch,
+              USERPROFILE: scratch,
+              OPENCLAW_HOME: scratch,
+              OPENCLAW_STATE_DIR: scratch,
+              OPENCLAW_CONFIG_PATH: configPath,
+              TMPDIR: scratch,
+              TMP: scratch,
+              TEMP: scratch,
+            },
+            baseEnv: {},
+            cwd: process.cwd(),
+            timeoutMs: 60_000,
+            signal,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        );
+        const result = await command;
+        assertLegacyCommandJoined(result);
+        signal.throwIfAborted();
+        const details = result.stderr + "\n" + result.stdout;
+        expect(result.termination, details).toBe("exit");
+        expect(result.code, details).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          executorDelegation: "pid-start-v1",
+          retainedOwnerBinding: true,
+          doctorConfigWrites: "pid-start-v1",
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      } finally {
+        await closeLegacyFixture(command, () => {});
+      }
+    }),
 );
 
 function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], signal: AbortSignal) {
@@ -103,6 +180,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     const ownedEnvironment = scenario.includes("-owned");
     const incumbent = scenario.endsWith("-incumbent");
     const legacyParent = scenario.includes("-parent-");
+    const completedByGateway = scenario.endsWith("-completed");
     const refusedParent = scenario.includes("-wrong-") || scenario.endsWith("-registered-child");
     const normalTemp = path.join(scratch, "normal-temp");
     const workerTemp = path.join(scratch, "openclaw-update-migrated-fixture");
@@ -123,6 +201,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
             TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
@@ -145,6 +224,19 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     try {
       fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      if (completedByGateway) {
+        const candidateState = new DatabaseSync(path.join(scratch, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          // The shipped v2026.9.3 producer supports state schema 16. The real
+          // candidate below must own all access to this genuinely newer state.
+          const version = candidateState.prepare("PRAGMA user_version").get()?.user_version;
+          expect(version).toBeGreaterThan(16);
+        } finally {
+          candidateState.close();
+        }
+      }
       if (legacyParent) {
         env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
         env.OPENCLAW_UPDATE_RUN_ID = runId;
@@ -286,6 +378,9 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           opts: { json: true, yes: true, run: { runId, env } },
           result: {
             status: "ok",
+            ...(completedByGateway
+              ? { after: { version: "2026.9.5", buildId: "verified-migrated-candidate" } }
+              : {}),
             mode: switchedRoot || scenario.endsWith("-git") ? "git" : movedRoot ? "pnpm" : "npm",
             ...(legacyParent
               ? {
@@ -311,7 +406,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
             : null,
           preUpdatePluginInstallRecords: {},
           startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
+          packageUpdateNodeRunner: testNodeExecPath,
           updateStepTimeoutMs: 20000,
           rollbackBlockedReason:
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
@@ -319,8 +414,11 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       };
       command = commandRunner.runUtf8CommandWithTimeout(
         [
-          process.execPath,
-          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint)),
+          testNodeExecPath,
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+            testNodeExecPath,
+          ),
           JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
         ],
         {
@@ -362,6 +460,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       assertLegacyCommandJoined(result);
       signal.throwIfAborted();
       const details = result.stderr + "\n" + result.stdout;
+      expect(result.termination, details).toBe("exit");
       if (incumbent || refusedParent) {
         expect(result.code, details).not.toBe(0);
         expect(fs.existsSync(path.join(scratch, "receiver-pid"))).toBe(false);

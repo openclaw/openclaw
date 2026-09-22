@@ -1,6 +1,7 @@
-// Chat UI chips for pull requests detected on the session's working branch.
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
   ControlUiSessionBranch,
@@ -9,6 +10,7 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import "./chat-ci-details.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
@@ -125,69 +127,66 @@ function renderChecks(
     return nothing;
   }
   const label = checksLabel(checks);
+  const syncChecksOverlay = (element: EventTarget | null | undefined) => {
+    if (!(element instanceof HTMLDetailsElement)) {
+      return;
+    }
+    syncAnchoredOverlay(element, "top", { alignment: "end" });
+    const popup = element.querySelector<WaPopup>(":scope > wa-popup[data-anchored-overlay]");
+    if (popup && props.presented === false) {
+      popup.active = false;
+    }
+  };
   return html`
-    <details class="chat-pr__checks" data-checks=${checks.state}>
+    <details
+      class="chat-pr__checks"
+      data-checks=${checks.state}
+      ${ref(syncChecksOverlay)}
+      @toggle=${(event: Event) => syncChecksOverlay(event.currentTarget)}
+    >
       <summary class="chat-pr__checks-pill" aria-label=${label} title=${label}>
         <span class="chat-pr__checks-dot" aria-hidden="true"></span>
         ${t("chat.pullRequests.checks")}
         <span class="chat-pr__checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
       </summary>
-      <div
-        class="chat-pr__checks-menu"
-        role="group"
-        aria-label=${t("chat.pullRequests.ciMonitoring")}
-      >
-        <div class="chat-pr__checks-menu-header">
-          <span>${t("chat.pullRequests.ciMonitoring")}</span>
-          <a
-            href=${pullRequest.checksUrl ?? pullRequest.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label=${t("chat.pullRequests.openChecks")}
-          >
-            ${icons.externalLink}
-          </a>
+      <wa-popup data-anchored-overlay>
+        <div
+          class="chat-pr__checks-menu"
+          role="group"
+          aria-label=${t("chat.pullRequests.ciMonitoring")}
+        >
+          <div class="chat-pr__checks-menu-header">
+            <span>${t("chat.pullRequests.ciMonitoring")}</span>
+            <a
+              href=${pullRequest.checksUrl ?? pullRequest.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label=${t("chat.pullRequests.openChecks")}
+            >
+              ${icons.externalLink}
+            </a>
+          </div>
+          <div class="chat-pr__checks-counts">
+            ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks.passed, "passed")}
+            ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks.failed, "failed")}
+            ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks.running, "running")}
+            ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks.skipped, "skipped")}
+          </div>
+          <openclaw-chat-ci-details
+            .pullRequest=${pullRequest}
+            .gateway=${props.gateway}
+            .sessionKey=${props.sessionKey ?? ""}
+            .presented=${props.presented ?? true}
+          ></openclaw-chat-ci-details>
         </div>
-        <div class="chat-pr__checks-counts">
-          ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks.passed, "passed")}
-          ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks.failed, "failed")}
-          ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks.running, "running")}
-          ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks.skipped, "skipped")}
-        </div>
-        <openclaw-chat-ci-details
-          .pullRequest=${pullRequest}
-          .gateway=${props.gateway}
-          .sessionKey=${props.sessionKey ?? ""}
-          .presented=${props.presented ?? true}
-        ></openclaw-chat-ci-details>
-      </div>
+      </wa-popup>
     </details>
   `;
 }
 
-const MAX_COLLAPSED_PULL_REQUESTS = 2;
-
 // Matches GitHub's own diff-stat rendering ("+2,819") in the viewer's locale.
 function formatDiffCount(value: number): string {
   return value.toLocaleString();
-}
-
-// Collapsed rows lead with live work; merged/closed history sits behind the
-// "show more" toggle so a long landing streak never buries the active PR.
-function visibleChatPullRequests(
-  pullRequests: ControlUiSessionPullRequest[],
-  expanded: boolean,
-): { visible: ControlUiSessionPullRequest[]; hiddenCount: number } {
-  const active = pullRequests.filter((item) => item.state === "open" || item.state === "draft");
-  const settled = pullRequests.filter((item) => item.state !== "open" && item.state !== "draft");
-  const ordered = [...active, ...settled];
-  if (expanded || ordered.length <= MAX_COLLAPSED_PULL_REQUESTS) {
-    return { visible: ordered, hiddenCount: 0 };
-  }
-  return {
-    visible: ordered.slice(0, MAX_COLLAPSED_PULL_REQUESTS),
-    hiddenCount: ordered.length - MAX_COLLAPSED_PULL_REQUESTS,
-  };
 }
 
 function renderDiffStats(
@@ -300,8 +299,6 @@ export function renderChatPullRequests(props: {
   presented?: boolean;
   branch?: ControlUiSessionBranch;
   status: ControlUiSessionPullRequestSnapshot["status"];
-  expanded: boolean;
-  onExpand: () => void;
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
   onOpenSessionDiff?: () => void;
   publication?: GitHubPublicationView;
@@ -321,7 +318,10 @@ export function renderChatPullRequests(props: {
   }
   const recovery =
     retainedPublication && (!published || publication?.error) ? publication : undefined;
-  const { visible, hiddenCount } = visibleChatPullRequests(props.pullRequests, props.expanded);
+  const visible = [
+    ...props.pullRequests.filter((item) => item.state === "open" || item.state === "draft"),
+    ...props.pullRequests.filter((item) => item.state !== "open" && item.state !== "draft"),
+  ];
   return html`
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
@@ -378,15 +378,6 @@ export function renderChatPullRequests(props: {
           </article>
         `;
       })}
-      ${
-        hiddenCount > 0
-          ? html`
-              <button class="chat-prs__more" type="button" @click=${props.onExpand}>
-                ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
-              </button>
-            `
-          : nothing
-      }
     </div>
   `;
 }

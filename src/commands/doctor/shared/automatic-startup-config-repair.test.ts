@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { readConfigFileSnapshot } from "../../../config/config.js";
 import { createConfigIoContext } from "../../../config/io.context.js";
 import { createConfigIO } from "../../../config/io.factory.js";
 import { readConfigFileSnapshotFromContext } from "../../../config/io.snapshot.js";
@@ -12,6 +13,7 @@ import {
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "../../../config/resolution-facts.js";
+import { writeOpenClawConfig } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -19,6 +21,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { VERSION } from "../../../version.js";
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
 import {
+  commitAutomaticConfigRepair,
   isStartupConfigRepairResult,
   planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
@@ -47,6 +50,32 @@ function invalidSnapshot(params: {
 }
 
 describe("automatic startup config repair", () => {
+  it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-channel-owner-repair-" }, async (state) => {
+      await state.writeConfig({
+        agents: { list: [{ id: "${LEGACY_CHANNEL_AGENT}" }, { id: "main" }] },
+        channels: { telegram: { botToken: "123456:synthetic-owner" } },
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", peer: { kind: "direct", id: "123" } } },
+        ],
+      });
+      const snapshot = await createConfigIO({
+        configPath: state.configPath,
+        env: { ...state.env, LEGACY_CHANNEL_AGENT: "ops" },
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      const plan = planAutomaticConfigRepair(snapshot);
+      expect(plan?.snapshot.valid).toBe(true);
+      expect(plan?.config.agents?.ownership).toBe("explicit");
+      expect(plan?.config.bindings).toContainEqual({
+        agentId: "ops",
+        match: { channel: "telegram", accountId: "default" },
+      });
+      expect(plan?.changes.join("\n")).toContain("Preserved telegram:default ownership");
+    });
+  });
+
   it.each([
     { providerId: "partner.east", refPath: 'models.providers["partner.east"].apiKey' },
     { providerId: "partner[blue]", refPath: 'models.providers["partner[blue]"].apiKey' },
@@ -161,6 +190,84 @@ describe("automatic startup config repair", () => {
     });
   });
 
+  it("preserves the admitted reference values when the environment rotates before commit", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", BROWSER_BIN: "/opt/example/browser-planning" },
+        async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            browser: { executablePath: "${BROWSER_BIN}" },
+            session: { idleMinutes: 45 },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const originalBytes = await fs.readFile(configPath, "utf8");
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.valid).toBe(false);
+          const plan = planAutomaticConfigRepair(snapshot);
+          if (!plan) {
+            throw new Error("expected a repairable session config");
+          }
+          await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-current" }, async () => {
+            await commitAutomaticConfigRepair(plan, snapshot);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.browser).toEqual({ executablePath: "${BROWSER_BIN}" });
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig.browser?.executablePath).toBe(
+              "/opt/example/browser-current",
+            );
+            expect(planAutomaticConfigRepair(reloaded)).toBeNull();
+          });
+          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+        },
+      );
+    });
+  });
+
+  it.each(["${STARTUP_MEMORY_KEY}", "$${STARTUP_MEMORY_KEY}"])(
+    "accepts the committed startup repair with a moved %s reference",
+    async (apiKey) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", STARTUP_MEMORY_KEY: "fixture-memory-key" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              agents: { defaults: { memorySearch: { remote: { apiKey } } } },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const originalBytes = await fs.readFile(configPath, "utf8");
+            const snapshot = await readConfigFileSnapshot();
+            expect(snapshot.valid).toBe(false);
+            expect(resolveStartupConfigSnapshot(snapshot)?.valid).toBe(true);
+            const plan = planAutomaticConfigRepair(snapshot);
+            if (!plan) {
+              throw new Error("expected a repairable memory config");
+            }
+            await commitAutomaticConfigRepair(plan, snapshot);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.memory.search.remote.apiKey).toBe(apiKey);
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+              apiKey.startsWith("$$") ? "${STARTUP_MEMORY_KEY}" : "fixture-memory-key",
+            );
+            expect(isStartupConfigRepairResult(snapshot, reloaded)).toBe(true);
+            expect(resolveStartupConfigSnapshot(reloaded)).toBe(reloaded);
+            expect(
+              isStartupConfigRepairResult(snapshot, {
+                ...reloaded,
+                sourceConfig: { ...reloaded.sourceConfig, gateway: { mode: "remote" } },
+              }),
+            ).toBe(false);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+          },
+        );
+      });
+    },
+  );
+
   it("plans a deterministic, fully valid migration of retired session keys", () => {
     const snapshot = invalidSnapshot({
       config: { session: { idleMinutes: 45 } } as OpenClawConfig,
@@ -221,7 +328,7 @@ describe("automatic startup config repair", () => {
     const repaired = {
       meta: {
         lastTouchedVersion: VERSION,
-        migrations: { modelPolicyAllowlist: true },
+        migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
       },
       agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
       gateway: { mode: "local" },
@@ -404,6 +511,37 @@ describe("automatic startup config repair", () => {
     });
   });
 
+  it("repairs core aliases while preserving an unavailable plugin and its warning", async () => {
+    // The availability ruling (#150016/#150312) permits repair while preserving uninspected config.
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath =
+        process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw", "openclaw.json");
+      const missingPath = path.join(home, "nonexistent-startup-plugin");
+      const plugins = { load: { paths: [missingPath] } };
+      const raw = JSON.stringify({ session: { idleMinutes: 45 }, plugins });
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, raw);
+      const snapshot = await createConfigIO({
+        configPath,
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      const plan = planAutomaticConfigRepair(snapshot);
+      expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
+      expect(plan?.config.plugins).toEqual(plugins);
+      expect(plan?.snapshot.valid).toBe(true);
+      expect(plan?.snapshot.warnings).toContainEqual(
+        expect.objectContaining({
+          code: "configured-plugin-path-unavailable",
+          path: "plugins.load.paths",
+          source: missingPath,
+        }),
+      );
+      expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+    });
+  });
+
   it.each([
     { name: "a non-legacy type error", config: { gateway: { port: "not-a-number" } } },
     {
@@ -427,10 +565,10 @@ describe("automatic startup config repair", () => {
       config: { $include: "included.json", session: { idleMinutes: 45 } },
     },
     {
-      name: "an unresolved plugin validation failure",
+      name: "a malformed plugin entry",
       config: {
         session: { idleMinutes: 45 },
-        plugins: { load: { paths: ["/nonexistent-startup-plugin"] } },
+        plugins: { entries: { broken: { enabled: "not-a-boolean" } } },
       },
     },
     {

@@ -45,12 +45,11 @@ import {
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import {
-  normalizePluginDependencySpecs,
-  type PluginDependencySpecMap,
-} from "./status-dependencies-core.js";
+import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 type InstalledPackageMetadata = {
+  packageDescription?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -154,6 +153,9 @@ function normalizePackageChannelPersistedAuthState(
     ? {
         ...(specifier ? { specifier } : {}),
         ...(exportName ? { exportName } : {}),
+        ...(persistedAuthState.backingStore === "plugin-state"
+          ? { backingStore: "plugin-state" as const }
+          : {}),
       }
     : undefined;
 }
@@ -403,7 +405,12 @@ function resolveInstalledPackageMetadata(
   const fallbackPackageManifest = recordPackageChannel
     ? { channel: recordPackageChannel }
     : undefined;
-  const fallback = fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
+  // Discovery normalizes absent package metadata to empty dependency maps.
+  const fallback = {
+    packageDependencies: {},
+    packageOptionalDependencies: {},
+    ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
+  };
   if (!record.packageJson?.path) {
     return fallback;
   }
@@ -418,6 +425,7 @@ function resolveInstalledPackageMetadata(
     return fallback;
   }
   const packageJson = parsed.value;
+  const packageDescription = normalizeOptionalString(packageJson.description);
   const packageManifest = getPackageManifestMetadata(packageJson);
   const dependencies = normalizePluginDependencySpecs({
     dependencies: packageJson.dependencies,
@@ -426,6 +434,7 @@ function resolveInstalledPackageMetadata(
   if (!packageManifest) {
     return {
       ...fallback,
+      packageDescription,
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
     };
@@ -437,6 +446,7 @@ function resolveInstalledPackageMetadata(
       : undefined;
   const { channel: _ignoredChannel, ...packageManifestWithoutChannel } = packageManifest;
   return {
+    packageDescription,
     packageManifest: {
       ...packageManifestWithoutChannel,
       ...(channel ? { channel } : {}),
@@ -464,6 +474,9 @@ function toPluginCandidate(
       ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
       ...(record.packageName ? { packageName: record.packageName } : {}),
       ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
+      ...(packageMetadata.packageDescription
+        ? { packageDescription: packageMetadata.packageDescription }
+        : {}),
       ...(packageMetadata.packageManifest
         ? { packageManifest: packageMetadata.packageManifest }
         : {}),
@@ -524,6 +537,15 @@ export function prepareInstalledPluginCandidateResolver(params: {
   );
   return (plugin) => {
     const candidate = toPluginCandidate(plugin, env);
+    // Explicit managed paths carry the requested workspace during discovery;
+    // restore that same provenance when hydrating the persisted inventory.
+    if (
+      candidate.origin === "global" &&
+      (resolveInstalledPluginIndexInstallOwner(plugin) ||
+        isInstalledPluginIndexInstallOwnerAmbiguous(plugin))
+    ) {
+      candidate.workspaceDir = normalizeOptionalString(params.workspaceDir);
+    }
     if (
       candidate.origin === "bundled" &&
       ((sourceRoots.size > 0 &&

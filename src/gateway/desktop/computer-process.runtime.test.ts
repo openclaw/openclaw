@@ -64,12 +64,22 @@ module.exports = {
   config.plugins!.allow = [pluginId];
   const configPath = path.join(home, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify(config));
-  const sdkHost = createCompiledSdkHost(computerUseSdkEntrypoint, (prefix) =>
+  const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
     tempDirs.make(prefix),
+  );
+  // A non-Node `node` earlier on PATH must not become the host worker runtime.
+  const shimDir = path.join(home, "shim");
+  fs.mkdirSync(shimDir);
+  const shimName = process.platform === "win32" ? "node.cmd" : "node";
+  fs.writeFileSync(
+    path.join(shimDir, shimName),
+    process.platform === "win32" ? "@exit /b 42\r\n" : "#!/bin/sh\nexit 42\n",
+    // Windows ignores the exec bit; POSIX needs it for the PATH scan to accept the shim.
+    process.platform === "win32" ? {} : { mode: 0o755 },
   );
   const child = startComputerHostProcess({
     env: {
-      PATH: path.dirname(process.execPath),
+      PATH: `${shimDir}${path.delimiter}${path.dirname(process.execPath)}`,
       HOME: home,
       USERPROFILE: home,
       OPENCLAW_HOME: home,

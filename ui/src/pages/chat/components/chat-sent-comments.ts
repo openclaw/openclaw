@@ -82,7 +82,7 @@ class ChatSentComments extends OpenClawLightDomContentsElement {
       comments.length
         ? renderCommentPreviewChip(
             comments.length,
-            html`<ol class="chat-comment-preview__list">
+            html`<ol class="chat-comment-preview__list" role="list">
               ${this.sources.map((source, index) => {
                 const comment = this.comments[index];
                 return comment

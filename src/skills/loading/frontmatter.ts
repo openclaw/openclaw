@@ -1,6 +1,7 @@
 // Frontmatter helpers parse skill metadata from SKILL.md files.
 import {
   normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseFrontmatterBlockResult } from "../../../packages/markdown-core/src/frontmatter.js";
@@ -188,7 +189,7 @@ export function resolveSkillManifestMetadata(
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
-    skillKey: readStringValue(metadataObj.skillKey),
+    skillKey: readNonEmptyStringPreservingWhitespace(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
     requires,

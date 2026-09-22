@@ -25,6 +25,15 @@ actor GatewayConnection: Observable {
             currentEndpointRevision: { GatewayEndpointStore.shared.routeRevision })
     }()
 
+    @MainActor private weak var approvalQueueStore: ExecApprovalQueueStore?
+
+    @MainActor var approvalQueue: ExecApprovalQueueStore {
+        if let store = self.approvalQueueStore { return store }
+        let store = ExecApprovalQueueStore(gateway: self)
+        self.approvalQueueStore = store
+        return store
+    }
+
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
@@ -1499,6 +1508,22 @@ extension GatewayConnection {
             return cached
         }
         return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    /// The resolved key belongs to this hello's physical socket. Callers must
+    /// recheck the lease synchronously when presenting it outside this actor.
+    func mainSessionKey(ifCurrentServerLease lease: ServerLease, timeoutMs: Double = 15000) async throws -> String {
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        if let cached = self.cachedMainSessionKey() { return cached }
+        do {
+            let data = try await self.request(
+                method: "config.get", params: nil, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
+            return try Self.mainSessionKey(fromConfigGetData: data)
+        } catch {
+            try Task.checkCancellation()
+            guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+            return "main"
+        }
     }
 
     func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {

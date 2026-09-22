@@ -39,27 +39,17 @@ export function formatToolAggregateParts(
       rawSegments.push(m);
       continue;
     }
-    const parts = m.split("/");
-    if (parts.length > 1) {
-      const dir = parts.slice(0, -1).join("/");
-      const base = parts.at(-1) ?? m;
-      if (!grouped[dir]) {
-        grouped[dir] = [];
-      }
-      grouped[dir].push(base);
-    } else {
-      if (!grouped["."]) {
-        grouped["."] = [];
-      }
-      grouped["."].push(m);
+    const slash = m.lastIndexOf("/");
+    const dir = m.slice(0, slash);
+    const base = m.slice(slash + 1);
+    if (!grouped[dir]) {
+      grouped[dir] = [];
     }
+    grouped[dir].push(base);
   }
 
   const segments = Object.entries(grouped).map(([dir, files]) => {
     const brace = files.length > 1 ? `{${files.join(", ")}}` : files[0];
-    if (dir === ".") {
-      return brace;
-    }
     return `${dir}/${brace}`;
   });
 

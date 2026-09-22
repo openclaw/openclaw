@@ -14,6 +14,7 @@ import {
 import { renderPanelTabStrip, type PanelTabStripTab } from "../../../components/panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../../../components/panel-toggle-contract.ts";
@@ -76,6 +77,7 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 }
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
+  @property({ attribute: false }) panelIdPrefix = "";
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
@@ -89,6 +91,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
+  private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
   private nativeCloseListeners: AbortController | undefined;
@@ -105,12 +108,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     document.addEventListener("pointerdown", this.trackFocus, options);
     document.addEventListener("focusin", this.trackFocus, options);
     window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     this.nativeCloseListeners?.abort();
     this.nativeCloseListeners = undefined;
     this.focusedSurface = null;
+    if (this.geometryFrame !== null) {
+      cancelAnimationFrame(this.geometryFrame);
+      this.geometryFrame = null;
+    }
     super.disconnectedCallback();
   }
 
@@ -234,6 +242,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 }),
               );
             }
+            if (slot === "link-reader" && openSlots.has(slot)) {
+              this.deliverPanelEvent(
+                slot,
+                new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true, newTab: true },
+                }),
+              );
+            }
             if (slot === "terminal" && openSlots.has(slot)) {
               this.deliverPanelEvent(
                 slot,
@@ -257,7 +273,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ${this.panelTypes()
           .filter(
             (type) =>
-              type.slot === "browser" || type.slot === "terminal" || !openSlots.has(type.slot),
+              type.slot === "browser" ||
+              type.slot === "terminal" ||
+              type.slot === "link-reader" ||
+              !openSlots.has(type.slot),
           )
           .map(
             (type) => html`
@@ -308,12 +327,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       }
       return null;
     };
-    const tabs = sidePanels.flatMap((panel): PanelTabStripTab[] => {
+    const tabs = sidePanels.flatMap((panel): (PanelTabStripTab & { contentId: string })[] => {
+      const contentId = `${this.panelIdPrefix}-${encodeURIComponent(panel.slot)}`;
       const hosted = hostedPanels.find((entry) => entry.panel.id === panel.id);
       if (hosted?.tabs.length) {
         return hosted.tabs.map((tab) => ({
           id: `hosted:${panel.id}:${tab.id}`,
-          domId: `side-panel-tab-${panel.id}-${tab.id}`,
+          domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(JSON.stringify([panel.id, tab.id]))}`,
+          contentId,
           label: tab.label,
           labelTooltip: tab.label,
           title: tab.title,
@@ -331,7 +352,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return [
         {
           id: panel.id,
-          domId: `side-panel-tab-${panel.id}`,
+          domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(panel.id)}`,
+          contentId,
           label: type.label,
           labelTooltip:
             panel.slot === "dashboard"
@@ -372,7 +394,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${renderPanelTabStrip({
             tabs,
             activeId,
-            ariaControls: "chat-side-panel-content",
+            ariaControls: (tab) => tab.contentId,
             onSelect: (panelId) => {
               const hosted = resolveHostedTab(panelId);
               if (hosted) {
@@ -487,7 +509,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderBody(column?: SidebarColumn) {
-    return html`<div id="chat-side-panel-content" class="side-panel__body">
+    return html`<div class="side-panel__body">
       ${repeat(
         // Tab reordering must not physically move live iframe/custom-element roots.
         this.panelDefinitions.flatMap((definition) =>
@@ -497,7 +519,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ),
         (panel) => panel.id,
         (panel) => html`<div
+          id=${`${this.panelIdPrefix}-${encodeURIComponent(panel.slot)}`}
           class="side-panel__panel"
+          role="region"
+          aria-label=${panelType(this.panelDefinitions, panel.slot).label}
           data-panel-slot=${panel.slot}
           data-region=${panel.id === this.layout.mainPanelId ? "main" : "side"}
           ?hidden=${!isSidebarSlotVisible(this.layout, panel.slot)}
@@ -527,7 +552,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         dock === "bottom"
           ? (panel?.getBoundingClientRect().height ?? column.height)
           : (panel?.getBoundingClientRect().width ?? column.width);
-      return { primarySize, panelSize, total: primarySize + panelSize };
+      // Grid columns mirror in RTL; divider ratios follow physical left/top movement.
+      const panelBeforeMain =
+        dock !== "bottom" &&
+        (dock === "left") !== (getComputedStyle(shell ?? this).direction === "rtl");
+      return { primarySize, panelSize, panelBeforeMain, total: primarySize + panelSize };
     };
     return renderChatResizableDivider({
       className: "sidebar-column__divider",
@@ -537,8 +566,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       minRatio: 0.05,
       maxRatio: 0.95,
       measureRatio: () => {
-        const { primarySize, panelSize, total } = measure();
-        return total > 0 ? (dock === "left" ? panelSize : primarySize) / total : 0.5;
+        const { primarySize, panelSize, panelBeforeMain, total } = measure();
+        return total > 0 ? (panelBeforeMain ? panelSize : primarySize) / total : 0.5;
       },
       measureSize: () => measure().total,
       onResize: (event) => {
@@ -549,9 +578,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             : this.availableWidth > 0
               ? this.availableWidth
               : (bounds?.width ?? 0);
-        const total = measure().total || regionSize;
+        const measured = measure();
+        const total = measured.total || regionSize;
         const requested =
-          total * (dock === "left" ? event.detail.splitRatio : 1 - event.detail.splitRatio);
+          total *
+          (measured.panelBeforeMain ? event.detail.splitRatio : 1 - event.detail.splitRatio);
         const minimum = dock === "bottom" ? SIDEBAR_MIN_HEIGHT_PX : SIDEBAR_MIN_WIDTH_PX;
         const maximum = Math.max(minimum, regionSize * 0.6);
         this.callbacks?.resizePanel(column.id, Math.max(minimum, Math.min(requested, maximum)));
@@ -575,21 +606,37 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ? this.renderDivider(column)
           : nothing
       }
-      <section class="side-panel" aria-label=${t("chat.sidePanel.label")}>
+      <div class="side-panel">
         ${column && sidebarSidePanels(this.layout).length > 0 ? this.renderHeader(column) : nothing}
         ${this.contentMounted ? this.renderBody(column) : nothing}
-      </section>`;
+      </div>`;
   }
 
   protected override updated() {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
       renderTemplate(this.renderPanel(), root);
-      const panel = root.querySelector<HTMLElement>(".side-panel");
+      this.scheduleGeometryCommit();
+    }
+  }
+
+  private scheduleGeometryCommit() {
+    if (this.geometryFrame !== null) {
+      return;
+    }
+    // Nested panels commit after this host. Measure their final geometry once,
+    // rather than forcing layout in the middle of each parent/child update.
+    this.geometryFrame = requestAnimationFrame(() => {
+      this.geometryFrame = null;
+      const shell = this.parentElement;
+      if (!this.isConnected || !shell) {
+        return;
+      }
+      const panel = shell.querySelector<HTMLElement>(
+        ".sidebar-region__right-runtime > .side-panel",
+      );
       const geometry = Array.from(
-        this.parentElement!.querySelectorAll<HTMLElement>(
-          ".sidebar-region__primary, .side-panel__panel",
-        ),
+        shell.querySelectorAll<HTMLElement>(".sidebar-region__primary, .side-panel__panel"),
         (content) =>
           `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
       ).join(":");
@@ -605,7 +652,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }),
       );
       this.previousGeometry = geometry;
-    }
+    });
   }
 
   override render() {

@@ -8,7 +8,6 @@ import {
   handleDynamicToolCallWithTimeout,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import { withDynamicToolTranscriptDetails } from "./dynamic-tool-response-state.js";
 
 describe("dynamic tool timeout diagnostics", () => {
   afterEach(() => {
@@ -24,13 +23,11 @@ describe("dynamic tool timeout diagnostics", () => {
       timeoutMs: 30_000,
       error: "memory_search timed out after 30s",
     };
-    const bridgeResponse = withDynamicToolTranscriptDetails(
-      {
-        success: false,
-        contentItems: [{ type: "inputText" as const, text: JSON.stringify(details) }],
-      },
-      details,
-    );
+    const bridgeResponse = {
+      success: false,
+      contentItems: [{ type: "inputText" as const, text: JSON.stringify(details) }],
+      transcriptDetails: details,
+    };
     const response = await handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
@@ -56,7 +53,10 @@ describe("dynamic tool timeout diagnostics", () => {
         text: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
       }),
     ]);
-    expect(toCodexDynamicToolProtocolResponse(response)).toEqual(bridgeResponse);
+    expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
+      contentItems: bridgeResponse.contentItems,
+      success: false,
+    });
   });
 
   it("logs process poll timeout context separately from session idle", async () => {
@@ -86,7 +86,7 @@ describe("dynamic tool timeout diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(response).resolves.toEqual({
+    expect(toCodexDynamicToolProtocolResponse(await response)).toEqual({
       success: false,
       contentItems: [
         {

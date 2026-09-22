@@ -1,3 +1,4 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Zalouser plugin module implements send behavior.
 import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
 import { createZalouserSendReceipt } from "./send-receipt.js";
@@ -56,9 +57,17 @@ export async function sendMessageZalouser(
             mediaUrl: undefined,
             textStyles: chunk.styles,
           };
-    const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions);
+    const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions, onDeliveryResult);
     if (!result.ok) {
-      throw new Error(result.error || "Failed to send Zalouser message");
+      const error = new Error(result.error || "Failed to send Zalouser message");
+      if (result.receipt.platformMessageIds.length > 0) {
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: result.receipt.platformMessageIds,
+          receipt: result.receipt,
+          visibleReplySent: true,
+        });
+      }
+      throw error;
     }
     await onDeliveryResult?.(result);
     lastResult = result;

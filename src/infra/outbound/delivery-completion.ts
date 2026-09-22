@@ -14,6 +14,8 @@ import {
   type ConversationRegistryScope,
   type PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
+import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
+import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -26,6 +28,7 @@ import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-r
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -68,6 +71,8 @@ export type DurableDeliveryCompletion =
     }
   | {
       kind: "pending-final";
+      /** Older queue records retain the canonical locator's original owner selection. */
+      agentId?: string;
       deliveryId: string;
       intentId: string;
       sessionId: string;
@@ -153,12 +158,15 @@ export async function settlePendingFinalDelivery(
     stateDir?: string;
     preserveActivity?: boolean;
     stateContext?: DeliveryQueueStateContext;
+    identifiedResult?: OutboundDeliveryResult;
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
+  let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
+      agentId: completion.agentId,
       sessionKey: completion.sessionKey,
       storePath: completion.storePath,
       env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
@@ -174,6 +182,34 @@ export async function settlePendingFinalDelivery(
       const deliveries = internalEntry.pendingFinalDelivery.deliveries;
       const index = deliveries?.findIndex(({ id }) => id === completion.deliveryId) ?? -1;
       if (!deliveries || index < 0) {
+        return null;
+      }
+      const authority = completion.sessionWriterDeliveryAuthority;
+      const claim = authority?.harnessCompletion;
+      if (
+        completion.agentId !== undefined &&
+        ((authority?.agentId !== undefined &&
+          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
+          (claim &&
+            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
+      ) {
+        return null;
+      }
+      if (
+        claim &&
+        (!authority ||
+          authority.sessionKey !== completion.sessionKey ||
+          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
+          claim.requesterSessionKey !== completion.sessionKey ||
+          claim.sessionId !== completion.sessionId ||
+          authority.expectedSessionId !== completion.sessionId ||
+          (authority.agentId !== undefined && authority.agentId !== claim.requesterAgentId) ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== internalEntry.lifecycleRevision) ||
+          (authority.expectedWriterRunId !== undefined &&
+            authority.expectedWriterRunId !== internalEntry.activeWriterRunId) ||
+          !getOwedHarnessCompletionTask(claim, internalEntry))
+      ) {
         return null;
       }
       const current = deliveries[index]!.state;
@@ -207,6 +243,41 @@ export async function settlePendingFinalDelivery(
         id: completion.deliveryId,
         state: settled,
       });
+      const result = options.identifiedResult;
+      const platformMessageId = result ? readPlatformMessageId(result) : undefined;
+      const context = pending.context;
+      // Persist the receipt in the same transaction as pending-final completion,
+      // before queue acknowledgement. A crash before the separate task-store
+      // commit leaves this exact claim replayable by startup reconciliation.
+      const terminalEvidence =
+        claim &&
+        result &&
+        platformMessageId &&
+        result.channel === context?.channel &&
+        context?.to &&
+        (!result.target || result.target.id === context.to) &&
+        settled === "delivered" &&
+        updatedDeliveries.every((delivery) => delivery.state === "delivered")
+          ? mergeRestartRecoveryTerminalDeliveryEvidence(
+              internalEntry.restartRecoveryTerminalDeliveryEvidence,
+              [
+                {
+                  runId: claim.sourceRunId,
+                  harnessCompletion: claim,
+                  deliveryContext: context,
+                  captured: true,
+                  payloads: [{ visible: true }],
+                  deliveryStatus: { status: "sent", resultCount: 1 },
+                  durableFinalReceipt: {
+                    intentId: completion.intentId,
+                    deliveryId: completion.deliveryId,
+                    platformMessageId,
+                  },
+                },
+              ],
+            )
+          : undefined;
+      deliveredHarnessClaim = terminalEvidence ? claim : undefined;
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
         !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -215,7 +286,7 @@ export async function settlePendingFinalDelivery(
         existingNotice?.intentId === pending.intentId;
       // One resolved sibling cannot erase another's ambiguity. Acknowledgment
       // remains an intent-level fact so delayed settlement cannot owe it again.
-      if (settled === current && !owedNotice && !clearsNotice) {
+      if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
       wakeRecovery =
@@ -236,14 +307,28 @@ export async function settlePendingFinalDelivery(
           deliveries: updatedDeliveries,
         },
         ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
+        ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
   );
+  if (deliveredHarnessClaim) {
+    const claim = deliveredHarnessClaim;
+    const { reconcileHarnessCompletionDelivery } =
+      await import("../../agents/agent-harness-completion-delivery.js");
+    reconcileHarnessCompletionDelivery({
+      agentId: claim.requesterAgentId,
+      sessionKey: completion.sessionKey,
+      storePath: completion.storePath,
+      sourceRunId: claim.sourceRunId,
+      taskRunId: claim.taskRunId,
+    });
+  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
     scheduleMainSessionRecoveryPendingTarget({
+      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
@@ -297,6 +382,7 @@ export async function completeDurableDelivery(
     ? await settlePendingFinalDelivery(completion, "delivered", undefined, {
         stateDir,
         stateContext,
+        identifiedResult: result,
       })
     : conversationResult(
         completion,

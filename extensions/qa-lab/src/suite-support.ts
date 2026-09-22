@@ -1,6 +1,4 @@
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaSuiteChannelDriverSelection } from "./crabline-artifacts.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -9,8 +7,6 @@ import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { scenarioRequiresControlUi, splitModelRef } from "./suite-planning.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from "./suite-types.js";
-
-type QaCrablineRuntime = typeof import("@openclaw/crabline");
 
 /**
  * One bounded retry for live-model flake: flow scenarios time out under model
@@ -41,22 +37,15 @@ export async function runQaScenarioWithFlakeRetry(
 
 export function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  channelDriverSelection?: QaSuiteChannelDriverSelection | null;
+  transportArtifactNotes?: readonly string[];
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
   isolatedWorkers?: boolean;
-  createCrablineChannelReportNotes?: QaCrablineRuntime["createOpenClawCrablineChannelReportNotes"];
 }) {
-  return [
-    ...params.transport.createReportNotes(params),
-    // Crabline reports completed generation paths through this filename-narrowed selection.
-    ...(params.createCrablineChannelReportNotes?.(
-      params.channelDriverSelection as OpenClawCrablineChannelDriverSelection | null | undefined,
-    ) ?? []),
-  ];
+  return [...params.transport.createReportNotes(params), ...(params.transportArtifactNotes ?? [])];
 }
 
 export function buildQaIsolatedScenarioWorkerParams(params: {
@@ -65,7 +54,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   providerMode: QaProviderMode;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelId?: string;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -76,7 +65,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   return {
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
-    channelId: params.input?.channelId,
+    channelId: params.channelId ?? params.input?.channelId,
     evidenceMode: params.input?.evidenceMode,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
@@ -85,13 +74,13 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     providerMode: params.providerMode,
     transportId: params.transportId,
     channelDriver: params.channelDriver,
-    channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
     thinkingDefault: params.input?.thinkingDefault,
     claudeCliAuthMode: params.input?.claudeCliAuthMode,
     scenarioIds: [params.scenario.id],
+    ...(params.input?.scenarioDefinitions ? { scenarioDefinitions: [params.scenario] } : {}),
     enabledPluginIds: params.input?.enabledPluginIds,
     concurrency: 1,
     startLab: params.startLab,
@@ -138,7 +127,7 @@ export function buildQaGatewayHeapCheckpointRuntimeEnvPatch(
     return undefined;
   }
   return {
-    NODE_OPTIONS: appendNodeOption(env.NODE_OPTIONS, "--heapsnapshot-signal=SIGUSR2"),
+    NODE_OPTIONS: appendNodeOption(env.NODE_OPTIONS, "--heapsnapshot-signal=SIGQUIT"),
   };
 }
 

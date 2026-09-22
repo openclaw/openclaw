@@ -2,13 +2,15 @@ import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
   it.each(["chat", "new"])("keeps a large pending model catalog usable in /%s", async (route) => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+    const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
+    await suite.withPage(contextOptions, async ({ page }) => {
       const models = Array.from({ length: 1_000 }, (_, index) => ({
         id: `model-${index}`,
         name: `Model ${String(index).padStart(4, "0")}`,
@@ -61,12 +63,53 @@ suite.define(() => {
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
       await trigger.click();
-      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(1);
-      expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
-        "example: checking models…",
-      );
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
+      expect(await refresh.textContent()).toContain("Refreshing models for Example…");
+      expect(await refresh.getAttribute("role")).toBe("status");
+      expect(await refresh.locator(".btn__spinner").isVisible()).toBe(true);
+      const requestsBeforeReopen = (await gateway.getRequests("models.list")).length;
+      await trigger.click();
+      await trigger.click();
+      expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeReopen);
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot)
+        : undefined;
+      if (artifactDir) {
+        await picker.locator(".chat-controls__model-menu").screenshot({
+          path: `${artifactDir}/pending-catalog.png`,
+          animations: "disabled",
+        });
+      }
+      await refresh.hover();
+      await expect
+        .poll(() => page.locator("openclaw-tooltip[open] .tooltip-content").textContent())
+        .toBe("Refreshing models for Example…");
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/refresh-details.png`,
+          animations: "disabled",
+        });
+      }
       const search = picker.locator("[data-chat-model-search]");
+      const refreshDetails = refresh.getByRole("button");
+      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
       await search.click();
+      await search.press("Tab");
+      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
+        true,
+      );
+      await refreshDetails.press("Enter");
+      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
+      await refreshDetails.press("Escape");
+      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      await search.click();
+      await refreshDetails.tap();
+      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
+      await search.click();
+      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
       expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       const searchBefore: typeof before = await cdp.send("Performance.getMetrics");
       const searchStarted = performance.now();
@@ -85,13 +128,30 @@ suite.define(() => {
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
       expect(await result.isEnabled()).toBe(true);
+      await search.clear();
+      await trigger.focus();
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedSearchStarted = performance.now();
+      await search.pressSequentially("Model 0999");
+      expect(await search.inputValue()).toBe("Model 0999");
+      await expect.poll(() => result.isVisible()).toBe(true);
+      expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-reduced-motion-search",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - reducedSearchStarted,
+        }),
+      );
+      expect(
+        await refresh
+          .locator(".btn__spinner")
+          .evaluate((node) => getComputedStyle(node).animationName),
+      ).toBe("none");
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).not.toHaveProperty("refresh", true);
       }
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot)
-        : undefined;
       if (artifactDir) {
         await writeFile(`${artifactDir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
         await writeFile(
@@ -103,9 +163,18 @@ suite.define(() => {
           animations: "disabled",
         });
       }
+      await refreshDetails.focus();
+      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
+        true,
+      );
       await gateway.setMethodResponse("models.list", { models });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await expect.poll(() => picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      await expect.poll(() => refresh.count()).toBe(0);
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+      expect(await search.inputValue()).toBe("Model 0999");
+      await search.press("ArrowDown");
+      expect(await result.getAttribute("data-chat-model-highlighted")).not.toBeNull();
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       expect(await picker.getAttribute("open")).not.toBeNull();
       if (artifactDir) {
         await page.screenshot({
@@ -589,6 +658,9 @@ suite.define(() => {
           expect(
             await menu.locator("[data-chat-thinking-slider], [data-chat-speed-toggle]").count(),
           ).toBe(0);
+          await revealChatModelOption(
+            menu.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'),
+          );
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
@@ -721,7 +793,6 @@ suite.define(() => {
             .toContainEqual({
               key: "agent:main:main",
               model: "openai/speed-only",
-              agentRuntime: null,
             });
         } else {
           await expect.poll(() => effort.count()).toBe(1);
@@ -730,7 +801,7 @@ suite.define(() => {
             .poll(() => composer.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
             .toBe("false");
           await model.click();
-          await composer.locator('[data-chat-model-option="example/basic"]').click();
+          await selectChatModelOption(composer.locator('[data-chat-model-option="example/basic"]'));
           await expect.poll(() => effort.count()).toBe(0);
         }
       });
@@ -859,7 +930,14 @@ suite.define(() => {
         await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
+        await revealChatModelOption(
+          picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+        );
         const search = picker.locator("[data-chat-model-search]");
+        // Enter search with the pointer so row tooltips do not own Escape.
+        await search.click();
+        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
         await search.fill("anthropic");
         await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
         if (artifactDir) {

@@ -16,6 +16,19 @@ const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const CI_PARALLEL_MIN_CPUS = 8;
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
+const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
+  "test/vitest/vitest.gateway-core.config.ts",
+  "test/vitest/vitest.gateway-database-workers.config.ts",
+  "test/vitest/vitest.gateway-methods.config.ts",
+  "test/vitest/vitest.gateway-methods-isolated.config.ts",
+  "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.gateway-server-isolated.config.ts",
+]);
+
+export function isExclusiveCiTestConfig(config: string): boolean {
+  return EXCLUSIVE_CI_TEST_CONFIGS.has(config);
+}
+
 type Env = NodeJS.ProcessEnv;
 type Resources = {
   logicalCpuCount: number;

@@ -360,12 +360,16 @@ export default definePluginEntry({
       { name: "google_meet" },
     );
 
+    let nodeHost: Awaited<ReturnType<typeof loadGoogleMeetNodeHostModule>> | undefined;
     api.registerNodeHostCommand({
       command: GOOGLE_MEET_NODE_COMMAND,
       cap: "google-meet",
       dangerous: true,
-      handle: async (paramsJSON) =>
-        await (await loadGoogleMeetNodeHostModule()).handleGoogleMeetNodeHostCommand(paramsJSON),
+      hasActiveWork: () => nodeHost?.handleGoogleMeetNodeHostCommand.hasActiveWork() ?? false,
+      handle: async (paramsJSON) => {
+        nodeHost ??= await loadGoogleMeetNodeHostModule();
+        return await nodeHost.handleGoogleMeetNodeHostCommand(paramsJSON);
+      },
     });
     api.registerNodeInvokePolicy(createLazyGoogleMeetNodeInvokePolicy(config));
 

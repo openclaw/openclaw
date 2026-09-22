@@ -4,6 +4,7 @@ import {
   type ChannelInboundEventRunnerParams,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,14 +21,6 @@ type MatrixInboundRunParams = Parameters<MatrixInboundRun>[0];
 type TurnAdoptionLifecycle = NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
 
 function createClaimSpies() {
   return {
@@ -81,9 +74,9 @@ describe("Matrix active-turn steering admission", () => {
       const storePath = path.join(tempDir, "sessions.json");
       const activeEventId = explicitSteer ? "$active-explicit-steer" : "$active-configured-steer";
       const followupEventId = explicitSteer ? "$explicit-steer" : "$configured-steer";
-      const activeResolverStarted = createDeferred();
-      const releaseActiveResolver = createDeferred();
-      const followupTurnResolved = createDeferred();
+      const activeResolverStarted = createDeferred<void>();
+      const releaseActiveResolver = createDeferred<void>();
+      const followupTurnResolved = createDeferred<void>();
       const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
       const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
       let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;

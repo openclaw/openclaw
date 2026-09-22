@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
@@ -13,6 +14,8 @@ type FailureOwner = {
   latch: ReturnType<typeof createSqliteTerminalOpenLatch>;
   evict(database: OpenClawStateDatabase): boolean;
   recordSchemaFailure(pathname: string, error: Error): void;
+  invalidate(pathname: string): void;
+  notifyTerminalFailure(pathname: string, error: Error): void;
 };
 
 /** Runtime validation uses the cache's existing handles, version counters, and terminal latch. */
@@ -33,6 +36,24 @@ export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwn
   };
 
   return {
+    closeTerminalFailure(pathname: string, error: Error): void {
+      owner.invalidate(pathname);
+      const cached = owner.cachedDatabases.get(pathname);
+      const errors: unknown[] = [];
+      try {
+        if (cached) {
+          owner.evict(cached);
+        }
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+      try {
+        owner.notifyTerminalFailure(pathname, error);
+      } catch (notificationError) {
+        errors.push(notificationError);
+      }
+      throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
+    },
     recordPublishedVersion: (database: OpenClawStateDatabase): void => {
       owner.dataVersions.set(database.db, readDataVersion(database));
     },

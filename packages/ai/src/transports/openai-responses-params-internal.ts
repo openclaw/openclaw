@@ -7,11 +7,13 @@ import type {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import {
+  resolveOpenAISimpleReasoningEffort,
+  resolveOpenAIRequestReasoning,
+} from "../providers/openai-request-reasoning.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -43,14 +45,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "github-copilot",
 ]);
 
-function resolveOpenAIReasoningEffort(
-  options: OpenAIResponsesOptions | undefined,
-): OpenAIApiReasoningEffort {
-  return normalizeOpenAIReasoningEffort(
-    options?.reasoningEffort ?? options?.reasoning ?? "high",
-  ) as OpenAIApiReasoningEffort;
-}
-
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
@@ -79,10 +73,7 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
     return params.effort;
   }
   for (const effort of ["low", "medium", "high"] as const) {
-    const resolved = resolveOpenAIReasoningEffortForModel({
-      model: params.model,
-      effort,
-    });
+    const resolved = resolveOpenAIRequestReasoning(params.model, effort).effort;
     if (resolved && resolved !== "none" && resolved !== "minimal") {
       return resolved;
     }
@@ -148,7 +139,7 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
 // compared `input` array, so it can vary freely per turn with no effect on
 // continuation eligibility. Routes that opt out via `compat.supportsInstructions:
 // false` (see openai-responses-payload-policy.ts) get no instructions field at
-// all -- convertOpenAIResponsesMessagesForRequest embeds the prompt back into
+// all -- request construction embeds the prompt back into
 // `input` for those instead.
 function resolveOpenAIResponsesInstructions(
   model: Model,
@@ -220,30 +211,6 @@ export function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-function convertOpenAIResponsesMessagesForRequest(
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions | undefined,
-  replayMode: OpenAIResponsesReplayMode,
-): ResponseInput {
-  const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "transport-default",
-  });
-  const policyAllowsReplayIds =
-    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
-  const replayResponsesItemIds =
-    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
-    replayResponsesItemIds,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-    replayMode,
-  });
-}
-
 export function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
@@ -254,7 +221,19 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
   });
-  const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
+  const policyAllowsReplayIds =
+    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
+  const replayResponsesItemIds =
+    !usesNativeOpenAICodexResponsesBackend(model) &&
+    (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
+  const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
+    replayReasoningItems: true,
+    replayResponsesItemIds,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+    replayMode,
+  });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
@@ -300,6 +279,7 @@ export function buildOpenAIResponsesParams(
     const tools = context.tools;
     const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
       transport: "stream",
+      supportsStrictMode: compat.supportsStrictMode,
     });
     const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
     if (
@@ -316,37 +296,29 @@ export function buildOpenAIResponsesParams(
     }
   }
   if (model.reasoning) {
-    if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
-      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
-      const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
+    const reasoning = options?.reasoning;
+    const requestedEffort =
+      options?.reasoningEffort ??
+      (reasoning === "none" ? "none" : resolveOpenAISimpleReasoningEffort(model, reasoning)) ??
+      (options?.reasoningSummary ? "high" : payloadPolicy.defaultManagedReasoningEffort);
+    const resolvedEffort =
+      requestedEffort === undefined
+        ? undefined
+        : resolveOpenAIRequestReasoning(model, requestedEffort).effort;
+    if (resolvedEffort !== undefined) {
+      const effort = raiseMinimalReasoningForResponsesWebSearch({
         model,
-        effort: requestedReasoningEffort,
+        effort: resolvedEffort,
+        tools: params.tools,
       });
-      const reasoningEffort = resolvedReasoningEffort
-        ? raiseMinimalReasoningForResponsesWebSearch({
-            model,
-            effort: resolvedReasoningEffort,
-            tools: params.tools,
-          })
-        : undefined;
-      if (reasoningEffort) {
-        params.reasoning = {
-          effort: reasoningEffort,
-          ...(reasoningEffort === "none" ? {} : { summary: options?.reasoningSummary || "auto" }),
-        };
-        if (reasoningEffort !== "none") {
-          params.include = ["reasoning.encrypted_content"];
-        }
-      }
-    } else if (model.provider !== "github-copilot") {
-      const reasoningEffort = resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: "none",
-      });
-      if (reasoningEffort) {
-        params.reasoning = {
-          effort: reasoningEffort,
-        };
+      const summary =
+        effort !== "none" &&
+        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary)
+          ? options.reasoningSummary || "auto"
+          : undefined;
+      params.reasoning = { effort, ...(summary ? { summary } : {}) };
+      if (summary) {
+        params.include = ["reasoning.encrypted_content"];
       }
     }
   }

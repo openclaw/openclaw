@@ -16,7 +16,7 @@ import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agen
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
 import { hasTaskSessionOwnerInDatabase } from "../../../tasks/task-registry.store.kernel.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,

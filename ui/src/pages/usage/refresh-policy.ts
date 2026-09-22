@@ -49,6 +49,8 @@ export class UsageRefreshPolicy {
   private reloadPending = false;
   private readonly incompleteUsageRetry = new IncompleteUsageRetry({
     retry: () => this.requestAndWait("poll"),
+    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
+    retryMs: (attempt) => 5_000 * 2 ** (attempt - 1),
     onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
   });
 

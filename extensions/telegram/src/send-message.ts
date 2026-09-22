@@ -437,7 +437,7 @@ export async function sendMessageTelegram(
             telegramHasInlineKeyboard: part.hasInlineKeyboard,
           };
           telegramCaptionDeliveryMetadata.add(meta);
-          recordSentMessage(chatId, part.messageId, cfg, {
+          await recordSentMessage(chatId, part.messageId, cfg, {
             accountId: account.accountId,
             agentId: ownerAgentId,
           });
@@ -466,10 +466,12 @@ export async function sendMessageTelegram(
             silent: opts.silent,
           });
         },
-        () => ({
-          receipt: buildMediaReceipt(),
-          visibleReplySent: true,
-        }),
+        {
+          partialDeliveryResult: () => ({
+            receipt: buildMediaReceipt(),
+            visibleReplySent: true,
+          }),
+        },
       );
       const mediaMessageId = resolveTelegramMessageIdOrThrow(lastMedia.result, "media send");
       const resolvedChatId = String(lastMedia.result.chat?.id ?? chatId);

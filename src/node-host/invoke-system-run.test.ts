@@ -1703,7 +1703,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   ] as const)(
     "checks live node policy at $boundary before real execution (revoke=$revoke)",
     async ({ boundary, revoke }) => {
-      const { testing } = await import("./invoke.test-support.js");
+      const { runCommand } = await import("./invoke-run-command.js");
       const cwd = createFixtureDir("openclaw-node-policy-before-spawn-");
       fs.writeFileSync(path.join(cwd, "approved.txt"), "");
       const revokePolicy = () => {
@@ -1731,7 +1731,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           if (boundary === "callback") {
             revokePolicy();
           }
-          const result = await testing.runCommand(
+          const result = await runCommand(
             argv,
             runCwd,
             { PATH: "/usr/bin:/bin", HOME: cwd },
@@ -3027,10 +3027,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           command: [executablePath, "-c", "print('hi')"],
         });
 
-        expect(prepared).toEqual({
+        expect(prepared).toMatchObject({
           ok: false,
-          message:
-            "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          reason: "unsupported-command-shape",
         });
         expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
       });

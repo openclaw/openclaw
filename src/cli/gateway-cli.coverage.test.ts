@@ -871,6 +871,27 @@ describe("gateway-cli coverage", () => {
     );
   });
 
+  it.each([18789, 29443])(
+    "forwards the resolved Gateway port %i in discovery SSH tunnel hints",
+    async (port) => {
+      discoverGatewayBeacons.mockResolvedValueOnce([
+        {
+          instanceName: "Remote gateway",
+          host: "gateway.example",
+          port,
+          gatewayPort: 41111,
+          sshPort: 2222,
+        },
+      ]);
+
+      await runGatewayCommand(["gateway", "discover"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain(`ws://gateway.example:${port}`);
+      expect(output).toContain(`ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.example -p 2222`);
+    },
+  );
+
   it("validates gateway discover timeout", async () => {
     discoverGatewayBeacons.mockClear();
     await expectGatewayExit(["gateway", "discover", "--timeout", "0"]);

@@ -1,13 +1,13 @@
-// Matrix plugin module implements idb persistence behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { getMatrixRuntime } from "../../runtime.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   readMatrixIdbSnapshotJson,
-  type MatrixSyncStateRuntime,
+  type MatrixSnapshotStateRuntime,
   writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
@@ -261,18 +261,19 @@ function resolveDefaultIdbSnapshotPath(): string {
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(
   snapshotPath?: string,
-  stateRuntime?: MatrixSyncStateRuntime,
+  stateRuntime?: MatrixSnapshotStateRuntime,
 ): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
   const storageRootDir = path.dirname(resolvedPath);
   let callbackStarted = false;
   try {
+    const snapshotStateRuntime = stateRuntime ?? getMatrixRuntime().state;
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
       let storedSnapshotJson: string | null;
       try {
-        storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir, stateRuntime);
+        storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, snapshotStateRuntime);
       } catch (err) {
         if (fs.existsSync(resolvedPath)) {
           throwLegacySnapshotMigrationRequired();
@@ -312,11 +313,12 @@ export async function persistIdbToDisk(params?: {
   databasePrefix?: string;
   strict?: boolean;
   abortSignal?: AbortSignal;
-  stateRuntime?: MatrixSyncStateRuntime;
+  stateRuntime?: MatrixSnapshotStateRuntime;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
   try {
+    const stateRuntime = params?.stateRuntime ?? getMatrixRuntime().state;
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     const persistedCount = await withFileLock(
@@ -327,7 +329,7 @@ export async function persistIdbToDisk(params?: {
         const storageRootDir = path.dirname(snapshotPath);
         let storedSnapshotJson: string | null;
         try {
-          storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir, params?.stateRuntime);
+          storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, stateRuntime);
         } catch (err) {
           if (fs.existsSync(snapshotPath)) {
             throwLegacySnapshotMigrationRequired();
@@ -339,11 +341,12 @@ export async function persistIdbToDisk(params?: {
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
         }
-        writeMatrixIdbSnapshotJson({
+        // Once publication begins, finish every row and cleanup before releasing the lock.
+        await writeMatrixIdbSnapshotJson({
           storageRootDir,
           snapshotJson: JSON.stringify(snapshot),
           databaseCount: snapshot.length,
-          stateRuntime: params?.stateRuntime,
+          stateRuntime,
         });
         return snapshot.length;
       },

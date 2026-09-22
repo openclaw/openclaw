@@ -167,9 +167,13 @@ describe("chat transcript controller", () => {
     expect(transcriptSize(container)).toBe(540);
   });
 
-  it.each([false, true])(
-    "keeps the committed rows and message lookup together while a touch holds a prepend, idle=%s",
-    async (idleBeforeRelease) => {
+  it.each([
+    { idleBeforeRelease: false, outsideContact: false },
+    { idleBeforeRelease: true, outsideContact: false },
+    { idleBeforeRelease: true, outsideContact: true },
+  ])(
+    "keeps the committed rows and message lookup together while a touch holds a prepend, idle=$idleBeforeRelease, outside contact=$outsideContact",
+    async ({ idleBeforeRelease, outsideContact }) => {
       const initial: TestContentRow[] = [
         {
           kind: "content",
@@ -195,7 +199,31 @@ describe("chat transcript controller", () => {
           new Map([["retained", "retained-row"]]),
         );
         renderRows(initial);
-        container.dispatchEvent(new Event("touchstart"));
+        const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained bubble");
+        const contact = (identifier: number, target: EventTarget): Touch => ({
+          identifier,
+          target,
+          clientX: 0,
+          clientY: 100,
+          pageX: 0,
+          pageY: 100,
+          screenX: 0,
+          screenY: 100,
+          radiusX: 1,
+          radiusY: 1,
+          rotationAngle: 0,
+          force: 1,
+        });
+        const owned = contact(1, bubble);
+        const remaining = outsideContact ? [contact(2, document.body)] : [];
+        bubble.dispatchEvent(
+          new TouchEvent("touchstart", {
+            touches: [...remaining, owned],
+            targetTouches: [owned],
+            changedTouches: [owned],
+            bubbles: true,
+          }),
+        );
         if (idleBeforeRelease) {
           // The finger can remain down after native offset notifications settle.
           vi.useFakeTimers();
@@ -220,7 +248,14 @@ describe("chat transcript controller", () => {
         expect(container.textContent).not.toContain("older");
         expect(session.activeMessageId(["retained"])).toBe("retained");
         expect(session.activeMessageId(["older"])).toBeNull();
-        container.dispatchEvent(new Event("touchend"));
+        bubble.dispatchEvent(
+          new TouchEvent("touchend", {
+            touches: remaining,
+            targetTouches: [],
+            changedTouches: [owned],
+            bubbles: true,
+          }),
+        );
         renderRows(next);
         expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([
           "expanded-row",
@@ -348,12 +383,149 @@ describe("chat transcript controller", () => {
     const onSettled = vi.fn();
     transcript.scrollToOffset(420, onSettled);
 
+    for (let update = 0; update < 100; update += 1) {
+      transcript.hostUpdated();
+    }
+    expect(onSettled).not.toHaveBeenCalled();
+
     for (let index = 0; index <= 60; index += 1) {
       transcript.hostUpdated();
       flushFrames();
     }
 
     expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
+  });
+
+  it("applies a measurable saved offset once instead of replaying it across frames", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "single-frame-restore",
+      numberedContentRows(12),
+    );
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 2000 },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    try {
+      transcript.scrollToOffset(420);
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+
+      expect(container.scrollTop).toBe(420);
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) => typeof options === "object" && options?.top === 420,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("waits for a temporarily truncated scroll range before applying a saved offset", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "growing-range-restore",
+      numberedContentRows(12),
+    );
+    let scrollHeight = 900;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    const onSettled = vi.fn();
+
+    try {
+      transcript.scrollToOffset(420, onSettled);
+      for (let update = 0; update < 20; update += 1) {
+        transcript.hostUpdated();
+      }
+      expect(onSettled).not.toHaveBeenCalled();
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) =>
+            typeof options === "object" && (options?.top === 300 || options?.top === 420),
+        ),
+      ).toHaveLength(0);
+      expect(onSettled).not.toHaveBeenCalled();
+
+      scrollHeight = 2000;
+      transcript.hostUpdated();
+      flushFrames();
+
+      expect(container.scrollTop).toBe(420);
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) => typeof options === "object" && options?.top === 420,
+        ),
+      ).toHaveLength(1);
+      expect(onSettled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("applies a saved offset once after a shorter range stabilizes", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "stable-short-range-restore",
+      numberedContentRows(12),
+    );
+    let scrollHeight = 900;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    const onSettled = vi.fn();
+
+    try {
+      transcript.scrollToOffset(420, onSettled);
+      for (let frame = 0; frame < 10; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      scrollHeight = 600;
+      transcript.hostUpdated();
+      scrollHeight = 900;
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      expect(onSettled).not.toHaveBeenCalled();
+      for (let frame = 0; frame < 14; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledWith({ scrollTop: 300, anchorToEnd: true });
+    } finally {
+      transcript.hostDisconnected();
+    }
   });
 
   it.each([
@@ -442,6 +614,84 @@ describe("chat transcript controller", () => {
         }
       } finally {
         transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it.each([0, 252])(
+    "retires an end index without losing newer native movement (%s px)",
+    async (nativeGrowth) => {
+      const flushFrames = stubAnimationFrames();
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: Promise.resolve(true),
+        },
+        { canFollowEnd: () => false },
+      );
+      const content = numberedContentRows(12);
+      const typing: TestContentRow = {
+        kind: "content",
+        key: "presence:typing",
+        content: html`<div>Typing</div>`,
+      };
+      const { container, renderRows } = await mountTestTranscript(
+        "retired-end-index",
+        [...content, typing],
+        transcript,
+      );
+      let extraExtent = 0;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, get: () => transcriptSize(container) + extraExtent },
+      });
+      container.scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
+        container.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+      });
+      const typingRow = expectDefined(
+        container.querySelector<HTMLElement>('[data-virtual-row-key="presence:typing"]'),
+        "typing row",
+      );
+      Object.defineProperty(typingRow, "offsetHeight", { configurable: true, value: 30 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+        observer.emitTarget(typingRow, 800, 30);
+      }
+      renderRows([...content, typing]);
+      flushFrames();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        transcript.scrollToEnd({ behavior: "auto" });
+        container.dispatchEvent(new Event("scroll"));
+        if (nativeGrowth > 0) {
+          extraExtent = nativeGrowth;
+          transcript.scrollToEnd({ behavior: "auto" });
+          // Its native scroll event has not arrived when the earlier idle callback fires.
+        }
+        const before = container.scrollTop;
+        // Native idle can beat the queued frame; they are separate schedulers.
+        vi.advanceTimersByTime(150);
+        expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
+        // A remote receipt cancels following after the UI considers the command settled.
+        transcript.cancelScroll();
+        transcriptDomState.measuredRowHeight = 120;
+        const next: TestContentRow[] = [
+          ...content,
+          { kind: "content", key: "peer", content: html`<div>Peer</div>` },
+          typing,
+        ];
+        renderRows(next);
+        await Promise.resolve();
+        renderRows(next);
+        flushFrames();
+        expect(container.scrollTop, "retired index must not follow the peer replacing typing").toBe(
+          before,
+        );
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
       }
     },
   );
@@ -693,7 +943,7 @@ describe("chat transcript controller", () => {
     { distance: 0, followEnabled: false },
     { distance: 8, followEnabled: false },
   ])(
-    "follows appended typing only when permitted near the real end ($distance, $followEnabled)",
+    "does not follow another person’s typing ($distance, $followEnabled)",
     async ({ distance, followEnabled }) => {
       const rows = numberedContentRows(12);
       const { container, renderRows, transcript } = await mountTestTranscript(
@@ -727,19 +977,15 @@ describe("chat transcript controller", () => {
           ...rows,
           { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
         ]);
-        if (followEnabled && distance <= 8) {
-          expect(scrollTo).toHaveBeenCalledWith({ top: total + 84 - 600, behavior: "auto" });
-        } else {
-          expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset);
-        }
+        expect(scrollTo).not.toHaveBeenCalled();
+        expect(container.scrollTop).toBe(readerOffset);
       } finally {
         transcript.hostDisconnected();
       }
     },
   );
 
-  it("cancels typing follow before later geometry can retarget the reader", async () => {
+  it("does not introduce a typing command while native reader movement is pending", async () => {
     const flushFrames = stubAnimationFrames();
     const rows = numberedContentRows(12);
     const { container, renderRows, transcript } = await mountTestTranscript(
@@ -766,12 +1012,9 @@ describe("chat transcript controller", () => {
         ...rows,
         { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
       ]);
-      expect(scrollTo).toHaveBeenCalled();
-      scrollTo.mockClear();
+      expect(scrollTo).not.toHaveBeenCalled();
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-      expect
-        .soft(scrollTo)
-        .toHaveBeenCalledExactlyOnceWith({ top: readerOffset, behavior: "instant" });
+      expect(scrollTo).not.toHaveBeenCalled();
       container.scrollTop -= 100;
       container.dispatchEvent(new Event("scroll"));
       scrollTo.mockClear();

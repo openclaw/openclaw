@@ -45,6 +45,98 @@ describe("Codex app-server terminal settlement", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
+  it.each([60_000, MAX_TIMER_TIMEOUT_MS])(
+    "settles a native receipt while prompt persistence is blocked with execution budget %i",
+    async (timeoutMs) => {
+      const params = createTestParams();
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "held-prompt.sqlite"),
+        "session-held-prompt",
+      );
+      const target = params.sessionTarget;
+      if (!target?.sessionId || !target.sessionKey) {
+        throw new Error("SQLite transcript target was not attached");
+      }
+      const transcriptTarget = {
+        ...target,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+      };
+      const held = createDeferred<void>();
+      const writerAcquired = createDeferred<void>();
+      let writer: Promise<void> | undefined;
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          writer = withSessionTranscriptWriteLock(transcriptTarget, async () => {
+            writerAcquired.resolve();
+            await held.promise;
+          });
+          await writerAcquired.promise;
+        }
+        return undefined;
+      });
+      const onAttemptTimeout = vi.fn();
+      const onAttemptDeadlineChanged = vi.fn();
+      const turnAccepted = createDeferred<void>();
+      params.timeoutMs = timeoutMs;
+      params.onAttemptTimeout = onAttemptTimeout;
+      params.onAttemptDeadlineChanged = onAttemptDeadlineChanged;
+      params.onExecutionPhase = ({ phase }) => {
+        if (phase === "turn_accepted") {
+          turnAccepted.resolve();
+        }
+      };
+      vi.useFakeTimers();
+      const run = runCodexAppServerAttempt(params);
+      const settled = vi.fn();
+      void run.then(settled, settled);
+      try {
+        await Promise.race([
+          turnAccepted.promise,
+          run.then(() => {
+            throw new Error("Codex attempt ended before turn acceptance");
+          }),
+        ]);
+        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
+        const receivedAtMs = Date.now();
+        void harness.notify(
+          turnCompleted({
+            id: "turn-1",
+            status: "completed",
+            items: [
+              {
+                id: "answer",
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "Completed answer.",
+              },
+            ],
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(onAttemptDeadlineChanged).toHaveBeenLastCalledWith({
+          kind: "bounded",
+          deadlineAtMs: receivedAtMs + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+        });
+        expect(settled).not.toHaveBeenCalled();
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        held.resolve();
+        await writer;
+        const result = await run;
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(result.assistantTexts).toEqual(["Completed answer."]);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+      } finally {
+        held.resolve();
+        vi.useRealTimers();
+        await writer;
+        await run;
+      }
+    },
+  );
+
   it.each([
     { stage: "onAssistantMessageStart", nativeCompleted: true },
     { stage: "onPartialReply", nativeCompleted: true },
@@ -475,8 +567,12 @@ describe("Codex app-server terminal settlement", () => {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
         }
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        if (release !== "during grace") {
+          await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        }
+        // Keep the grace clock fixed while accepted transcript work and cleanup settle.
         const result = await run;
+        expect(settled).toHaveBeenCalledOnce();
         expect(readAttemptTerminal(result)).toMatchObject({
           aborted: termination === "abort",
           timedOut: false,

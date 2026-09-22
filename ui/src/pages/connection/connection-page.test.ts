@@ -84,6 +84,70 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("ConnectionPage browser sign-in", () => {
+  it.each(["offline", "stopped", "connected"] as const)(
+    "requires confirmation and clears only after accepting while %s",
+    async (phase) => {
+      const { gateway } = createApplicationGateway({
+        phase,
+        sessionKey: "main",
+      } as ApplicationGatewaySnapshot);
+      let stored = true;
+      gateway.hasStoredDeviceToken = () => stored;
+      gateway.forgetDeviceToken = vi.fn(() => {
+        stored = false;
+        return true;
+      });
+      const { page } = await mount(gateway);
+      const forget = () =>
+        [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Forget this browser",
+        );
+      expect(forget()).toBeDefined();
+      forget()?.click();
+      await vi.waitFor(() =>
+        expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      );
+      document
+        .querySelector<HTMLButtonElement>(".exec-approval-actions button:not(.danger)")
+        ?.click();
+      await settleLitElement(page);
+      expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
+      forget()?.click();
+      await vi.waitFor(() =>
+        expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      );
+      document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")?.click();
+      await vi.waitFor(() => expect(gateway.forgetDeviceToken).toHaveBeenCalledOnce());
+      await settleLitElement(page);
+      expect(forget()).toBeUndefined();
+    },
+  );
+
+  it("does not apply an old confirmation to a newly selected Gateway", async () => {
+    const { gateway } = createApplicationGateway({
+      phase: "offline",
+      sessionKey: "main",
+    } as ApplicationGatewaySnapshot);
+    gateway.hasStoredDeviceToken = () => true;
+    gateway.forgetDeviceToken = vi.fn(() => true);
+    const { page } = await mount(gateway);
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Forget this browser")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+    );
+    expect(document.querySelector(".exec-approval-sub")?.textContent).toContain(
+      "gateway.example.test",
+    );
+    gateway.connection.gatewayUrl = "wss://other.example.test";
+    document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")?.click();
+    await settleLitElement(page);
+    expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("ConnectionPage ping", () => {
   function pingStat(page: ConnectionPage, label: string) {
     const term = [...page.querySelectorAll(".connection-ping__stats dt")].find(

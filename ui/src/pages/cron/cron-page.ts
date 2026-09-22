@@ -20,9 +20,7 @@ import {
   hasCronFormErrors,
   invalidateCronRefresh,
   loadCronJobsPage,
-  loadCronRuns,
   loadCronStatus,
-  loadMoreCronRuns,
   normalizeCronFormState,
   removeCronJob,
   runCronJob,
@@ -30,11 +28,15 @@ import {
   startCronEdit,
   toggleCronJob,
   updateCronJobsFilter,
-  updateCronRunsFilter,
   validateCronForm,
-  type CronFormState,
-  type CronState,
 } from "../../lib/cron/index.ts";
+import {
+  getCronRunsViewState,
+  loadCronRuns,
+  loadMoreCronRuns,
+  updateCronRunsFilter,
+} from "../../lib/cron/runs.ts";
+import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -42,14 +44,21 @@ import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-naviga
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CronEditorClearance } from "./editor-clearance.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.ts";
-import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
+import type { CronDetailTab, CronListTab } from "./view-types.ts";
+import { renderCron } from "./view.ts";
 
 registerCronEnglish();
 
 class CronPage extends OpenClawLightDomElement {
+  constructor() {
+    super();
+    void new CronEditorClearance(this);
+  }
+
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
@@ -518,11 +527,12 @@ class CronPage extends OpenClawLightDomElement {
 
   private submitForm(options: { runNow?: boolean } = {}) {
     this.runCronAdminTask(async (cronState) => {
+      const editing = Boolean(cronState.cronEditingJob);
       const result = await addCronJob(cronState);
       if (!result.saved) {
         return;
       }
-      if (cronState.cronEditingJob) {
+      if (editing || cronState.cronEditingJob) {
         return;
       }
       if (options.runNow && result.jobId) {
@@ -600,7 +610,7 @@ class CronPage extends OpenClawLightDomElement {
           createOpen: this.cron.cronCreateOpen,
           listTab: this.listTab,
           detailTab: this.detailTab,
-          error: this.cron.cronError ?? this.modelSuggestionsError,
+          error: this.cron.cronError ?? this.cron.cronRunsError ?? this.modelSuggestionsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
           heartbeatScratch: canManage ? this.heartbeatScratch : "",
@@ -610,6 +620,7 @@ class CronPage extends OpenClawLightDomElement {
           channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
           channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
           runs: this.cron.cronRuns,
+          runsState: getCronRunsViewState(this.cron),
           highlightedRunId: this.highlightedRunId,
           runsTotal: this.cron.cronRunsTotal,
           runsHasMore: this.cron.cronRunsHasMore,

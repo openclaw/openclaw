@@ -12,6 +12,9 @@ The timeout budgets around a Codex turn, and how OpenClaw settles a completed tu
 
 ## Timeouts
 
+Client startup and app-server control-request budgets measure elapsed time, so
+system-clock adjustments do not shorten or extend them.
+
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:

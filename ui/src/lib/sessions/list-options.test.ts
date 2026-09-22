@@ -281,10 +281,12 @@ describe("session list replacement options", () => {
       );
     });
     snapshot.client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(snapshot.client);
     const sessions = createTestSessionCapability({
-      snapshot,
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
+      ...gateway,
+      get snapshot() {
+        return snapshot;
+      },
     });
 
     await sessions.refresh({ agentId: "main", force: true });
@@ -299,15 +301,19 @@ describe("session list replacement options", () => {
       archivedAt: 20,
     });
 
-    sessions.reconcileChanged({
-      sessionKey: key,
-      key,
-      kind: "direct",
-      sessionId: "archived-session",
-      updatedAt: 50,
-      archived: false,
-      archivedAt: null,
-      reason: "update",
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        sessionId: "archived-session",
+        updatedAt: 50,
+        archived: false,
+        archivedAt: null,
+        reason: "update",
+      },
     });
     expect(sessions.state.result?.sessions.find((row) => row.key === key)?.archived).toBe(false);
     sessions.dispose();
@@ -397,7 +403,7 @@ describe("session list replacement options", () => {
     },
   );
 
-  it("keeps a restored Active row when another observer replays an older archive event", async () => {
+  it("restores Active membership when an archive and restore share a timestamp", async () => {
     vi.useFakeTimers();
     const original: GatewaySessionRow = {
       key: "agent:main:restored-archive",
@@ -447,9 +453,6 @@ describe("session list replacement options", () => {
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.state.result?.sessions).toEqual([offered]);
 
-      // The same payload retains its first receipt across capability consumers.
-      sessions.reconcileChanged(archived);
-      expect(sessions.state.result?.sessions).toEqual([offered]);
       expect(sessions.state.result?.count).toBe(1);
       expect(sessions.archiveVisibility(original.key)).toBeUndefined();
     } finally {
@@ -885,7 +888,7 @@ describe("session list replacement options", () => {
     const listCallsBeforeTail = request.mock.calls.filter(
       ([method]) => method === "sessions.list",
     ).length;
-    await sessions.refreshReplacement("main");
+    await sessions.reconcileMutation("main");
 
     // One seeding list, none from the patches, one authoritative tail refresh.
     expect(listCallsBeforeTail).toBe(1);

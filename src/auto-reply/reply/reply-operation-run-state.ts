@@ -1,5 +1,6 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type { ReplyCompletion } from "../../agents/reply-completion.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
@@ -17,7 +18,8 @@ type ReplyOperationAdmissionSnapshot =
         | "lifecycle-invalidated"
         | "queue-cap"
         | "question-response-indeterminate"
-        | "question-response-refused";
+        | "question-response-refused"
+        | "question-response-rejected";
     };
 
 // Rejection diagnostics carry owner-selected codes, never user-facing error text.
@@ -31,6 +33,7 @@ export type ReplyPreRunRejectionCode =
   | "session-directive-rejected";
 
 export type ReplyOperationRunState = {
+  replyCompletion?: ReplyCompletion;
   heartbeat?: {
     prepareReply: (
       replyResult: ReplyPayload | ReplyPayload[] | undefined,

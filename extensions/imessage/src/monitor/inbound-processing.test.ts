@@ -575,7 +575,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "p:0/imsg-production",
       chatGuid: "any;-;+15555550123",
@@ -924,39 +924,32 @@ describe("buildIMessageInboundContext", () => {
 });
 
 describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression)", () => {
-  function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
-    const decision = {
-      kind: "dispatch" as const,
-      route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
-      bindingResolution: null,
-      isGroup: false,
+  async function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
+    const message = {
       sender: "+15555550123",
-      senderId: "+15555550123",
-      senderNormalized: "+15555550123",
-      historyKey: "h",
-      chatId: 3,
-      chatGuid: "any;-;+15555550123",
-      chatIdentifier: "+15555550123",
-      replyContext: undefined,
-      isCommand: false,
-      commandAuthorized: false,
-      hasControlCommand: false,
+      text: "hi",
+      chat_id: 3,
+      chat_guid: "any;-;+15555550123",
+      chat_identifier: "+15555550123",
+      ...messageOverrides,
     };
+    const decision = await resolveDecision({ message });
+    if (decision.kind !== "dispatch") {
+      throw new Error("expected message dispatch");
+    }
     return {
       cfg: {} as OpenClawConfig,
       accountService: undefined,
-      decision: decision as unknown as Parameters<
-        typeof buildIMessageInboundContext
-      >[0]["decision"],
-      message: { sender: "+15555550123", text: "hi", ...messageOverrides },
+      decision,
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    } as unknown as Parameters<typeof buildIMessageInboundContext>[0];
+    } satisfies Parameters<typeof buildIMessageInboundContext>[0];
   }
 
   it("uses the gateway-allocated shortId when the inbound has a guid", async () => {
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
+      await buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
     );
     // The gateway-allocated short id must not leak the chat.db rowid.
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
@@ -969,7 +962,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     // short-id namespace. Agent then tried to react to a phantom shortId
     // that the resolver couldn't find ("13 is no longer available").
     const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 13, guid: undefined }),
+      await buildParams({ id: 13, guid: undefined }),
     );
     expect(ctxPayload.MessageSid).toBeUndefined();
     // Critically: never the rowid as a string.
@@ -977,7 +970,9 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
   });
 
   it("does not leak chat.db ROWIDs even when the guid is whitespace", async () => {
-    const { ctxPayload } = await buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
+    const { ctxPayload } = await buildIMessageInboundContext(
+      await buildParams({ id: 13, guid: "   " }),
+    );
     expect(ctxPayload.MessageSid).toBeUndefined();
   });
 });

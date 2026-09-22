@@ -1,12 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
-import {
-  renderPanelRefreshStatus,
-  type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -14,6 +10,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
 import { charsToTokens, formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { renderUsageRefreshStatus } from "./page-shell.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
@@ -21,9 +18,9 @@ import type {
   UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
-import { renderInsightList, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
+import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
+import { renderInsightList } from "./view-overview.ts";
 
-// Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
 const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
@@ -48,44 +45,19 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
   return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
 }
 
-/** Filter session logs by a timestamp range. */
-function filterLogsByRange(
-  logs: SessionLogEntry[],
-  rangeStart: number,
-  rangeEnd: number,
-): SessionLogEntry[] {
-  const lo = Math.min(rangeStart, rangeEnd);
-  const hi = Math.max(rangeStart, rangeEnd);
-  return logs.filter((log) => {
-    if (log.timestamp <= 0) {
-      return true;
-    }
-    const ts = normalizeLogTimestamp(log.timestamp);
-    return ts >= lo && ts <= hi;
-  });
-}
-
-function renderUsageRefreshStatus(
-  status: PanelRefreshStatus,
-  detailKey: string,
-  kind: "timeline" | "conversation" | "context",
-) {
-  return renderPanelRefreshStatus({
-    status,
-    errorMessage: status.error
-      ? t("usage.details.loadFailed", {
-          detail: normalizeLowercaseStringOrEmpty(t(detailKey)),
-          error: status.error,
-        })
-      : undefined,
-    className: `usage-callout usage-detail-error--${kind}`,
-  });
+function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
+  // Keep undated entries visible; interval totals count dated entries separately.
+  if (!(log.timestamp > 0)) {
+    return true;
+  }
+  const ts = normalizeLogTimestamp(log.timestamp);
+  return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
 function renderSessionSummary(
   session: UsageSessionEntry,
   filteredUsage?: UsageSessionEntry["usage"],
-  filteredLogs?: SessionLogEntry[],
+  filteredLogs?: SessionLogEntry[] | null,
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
@@ -93,6 +65,22 @@ function renderSessionSummary(
   }
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
+  const hasInterval = filteredLogs !== undefined;
+  const datedLogs = filteredLogs?.filter((log) => log.timestamp > 0);
+  const messageCounts = !hasInterval
+    ? usage.messageCounts
+    : datedLogs?.length
+      ? datedLogs.reduce(
+          (counts, { role }) => {
+            if (role === "user" || role === "assistant") {
+              counts[role] += 1;
+              counts.total += 1;
+            }
+            return counts;
+          },
+          { total: 0, user: 0, assistant: 0 },
+        )
+      : undefined;
 
   const badges = [
     session.channel && `channel:${session.channel}`,
@@ -105,10 +93,10 @@ function renderSessionSummary(
   // Always use the full tool list for stable layout; update counts when filtering
   const baseTools = usage.toolUsage?.tools.slice(0, 6) ?? [];
   let toolCounts: Map<string, number> | undefined;
-  if (filteredLogs) {
+  if (datedLogs?.length) {
     toolCounts = new Map();
     // Result rows carry tool names for filtering, but only assistant rows record calls.
-    for (const log of filteredLogs.filter(({ role }) => role === "assistant")) {
+    for (const log of datedLogs.filter(({ role }) => role === "assistant")) {
       for (const [name, count] of parseToolSummary(log.content).tools) {
         toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
@@ -116,13 +104,19 @@ function renderSessionSummary(
   }
   const toolItems = baseTools.map((tool) => ({
     label: tool.name,
-    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : tool.count}`,
+    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : hasInterval ? t("usage.common.emptyValue") : tool.count}`,
     sub: t("usage.overview.calls"),
   }));
   const toolCallCount = toolCounts
     ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
-    : (usage.toolUsage?.totalCalls ?? 0);
-  const uniqueToolCount = toolCounts ? toolCounts.size : (usage.toolUsage?.uniqueTools ?? 0);
+    : hasInterval
+      ? t("usage.common.emptyValue")
+      : (usage.toolUsage?.totalCalls ?? 0);
+  const uniqueToolCount = toolCounts
+    ? toolCounts.size
+    : hasInterval
+      ? t("usage.common.emptyValue")
+      : (usage.toolUsage?.uniqueTools ?? 0);
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
@@ -132,11 +126,15 @@ function renderSessionSummary(
   const cards = [
     {
       labelKey: "usage.overview.messages",
-      value: usage.messageCounts?.total ?? 0,
-      meta: html`${usage.messageCounts?.user ?? 0}
-      ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-      ${usage.messageCounts?.assistant ?? 0}
-      ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
+      value: messageCounts?.total ?? (hasInterval ? t("usage.common.emptyValue") : 0),
+      meta: html`${
+        hasInterval && !messageCounts
+          ? t("usage.common.emptyValue")
+          : html`${messageCounts?.user ?? 0}
+            ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
+            ${messageCounts?.assistant ?? 0}
+            ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`
+      }${hasInterval ? html`<br />${t("usage.details.loadedIntervalMessages")}` : nothing}`,
     },
     {
       labelKey: "usage.overview.toolCalls",
@@ -145,8 +143,9 @@ function renderSessionSummary(
     },
     {
       labelKey: "usage.overview.errors",
-      value: usage.messageCounts?.errors ?? 0,
-      meta: html`${usage.messageCounts?.toolResults ?? 0} ${t("usage.overview.toolResults")}`,
+      value: hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.errors ?? 0),
+      meta: html`${hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.toolResults ?? 0)}
+      ${t("usage.overview.toolResults")}`,
     },
     {
       labelKey: "usage.details.duration",
@@ -197,8 +196,6 @@ function computeFilteredUsage(
 
   let totalTokens = 0;
   let totalCost = 0;
-  let userMessages = 0;
-  let assistantMessages = 0;
   const tokenTotals = { output: 0, input: 0, cacheWrite: 0, cacheRead: 0 };
 
   for (const p of filtered) {
@@ -207,8 +204,6 @@ function computeFilteredUsage(
     for (const { key } of USAGE_TOKEN_CATEGORIES) {
       tokenTotals[key] += p[key] || 0;
     }
-    assistantMessages += p.output > 0 ? 1 : 0;
-    userMessages += p.input > 0 ? 1 : 0;
   }
   const first = expectDefined(filtered[0], "filtered usage first point");
   const last = expectDefined(filtered.at(-1), "filtered usage last point");
@@ -221,14 +216,7 @@ function computeFilteredUsage(
     durationMs: last.timestamp - first.timestamp,
     firstActivity: first.timestamp,
     lastActivity: last.timestamp,
-    messageCounts: {
-      total: filtered.length,
-      user: userMessages,
-      assistant: assistantMessages,
-      toolCalls: 0,
-      toolResults: 0,
-      errors: 0,
-    },
+    messageCounts: undefined,
   };
 }
 
@@ -339,8 +327,12 @@ function renderSessionDetailPanel(
         ${renderSessionSummary(
           session,
           filteredUsage,
-          timeSeriesCursorStart != null && timeSeriesCursorEnd != null && sessionLogs
-            ? filterLogsByRange(sessionLogs, timeSeriesCursorStart, timeSeriesCursorEnd)
+          hasRange
+            ? sessionLogsStatus.hasLoaded && sessionLogs
+              ? sessionLogs.filter((log) =>
+                  isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
+                )
+              : null
             : undefined,
         )}
         <div class="session-detail-row">
@@ -425,7 +417,6 @@ function renderTimeSeriesCompact(
     `;
   }
 
-  // Filter and recalculate (same logic as main function)
   let points = timeSeries.points;
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
     const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
@@ -457,7 +448,6 @@ function renderTimeSeriesCompact(
     return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
   });
 
-  // Compute range-filtered sums for "Tokens by Type"
   const hasSelection = cursorStart != null && cursorEnd != null;
   const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
   const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
@@ -512,7 +502,6 @@ function renderTimeSeriesCompact(
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
 
-  // Pre-compute handle X positions in SVG viewBox coordinates
   const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
   const rightHandleX =
     rangeEndIdx >= points.length
@@ -593,14 +582,10 @@ function renderTimeSeriesCompact(
               svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
           )}
           <!-- X axis labels (first and last) -->
-          ${
-            points.length > 0
-              ? svg`
+          ${svg`
             <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
             <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-          `
-              : nothing
-          }
+          `}
           <!-- Bars -->
           ${points.map((p, i) => {
             const val = expectDefined(barTotals[i], "time series bar total");
@@ -669,9 +654,8 @@ function renderTimeSeriesCompact(
             }
             e.preventDefault();
             e.stopPropagation();
-            // Find the wrapper, then the SVG inside it
             const wrapper = (e.currentTarget as HTMLElement).closest(".timeseries-chart-wrapper");
-            const svgEl = wrapper?.querySelector("svg") as SVGSVGElement;
+            const svgEl = wrapper?.querySelector("svg");
             if (!svgEl) {
               return;
             }
@@ -1035,25 +1019,16 @@ function renderSessionLogsCompact(
     new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
   ).toSorted((a, b) => a.localeCompare(b));
   const hasCursorFilter = cursorStart != null && cursorEnd != null;
-  const cursorMin = hasCursorFilter ? Math.min(cursorStart, cursorEnd) : 0;
-  const cursorMax = hasCursorFilter ? Math.max(cursorStart, cursorEnd) : Infinity;
-  const filteredEntries = entries.filter((entry) => {
-    // Filter by cursor timeline range (only if logs cover the range)
-    if (hasCursorFilter && entry.log.timestamp > 0) {
-      const timestamp = normalizeLogTimestamp(entry.log.timestamp);
-      if (timestamp < cursorMin || timestamp > cursorMax) {
-        return false;
-      }
-    }
-    return (
+  const filteredEntries = entries.filter(
+    (entry) =>
+      (!hasCursorFilter || isLogInRange(entry.log, cursorStart, cursorEnd)) &&
       (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
       (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
       (filters.tools.length === 0 ||
         entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
       (!normalizedQuery ||
-        normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery))
-    );
-  });
+        normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery)),
+  );
   const hasActiveFilters =
     filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;
   const displayedCount =

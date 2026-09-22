@@ -3,9 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
   waitForPidFile,
@@ -466,12 +468,12 @@ describe("secret ref resolver", () => {
     let childPid: number | undefined;
     let resultPromise: Promise<string> | undefined;
     const nativeSetTimeout = globalThis.setTimeout;
-    const noOutputTimeouts: Array<() => void> = [];
+    let noOutputTimeout: (() => void) | undefined;
     const setTimeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockImplementation((callback, delay, ...args) => {
         if (delay === 1_000) {
-          noOutputTimeouts.push(() => callback(...args));
+          noOutputTimeout = () => callback(...args);
           return nativeSetTimeout(() => undefined, 60_000);
         }
         return nativeSetTimeout(callback, delay, ...args);
@@ -485,13 +487,8 @@ describe("secret ref resolver", () => {
       });
       const resultErrorPromise = resultPromise.catch((error: unknown) => error);
       childPid = await waitForPidFile(pidPath);
-      await vi.waitFor(
-        () => {
-          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 5_000 },
-      );
-      noOutputTimeouts.at(-1)?.();
+      expect(isPidAlive(childPid)).toBe(true);
+      expectDefined(noOutputTimeout, "no-output timeout")();
       const error = await resultErrorPromise;
 
       expect(isProviderScopedSecretResolutionError(error)).toBe(true);

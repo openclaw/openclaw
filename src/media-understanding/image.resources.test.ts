@@ -7,8 +7,12 @@ import * as minimaxVlm from "../agents/minimax-vlm.js";
 import * as modelAuth from "../agents/model-auth.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { closeEphemeralPreparedModelRuntimeResources } from "../agents/prepared-model-runtime.resources.js";
+import * as providerStream from "../agents/provider-stream.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
+import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
@@ -271,6 +275,59 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("does not dispatch an image completion retired during transport initialization", async () => {
+  const fixture = nativeImageFixture();
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      const lease = await acquireFixtureRuntime(fixture, "image-model");
+      vi.useFakeTimers();
+      const dispatch = vi.fn(() => {
+        throw new Error("Unexpected retired image provider dispatch");
+      });
+      const register = vi
+        .spyOn(providerStream, "registerProviderStreamForModel")
+        .mockImplementationOnce(({ model }) => {
+          const runtime = getModelLlmRuntime(model);
+          expect(runtime).toBeDefined();
+          runtime?.registry.registerApiProvider({
+            api: model.api,
+            stream: dispatch,
+            streamSimple: dispatch,
+          });
+          return undefined;
+        });
+      const complete = llmStream.complete;
+      let retirement: Promise<void> | undefined;
+      const facade = vi.spyOn(llmStream, "complete").mockImplementationOnce((...args) => {
+        const completion = complete(...args);
+        retirement = closeEphemeralPreparedModelRuntimeResources();
+        expect(args[2]?.signal?.aborted).toBe(false);
+        return completion;
+      });
+      try {
+        await expect(
+          describeImageWithModelCore({
+            ...fixture.request,
+            preparedModelRuntime: lease.snapshot,
+          }),
+        ).rejects.toThrow("Prepared plugin registry resources have been released");
+        expect(facade).toHaveBeenCalledOnce();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        facade.mockRestore();
+        register.mockRestore();
+        await lease[Symbol.asyncDispose]();
+        await retirement;
+      }
+      expect(fixture.state.connections[0]?.disposals).toBe(1);
+      expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it.each(["timeout", "cancellation", "late-rejection"] as const)(
   "retains the supplied generation and adopted donor after %s reports",

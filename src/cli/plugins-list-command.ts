@@ -106,7 +106,7 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const enabled = list.filter((p) => p.enabled).length;
+  const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
 
   if (!opts.verbose) {

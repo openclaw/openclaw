@@ -1,7 +1,10 @@
 // Prepares the trusted harness manifest for npm Telegram live E2E scenarios.
 import fs from "node:fs";
 import { isRecord as isPackageJsonRecord } from "../../../../packages/normalization-core/src/record-coerce.ts";
-import { privateLocalOnlyPluginSdkEntrypoints } from "../../../lib/plugin-sdk-entries.mts";
+import {
+  privateLocalOnlyPluginSdkEntrypoints,
+  privateQaPluginSdkEntrypoints,
+} from "../../../lib/plugin-sdk-entries.mts";
 
 const packageJsonPaths = process.argv.slice(2);
 if (packageJsonPaths.length !== 1) {
@@ -21,13 +24,8 @@ const packageExports = isPackageJsonRecord(parsedPackageJson.exports)
   : {};
 parsedPackageJson.exports = packageExports;
 
-// Private QA builds emit these harness-only facades outside the regular SDK inventory.
-for (const subpath of [
-  ...privateLocalOnlyPluginSdkEntrypoints,
-  "qa-channel-protocol",
-  "qa-lab",
-  "qa-runtime",
-]) {
+// Match the private build's facades without adding them to the candidate package.
+for (const subpath of [...privateLocalOnlyPluginSdkEntrypoints, ...privateQaPluginSdkEntrypoints]) {
   const exportPath = `./plugin-sdk/${subpath}`;
   if (!packageExports[exportPath]) {
     packageExports[exportPath] = {

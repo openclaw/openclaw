@@ -1,5 +1,7 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/conversation-runtime";
+import { listDiscordAccountIds, resolveDiscordAccountConfig } from "./accounts.js";
 import { resolveDiscordRuntimeBindingConversationId } from "./conversation-identity.js";
 import { resolveDiscordConversationBindingRoute } from "./monitor/conversation-binding-route.js";
 import { resolveDiscordConversationRoute } from "./monitor/route-resolution.js";
@@ -19,6 +21,14 @@ export function inspectDiscordConversationRouteOwner(params: {
     };
   };
 }) {
+  const accountId = normalizeAccountId(params.accountId);
+  if (
+    params.cfg.channels?.discord?.enabled === false ||
+    !listDiscordAccountIds(params.cfg).some((id) => normalizeAccountId(id) === accountId) ||
+    resolveDiscordAccountConfig(params.cfg, accountId)?.enabled === false
+  ) {
+    return null;
+  }
   const direct = params.conversation.kind === "direct";
   const nativeConversationId = params.conversation.nativeChannelId ?? params.conversation.peerId;
   const threadConversationId = direct ? undefined : params.conversation.threadId;
@@ -32,7 +42,7 @@ export function inspectDiscordConversationRouteOwner(params: {
     });
   const route = resolveDiscordConversationRoute({
     cfg: params.cfg,
-    accountId: params.accountId,
+    accountId,
     guildId: params.conversation.context?.guildId,
     memberRoleIds: params.conversation.context?.memberRoleIds,
     peer: { kind: params.conversation.kind, id: params.conversation.peerId },
@@ -41,7 +51,7 @@ export function inspectDiscordConversationRouteOwner(params: {
   const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
     cfg: params.cfg,
     route,
-    accountId: params.accountId,
+    accountId,
     runtimeConversationId,
     configuredConversationId: threadConversationId ?? nativeConversationId,
     parentConversationId: params.conversation.context?.parentPeerId,
@@ -52,7 +62,7 @@ export function inspectDiscordConversationRouteOwner(params: {
     resolveThreadBindingSpawnPolicy({
       cfg: params.cfg,
       channel: "discord",
-      accountId: params.accountId,
+      accountId,
       kind: "subagent",
     }).enabled
   ) {

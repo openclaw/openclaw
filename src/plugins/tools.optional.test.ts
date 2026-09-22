@@ -1634,19 +1634,7 @@ describe("resolvePluginTools optional tools", () => {
   );
 
   it("warns when cold registry load still does not provide the selected plugin tools", () => {
-    const context = {
-      ...createContext(),
-      config: {
-        ...createContext().config,
-        plugins: {
-          ...createContext().config.plugins,
-          entries: {
-            "optional-demo": { enabled: true },
-          },
-        },
-      },
-    };
-    const config = context.config;
+    const { rawContext, autoEnabledConfig: config } = createAutoEnabledOptionalContext();
     const registry = createToolRegistry([]);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     installToolManifestSnapshot({
@@ -1657,18 +1645,20 @@ describe("resolvePluginTools optional tools", () => {
       }),
     });
 
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
-        context,
-        toolAllowlist: ["optional_tool"],
-      }),
-    );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const tools = resolvePluginTools(
+        createResolveToolsParams({
+          context: { ...rawContext, config },
+          toolAllowlist: ["optional_tool"],
+        }),
+      );
 
-    expect(tools).toStrictEqual([]);
-    expectSingleDiagnosticMessage(
-      registry.diagnostics,
-      "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
-    );
+      expect(tools).toStrictEqual([]);
+      expectSingleDiagnosticMessage(
+        registry.diagnostics,
+        "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
+      );
+    }
   });
 
   it("keeps active-owner callbacks while a missing sibling loads", () => {
@@ -2626,7 +2616,9 @@ describe("resolvePluginTools optional tools", () => {
         field === "schema"
           ? "broken_tool missing parameters object"
           : `ordinary ${field} getter failure`;
-      const broken =
+      const expectedMessage = `plugin tool is malformed (schema-bug): ${reason}`;
+      const siblingNames = ["valid_tool", "independent_tool"];
+      let broken =
         field === "schema"
           ? createMalformedTool("broken_tool")
           : Object.defineProperty(makeTool("broken_tool"), field, {
@@ -2645,16 +2637,24 @@ describe("resolvePluginTools optional tools", () => {
         createNamedToolEntry("independent-owner", "independent_tool"),
       ]);
 
-      const tools = resolvePluginTools(createResolveToolsParams());
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const tools = resolvePluginTools(createResolveToolsParams());
 
-      expectResolvedToolNames(tools, ["valid_tool", "independent_tool"]);
-      expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is malformed (schema-bug):");
-      expect(registry.diagnostics[0]?.message).toContain(reason);
-      for (const tool of tools) {
-        await expect(tool.execute("call", {}, undefined)).resolves.toEqual({
-          content: [{ type: "text", text: "ok" }],
-        });
+        expectResolvedToolNames(tools, siblingNames);
+        expectSingleDiagnosticMessage(registry.diagnostics, expectedMessage);
+        for (const tool of tools) {
+          await expect(tool.execute("call", {}, undefined)).resolves.toEqual({
+            content: [{ type: "text", text: "ok" }],
+          });
+        }
       }
+
+      broken = Object.defineProperty(makeTool("broken_tool"), "execute", { value: null });
+      expectResolvedToolNames(resolvePluginTools(createResolveToolsParams()), siblingNames);
+      expect(registry.diagnostics.map(({ message }) => message)).toEqual([
+        expect.stringContaining(expectedMessage),
+        expect.stringContaining("broken_tool missing execute function"),
+      ]);
     },
   );
 

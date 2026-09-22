@@ -14,6 +14,7 @@ const native = vi.hoisted(() => ({
   tracingCategories: vi.fn(),
   unsupported: false,
 }));
+const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: native.tracingCategories }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -82,6 +83,11 @@ async function capture(signal = new AbortController().signal, hasAuthority = () 
 }
 
 beforeEach(() => {
+  if (hostBunVersion) {
+    // Most cases exercise the Node inspector owner through a mocked native
+    // session. The dedicated Bun case below retains the unsupported contract.
+    Object.defineProperty(process.versions, "bun", { ...hostBunVersion, value: undefined });
+  }
   vi.resetModules();
   vi.resetAllMocks();
   vi.stubEnv("NODE_OPTIONS", "");
@@ -106,7 +112,12 @@ beforeEach(() => {
   );
   native.wait.mockResolvedValue(undefined);
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  if (hostBunVersion) {
+    Object.defineProperty(process.versions, "bun", hostBunVersion);
+  }
+  vi.unstubAllEnvs();
+});
 
 describe("diagnostic CPU profile owner", () => {
   it("returns a complete sanitized graph only after native cleanup", async () => {
@@ -151,9 +162,19 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
   });
 
-  it("preserves sample order when native timestamps move backward", async () => {
+  it("preserves native signed script IDs, source offsets and sample order", async () => {
     const value = profile();
     value.timeDeltas = [10_000, -500, 10_500];
+    value.nodes[1].callFrame.lineNumber = -10;
+    value.nodes[1].callFrame.columnNumber = -200;
+    value.nodes[1].positionTicks = [{ line: -9, ticks: 2 }];
+    value.nodes[2].callFrame = {
+      functionName: "wasm-to-js",
+      scriptId: "-1",
+      url: "",
+      lineNumber: 0,
+      columnNumber: 0,
+    };
     native.post.mockImplementation(async (method) =>
       method === "Profiler.stop" ? { profile: value } : {},
     );
@@ -161,12 +182,46 @@ describe("diagnostic CPU profile owner", () => {
       status: "complete",
       result: {
         profile: {
+          nodes: expect.arrayContaining([
+            expect.objectContaining({
+              id: 2,
+              callFrame: expect.objectContaining({ lineNumber: -10, columnNumber: -200 }),
+              positionTicks: [{ line: -9, ticks: 2 }],
+            }),
+            expect.objectContaining({
+              id: 3,
+              callFrame: {
+                functionName: "[redacted]",
+                scriptId: "-1",
+                url: "",
+                lineNumber: 0,
+                columnNumber: 0,
+              },
+            }),
+          ]),
           samples: [2, 3, 2],
           timeDeltas: [10_000, -500, 10_500],
         },
       },
     });
   });
+
+  it.each(["private payload", "-", "-1.5", `-${"1".repeat(33)}`])(
+    "rejects malformed or oversized script IDs: %s",
+    async (scriptId) => {
+      const value = profile();
+      value.nodes[1].callFrame.scriptId = scriptId;
+      native.post.mockImplementation(async (method) =>
+        method === "Profiler.stop" ? { profile: value } : {},
+      );
+      expect(await capture()).toEqual({
+        status: "unavailable",
+        reason: "invalid-profile",
+        cleanupFailed: false,
+      });
+      expect(native.disconnect).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects overlap instead of queuing, and stops on cancellation", async () => {
     const controller = new AbortController();
@@ -400,6 +455,24 @@ describe("diagnostic CPU profile owner", () => {
       "invalid delta",
       (value: ProfileFixture) => {
         value.timeDeltas[0] = Number.NaN;
+      },
+    ],
+    [
+      "fractional source line",
+      (value: ProfileFixture) => {
+        value.nodes[1].callFrame.lineNumber = -1.5;
+      },
+    ],
+    [
+      "fractional source column",
+      (value: ProfileFixture) => {
+        value.nodes[1].callFrame.columnNumber = -1.5;
+      },
+    ],
+    [
+      "fractional position-tick line",
+      (value: ProfileFixture) => {
+        value.nodes[1].positionTicks = [{ line: -1.5, ticks: 2 }];
       },
     ],
     [

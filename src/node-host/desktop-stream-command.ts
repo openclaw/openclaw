@@ -6,6 +6,7 @@ import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, connectRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import { isWorkerDesktopArdPassword } from "../shared/worker-desktop-descriptor.js";
 import { parseNodeWorkerDesktopStreamInput } from "../worker/node-desktop-protocol.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
@@ -13,6 +14,25 @@ const DEFAULT_DESKTOP_PORT = 5900;
 const PROBE_TIMEOUT_MS = 1_500;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_VNC_PASSWORD_BYTES = 4 * 1024;
+
+/** One node-local decision serves both the declaration and stream invocation. */
+export function resolveNodeDesktopHostConfig(params: {
+  config?: DesktopHostConfig;
+  desktopSharingEnabled?: boolean;
+  platform: NodeJS.Platform;
+  ephemeral?: boolean;
+}): DesktopHostConfig {
+  return {
+    ...params.config,
+    // Disposable worker desktops stay behind their provider-attested carrier.
+    enabled:
+      params.ephemeral !== true &&
+      (params.platform === "darwin" ||
+        params.platform === "linux" ||
+        params.platform === "win32") &&
+      (params.desktopSharingEnabled ?? params.config?.enabled ?? true),
+  };
+}
 
 type NodeDesktopStreamCommandParams = {
   ticket: string;
@@ -99,6 +119,7 @@ async function runNodeDesktopStreamCommand(params: {
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   target: NodeDesktopStreamTarget;
   passwordFile?: string;
+  username?: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
@@ -122,12 +143,16 @@ async function runNodeDesktopStreamCommand(params: {
   if (probe.kind !== "rfb") {
     throw new Error(
       probe.kind === "not-rfb"
-        ? "desktop stream target is not an RFB server"
-        : "desktop stream loopback RFB server is unavailable",
+        ? `desktop stream target 127.0.0.1:${params.target.port} is not an RFB server; set desktop.host.port to the node's VNC server port`
+        : `desktop stream loopback RFB server is unavailable on port ${params.target.port}; enable System Settings -> General -> Sharing -> Screen Sharing on macOS, or start an authenticated loopback VNC server on Linux or Windows`,
     );
   }
   try {
-    const auth = classifyRfbSecurity(probe.securityTypes);
+    const auth = params.username
+      ? probe.securityTypes.includes(30)
+        ? "ard-account"
+        : "unsupported"
+      : classifyRfbSecurity(probe.securityTypes);
     if (auth === "none") {
       throw new Error("refusing unauthenticated loopback RFB server");
     }
@@ -135,9 +160,14 @@ async function runNodeDesktopStreamCommand(params: {
       throw new Error("loopback RFB server security is unsupported");
     }
     const vncPassword =
-      auth === "vnc-password"
+      auth === "vnc-password" || (auth === "ard-account" && params.username)
         ? await readVncPassword(params.passwordFile, params.signal)
         : undefined;
+    if (params.username && !isWorkerDesktopArdPassword(vncPassword)) {
+      throw new Error(
+        "lease-owned desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
+      );
+    }
     if (params.signal.aborted) {
       return;
     }
@@ -218,6 +248,7 @@ export async function invokeNodeWorkerDesktopStream(params: {
       : {}),
     target: { host: "127.0.0.1", port: command.port },
     ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
+    ...(command.username ? { username: command.username } : {}),
     signal: params.signal,
   });
 }

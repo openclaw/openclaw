@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
+import { imessagePlugin } from "../channel.js";
 
 type SendMessage = typeof import("../send.js").sendMessageIMessage;
 type RpcRequest = {
@@ -155,8 +156,8 @@ export function createIMessageOutboundRpcFixture(
       textLimit,
     });
   };
-  const createChannelDelivery = async () => {
-    const { imessagePlugin } = await import("../channel.js");
+  const createChannelDelivery = () => {
+    // The registered renderers are stateless; share them across per-case module resets.
     const channelChunker = imessagePlugin.outbound?.chunker;
     const channelSanitizer = imessagePlugin.outbound?.sanitizeText;
     if (!channelChunker || !channelSanitizer) {

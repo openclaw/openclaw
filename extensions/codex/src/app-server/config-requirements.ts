@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { parse as parseToml, type TomlTable } from "smol-toml";
 import type {
   CodexAppServerApprovalsReviewer,
   CodexAppServerManagedApprovalPolicy,
@@ -6,7 +7,7 @@ import type {
   OpenClawExecMode,
 } from "./config-contracts.js";
 import { resolveApprovalPolicy, resolveApprovalsReviewer } from "./config-exec-policy.js";
-import { readNonEmptyString } from "./config-utils.js";
+import { readNonEmptyString, readRecord } from "./config-utils.js";
 
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
@@ -46,21 +47,24 @@ export function parseAllowedSandboxModesFromCodexRequirements(
   content: string,
   hostName: string,
 ): Set<CodexAppServerSandboxMode> | undefined {
+  const requirements = parseCodexRequirements(content);
   const remoteSandboxModes = parseMatchingRemoteSandboxModesFromCodexRequirements(
-    content,
+    requirements,
     hostName,
   );
   if (remoteSandboxModes !== undefined) {
     return remoteSandboxModes;
   }
-  const values = parseTopLevelRequirementsStringArray(content, "allowed_sandbox_modes");
+  const values = readRequirementsStringArray(requirements?.allowed_sandbox_modes);
   return parseRequirementsSandboxModes(values);
 }
 
 export function parseAllowedApprovalPoliciesFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerManagedApprovalPolicy> | undefined {
-  const values = parseTopLevelRequirementsStringArray(content, "allowed_approval_policies");
+  const values = readRequirementsStringArray(
+    parseCodexRequirements(content)?.allowed_approval_policies,
+  );
   if (values === undefined) {
     return undefined;
   }
@@ -73,7 +77,9 @@ export function parseAllowedApprovalPoliciesFromCodexRequirements(
 export function parseAllowedApprovalsReviewersFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerApprovalsReviewer> | undefined {
-  const values = parseTopLevelRequirementsStringArray(content, "allowed_approvals_reviewers");
+  const values = readRequirementsStringArray(
+    parseCodexRequirements(content)?.allowed_approvals_reviewers,
+  );
   if (values === undefined) {
     return undefined;
   }
@@ -84,20 +90,22 @@ export function parseAllowedApprovalsReviewersFromCodexRequirements(
 }
 
 function parseMatchingRemoteSandboxModesFromCodexRequirements(
-  content: string,
+  requirements: TomlTable | undefined,
   hostName: string,
 ): Set<CodexAppServerSandboxMode> | undefined {
   const normalizedHostName = normalizeRequirementsHostName(hostName);
-  if (normalizedHostName === undefined) {
+  const remoteConfigs = requirements?.remote_sandbox_config;
+  if (normalizedHostName === undefined || !Array.isArray(remoteConfigs)) {
     return undefined;
   }
-  for (const section of parseTomlArrayTableSections(content, "remote_sandbox_config")) {
-    const patterns = parseRequirementsStringArray(section, "hostname_patterns");
+  for (const section of remoteConfigs) {
+    const config = readRecord(section);
+    const patterns = readRequirementsStringArray(config?.hostname_patterns);
     if (!patterns || !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)) {
       continue;
     }
     return parseRequirementsSandboxModes(
-      parseRequirementsStringArray(section, "allowed_sandbox_modes"),
+      readRequirementsStringArray(config?.allowed_sandbox_modes),
     );
   }
   return undefined;
@@ -115,141 +123,18 @@ function parseRequirementsSandboxModes(
   return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
 }
 
-function parseTopLevelRequirementsStringArray(content: string, key: string): string[] | undefined {
-  const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
-  return parseRequirementsStringArray(topLevelContent, key);
-}
-
-export function parseTomlStringValue(content: string, key: string): string | undefined | false {
-  return parseTomlStringAssignmentValue(content, tomlDottedKeyPattern(key));
-}
-
-export function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined | false {
-  return parseTomlStringAssignmentValue(
-    content,
-    `${tomlKeyPattern("model_providers")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("openai")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("base_url")}`,
-  );
-}
-
-function parseTomlStringAssignmentValue(
-  content: string,
-  keyPattern: string,
-): string | undefined | false {
-  const assignment = content.match(new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*([^\\r\\n]*)`));
-  if (!assignment) {
+function parseCodexRequirements(content: string): TomlTable | undefined {
+  try {
+    return parseToml(content, { integersAsBigInt: true });
+  } catch {
     return undefined;
   }
-  const rawValue = assignment[1]?.trimStart() ?? "";
-  if (rawValue.startsWith('"""') || rawValue.startsWith("'''")) {
-    return false;
-  }
-  const match = parseTomlStringAssignment(content, keyPattern);
-  return match ? (match[1] ?? match[2] ?? "") : false;
 }
 
-function parseTomlStringAssignment(content: string, keyPattern: string): RegExpMatchArray | null {
-  return content.match(
-    new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*(?:"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"|'([^']*)')`),
-  );
-}
-
-function tomlDottedKeyPattern(key: string): string {
-  return key.split(".").map(tomlKeyPattern).join("\\s*\\.\\s*");
-}
-
-function tomlKeyPattern(key: string): string {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return `(?:"${escaped}"|'${escaped}'|${escaped})`;
-}
-
-function parseRequirementsStringArray(content: string, key: string): string[] | undefined {
-  const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
-  if (!match) {
-    return undefined;
-  }
-  const arrayBody = match[1] ?? "";
-  const stringMatches = [...arrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
-  if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
-    return undefined;
-  }
-  return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
-}
-
-export function parseTomlTableSection(content: string, table: string): string | undefined {
-  const strippedContent = stripTomlLineComments(content);
-  const tablePattern = tomlDottedKeyPattern(table);
-  const headerPattern = new RegExp(`^\\s*\\[\\s*${tablePattern}\\s*\\]\\s*$`, "m");
-  const match = headerPattern.exec(strippedContent);
-  if (!match) {
-    return undefined;
-  }
-  const sectionStart = match.index + match[0].length;
-  const rest = strippedContent.slice(sectionStart);
-  const nextTableOffset = rest.search(/^\s*\[/m);
-  return nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset);
-}
-
-function parseTomlArrayTableSections(content: string, table: string): string[] {
-  const strippedContent = stripTomlLineComments(content);
-  const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const headerPattern = new RegExp(`^\\s*\\[\\[\\s*${escapedTable}\\s*\\]\\]\\s*$`, "gm");
-  const sections: string[] = [];
-  for (
-    let match = headerPattern.exec(strippedContent);
-    match;
-    match = headerPattern.exec(strippedContent)
-  ) {
-    const sectionStart = headerPattern.lastIndex;
-    const rest = strippedContent.slice(sectionStart);
-    const nextTableOffset = rest.search(/^\s*\[/m);
-    sections.push(nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset));
-  }
-  return sections;
-}
-
-export function firstTomlTableOffset(content: string): number {
-  const match = content.match(/^\s*\[[^\]\n]/m);
-  return match?.index ?? content.length;
-}
-
-export function stripTomlLineComments(value: string): string {
-  let output = "";
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index] ?? "";
-    if (quote) {
-      output += char;
-      if (quote === '"' && escaped) {
-        escaped = false;
-        continue;
-      }
-      if (quote === '"' && char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      output += char;
-      continue;
-    }
-    if (char === "#") {
-      while (index < value.length && value[index] !== "\n") {
-        index += 1;
-      }
-      if (value[index] === "\n") {
-        output += "\n";
-      }
-      continue;
-    }
-    output += char;
-  }
-  return output;
+function readRequirementsStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? value
+    : undefined;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxMode | undefined {

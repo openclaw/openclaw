@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveOpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { runQaSuite } from "./suite-launch.runtime.js";
@@ -45,11 +44,8 @@ describe("Discord Crabline real-plugin roundtrip", () => {
         "qa-e2e",
         `discord-crabline-roundtrip-${process.pid}-${Date.now()}`,
       );
-      const selection = resolveOpenClawCrablineChannelDriverSelection({ channel: "discord" });
-
       const suite = await runQaSuite({
         channelDriver: "crabline",
-        channelDriverSelection: selection,
         channelId: "discord",
         controlUiEnabled: false,
         outputDir,
@@ -128,6 +124,34 @@ describe("Discord Crabline real-plugin roundtrip", () => {
             event.accepted === true &&
             (event.method === "PUT" || event.method === "POST") &&
             /^\/api\/v10\/applications\/\d{17,20}\/commands$/u.test(event.path ?? ""),
+        ),
+      ).toBe(true);
+
+      const summary = JSON.parse(
+        await fs.readFile(path.join(suite.result.outputDir, "qa-suite-summary.json"), "utf8"),
+      ) as { run?: { channelDriverSmokePath?: string } };
+      const readinessPath = summary.run?.channelDriverSmokePath;
+      if (!readinessPath) {
+        throw new Error("Discord Crabline readiness artifact path missing from QA summary");
+      }
+      const readiness = JSON.parse(
+        await fs.readFile(path.resolve(suite.result.outputDir, readinessPath), "utf8"),
+      ) as { providerReadiness?: { result?: { recorderPath?: string } } };
+      const snapshotRecorderPath = readiness.providerReadiness?.result?.recorderPath;
+      if (!snapshotRecorderPath) {
+        throw new Error("Discord Crabline readiness snapshot recorder path missing");
+      }
+      const snapshotEvents = await readRecorderEvents(
+        path.resolve(suite.result.outputDir, snapshotRecorderPath),
+      );
+      expect(
+        snapshotEvents.some(
+          (event) =>
+            event.type === "api" &&
+            event.method === "POST" &&
+            event.path === `/api/v10/channels/${inboundChannelId}/messages` &&
+            (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
+            event.accepted === true,
         ),
       ).toBe(true);
 

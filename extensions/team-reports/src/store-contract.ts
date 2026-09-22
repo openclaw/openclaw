@@ -58,6 +58,10 @@ export type TeamReportsOperations = {
     output: void;
   };
   getPeriod: { input: { period: Period; key: string }; output: StoredPeriod | undefined };
+  getPeriodDocument: {
+    input: { period: Period; key: string };
+    output: Pick<StoredPeriod, "report" | "summary"> | undefined;
+  };
   listPeriods: {
     input: { period?: Period; status?: "partial" | "closed"; limit?: number };
     output: PeriodListEntry[];

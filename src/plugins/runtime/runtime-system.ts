@@ -1,9 +1,9 @@
 // Runtime system helpers expose host system operations to activated plugin runtimes.
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import { enqueueSystemEventFromSdk } from "./system-events.js";
 import type { RunHeartbeatOnceOptions } from "./types-core.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -29,7 +29,7 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
     });
 
   return {
-    enqueueSystemEvent,
+    enqueueSystemEvent: enqueueSystemEventFromSdk,
     requestHeartbeat,
     requestHeartbeatNow,
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => {

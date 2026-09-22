@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearBundledDiscoveryModeMemo } from "../../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
@@ -13,6 +14,9 @@ import {
   createSyncSuiteTempRootTracker,
   mkdirSafeDir,
 } from "../../plugins/test-helpers/fs-fixtures.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { withEnv } from "../../test-utils/env.js";
 import { loadStaticManifestCatalogRowsForList } from "./list.manifest-catalog.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("manifest-catalog");
@@ -20,6 +24,7 @@ const tempRoots = createSyncSuiteTempRootTracker("manifest-catalog");
 afterEach(() => {
   vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
+  closeOpenClawStateDatabaseForTest();
   tempRoots.cleanup();
 });
 
@@ -171,6 +176,38 @@ function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: (
 }
 
 describe("setup prepared manifest snapshot", () => {
+  it.each(["compat", "allowlist"] as const)(
+    "uses the explicit profile's %s policy for static provider and alias rows",
+    (mode) => {
+      const fixture = prepareFixture();
+      const processEnv = {
+        OPENCLAW_STATE_DIR: path.join(fixture.workspaceDir, "other-profile"),
+      };
+      writeConfigMachineState("plugins.bundledDiscovery", mode, { env: fixture.env });
+      writeConfigMachineState(
+        "plugins.bundledDiscovery",
+        mode === "compat" ? "allowlist" : "compat",
+        { env: processEnv },
+      );
+      clearBundledDiscoveryModeMemo();
+      const cfg: OpenClawConfig = {
+        ...fixture.cfg,
+        plugins: { ...fixture.cfg.plugins, allow: ["unrelated-owner"] },
+      };
+
+      withEnv(processEnv, () =>
+        withoutManifestIo(fixture, () => {
+          for (const providerFilter of ["fixture-direct", "fixture-alias"]) {
+            const rows = loadStaticManifestCatalogRowsForList({ ...fixture, cfg, providerFilter });
+            expect
+              .soft(rows.map((row) => row.ref))
+              .toEqual(mode === "compat" ? [`${providerFilter}/tiny-model`] : []);
+          }
+        }),
+      );
+    },
+  );
+
   it("loads static provider and alias rows without manifest I/O", () => {
     const fixture = prepareFixture();
     for (const providerFilter of [

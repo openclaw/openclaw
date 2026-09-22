@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,8 +14,8 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["malformed", "nonregular-wal"])(
-  "refuses an indeterminate agent family: %s",
+it.each(["malformed", "nonregular-wal", "empty-worker"])(
+  "reports an actionable schema inspection failure: %s",
   async (kind) => {
     const stateDir = fs.realpathSync(dirs.make("update-schema-invalid-"));
     const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -25,12 +26,43 @@ it.each(["malformed", "nonregular-wal"])(
       const db = openNodeSqliteDatabase(file);
       db.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
       db.close();
-      fs.mkdirSync(`${file}-wal`);
+      if (kind === "nonregular-wal") {
+        fs.mkdirSync(`${file}-wal`);
+      }
+    }
+    const candidateRoot = path.join(stateDir, "candidate-package");
+    if (kind === "empty-worker") {
+      const worker = path.join(
+        candidateRoot,
+        "dist",
+        runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+      );
+      fs.mkdirSync(path.dirname(worker), { recursive: true });
+      fs.writeFileSync(worker, "process.exitCode = 1;\n");
     }
     const before = fs.readFileSync(file);
-    await expect(readUpdateStateSchemaVersions({ stateDir, config: {} })).rejects.toThrow(
-      /State schema inspection failed/,
+    const failure = await readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      ...(kind === "empty-worker" ? { root: candidateRoot } : {}),
+    }).catch((error: unknown) => error);
+    assert(failure instanceof Error);
+    expect(failure).toHaveProperty(
+      "message",
+      expect.stringContaining("State schema inspection failed"),
     );
+    const message = failure.message;
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? path.join(stateDir, "state", "openclaw.sqlite") : file);
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? "shared database discovery" : "agent schema inspection");
+    expect.soft(message).toMatch(/after \d+(?:\.\d+)? seconds/);
+    expect.soft(message).toContain("then retry the update");
+    if (kind === "empty-worker") {
+      expect.soft(message).toContain("Worker exited without diagnostic output");
+    }
     expect(fs.readFileSync(file)).toEqual(before);
     if (kind === "nonregular-wal") {
       expect(fs.statSync(`${file}-wal`).isDirectory()).toBe(true);
@@ -220,6 +252,14 @@ async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boole
   const directory = path.join(packageRoot, "dist/infra");
   await fs.promises.mkdir(directory, { recursive: true });
   await fs.promises.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}');
+  const stagingProbe = `
+    const staging = process.env.XDG_CACHE_HOME;
+    const marker = process.env.CANDIDATE_EXPECT_LEGACY_STAGING === "1"
+      ? /^openclaw-sqlite-readonly-[1-9][0-9]*-/ : /^openclaw-sqlite-readonly-v2-/;
+    if (!marker.test(path.basename(staging)) || !fs.existsSync(path.join(staging, "owner.sqlite"))) {
+      throw new Error("Candidate staging lifetime is unprotected before worker entry");
+    }
+  `;
   // These fixtures implement the released command shapes, not updater-relative imports.
   await fs.promises.writeFile(
     path.join(directory, "update-candidate-state.worker.js"),
@@ -227,6 +267,7 @@ async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boole
     import fs from "node:fs";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
+    ${stagingProbe}
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
     const parsed = JSON.parse(input);
@@ -262,6 +303,7 @@ async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boole
     `
     import fs from "node:fs";
     import path from "node:path";
+    ${stagingProbe}
     if (process.argv[2] !== "--openclaw-sqlite-readonly-child" || process.argv[3] !== "sync") {
       throw new Error("Unexpected SQLite snapshot worker protocol");
     }
@@ -335,7 +377,11 @@ it.each(
         config: {},
         root: candidateRoot,
         nodeRunner,
-        env: { ...process.env, CANDIDATE_SNAPSHOT_REPORT: report },
+        env: {
+          ...process.env,
+          CANDIDATE_SNAPSHOT_REPORT: report,
+          CANDIDATE_EXPECT_LEGACY_STAGING: "1",
+        },
       });
       expect(after).toEqual(before);
       expect(fs.readFileSync(shared)).toEqual(sourceBytes);

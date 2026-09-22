@@ -25,6 +25,7 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { refreshLocalBuildStampTimes } from "../../scripts/lib/local-build-metadata.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -525,6 +526,23 @@ describe("check-gateway-watch-regression", () => {
       );
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, null, undefined])("retains restored stamp provenance (%s)", (inputsClean) => {
+    const rootDir = tempDirs.make("openclaw-watch-restored-stamps-");
+    fs.mkdirSync(path.join(rootDir, "dist"));
+    const contents = JSON.stringify({ head: "producer-head", inputsClean });
+    for (const name of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+      const filename = path.join(rootDir, "dist", name);
+      fs.writeFileSync(filename, contents);
+      fs.utimesSync(filename, 1, 1);
+    }
+    refreshLocalBuildStampTimes({ cwd: rootDir, now: () => 10_000 });
+    for (const name of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+      const filename = path.join(rootDir, "dist", name);
+      expect(fs.readFileSync(filename, "utf8")).toBe(contents);
+      expect(fs.statSync(filename).mtimeMs).toBe(10_000);
     }
   });
 

@@ -6,7 +6,9 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -17,6 +19,10 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
+import {
+  enqueueTelegramMenuSync,
+  resolveTelegramMenuRemoteOwner,
+} from "./bot-native-command-menu-state.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
@@ -26,7 +32,6 @@ import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
 } from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 
@@ -59,19 +64,17 @@ it.each(["none", "middleware", "handler"] as const)(
     process.env.OPENCLAW_STATE_DIR = stateDir;
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramAccountThrottlersForTest();
-    setTelegramRuntime({
-      state: {
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
-        ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramRuntime(
+      createPluginRuntimeMock({
+        state: {
+          openChannelIngressQueue: (
+            options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+          ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+            createPluginStateKeyedStoreForTests<T>("telegram", options),
+        },
+      }),
+    );
 
     const requests: Array<{ method: string; payload: Record<string, unknown> }> = [];
     const runtimeErrors: unknown[] = [];
@@ -263,6 +266,14 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
+      // Menu sync has its own queue; finish it before closing the loopback API.
+      await new Promise<void>((resolve, reject) => {
+        enqueueTelegramMenuSync({
+          ownerKey: resolveTelegramMenuRemoteOwner({ botId: telegramBotInfoForTest.id }).queueKey,
+          sync: async () => resolve(),
+          onError: reject,
+        });
+      });
       readHandlerAnswer.mockRestore();
       await telegramTransport.close();
       server.closeAllConnections();

@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval handler behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,

@@ -152,25 +152,16 @@ Doctor repairs are unavailable inside OpenClaw because they can rewrite the prov
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
 
-`config set` and `config set-ref` can change any setting a user can change,
-with a short human-only denylist: `$include`, `auth.*`, `env.*`, `models.*`,
-and `secrets.*` stay refused because they carry credential material,
-alternate-config inclusion, or the provider/catalog definitions that feed
-inference routing. Inference routing itself is also protected: default model
-routes (`agents.defaults` model/params/runtime fields) and the routing fields
-of whichever agent backs the active default route are refused, as are agent
-identity/topology fields (`id`, `agentDir`, `default`). Routing fields for
-other agents remain writable behind approval. Gateway and channel auth remain
-normal config surfaces. Use `set default model <provider/model>` for an
-already configured route; it live-tests the route before saving it. To
-configure or repair provider/auth access, exit OpenClaw and run
-`openclaw onboard`.
+`config set` and `config set-ref` propose config changes for approval. Approved
+writes use the existing config validator and writer. Validation or write errors
+return to the assistant for one corrective proposal, which needs fresh approval.
+A failure after saving is reported as such. Config writes do not test whether a
+model route or API key works. Follow your secret storage preference; for environment
+storage, use `config set-ref`. Secret values are not echoed in chat.
+`set default model <provider/model>` still live-tests the route before saving it.
 
-`plugins.entries.<id>.*` writes (enable/disable/config of installed plugins)
-are allowed unless that plugin backs the active inference route. Plugin
-install sources and load policy keep their trust boundary in the typed
-plugin-install workflow. Plugin uninstall of the route-backing plugin is
-refused for the same reason; exit OpenClaw and run
+Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
@@ -222,12 +213,12 @@ same way for web-search provider setup, opening the masked search wizard after
 the chat TUI closes. `open gateway wizard` opens masked local Gateway setup;
 when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
-OpenClaw never changes provider/auth access from inside its own session: the
-session already depends on that inference route. For model-provider setup or
-repair, `configure model provider` returns exit/onboarding guidance without
-starting a wizard or writing config. Exit OpenClaw and run `openclaw
-onboard`; onboarding stages the credentials and saves only a route that
-completes a real live turn. Start OpenClaw again after onboarding succeeds.
+`configure model provider` directs you to **Settings → Models → Connect provider**
+without starting a wizard or changing config. Check the connected Gateway and
+selected **System** or agent scope in Settings before signing in. Enter credentials
+only in the protected sign-in controls, never in chat. Connecting another provider
+does not select it as the active model or require stopping the host. Model selection
+is separate; replacing credentials for a provider already in use can affect work.
 
 ## Setup bootstrap
 

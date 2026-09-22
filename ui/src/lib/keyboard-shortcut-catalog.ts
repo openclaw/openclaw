@@ -1,7 +1,10 @@
+import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   type KeyboardShortcutCombo,
 } from "./keyboard-shortcut-contract.ts";
+
+registerCommandPaletteEnglish();
 
 export {
   formatKeyboardShortcutCombo,
@@ -25,6 +28,8 @@ function keyboardShortcutSection(id: string, entries: readonly KeyboardShortcutE
 const KEYBOARD_SHORTCUT_SECTIONS = [
   keyboardShortcutSection("general", [
     keyboardShortcutEntry("commandPalette", KEYBOARD_SHORTCUT_COMBOS.commandPalette),
+    keyboardShortcutEntry("newSession", KEYBOARD_SHORTCUT_COMBOS.newSession),
+    keyboardShortcutEntry("paletteStartSession", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
     keyboardShortcutEntry("keyboardShortcuts", KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts),
     keyboardShortcutEntry("toggleSidebar", KEYBOARD_SHORTCUT_COMBOS.toggleSidebar),
     keyboardShortcutEntry("debugOverlay", KEYBOARD_SHORTCUT_COMBOS.debugOverlay),
@@ -33,6 +38,7 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
+    keyboardShortcutEntry("archiveSession", KEYBOARD_SHORTCUT_COMBOS.archiveSession),
     keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
     keyboardShortcutEntry("newline", KEYBOARD_SHORTCUT_COMBOS.newline),
     keyboardShortcutEntry("steerImmediately", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),

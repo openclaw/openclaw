@@ -2,7 +2,10 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,6 +26,7 @@ import {
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
@@ -182,6 +186,80 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("observes and yields the same iterator value without reading it twice", async () => {
+    const model = makeProviderModelFixture({
+      id: "test-model",
+      provider: "test-provider",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid",
+    });
+    const firstChunk: AssistantMessageEvent = {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "first",
+    };
+    const readChunk = vi
+      .fn<() => AssistantMessageEvent>()
+      .mockReturnValueOnce(firstChunk)
+      .mockReturnValue({ type: "text_delta", contentIndex: 0, delta: "second value" });
+    const source: Awaited<ReturnType<StreamFn>> = {
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return {
+          async next(): Promise<IteratorResult<AssistantMessageEvent>> {
+            if (emitted) {
+              return { done: true, value: undefined };
+            }
+            emitted = true;
+            return {
+              done: false,
+              get value() {
+                return readChunk();
+              },
+            };
+          },
+        };
+      },
+      async result() {
+        return {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: 0,
+        };
+      },
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => source, {
+      runId: "run-value-getter",
+      provider: model.provider,
+      model: model.id,
+      trace: createDiagnosticTraceContext(),
+      nextCallId: () => "call-value-getter",
+    });
+    const chunks: AssistantMessageEvent[] = [];
+    const events = await collectModelCallEvents(async () => {
+      const response = await wrapped(model, { messages: [] });
+      for await (const chunk of response) {
+        chunks.push(chunk);
+      }
+      await response.result();
+    });
+
+    expect(chunks).toEqual([firstChunk]);
+    expect(readChunk).toHaveBeenCalledOnce();
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(events[1]).toMatchObject({
+      responseStreamBytes: Buffer.byteLength(firstChunk.delta, "utf8"),
+    });
   });
 
   it("normalizes the timeout from each exact model request", async () => {

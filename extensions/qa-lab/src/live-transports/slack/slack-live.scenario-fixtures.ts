@@ -270,7 +270,9 @@ export function buildSlackProgressCommentaryRun(
             (message) =>
               [toolMarker, outputMarker].some((marker) =>
                 observedSlackText(message).includes(marker),
-              ) || hasSlackExecHeader(message),
+              ) ||
+              hasSlackExecHeader(message) ||
+              /\bsleep\s+5\b/u.test(observedSlackText(message)),
           )
           .map((message) => message.ts),
       );

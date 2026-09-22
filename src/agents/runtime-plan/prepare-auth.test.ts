@@ -13,6 +13,7 @@ import {
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
 } from "./prepare-auth.js";
+import { prepareAgentRuntimeAuthPlan, prepareAuthFixture } from "./prepare-auth.test-support.js";
 
 // This suite owns generic auth planning. Provider-hook behavior has dedicated
 // coverage; keep those runtimes out of this focused planner test.
@@ -22,10 +23,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
 }));
-
-function prepareAgentRuntimeAuthPlan(params: Parameters<typeof prepareAgentRuntimeAuth>[0]) {
-  return prepareAgentRuntimeAuth(params).plan;
-}
 
 function authStore(
   profiles: AuthProfileStore["profiles"],
@@ -536,7 +533,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("prepares a user pin first and retains same-provider profile fallbacks", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "xai",
       modelId: "grok-4",
       env: {},
@@ -573,7 +570,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       },
     });
 
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "xai",
       modelId: "grok-4",
       env: {},
@@ -607,7 +604,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       },
     });
 
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "xai",
       modelId: "grok-4",
       env: {},
@@ -756,7 +753,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     };
 
     expect(() =>
-      prepareAgentRuntimeAuth({
+      prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
         routeIntent: { authRequirement: "api-key", source: "explicit" },
@@ -838,7 +835,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("selects the first compatible auth.order profile with its exact route", () => {
-    const preparation = prepareAgentRuntimeAuth({
+    const preparation = prepareAuthFixture({
       ...openAIPlatformAuthFixture(),
       env: {},
       harnessId: "codex",
@@ -909,7 +906,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps same-route native candidates ahead of interleaved route fallbacks", () => {
-    const preparation = prepareAgentRuntimeAuth({
+    const preparation = prepareAuthFixture({
       ...openAIPlatformAuthFixture(),
       config: {
         secrets: {
@@ -1212,7 +1209,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     { provider: "openai", mode: "oauth" as const },
   ])("rejects a bound profile with conflicting $provider/$mode metadata", ({ mode, provider }) => {
     expect(() =>
-      prepareAgentRuntimeAuth({
+      prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
         config: {
@@ -1417,7 +1414,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       },
       { openai: ["openai:platform-backup"] },
     );
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       ...openAIChatGptAuthFixture(),
       config,
       env: {},
@@ -1508,7 +1505,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       },
       { openai: ["openai:platform"] },
     );
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
       config: {
@@ -1556,7 +1553,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   // undeclared credential is about not letting it silently *succeed a declared
   // profile*, not about banning the documented zero-config path.
   it("still uses an undeclared env key when the provider has no usable profile", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
       env: { OPENAI_API_KEY: "ambient-platform-key" },
@@ -1575,7 +1572,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   // Declared apiKey material keeps normal direct-source standing, so the
   // narrowing is scoped to credentials that appear nowhere in config.
   it("still routes a declared provider apiKey with no profiles present", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
       config: {
@@ -1596,7 +1593,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("reports a local provider marker as synthetic auth", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "ollama-remote",
       modelId: "qwen3.5:27b",
       config: {
@@ -1672,7 +1669,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     },
   ])("does not queue $label", ({ config, env, profile, profileId, requirements, rejects }) => {
     const prepare = () =>
-      prepareAgentRuntimeAuth({
+      prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
         config,
@@ -1708,7 +1705,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         },
       } as OpenClawConfig;
       const store = authStore({});
-      const prepared = prepareAgentRuntimeAuth({
+      const prepared = prepareAuthFixture({
         ...openAIChatGptAuthFixture(),
         config,
         env: process.env,
@@ -1773,7 +1770,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps a provider apiKey SecretRef ahead of API-key-compatible profiles", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       ...openAIChatGptAuthFixture(),
       config: {
         models: {
@@ -1823,7 +1820,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("uses explicit OAuth mode for literal provider material", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       ...openAIPlatformAuthFixture(),
       config: {
         models: {
@@ -1858,7 +1855,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps configured OAuth direct material on the subscription route", () => {
-    const prepared = prepareAgentRuntimeAuth({
+    const prepared = prepareAuthFixture({
       provider: "openai",
       modelId: "gpt-5.5",
       config: {
@@ -1939,7 +1936,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     },
   ])("rejects a $profile.type profile for configured $auth auth", ({ auth, profile }) => {
     expect(() =>
-      prepareAgentRuntimeAuth({
+      prepareAuthFixture({
         provider: "openai",
         modelId: "gpt-5.5",
         config: {
@@ -2062,7 +2059,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("keeps same-provider retries behind a user-pinned virtual Codex profile", () => {
-    const preparation = prepareAgentRuntimeAuth({
+    const preparation = prepareAuthFixture({
       ...virtualCodexAuthFixture(),
       authProfileStore: authStore(
         {
@@ -2139,7 +2136,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       expect.objectContaining({
         code: "selected_auth_profile_unavailable",
         reason: "auth",
-        status: 401,
+        status: undefined,
       }),
     );
   });

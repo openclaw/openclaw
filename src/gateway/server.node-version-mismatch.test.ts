@@ -1,6 +1,6 @@
 // Real signed node connects protect same-install classification and version admission.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -17,6 +17,7 @@ import {
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { configureNodeHost } from "../node-host/config.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -92,22 +93,30 @@ describe("node host version mismatch guard", () => {
     await server?.close();
   });
 
-  test.each([gatewayVersion, "dev", "1.0.0"])(
-    "same-install node with accepted version %s connects",
-    async (clientVersion) => {
-      let helloProtocol: number | undefined;
-      const client = await connectNode({
-        clientVersion,
-        onHelloOk: (hello) => {
-          helloProtocol = hello.protocol;
-        },
-      });
-      try {
-        expect(helloProtocol).toBe(PROTOCOL_VERSION);
-      } finally {
-        await client.stopAndWait({ timeoutMs: 2_000 });
-      }
-    },
+  test.each([
+    [gatewayVersion, gatewayVersion],
+    [gatewayVersion, "dev"],
+    [gatewayVersion, "1.0.0"],
+    ["2026.9.4", "2026.9.5"],
+    ["2026.9.4", "2026.9.5-beta.1"],
+    ["2026.9.4", "2026.9.4-1"],
+  ])(
+    "Gateway %s accepts same-install node version %s",
+    async (serverVersion, clientVersion) =>
+      await withEnvAsync({ OPENCLAW_VERSION: serverVersion }, async () => {
+        let helloProtocol: number | undefined;
+        const client = await connectNode({
+          clientVersion,
+          onHelloOk: (hello) => {
+            helloProtocol = hello.protocol;
+          },
+        });
+        try {
+          expect(helloProtocol).toBe(PROTOCOL_VERSION);
+        } finally {
+          await client.stopAndWait({ timeoutMs: 2_000 });
+        }
+      }),
   );
 
   test.each(["default", "different", "omitted"])(

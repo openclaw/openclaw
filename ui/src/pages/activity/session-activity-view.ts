@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { icons } from "../../components/icons.ts";
@@ -45,7 +44,7 @@ import {
 } from "./session-activity.ts";
 
 type SessionActivityViewProps = {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
@@ -253,7 +252,7 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 }
 
 function renderSessionLink(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   row: GatewaySessionRow,
   onSummaryRetry?: (row: GatewaySessionRow) => void,
 ) {
@@ -423,7 +422,7 @@ function renderDaySessions(
 }
 
 function renderIdentityHeader(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   identity: PresenceViewer,
   rows: readonly GatewaySessionRow[],
 ) {

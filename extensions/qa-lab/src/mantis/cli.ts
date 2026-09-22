@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
+import { runWithMantisCliInterrupts } from "./cli-interrupts.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
@@ -21,6 +22,13 @@ type MantisBeforeAfterCommanderOptions = Omit<
   MantisBeforeAfterOptions,
   "allowFailures" | "commandRunner" | "fastMode" | "now"
 > & { fast?: boolean };
+
+async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
+  await runWithMantisCliInterrupts(async (signal) => {
+    const runtime = await loadMantisCliRuntime();
+    await runtime.runMantisBeforeAfterCommand({ ...opts, signal });
+  });
+}
 
 type MantisDesktopBrowserSmokeCommanderOptions = Omit<
   MantisDesktopBrowserSmokeOptions,
@@ -108,8 +116,7 @@ export function registerMantisCli(qa: Command) {
         skipInstall: opts.skipInstall,
         transport: opts.transport,
       };
-      const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisBeforeAfterCommand(options);
+      await runBeforeAfter(options);
     });
 
   mantis

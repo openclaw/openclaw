@@ -1,3 +1,4 @@
+import "../subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

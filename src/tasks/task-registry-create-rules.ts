@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readTaskBackingInstance } from "./task-backing-records.js";
 import { ensureNotifyPolicy } from "./task-registry-common.js";
 import { compareTasksForRunIdLookup } from "./task-registry-records.js";
 import type {
@@ -20,10 +21,13 @@ export function selectExistingTaskForCreate(params: {
   runId?: string;
   label?: string;
   task: string;
+  detail?: JsonValue;
   candidates: readonly TaskRecord[];
   isTaskMirroredFlow: (flowId: string) => boolean;
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
+  const requestedBacking =
+    params.runtime === "acp" ? readTaskBackingInstance(params.detail) : undefined;
   const runScopeMatches = runId
     ? params.candidates.filter((task) => {
         if (
@@ -36,6 +40,12 @@ export function selectExistingTaskForCreate(params: {
             (normalizeOptionalString(params.childSessionKey) ?? "")
         ) {
           return false;
+        }
+        if (requestedBacking?.runtime === "acp") {
+          const backing = readTaskBackingInstance(task.detail);
+          if (backing?.runtime !== "acp" || backing.instanceId !== requestedBacking.instanceId) {
+            return false;
+          }
         }
         if (params.runtime === "acp" && !params.parentFlowId?.trim()) {
           const existingFlowId = task.parentFlowId?.trim();
@@ -132,7 +142,16 @@ export function buildTaskCreateMergePatch(
     patch.notifyPolicy = notifyPolicy;
   }
   if (params.detail !== undefined) {
-    patch.detail = params.detail;
+    const currentBacking = readTaskBackingInstance(existing.detail);
+    const nextBacking = readTaskBackingInstance(params.detail);
+    if (
+      currentBacking?.runtime !== "acp" ||
+      nextBacking?.runtime !== "acp" ||
+      currentBacking.instanceId !== nextBacking.instanceId ||
+      nextBacking.generation >= currentBacking.generation
+    ) {
+      patch.detail = params.detail;
+    }
   }
   return patch;
 }

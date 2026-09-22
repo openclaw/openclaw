@@ -6,8 +6,8 @@ import * as leaseStore from "../state/openclaw-state-lease-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,

@@ -1,4 +1,3 @@
-// Discord plugin module implements event queue behavior.
 export type DiscordEventQueueOptions = {
   maxQueueSize?: number;
   maxConcurrency?: number;

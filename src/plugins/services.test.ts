@@ -28,11 +28,12 @@ import {
   resetDiagnosticStabilityRecorderForTest,
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
-import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
+import { queuePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { listPluginServiceHealthFailures } from "./service-health.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { subscribePluginSessionsChanged } from "./services.test-support.js";
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
@@ -49,6 +50,7 @@ function createRegistry(
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
     pluginId,
+    id: service.id.trim(),
     service,
     source: "test",
     origin,

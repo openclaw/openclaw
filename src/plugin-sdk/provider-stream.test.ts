@@ -581,16 +581,22 @@ describe("buildProviderStreamFamilyHooks", () => {
       "high",
     );
 
+    const openRouterNoEffortModel = {
+      ...streamTestModel,
+      provider: "openrouter",
+      id: "example/no-effort-selector",
+      compat: { supportsReasoningEffort: false },
+    };
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
-        modelId: "x-ai/grok-3",
+        modelId: openRouterNoEffortModel.id,
       } as never),
-    )({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
-    const openRouterGrokPayload = requirePayload(capturedPayload);
-    expectDefaultThinkingBudget(openRouterGrokPayload);
-    expect(openRouterGrokPayload).not.toHaveProperty("reasoning");
+    )(openRouterNoEffortModel, {} as never, {});
+    const openRouterNoEffortPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterNoEffortPayload);
+    expect(openRouterNoEffortPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(

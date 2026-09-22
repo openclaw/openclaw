@@ -1023,6 +1023,23 @@ describe("Codex install helpers", () => {
     },
   );
 
+  it("rejects an extra failed-mutation warning even after both replies and a valid artifact", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-warning-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      replyTexts: [
+        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS",
+        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-COMPLETE",
+        "⚠️ 🛠️ Bash failed: `run python inline script (heredoc)` (agent)",
+      ],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected exact progress and completion replies");
+  });
+
   it("accepts settled failed work before a later successful artifact write", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-recovered-work-");
     const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root, readFails: true });

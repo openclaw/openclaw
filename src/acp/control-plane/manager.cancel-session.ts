@@ -1,10 +1,12 @@
 /** Cancellation path for active ACP turns and idle runtime handles. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import { resolveAcpSessionControlOwner } from "../runtime/session-control-owner.js";
 import type { AcceptedTurnState, AcceptedTurns } from "./manager.accepted-turns.js";
 import type {
   ActiveTurnState,
@@ -17,6 +19,7 @@ import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js"
 
 /** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -31,6 +34,8 @@ export async function runManagerCancelSession(params: {
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
+  params.assertActive?.();
+  const cancellationControl = captureTaskCancellationControl();
   const actorKey = acpSessionActorKey(params);
   const expectedRunId = params.expectedRunId?.trim();
   const expectedInstanceId = params.expectedInstanceId?.trim();
@@ -49,7 +54,7 @@ export async function runManagerCancelSession(params: {
     }
     const resolution = params.resolveSession(params);
     const entry = resolution.kind === "ready" ? resolution.entry : undefined;
-    const ownerKey = entry?.spawnedBy?.trim() || entry?.parentSessionKey?.trim();
+    const ownerKey = resolveAcpSessionControlOwner(entry);
     if (ownerKey !== expectedOwnerKey) {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task owner could not be verified.");
     }
@@ -68,6 +73,10 @@ export async function runManagerCancelSession(params: {
           acceptedTurn,
           reason: params.reason,
           revalidate: requireExpectedOwner,
+          assertCancellationAllowed: () => {
+            params.assertActive?.();
+            cancellationControl?.assertCurrent();
+          },
         }),
       ),
     );
@@ -75,7 +84,8 @@ export async function runManagerCancelSession(params: {
   }
   requireExpectedTurn(undefined);
 
-  await params.withSessionActor(params, async () => {
+  await params.withSessionActor(params, async (isCurrentActor) => {
+    params.assertActive?.();
     // The actor wait may admit queued work. Recheck exact authority only after
     // that wait, immediately before the idle-handle cancellation boundary.
     requireExpectedTurn(params.activeTurnBySession.get(actorKey));
@@ -87,23 +97,30 @@ export async function runManagerCancelSession(params: {
     });
     const resolvedMeta = requireReadySessionMeta(resolution);
     const { runtime, handle } = await params.ensureRuntimeHandle({
+      assertActive: params.assertActive,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       meta: resolvedMeta,
+      isCurrentActor,
     });
+    params.assertActive?.();
     try {
       requireExpectedOwner();
       await runtime.cancel({
         handle,
         reason: params.reason,
       });
+      if (!isCurrentActor()) {
+        return;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "idle",
         clearLastError: true,
+        isCurrentActor,
       });
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -111,12 +128,16 @@ export async function runManagerCancelSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP cancel failed before completion.",
       });
+      if (!isCurrentActor()) {
+        throw acpError;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "error",
         lastError: acpError.message,
+        isCurrentActor,
       });
       throw acpError;
     }
@@ -149,8 +170,11 @@ export async function cancelManagerAcceptedTurn(params: {
   acceptedTurn: AcceptedTurnState;
   reason?: string;
   revalidate?: () => void;
+  assertCancellationAllowed?: () => void;
 }): Promise<void> {
   params.revalidate?.();
+  // Caller authority admits the abort once; target checks retain cleanup custody.
+  params.assertCancellationAllowed?.();
   const turn = params.acceptedTurn;
   turn.cancelReason ??= params.reason;
   turn.revalidateCancel ??= params.revalidate;

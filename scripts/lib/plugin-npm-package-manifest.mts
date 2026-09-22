@@ -1159,11 +1159,14 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
     ? collectWorkspacePatchedDependencies(repoRoot, packageDir, packageJson)
     : [];
   const resolvedParams = { ...params, patchedDependencies };
+  const bundleDependencies = shouldBundleDependencies(
+    params.bundleDependencies,
+    packageJson,
+    patchedDependencies,
+  );
   if (
     !params.clawhubMetadataDir &&
-    (!packageJson ||
-      !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
-      !hasPackageRuntimeDependencies(packageJson))
+    (!packageJson || !bundleDependencies || !hasPackageRuntimeDependencies(packageJson))
   ) {
     return withPluginNpmManifestOverlay(resolvedParams, callback);
   }
@@ -1176,7 +1179,12 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   try {
     fs.cpSync(packageDir, stagedPackageDir, {
       recursive: true,
-      filter: (source) => path.basename(source) !== "node_modules",
+      // Historical candidates contain npm shrinkwraps. npm ci prefers them to
+      // the fresh pnpm-policy lock, so exclude only the bundle's root shrinkwrap
+      // from staging; preserve the frozen source and dependency-owned locks.
+      filter: (source) =>
+        path.basename(source) !== "node_modules" &&
+        (!bundleDependencies || source !== path.join(packageDir, "npm-shrinkwrap.json")),
     });
     return withPluginNpmManifestOverlay(
       { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },

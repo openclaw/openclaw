@@ -181,6 +181,13 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/config/defaults.ts"])).toEqual(expectedNodeOnlyScope);
   });
 
+  it("runs Android and Node CI for Android toolchain action changes", () => {
+    expect(detectChangedScope([".github/actions/setup-android-toolchain/action.yml"])).toEqual({
+      ...expectedNodeOnlyScope,
+      runAndroid: true,
+    });
+  });
+
   it("keeps node lane off for native-only changes", () => {
     expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
       runNode: false,
@@ -266,6 +273,7 @@ describe("detectChangedScope", () => {
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
+      "scripts/lib/swift-toolchain.sh",
       "scripts/lint-swift.sh",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
@@ -397,7 +405,6 @@ describe("detectChangedScope", () => {
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
-    "scripts/lib/swift-toolchain.sh",
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",
@@ -457,6 +464,8 @@ describe("detectChangedScope", () => {
     ["src/shared/runtime-import.test.ts", true, false],
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
+    ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
     [".github/workflows/windows-testbox-probe.yml", true, false],
@@ -790,6 +799,7 @@ describe("detectChangedScope", () => {
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
     ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
+    ["shared Talk fixture", "test/fixtures/talk-config-contract.json", "valid", false],
     ["unrelated process test", "src/process/exec.test.ts", "valid", false],
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
     ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
@@ -843,6 +853,11 @@ describe("detectChangedScope", () => {
       );
 
       const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+      if (changedPath === "test/fixtures/talk-config-contract.json") {
+        console.log(
+          `REAL_CI_CHANGED_SCOPE_OUTPUT run_android=${output.run_android} run_macos=${output.run_macos} run_node=${output.run_node}`,
+        );
+      }
       expect(Object.keys(output).toSorted()).toEqual(
         "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
           " ",
@@ -856,8 +871,11 @@ describe("detectChangedScope", () => {
           const selected =
             (failSafe && !key.startsWith("run_node_fast")) ||
             (key === "run_node" && Boolean(changedPath)) ||
+            (key === "run_android" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_macos_node" &&
-              changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
+              (changedPath === "test/scripts/mac-script-fixture.test-support.ts" ||
+                changedPath === "test/fixtures/talk-config-contract.json")) ||
+            (key === "run_macos" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_windows" &&
               changedPath === "src/process/exec.windows.integration.test.ts");
           expect(value, key).toBe(String(selected));

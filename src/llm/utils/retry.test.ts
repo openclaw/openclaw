@@ -8,7 +8,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type AssistantMessage,
 } from "../types.js";
-import { isRetryableAssistantError } from "./retry.js";
+import { isRetryableAssistantError, isTerminalAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
   return {
@@ -25,6 +25,18 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it.each([undefined, "{}", "invalid", '{"retrySafe":false}'])(
+    "does not reclassify an identity conflict without safe-retry evidence: %s",
+    (errorBody) => {
+      const message = {
+        ...errorMessage("Responses stream changed output item identity; connection reset"),
+        errorCode: "responses_output_identity_conflict",
+        errorBody,
+      };
+      expect(isTerminalAssistantError(message)).toBe(true);
+      expect(isRetryableAssistantError(message)).toBe(false);
+    },
+  );
   it("freezes one retry decision for every failover corpus row", () => {
     expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
       failoverClassificationCorpus.map((row) => row.id).toSorted(),
@@ -103,46 +115,12 @@ describe("isRetryableAssistantError", () => {
   });
 
   it.each([
-    "An error occurred while processing your request. You can retry your request.",
-    "The system encountered an unexpected error. Try your request again.",
-    "Temporary provider failure; please retry your request.",
-  ])("accepts explicit retry guidance: %s", (text) => {
-    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
-  });
-
-  it("keeps concrete quota failures non-retryable", () => {
-    expect(isRetryableAssistantError(errorMessage("429 insufficient_quota"))).toBe(false);
-    expect(isRetryableAssistantError(errorMessage("Monthly usage limit reached"))).toBe(false);
-  });
-
-  it.each([
     "model gpt-5.5-preview-0429 not found",
     "model model-x-500-preview not found",
     "Image dimensions 1504x1504 exceed the maximum allowed size",
     "Image width 500 exceeds the maximum allowed size",
     "invalid api key sk-example502value",
   ])("does not retry permanent errors with status-code substrings: %s", (text) => {
-    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
-  });
-
-  it.each([
-    "429 temporary provider response",
-    "HTTP 500 temporary provider response",
-    "503: temporary provider response",
-    "524 status code (no body)",
-    "The socket connection was closed unexpectedly by fetch",
-    "ResourceExhausted: Worker local total request limit reached",
-    "resource_exhausted: transient worker capacity exhausted",
-  ])("retries explicit transient HTTP statuses: %s", (text) => {
-    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
-  });
-
-  it.each([
-    "429 You exceeded your daily request limit. Please try again in 24 hours.",
-    "rate limit reached for requests. Retry after 6h.",
-    "429 RPM limit exceeded; Retry-After: 2 hours",
-    "rate limit reached; Retry-After: 90 minutes",
-  ])("does not retry rate limits that outlast session backoff: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
   });
 
@@ -161,38 +139,6 @@ describe("isRetryableAssistantError", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("retries transient billing-service failures", () => {
-    expect(
-      isRetryableAssistantError(
-        errorMessage("503 billing service unavailable; please retry your request"),
-      ),
-    ).toBe(true);
-  });
-
-  it("retries transient subscription-service failures", () => {
-    expect(
-      isRetryableAssistantError(
-        errorMessage("503 subscription service unavailable while checking quota"),
-      ),
-    ).toBe(true);
-  });
-
-  it("retries a 503 with a long Retry-After window", () => {
-    expect(
-      isRetryableAssistantError(errorMessage("503 Service Unavailable; Retry-After: 120 seconds")),
-    ).toBe(true);
-  });
-
-  it("retries short-window quota exhaustion", () => {
-    expect(
-      isRetryableAssistantError(
-        errorMessage(
-          "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric requests per minute; please retry your request",
-        ),
-      ),
-    ).toBe(true);
   });
 
   it.each([

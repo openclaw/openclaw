@@ -15,7 +15,7 @@ export function createLoggerBackedRuntime(params: {
     error: (...args) => params.logger.error(format(...args)),
     writeStdout: (value) => params.logger.info(value),
     writeJson: (value, space = 2) =>
-      params.logger.info(JSON.stringify(value, null, space > 0 ? space : undefined)),
+      params.logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined)),
     exit: (code: number): never => {
       throw params.exitError?.(code) ?? new Error(`exit ${code}`);
     },

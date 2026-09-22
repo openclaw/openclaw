@@ -156,7 +156,7 @@ test.each(["custom/model", "middle"])(
           resolveSessionSelectedModelRef({
             cfg: identityConfig,
             agentId: "main",
-            source: { entry, loadSessionEntry: () => undefined },
+            source: { entry, readSourceEntry: () => undefined },
             allowPluginNormalization: false,
           }),
         )
@@ -167,7 +167,7 @@ test.each(["custom/model", "middle"])(
 );
 
 test.each([false, true])(
-  "separates cached raw and resolved selections (resolved first=%s)",
+  "projects raw and resolved selections once (resolved first=%s)",
   async (resolvedFirst) => {
     await withIdentityScope(() => {
       const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
@@ -178,7 +178,7 @@ test.each([false, true])(
           providerOverride: "custom",
           modelOverride: "latest",
         },
-        model: "final",
+        model: "middle",
       };
       const rowContext = buildSessionListRowMetadataContext({ now: 1 });
       for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
@@ -187,7 +187,7 @@ test.each([false, true])(
             resolveSessionSelectedModelRef({
               cfg: identityConfig,
               agentId: "main",
-              source: { entry, loadSessionEntry: () => undefined },
+              source: { entry, readSourceEntry: () => undefined },
               rowContext,
               allowPluginNormalization: false,
             }),

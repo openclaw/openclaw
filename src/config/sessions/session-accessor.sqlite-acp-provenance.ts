@@ -113,7 +113,7 @@ export function retainLegacyAcpMigrationSourcesForEntry(
 }
 
 export function copyLegacyAcpMigrationSourcesForRepair(
-  source: OpenClawAgentDatabase,
+  source: Pick<OpenClawAgentDatabase, "db">,
   destination: OpenClawAgentDatabase,
   sourceKeys: readonly string[],
   canonicalKey: string,

@@ -233,8 +233,8 @@ describe("guarded startup request lifetime", () => {
       .request("thread/start", {}, { timeoutMs: 1_000 })
       .catch((error: unknown) => error);
     const frame = await waitForHarnessRequest(harness, "thread/start");
-    // Move wall time past the deadline without running the timer callback.
-    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
+    // Advance elapsed time past the deadline without running the timer callback.
+    const now = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 2_000);
     harness.send({ id: frame.id, error: { code: -32001, message: "Server overloaded" } });
     expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: false });
     now.mockRestore();

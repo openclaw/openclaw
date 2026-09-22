@@ -2,11 +2,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sql } from "kysely";
 import {
+  getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionActor } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -19,7 +20,7 @@ export type SqliteSessionOwnerRow = {
 };
 
 function prepareOwnerColumnReads(database: DatabaseSync) {
-  const db = getSessionKysely(database);
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   return {
     schemaVersion: prepareSqliteQueryTakeFirstSync(database, () =>
       db

@@ -1,10 +1,15 @@
 import { types } from "node:util";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 
 /** Restore opaque handles only when they return to the instance that created their view. */
 function restorePluginArgumentViews(
   args: unknown[],
   originals: WeakMap<object, object>,
 ): unknown[] {
+  // Callable arguments are handled separately; only objects can contain opaque handles.
+  if (!args.some((value) => value !== null && typeof value === "object")) {
+    return args;
+  }
   // Parents are plain records or arrays; a Set represents multiple parents.
   const parents = new Map<object, object | Set<object> | undefined>();
   const replacements = new Map<object, object>();
@@ -23,6 +28,9 @@ function restorePluginArgumentViews(
         original = previous;
       }
       if (!original) {
+        if (isDeeplyFrozenPlainData(value)) {
+          return;
+        }
         if (types.isProxy(value)) {
           return;
         }
@@ -129,7 +137,7 @@ export function createPluginArgumentView(bindings: {
     args: unknown[];
     callerData?: unknown[];
   } => {
-    if (callbackIndex === null) {
+    if (callbackIndex === null || args.length === 0) {
       return {
         args: args.map((value) =>
           value && (typeof value === "object" || typeof value === "function")

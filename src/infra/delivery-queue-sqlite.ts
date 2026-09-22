@@ -1,4 +1,5 @@
 // Stores durable delivery queue entries through their connection-bound owner.
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -6,7 +7,6 @@ import {
 import {
   loadDeliveryQueueEntryInDatabase,
   type DeliveryQueueReadMode,
-  type UpsertDeliveryQueueEntryParams,
 } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
@@ -14,11 +14,9 @@ import {
   getDeliveryQueueEntryOwnersInDatabase,
   loadDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
-  pruneExpiredDeliveryQueueTombstonesInDatabase,
   reserveDeliveryQueueEntryAttemptInDatabase,
   terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntryInDatabase,
-  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueStoredStatus,
   type ReserveDeliveryQueueAttemptResult,
   type TerminalizePendingDeliveryQueueEntryParams,
@@ -48,14 +46,6 @@ function openStateDatabase(stateDir?: string, context?: DeliveryQueueStateContex
   });
 }
 
-/** Insert or replace a delivery queue entry under a queue namespace. */
-export function upsertDeliveryQueueEntry(
-  params: UpsertDeliveryQueueEntryParams,
-  context?: DeliveryQueueStateContext,
-): boolean {
-  return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir, context));
-}
-
 /** Load a single pending delivery queue entry. */
 export function loadDeliveryQueueEntry(
   queueName: string,
@@ -78,24 +68,9 @@ export function getDeliveryQueueEntryStatus(
   id: string,
   stateDir?: string,
 ): DeliveryQueueStoredStatus | undefined {
-  return getDeliveryQueueEntryOwners([queueName], id, stateDir).get(queueName)?.status;
-}
-
-/** Read one exact ID across physical namespaces from a single ownership snapshot. */
-export function getDeliveryQueueEntryOwners(
-  queueNames: readonly string[],
-  id: string,
-  stateDir?: string,
-  context?: DeliveryQueueStateContext,
-): Map<string, { status: DeliveryQueueStoredStatus; settlementPending?: true }> {
-  if (queueNames.length === 0) {
-    return new Map();
-  }
-  return getDeliveryQueueEntryOwnersInDatabase(
-    openStateDatabase(stateDir, context),
-    queueNames,
-    id,
-  );
+  return getDeliveryQueueEntryOwnersInDatabase(openStateDatabase(stateDir), [queueName], id).get(
+    queueName,
+  )?.status;
 }
 
 /** Load all pending entries for a queue namespace in database order. */
@@ -169,16 +144,39 @@ export async function countFailedDeliveryQueueEntries(
 export function countPendingDeliveryQueueEntries(
   queueNames: readonly string[],
   stateDir?: string,
+  context?: DeliveryQueueStateContext,
 ): number {
   if (queueNames.length === 0) {
     return 0;
   }
-  return countPendingDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueNames);
+  return countPendingDeliveryQueueEntriesInDatabase(
+    openStateDatabase(stateDir, context),
+    queueNames,
+  );
+}
+
+/** Inventory retired custody without opening a writer or creating state. */
+export async function countPendingDeliveryQueueEntriesReadOnly(
+  queueNames: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      (database) => countPendingDeliveryQueueEntriesInDatabase(database, queueNames),
+      { env },
+    )) ?? 0
+  );
 }
 
 /** Physically expire age-bounded delivery queue tombstones. */
-export function pruneExpiredDeliveryQueueTombstones(stateDir?: string): void {
-  pruneExpiredDeliveryQueueTombstonesInDatabase(openStateDatabase(stateDir));
+export async function pruneExpiredDeliveryQueueTombstones(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.pruneTombstones",
+    input: undefined,
+  });
 }
 
 /** Atomically delete or tombstone a pending row only while its value is unchanged. */

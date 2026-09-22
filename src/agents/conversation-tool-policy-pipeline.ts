@@ -151,3 +151,16 @@ export function projectConversationToolNames<TName extends string>(params: {
     }),
   }).map((tool) => tool.name);
 }
+
+export function isConversationToolAllowed(
+  capabilityProfile: ResolvedConversationCapabilityProfile,
+  toolName: string,
+): boolean {
+  return (
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: [toolName],
+      warn: () => undefined,
+    }).length === 1
+  );
+}

@@ -421,6 +421,14 @@ describe("telegramApprovalNativeRuntime", () => {
       expected: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
     },
     {
+      name: "completion unconfirmed after an approved write",
+      decision: "allow-once",
+      applicationStatus: "not-applied",
+      summary: "set config gateway.port to 19001",
+      expected:
+        "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
+    },
+    {
       name: "denied and not applied",
       decision: "deny",
       applicationStatus: "not-applied",

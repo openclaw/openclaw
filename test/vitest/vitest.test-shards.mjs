@@ -144,8 +144,6 @@ export const fullSuiteVitestShards = [
     projects: [
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-codex-app-server-attempt.config.ts",
-      "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
       "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
       "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts",
       "test/vitest/vitest.extension-codex-app-server-runtime.config.ts",

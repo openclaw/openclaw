@@ -19,6 +19,9 @@ import { resolveDiscordPreflightChannelAccess } from "./message-handler.prefligh
 const DISCORD_GUILD_JOIN_INTRO_MAX_AGE_MS = 5 * 60 * 1_000;
 
 export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
+  private stopped = false;
+  private readonly pendingReports = new Set<ReturnType<typeof reportChannelRoomJoin>>();
+
   constructor(
     private readonly params: {
       readPolicy?: DiscordLivePolicyReader;
@@ -34,7 +37,13 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
   }
 
   async handle(data: Parameters<GuildCreateListener["handle"]>[0], client: Client): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     const policy = await this.params.readPolicy?.();
+    if (this.stopped) {
+      return;
+    }
     const params = { ...this.params, ...policy };
     if (!("joined_at" in data) || data.unavailable || !params.botUserId) {
       return;
@@ -106,6 +115,9 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
         }
       }
     }
+    if (this.stopped) {
+      return;
+    }
     if (policy?.isCurrent() === false) {
       params.logger?.info("Discord guild join introduction skipped: access policy changed", {
         guildId: data.id,
@@ -122,7 +134,7 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
     }
     const selectedChannel = targetChannel;
 
-    await reportChannelRoomJoin({
+    const report = reportChannelRoomJoin({
       cfg: params.cfg,
       channel: "discord",
       accountId: params.accountId,
@@ -162,5 +174,17 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
         }
       },
     });
+    this.pendingReports.add(report);
+    try {
+      await report;
+    } finally {
+      this.pendingReports.delete(report);
+    }
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    // Accepted reports own delivery and its durable claim; permission reads own neither.
+    await Promise.allSettled(this.pendingReports);
   }
 }

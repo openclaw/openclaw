@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements session behavior.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
 import type {

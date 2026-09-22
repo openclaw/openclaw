@@ -51,7 +51,7 @@ describe("coding-tool exec working directory", () => {
       codingRoot,
       containmentRoot: codingRoot,
       includeBaseCodingTools: false,
-      includeShellTools: true,
+      shellTools: "full",
       workspaceOnly: false,
       readOnly: false,
       applyPatchEnabled: false,

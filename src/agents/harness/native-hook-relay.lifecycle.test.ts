@@ -631,6 +631,71 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
   },
 );
 
+it("rejects oversized direct bridge responses", async () => {
+  await withOpenClawTestState({ label: "relay-oversized-response" }, async () => {
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-oversized-bridge-response",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const server = new Server((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("x".repeat(5_000_001));
+    });
+    try {
+      await relay.ready;
+      const record = await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId });
+      if (!record) {
+        throw new Error("test bridge registration unavailable");
+      }
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test bridge server address unavailable");
+      }
+      await store.writeNativeHookRelayBridgeRecord({
+        record: {
+          ...record,
+          port: address.port,
+          token: "test-token",
+          expiresAtMs: Date.now() + 10_000,
+        },
+      });
+
+      // Cold locator startup must not consume this byte-limit fixture's caller deadline.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      try {
+        await expect(
+          invokeNativeHookRelayBridge({
+            provider: "codex",
+            relayId: relay.relayId,
+            generation: relay.generation,
+            event: "pre_tool_use",
+            timeoutMs: 500,
+            rawPayload: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            },
+          }),
+        ).rejects.toThrow("native hook relay bridge response too large");
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      relay.unregister();
+      await relay.drain();
+    }
+  });
+});
+
 it("does not start transport when locator lookup consumes the caller deadline", async () => {
   await withOpenClawTestState({ label: "relay-lookup-deadline" }, async () => {
     const relay = registerOwnedNativeHookRelay({
@@ -842,17 +907,16 @@ it("does not restore an old locator when renewal finishes after unregister", asy
         }
       },
     );
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       sessionId: "renewal-close",
       runId: "renewal-close",
     });
     try {
-      await vi.waitFor(async () => {
-        expect(
-          Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId })),
-        ).toBe(true);
-      });
+      await relay.ready;
+      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
+        true,
+      );
       relay.renew(60_000);
       await entered.promise;
       relay.unregister();
@@ -874,37 +938,30 @@ it("does not publish renewal expiry before the durable renewal succeeds", async 
   await withOpenClawTestState({ label: "relay-renewal-expiry" }, async () => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const renewed = createDeferredCore();
     const renew = store.renewOrRestoreNativeHookRelayBridgeRecord;
     vi.spyOn(store, "renewOrRestoreNativeHookRelayBridgeRecord").mockImplementation(
       async (params) => {
         entered.resolve();
         await resume.promise;
-        try {
-          return await renew(params);
-        } finally {
-          renewed.resolve();
-        }
+        return await renew(params);
       },
     );
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       sessionId: "renewal-expiry",
       runId: "renewal-expiry",
     });
     try {
-      await vi.waitFor(async () => {
-        expect(
-          Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId })),
-        ).toBe(true);
-      });
+      await relay.ready;
+      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
+        true,
+      );
       const expiresAtMs = relay.expiresAtMs;
       relay.renew(60_000);
       await entered.promise;
       expect(relay.expiresAtMs).toBe(expiresAtMs);
     } finally {
       resume.resolve();
-      await renewed.promise;
       relay.unregister();
       await testing.clearNativeHookRelaysForTests();
     }

@@ -26,7 +26,6 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -38,7 +37,10 @@ import {
 } from "../embedded-agent-tool-media.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { closeCliLiveSession } from "./cli-live-session-registry.js";
-import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
+import {
+  attachCliMessagingDeliveryEvidence,
+  projectCliMessagingDeliveryEvidence,
+} from "./delivery-evidence.js";
 import * as Deadline from "./execute-ask-user-deadline.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -233,7 +235,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const delivered = deliveryFact
       ? deliveryFact.status === "settled" &&
         (params.isError !== true || deliveryFact.partialDelivery)
-      : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
+      : isDeliveredMessagingToolResult(params);
     if (!delivered) {
       return;
     }
@@ -558,6 +560,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         isError: event.isError,
       });
     }
+    return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;
   };
   const resolveCliLoopbackTerminalOutcome = (toolCallId: string) => {
     const activeTool = activeCliTools.get(toolCallId);
@@ -670,23 +673,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
-        ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
-        ...(current.didDeliverSourceReplyViaMessageTool
-          ? { didDeliverSourceReplyViaMessageTool: true }
-          : {}),
-        ...(current.sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
-        ...(current.messagingToolSentTexts.length > 0
-          ? { messagingToolSentTexts: current.messagingToolSentTexts.slice() }
-          : {}),
-        ...(current.messagingToolSentMediaUrls.length > 0
-          ? { messagingToolSentMediaUrls: current.messagingToolSentMediaUrls.slice() }
-          : {}),
-        ...(current.messagingToolSentTargets.length > 0
-          ? { messagingToolSentTargets: current.messagingToolSentTargets.slice() }
-          : {}),
-        ...(current.messagingToolSourceReplyPayloads.length > 0
-          ? { messagingToolSourceReplyPayloads: current.messagingToolSourceReplyPayloads.slice() }
-          : {}),
+        ...projectCliMessagingDeliveryEvidence(current, true),
         ...(current.toolMediaUrls.length > 0
           ? { toolMediaUrls: current.toolMediaUrls.slice() }
           : {}),

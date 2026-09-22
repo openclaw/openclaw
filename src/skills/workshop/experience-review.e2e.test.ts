@@ -23,7 +23,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillReviewOutcomes } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
@@ -307,7 +307,9 @@ describe("Workshop draft-only review through the real provider and tool owners",
           });
           // Load the real provider plugin before entering the review lane, as the live proof does.
           loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
-          const outcomesBefore = new Set(Object.keys(readSkillReviewOutcomes().experienceReviews));
+          const outcomesBefore = new Set(
+            Object.keys(readSkillCuratorReviewStatus().experienceReviews),
+          );
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const foregroundFingerprint = () => {
             const hash = createHash("sha256");
@@ -376,7 +378,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
             agentId: "main",
             runId,
           });
-          const outcomes = Object.entries(readSkillReviewOutcomes().experienceReviews).filter(
+          const outcomes = Object.entries(readSkillCuratorReviewStatus().experienceReviews).filter(
             ([key]) => !outcomesBefore.has(key),
           );
           expect(outcomes).toHaveLength(1);

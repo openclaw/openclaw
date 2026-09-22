@@ -8,6 +8,44 @@ import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-help
 import { buildConfigSchemaCore } from "./schema.js";
 
 describe("realredactConfigSnapshot_real", () => {
+  it.each(["url-secret", " URL-SECRET "])(
+    "redacts and restores custom plugin endpoints with authored tag %j",
+    (tag) => {
+      const hints = buildConfigSchemaCore({
+        plugins: [
+          {
+            id: "endpoint-proof",
+            configSchema: {
+              type: "object",
+              properties: { endpoint: { type: "string" } },
+            },
+            configUiHints: { endpoint: { sensitive: false, tags: [tag] } },
+          },
+        ],
+      }).uiHints;
+      const snapshot = makeSnapshot({
+        plugins: {
+          entries: {
+            "endpoint-proof": {
+              config: {
+                endpoint: "https://proof-user:proof-password@example.test/v1?token=proof-token",
+              },
+            },
+          },
+        },
+      });
+
+      const result = redactConfigSnapshot(snapshot, hints);
+      expect(result.config.plugins?.entries?.["endpoint-proof"]?.config?.endpoint).toBe(
+        REDACTED_SENTINEL,
+      );
+      for (const secret of ["proof-user", "proof-password", "proof-token"]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+      }
+      expect(restoreRedactedValues(result.config, snapshot.config, hints)).toEqual(snapshot.config);
+    },
+  );
+
   it("main schema redact works (samples)", () => {
     const snapshot = makeSnapshot({
       memory: {

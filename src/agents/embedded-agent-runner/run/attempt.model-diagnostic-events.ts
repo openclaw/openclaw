@@ -108,9 +108,10 @@ function observeModelCallIterator<T>(
           iteratorSettled = true;
           break;
         }
-        lifecycle.observer.observeResponseChunk(lifecycle.startedAt, next.value);
+        const chunk = next.value;
+        lifecycle.observer.observeResponseChunk(lifecycle.startedAt, chunk);
         lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
-        yield next.value;
+        yield chunk;
       }
       // EOF can precede result decorators' settlement. Retain that work through
       // owner cleanup without delaying drain-only consumers or losing failures.
@@ -235,6 +236,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       requestTimeoutMs,
       createObserver: (capturePromptStats) =>
         createModelObserver({
+          config: ctx.config,
           streamContext,
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,

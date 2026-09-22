@@ -50,7 +50,7 @@ type QaScenarioRuntimeApi<
   imageUnderstandingValidPngBase64: string;
   getTransportSnapshot: TEnv["transport"]["state"]["getSnapshot"];
   resetTransport: () => Promise<void>;
-  injectInboundMessage: TEnv["transport"]["state"]["addInboundMessage"];
+  injectInboundMessage: TEnv["transport"]["sendInbound"];
   injectOutboundMessage: TEnv["transport"]["state"]["addOutboundMessage"];
   readTransportMessage: TEnv["transport"]["state"]["readMessage"];
   resetBus: () => Promise<void>;
@@ -89,7 +89,7 @@ export function createQaScenarioRuntimeApi<
     imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,
     getTransportSnapshot: transportState.getSnapshot.bind(transportState),
     resetTransport: resetTransportState,
-    injectInboundMessage: transportState.addInboundMessage.bind(transportState),
+    injectInboundMessage: transport.sendInbound.bind(transport),
     injectOutboundMessage: transportState.addOutboundMessage.bind(transportState),
     readTransportMessage: transportState.readMessage.bind(transportState),
     resetBus: resetTransportState,

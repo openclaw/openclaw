@@ -358,6 +358,8 @@ export async function drainContextEngineTurnOutbox(params: {
   ownerPluginId?: string;
   sessionId?: string;
   limit?: number;
+  /** Observe acknowledged turns without changing durable advancement on observer failure. */
+  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
   if (typeof params.engine.commitTurn !== "function") {
@@ -479,6 +481,14 @@ async function commitPendingContextEngineTurn(
         .deleteFrom("context_engine_turn_outbox")
         .where("advancement_key", "=", row.advancement_key),
     );
+    // Notification is best effort after acknowledgment; its failure must never requeue a commit.
+    try {
+      params.onCommitted?.(commonParams);
+    } catch (error) {
+      params.warn(
+        `[context-engine] committed turn notification failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

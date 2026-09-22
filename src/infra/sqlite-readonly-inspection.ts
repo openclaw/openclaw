@@ -25,16 +25,12 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
       throw error;
     }
     const sidecars = readSourceSidecars(canonicalPath);
-    // Keep byte-neutral private recovery for empty files, incomplete WAL state,
-    // and rollback journals. These cannot always be attached read-only.
-    if (
-      mode === "empty" ||
-      sidecars.journal ||
-      (mode === "wal" && !(sidecars.wal && sidecars.shm))
-    ) {
+    // Incomplete WAL families need private recovery. A live rollback journal
+    // still permits a committed read; only SQLite's recovery refusal falls back.
+    if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm))) {
       return undefined;
     }
-    return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+    return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
       try {
         // sqlite-allow-raw -- SQLite connection policy and deferred read admission, not a row query.
         database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");

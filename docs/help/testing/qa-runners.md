@@ -49,6 +49,10 @@ inside every shard.
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker
     count, or `--concurrency 1` for the older serial lane.
+    Each worker owns a stable named profile as well as separate home, state,
+    and config paths, so its CLI bootstrap cannot select the operator's installed
+    Gateway service. Parent profiles and runtime environment patches do not
+    override that worker identity.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.

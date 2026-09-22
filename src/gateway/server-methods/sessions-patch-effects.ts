@@ -50,6 +50,9 @@ export async function publishSessionPatchEffects(params: {
         sessionKey: target.canonicalKey,
         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
         reason: "patch",
+        ...(target.fullPatch.model !== undefined || target.fullPatch.agentRuntime !== undefined
+          ? { catalogChanged: true }
+          : {}),
       },
       { accessChanged },
     );
@@ -69,8 +72,21 @@ export async function publishSessionPatchEffects(params: {
   if (params.targets.length > 0 && typeof category === "string" && category.trim()) {
     // A first-use category is a group-catalog mutation: clients reload the
     // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" }, { accessChanged: false });
+    let catalogChanged: boolean;
+    try {
+      catalogChanged = await ensureSessionGroupRegistered(category);
+    } catch (error) {
+      // The session category is already durable. Preserve that outcome and the
+      // existing same-category patch recovery instead of asking clients to undo it.
+      sessionLog.warn(
+        `sessions.patch: category ${JSON.stringify(category)} was saved, but group registration failed; retry the same category assignment to repair the catalog: ${formatErrorMessage(error)}`,
+      );
+      // Registration may have committed before cleanup failed. Reload the catalog
+      // on uncertain outcomes too, without invalidating unrelated session rows.
+      catalogChanged = true;
+    }
+    if (catalogChanged) {
+      emitSessionsChanged(params.context, { reason: "groups" }, { catalogOnly: true });
     }
   }
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {

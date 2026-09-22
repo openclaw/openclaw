@@ -1,6 +1,7 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
 import {
@@ -61,7 +62,6 @@ export async function runQaFlowSuiteIsolated(
     adapterFactories: params?.adapterFactories,
     channelDriver: params?.channelDriver,
     channelId: params?.channelId,
-    channelDriverSelection: params?.channelDriverSelection,
     adapterOptions: {
       ...params?.adapterOptions,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
@@ -114,7 +114,7 @@ export async function runQaFlowSuiteIsolated(
           alternateModel,
           fastMode,
           concurrency,
-          channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+          channel: params?.channelId ?? transport.id,
           channelDriver: transportFactoryResult.driver,
           isolatedWorkers: true,
           writeEvidenceFile: false,
@@ -145,6 +145,7 @@ export async function runQaFlowSuiteIsolated(
   let parentTransportCleaned = false;
   let completionProgress: string | undefined;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let transportArtifacts: QaRunnerTransportArtifacts | undefined;
   try {
     if (params?.channelDriver === "live") {
       // The parent only renders aggregate artifacts. Release its live credentials
@@ -193,7 +194,7 @@ export async function runQaFlowSuiteIsolated(
               providerMode,
               transportId,
               channelDriver: params?.channelDriver,
-              channelDriverSelection: params?.channelDriverSelection,
+              channelId: params?.channelId,
               primaryModel,
               alternateModel,
               fastMode,
@@ -300,6 +301,8 @@ export async function runQaFlowSuiteIsolated(
           params?.failFast === true && scenarioResult.status === "fail",
       },
     );
+    await artifactWriteQueue;
+    transportArtifacts = await transport.captureArtifacts?.({ outputDir });
     terminalScenarios = scenarios;
     completionProgress = "run complete";
   } catch (error) {
@@ -345,9 +348,9 @@ export async function runQaFlowSuiteIsolated(
     alternateModel,
     fastMode,
     concurrency,
-    channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+    channel: params?.channelId ?? transport.id,
     channelDriver: transportFactoryResult.driver,
-    channelDriverSelection: params?.channelDriverSelection,
+    transportArtifacts,
     isolatedWorkers: true,
     writeEvidenceFile: params?.writeEvidenceFile,
     scenarioIds:

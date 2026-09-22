@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -98,7 +99,10 @@ export async function completeReplyAgentRun(input: {
         agentId: followupRun.run.agentId,
       });
       if (contextContent) {
-        enqueueSystemEvent(contextContent, { sessionKey });
+        enqueueSystemEvent(
+          contextContent,
+          withSystemEventOwner({ sessionKey }, followupRun.run.agentId),
+        );
       }
     }
 
@@ -224,6 +228,7 @@ export async function completeReplyAgentRun(input: {
         const deliveryId = crypto.randomUUID();
         setReplyPayloadMetadata(payload, {
           pendingFinalDeliveryCompletion: {
+            agentId: followupRun.run.agentId,
             deliveryId,
             intentId: pendingFinalDeliveryIntentId,
             ...(activeSessionEntry?.restartRecoveryDeliveryRunId
@@ -247,7 +252,7 @@ export async function completeReplyAgentRun(input: {
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
       const persistedPendingFinalDelivery = await updateSessionEntry(
-        { storePath, sessionKey },
+        { agentId: followupRun.run.agentId, storePath, sessionKey },
         (entry) =>
           entry.sessionId === expectedSessionId
             ? {
