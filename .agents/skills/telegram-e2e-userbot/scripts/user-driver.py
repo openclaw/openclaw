@@ -47,6 +47,16 @@ TDLIB_CACHE_ROOT = Path(
 CREDENTIAL_STATE_MISSING_GROUP = "credential_state_missing_group"
 
 
+def remaining_request_timeout(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DriverError(
+            "Timed out during Telegram credential readiness",
+            tdlib_timed_out=True,
+        )
+    return min(10, remaining)
+
+
 class DriverError(RuntimeError):
     def __init__(
         self,
@@ -56,12 +66,14 @@ class DriverError(RuntimeError):
         tdlib_code=None,
         tdlib_message="",
         tdlib_method="",
+        tdlib_timed_out=False,
     ):
         super().__init__(message)
         self.diagnostic_code = diagnostic_code
         self.tdlib_code = tdlib_code
         self.tdlib_message = tdlib_message
         self.tdlib_method = tdlib_method
+        self.tdlib_timed_out = tdlib_timed_out
 
 
 class TdRequestError(DriverError):
@@ -388,7 +400,11 @@ class TdClient:
                     )
                 return item
             self.handle_update(item)
-        raise DriverError(f"Timed out waiting for {payload['@type']}")
+        raise DriverError(
+            f"Timed out waiting for {payload['@type']}",
+            tdlib_method=payload["@type"],
+            tdlib_timed_out=True,
+        )
 
     def handle_update(self, item):
         self.updates.append(item)
@@ -546,7 +562,40 @@ class UserDriver:
         print(link)
         print("")
 
-    def resolve_chat(self, chat, *, local_only=False):
+    def load_credential_chat(self, chat_id, deadline):
+        for chat_list_type in ("chatListMain", "chatListArchive"):
+            while True:
+                try:
+                    self.client.request(
+                        {
+                            "@type": "loadChats",
+                            "chat_list": {"@type": chat_list_type},
+                            "limit": 100,
+                        },
+                        timeout=remaining_request_timeout(deadline),
+                    )
+                except DriverError as load_error:
+                    if load_error.tdlib_method == "loadChats" and load_error.tdlib_code == 404:
+                        break
+                    raise
+                try:
+                    return self.client.request(
+                        {"@type": "getChat", "chat_id": chat_id},
+                        timeout=remaining_request_timeout(deadline),
+                    )["id"]
+                except DriverError as chat_error:
+                    if not (
+                        chat_error.tdlib_method == "getChat"
+                        and chat_error.tdlib_code == 400
+                        and chat_error.tdlib_message == "Chat not found"
+                    ):
+                        raise
+        raise DriverError(
+            f"Chat {chat_id} is absent after exhausting the cold-restored TDLib chat lists. Disable and republish the pooled credential.",
+            diagnostic_code=CREDENTIAL_STATE_MISSING_GROUP,
+        )
+
+    def resolve_chat(self, chat, *, credential_deadline=None):
         chat = chat or default_chat(self.config, self.bot_config)
         if not chat:
             raise DriverError("Missing chat. Pass --chat or configure defaultChatId. Run `user-driver.py chats --json` to list chats visible to the tester account.")
@@ -557,7 +606,14 @@ class UserDriver:
         if chat.startswith("https://t.me/") and "/" not in chat.removeprefix("https://t.me/"):
             return self.client.request({"@type": "searchPublicChat", "username": chat.removeprefix("https://t.me/")})["id"]
         try:
-            return self.client.request({"@type": "getChat", "chat_id": int(chat)}, timeout=10)["id"]
+            timeout = (
+                remaining_request_timeout(credential_deadline)
+                if credential_deadline is not None
+                else 10
+            )
+            return self.client.request(
+                {"@type": "getChat", "chat_id": int(chat)}, timeout=timeout
+            )["id"]
         except DriverError as error:
             if not (
                 error.tdlib_method == "getChat"
@@ -565,11 +621,9 @@ class UserDriver:
                 and error.tdlib_message == "Chat not found"
             ):
                 raise
-            if local_only:
-                raise DriverError(
-                    f"Chat {chat} is missing from the cold-restored TDLib state. Disable and republish the pooled credential with a snapshot where getChat(groupId) succeeds.",
-                    diagnostic_code=CREDENTIAL_STATE_MISSING_GROUP,
-                ) from error
+            chat_id = int(chat)
+            if credential_deadline is not None:
+                return self.load_credential_chat(chat_id, credential_deadline)
             try:
                 self.client.request(
                     {
@@ -580,13 +634,17 @@ class UserDriver:
                     timeout=30,
                 )
             except DriverError as refresh_error:
-                if "failed (404)" not in str(refresh_error):
+                if not (
+                    isinstance(refresh_error, TdRequestError)
+                    and refresh_error.tdlib_method == "loadChats"
+                    and refresh_error.tdlib_code == 404
+                ):
                     raise
             try:
                 return self.client.request(
-                    {"@type": "getChat", "chat_id": int(chat)}, timeout=10
+                    {"@type": "getChat", "chat_id": chat_id}, timeout=10
                 )["id"]
-            except DriverError:
+            except DriverError as refreshed_error:
                 raise DriverError(
                     f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
                 ) from error
@@ -927,17 +985,25 @@ def command_login(args):
 def command_status(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
+    deadline = time.monotonic() + args.timeout_ms / 1000
     ready = driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms), need_ready=False)
     if not ready:
         print_result({"ok": False, "authorized": False, "next": "login --qr"}, args.json, getattr(args, "output", ""))
         sys.exit(1)
-    me = driver.client.request({"@type": "getMe"})
-    version = driver.client.request({"@type": "getOption", "name": "version"})
+    me = driver.client.request(
+        {"@type": "getMe"}, timeout=remaining_request_timeout(deadline)
+    )
+    version = driver.client.request(
+        {"@type": "getOption", "name": "version"},
+        timeout=remaining_request_timeout(deadline),
+    )
     group_write_access = None
     if args.check_chat:
         group_write_access = driver.check_group_write_access(driver.resolve_chat(args.check_chat), me["id"])
     chat_id = (
-        driver.resolve_chat(args.require_chat, local_only=True) if args.require_chat else None
+        driver.resolve_chat(args.require_chat, credential_deadline=deadline)
+        if args.require_chat
+        else None
     )
     save_tester_identity(config, me)
     print_result(

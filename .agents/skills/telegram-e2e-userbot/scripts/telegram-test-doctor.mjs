@@ -47,7 +47,7 @@ export async function checkTelegramTestCredential({
     lease.assertHealthy();
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
     const requiredChat = dm || chat ? "" : credential.groupId;
-    const statusArgs = ["run", USER_DRIVER_PATH, "status", "--json"];
+    const statusArgs = ["run", USER_DRIVER_PATH, "status", "--json", "--timeout-ms", "25000"];
     if (requiredChat) statusArgs.push("--require-chat", requiredChat);
     const status = await runCommandImpl("uv", statusArgs, {
       cwd: process.cwd(),
