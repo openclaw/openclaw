@@ -9,12 +9,12 @@ import {
   resolveChannelConfigured,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import { createChannelsViewProps } from "./view.test-support.ts";
+import { createChannelsViewProps, type ChannelsViewTestProps } from "./view.test-support.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
-function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
+function createProps(snapshot: ChannelsViewTestProps["snapshot"]): ChannelsViewTestProps {
   return createChannelsViewProps(snapshot, {
     accounts: [],
     requests: [],

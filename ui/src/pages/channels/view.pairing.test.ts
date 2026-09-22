@@ -9,8 +9,11 @@ import {
   renderChannelPairingPrompt,
   renderChannelPairingQueue,
 } from "./view.pairing.ts";
-import { createChannelsViewProps } from "./view.test-support.ts";
-import type { ChannelsProps } from "./view.types.ts";
+import {
+  createChannelsViewProps,
+  type ChannelsViewTestOverrides,
+  type ChannelsViewTestProps,
+} from "./view.test-support.ts";
 
 const request = {
   requestId: "opaque-request-id",
@@ -27,7 +30,7 @@ const request = {
   notifySupported: true,
 } as const;
 
-function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
+function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsViewTestProps {
   return createChannelsViewProps(
     null,
     {
