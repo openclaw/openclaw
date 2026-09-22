@@ -21,6 +21,7 @@ function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
       arrayBuffers: memory,
     },
     runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
+    activeResources: { Timeout: 1 },
   };
 }
 
@@ -31,7 +32,9 @@ describe("Kitchen Sink resource phase receipts", () => {
       .mockResolvedValueOnce(snapshot(1))
       .mockResolvedValueOnce(snapshot(4, 80));
     const run = vi.fn(async (index: number) => {
-      if (index === 1) throw new Error("tool output missed its fixture");
+      if (index === 1) {
+        throw new Error("tool output missed its fixture");
+      }
     });
     const phase = await measureResourceOperations({ name: "plugin-tool", count: 20, sample, run });
     expect(run.mock.calls).toEqual([[0], [1]]);
@@ -131,5 +134,27 @@ describe("Kitchen Sink resource phase receipts", () => {
     const invalid = snapshot(2);
     invalid.memory.rss = Number.NaN;
     expect(() => summarizeResourcePhase("idle", snapshot(1), invalid, ops)).toThrow("invalid rss");
+  });
+
+  it("retains signed resource changes and rejects missing observations", () => {
+    const before = { ...snapshot(1), activeResources: { Timeout: 2, TCPServerWrap: 1 } };
+    const after = { ...snapshot(2), activeResources: { Timeout: 1, Immediate: 1 } };
+    const ops = { attempted: 0, completed: 0, failed: 0 };
+    expect(summarizeResourcePhase("stop", before, after, ops).activeResourceChanges).toEqual({
+      Immediate: 1,
+      TCPServerWrap: -1,
+      Timeout: -1,
+    });
+    expect(() =>
+      summarizeResourcePhase(
+        "stop",
+        before,
+        {
+          ...after,
+          activeResources: { Timeout: Number.NaN },
+        },
+        ops,
+      ),
+    ).toThrow("invalid active-resource");
   });
 });

@@ -5,7 +5,9 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { readDeferredPluginSessionImport } from "../../infra/deferred-plugin-session-sources.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { createAgentDatabaseDeletionClassifier } from "../../state/agent-deletion-discovery.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -33,7 +35,11 @@ import {
   resolveSqliteTargetFromSessionStorePath,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
-import { resolveAllAgentSessionStoreTargetsSync, resolveSessionStoreTargets } from "./targets.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+} from "./targets.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
@@ -71,13 +77,29 @@ export function assertSessionStoreMigrationComplete(params: {
     const sourcePath = path.resolve(target.storePath);
     sourcesByPath.set(sourcePath, [...(sourcesByPath.get(sourcePath) ?? []), target]);
   }
-  const legacyStore = [...sourcesByPath].find(([storePath, candidates]) => {
-    if (storePath.endsWith(".sqlite") || !fs.existsSync(storePath)) {
-      return false;
-    }
+  const legacySources = [...sourcesByPath].filter(
+    ([storePath]) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath),
+  );
+  if (legacySources.length === 0) {
+    return;
+  }
+  const deletionSnapshot = readAgentDatabaseDeletionSnapshot(env);
+  const classifyDeletion =
+    deletionSnapshot &&
+    createAgentDatabaseDeletionClassifier({
+      env,
+      retainedDeletions: deletionSnapshot.retainedDeletions,
+      registeredAgentDatabases: deletionSnapshot.registeredAgentDatabases,
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(
+        params.cfg,
+        readOptions,
+      ),
+    });
+  const legacyStore = legacySources.find(([storePath, candidates]) => {
     type SourceOwner = {
       target: { agentId: string; storePath: string; sqlitePath?: string };
       destination: string;
+      retained: boolean;
     };
     const owners = new Map<string, SourceOwner>();
     for (const target of candidates) {
@@ -90,10 +112,22 @@ export function assertSessionStoreMigrationComplete(params: {
           agentId: target.agentId,
           ...readOptions,
         }).path;
+      const deletion =
+        classifyDeletion?.(storePath, target.agentId) ??
+        classifyDeletion?.(destination, target.agentId);
       owners.set(`${target.agentId}\0${destination}`, {
         target: { ...target, agentId: target.agentId },
         destination,
+        retained: deletion !== undefined && deletion !== "unavailable",
       });
+    }
+    // A shared path still needs record-level ownership even when every candidate is held.
+    if (
+      [...owners.values()].every(
+        ({ target, retained }) => retained && !shouldFilterLegacySessionRecordsByTarget(target),
+      )
+    ) {
+      return false;
     }
     // A roster entry is only a possible importer. Inspect retained source ownership
     // here, never in runtime session access, and bind parsed bytes to every receipt.
@@ -121,7 +155,13 @@ export function assertSessionStoreMigrationComplete(params: {
       required.add(matches[0]!);
     }
     let hasUnindexedHistory: boolean | undefined;
-    return [...required].some(({ target, destination }) => {
+    return [...required].some(({ target, destination, retained }) => {
+      if (
+        retained &&
+        (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target))
+      ) {
+        return false;
+      }
       const receipt = readDeferredPluginSessionImport({
         cfg: params.cfg,
         target,

@@ -29,6 +29,7 @@ import {
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
   assertKitchenSinkResourcePlugins,
+  assertKitchenSinkResourceShutdown,
   assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
@@ -75,6 +76,19 @@ import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+it("resource proof requires clean joined Gateway exit, not forced termination", () => {
+  const clean = { exited: true, exitCode: 0, signal: null, signals: ["SIGTERM"] };
+  expect(() => assertKitchenSinkResourceShutdown(clean)).not.toThrow();
+  for (const failed of [
+    { ...clean, exited: false },
+    { ...clean, exitCode: 1 },
+    { ...clean, signals: ["SIGTERM", "SIGKILL"] },
+    { ...clean, exitCode: null, signal: "SIGKILL", signals: ["SIGTERM", "SIGKILL"] },
+  ]) {
+    expect(() => assertKitchenSinkResourceShutdown(failed)).toThrow("did not exit cleanly");
+  }
+});
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;

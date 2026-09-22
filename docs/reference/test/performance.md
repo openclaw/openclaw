@@ -68,15 +68,33 @@ creates a session and runs 20 asserted `kitchen_sink_text` calls with unique
 idempotency keys, followed by another observation window. Setup and package
 installation are outside measured phases; failed measured calls are not retried.
 
+After those matched phases, the conformance case uses `kitchen.resources` to
+verify ten million CPU iterations and a fixed checksum, hold a 16 MiB Buffer,
+and start a referenced 10 ms timer. Timer progress is observed with bounded
+status probes. Each calibration operation counts one asserted control step,
+including its probes; it is not an RPC throughput count. The fixture must include
+the calibration controls from Kitchen Sink commit `051db418820c2f0a73f8d349c88eb002b3c2d6e2`
+or later. Older fixtures fail visibly instead of skipping calibration.
+
+The harness resets the controls, asserts empty owner state, then reacquires the
+Buffer and timer before `plugins.setEnabled` disables the fixture. It requires
+an applied runtime receipt, no restart or cleanup warnings, an inactive catalog,
+and before/after samples from the same Gateway PID. This gives an in-process
+retirement observation before normal Gateway shutdown. Forced termination or a
+nonzero Gateway exit fails the report even when the process group is gone.
+
 The report preserves raw phase-boundary snapshots, completed/failed operation
 counts, provenance hashes and signed conformance-minus-empty deltas. CPU counters
 cover the Gateway process and main thread, excluding separate child processes.
 RSS is process-wide; other memory fields describe the main isolate. ArrayBuffers
 overlap external memory. Boundary samples are not peaks, and no forced GC occurs.
+Active-resource histograms count the types keeping the event loop alive, not
+plugin ownership or all live objects. The report labels CPU, held-memory and timer
+signals as observed or inconclusive; unrelated collection or host timers can
+obscure them. Reset proves owner-state release, not immediate RSS reclamation.
 The fixed post-work window is not a plugin drain receipt. Host shutdown is checked
-separately; post-disposal retention remains explicitly unsupported because the
-measured process exits. These observations establish neither a leak nor a budget
-violation. Repeat comparable pairs through the campaign owner before drawing
+separately; post-process-exit sampling and guaranteed reclamation remain unsupported.
+These observations establish neither a leak nor a budget violation. Repeat comparable pairs through the campaign owner before drawing
 performance conclusions; do not sum individual plugin costs.
 
 ### Zod schema compilation

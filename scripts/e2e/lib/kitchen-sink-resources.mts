@@ -9,6 +9,22 @@ function memoryDifference(before: NodeJS.MemoryUsage, after: NodeJS.MemoryUsage)
   return Object.fromEntries(MEMORY_FIELDS.map((field) => [field, after[field] - before[field]]));
 }
 
+function resourceDifference(before: Record<string, number>, after: Record<string, number>) {
+  for (const sample of [before, after]) {
+    if (
+      !sample ||
+      Object.values(sample).some((count) => !Number.isSafeInteger(count) || count < 0)
+    ) {
+      throw new Error("Gateway resource sample has invalid active-resource counts");
+    }
+  }
+  return Object.fromEntries(
+    [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .toSorted()
+      .map((type) => [type, (after[type] ?? 0) - (before[type] ?? 0)]),
+  );
+}
+
 export type KitchenSinkResourcePhase = {
   name: string;
   status: "exercised" | "failed";
@@ -17,6 +33,7 @@ export type KitchenSinkResourcePhase = {
   after: GatewayResourceSnapshot | null;
   cpu: ReturnType<typeof measureGatewayCpuUsage> | null;
   memoryChangeBytes: ReturnType<typeof memoryDifference> | null;
+  activeResourceChanges: Record<string, number> | null;
   processCpuMsPerCompletedOperation: number | null;
   error?: string;
 };
@@ -44,6 +61,7 @@ export function summarizeResourcePhase(
     after,
     cpu,
     memoryChangeBytes: memoryDifference(before.memory, after.memory),
+    activeResourceChanges: resourceDifference(before.activeResources, after.activeResources),
     processCpuMsPerCompletedOperation:
       operations.failed === 0 && operations.completed > 0
         ? cpu.process.totalMs / operations.completed
@@ -84,6 +102,7 @@ export async function measureResourceOperations(options: {
       after: null,
       cpu: null,
       memoryChangeBytes: null,
+      activeResourceChanges: null,
       processCpuMsPerCompletedOperation: null,
       operations,
       error: [error, `Resource sample failed: ${String(cause)}`]
