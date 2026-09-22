@@ -715,6 +715,7 @@ src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
+src/infra/sqlite-readonly-worker-context.ts
 src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
 src/infra/sqlite-readonly-worker.ts
@@ -1082,6 +1083,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/service-child-windows-job-native.ts

@@ -13,10 +13,15 @@ The standalone UI suite runs three native Vitest shards through the same group
 executor and cache leaf as its bounded four-file seed in the trusted warmer.
 Each row retains the root Node worker limit of three; Chromium uses its project
 default. The shards preserve the complete four-project inventory and each
-project's isolation and cleanup policy. Every frozen target keeps its original
-singleton, unsharded test command. The window.open lint runs once in row one.
-The extra two jobs add two Blacksmith registrations per selected non-frozen run
-on Blacksmith routes, and none on hosted routes. They do not guarantee an
+project's isolation and cleanup policy. Exact-target dispatches using the current
+shard runner retain all three shards, including Full Release Validation's complete
+Node and Bun passes. Only compatibility targets using the historical package test
+command keep their singleton, unsharded envelope. The window.open lint runs once
+in row one. Each row retains its 20-minute deadline and the matrix admits at most
+three rows concurrently.
+The extra two jobs add two Blacksmith registrations per selected automatic run
+on Blacksmith routes, and none on hosted routes. Exact-target dispatches add two
+hosted rows without changing automatic-run budgets. They do not guarantee an
 eight-minute workflow: preflight, setup, queue time and other jobs still apply.
 Its native reporter records runtime CPU and memory facts, configured project
 workers, module diagnostics, and observed queue/end events. Browser pool logs

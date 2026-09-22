@@ -13,6 +13,7 @@ import {
   isMcpOAuthWorkerCommand,
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
+import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
@@ -500,6 +501,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "sandboxRegistry.insertIfMissing") {
+    return importSandboxRegistryRow(command.input, writeOptions);
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }

@@ -511,11 +511,13 @@ describe("registered async managed child linkage", () => {
                 .map((event) => ({ status: event.task.status, endedAt: event.task.endedAt })),
             );
           }
+          // Each task's lifecycle is ordered; independent task publications can interleave.
           expect(
             updates
               .filter((event) => event.task.status === "succeeded")
-              .map((event) => event.task.taskId),
-          ).toEqual([backing.taskId, receipt.task.taskId]);
+              .map((event) => event.task.taskId)
+              .toSorted(),
+          ).toEqual([backing.taskId, receipt.task.taskId].toSorted());
         }
         expect(
           await runtime.tasks.async.flows.bindSession({ sessionKey: ownerKey }).get(flow.flowId),
