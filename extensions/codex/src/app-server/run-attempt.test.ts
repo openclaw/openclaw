@@ -5978,12 +5978,9 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("does not install an active run handle when turn start resolves after abort", async () => {
     const turnStart = createDeferred<ReturnType<typeof turnStartResult>>();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        return await turnStart.promise;
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "turn/start" ? await turnStart.promise : undefined,
+    );
     const abortController = new AbortController();
     const params = createRunParams();
     params.abortSignal = abortController.signal;
@@ -5994,6 +5991,9 @@ describe("runCodexAppServerAttempt", () => {
     turnStart.resolve(turnStartResult());
     await expect(run).rejects.toThrow("test_abort");
     expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
+    expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+      { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
+    ]);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {

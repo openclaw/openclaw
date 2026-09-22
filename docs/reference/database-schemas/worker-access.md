@@ -146,6 +146,18 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
+Cron retention discovery also uses the session reader worker. It validates the
+complete physical store's metadata and participants in one read snapshot. Its
+existing full-row decoder streams JSON once and retains prompt snapshots only
+for expired cron runs belonging to the logical agent. The
+host retains pending-media, descendant-settlement, and busy-session checks; the
+lifecycle mutation still compares each complete expected entry and rechecks its
+commit guard. Shared-store ownership, retention, schemas, and update behavior
+are unchanged. Discovery closes every matching retained SQLite reader before
+releasing its captured alias ownership, allowing successful Node reads to keep
+the existing worker warm. Failed reads, uncertain native cleanup, and Bun retain
+worker retirement; idle retirement remains unchanged.
+
 Shared GitHub publication prepares canonical profile identity and alias-binding
 lifetimes through the existing profile catalogue and read worker. Alias writers
 publish their committed binding facts before observers; worker creation and

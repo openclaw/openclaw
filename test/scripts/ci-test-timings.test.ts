@@ -2231,6 +2231,8 @@ describe("committed CI timing loader", () => {
       expect(loader.readRepoE2eFileTimings()).toEqual({});
       expect(loader.readCompactGroupTimings("blacksmith")).toEqual({});
       expect(loader.readCompactGroupTimings("github")).toEqual({});
+      expect(loader.readToolingFileTimings("blacksmith")).toEqual({});
+      expect(loader.readToolingFileTimings("github")).toEqual({});
     },
   );
 
@@ -2239,17 +2241,25 @@ describe("committed CI timing loader", () => {
       ...baseline,
       compactGroupSeconds: { blacksmith: { group: 110 }, github: { group: 181 } },
       repoE2eFileSeconds: { "test/example.e2e.test.ts": 90 },
+      toolingFileSeconds: {
+        blacksmith: { "test/scripts/ci-node-test-plan.test.ts": 300 },
+        github: { "test/scripts/ci-node-test-plan.test.ts": 420 },
+      },
     };
     const { loader, read, timingPath } = await readTimings(JSON.stringify(data));
     expect(loader.readUiE2eFileTimings()).toEqual(data.uiE2e);
     expect(loader.readRepoE2eFileTimings()).toEqual(data.repoE2eFileSeconds);
     expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 110 });
     expect(loader.readCompactGroupTimings("github")).toEqual({ group: 181 });
+    expect(loader.readToolingFileTimings("blacksmith")).toEqual(data.toolingFileSeconds.blacksmith);
+    expect(loader.readToolingFileTimings("github")).toEqual(data.toolingFileSeconds.github);
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "0");
     expect(loader.readUiE2eFileTimings()).toEqual({ fileSeconds: {}, perFileOverheadSeconds: 0 });
     expect(loader.readRepoE2eFileTimings()).toEqual({});
     expect(loader.readCompactGroupTimings("blacksmith")).toEqual({});
     expect(loader.readCompactGroupTimings("github")).toEqual({});
+    expect(loader.readToolingFileTimings("blacksmith")).toEqual({});
+    expect(loader.readToolingFileTimings("github")).toEqual({});
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", undefined);
     expect(loader.readCompactGroupTimings("github")).toEqual({ group: 181 });
     expect(

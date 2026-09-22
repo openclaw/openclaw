@@ -24,7 +24,7 @@ and publishes the result. Avoid exposing a generic SQL callback to application
 code or adding an asynchronous wrapper around an existing asynchronous facade.
 The plugin KV API already has asynchronous methods over its SQLite owner.
 
-Operator approval lookups, pending replay, verdicts, expiry, and allow-once
+Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
 consumption execute in the shared-state worker. Lookups and pending scans retain
 their expiry and corrupt-row repair transactions; history pages use the read-only
 worker. The approval manager retains live authority and decision handoffs, checks
@@ -32,6 +32,56 @@ authority at transaction and commit admission, and joins accepted mutations befo
 retiring their local bindings. Startup orphan closure and pruning remain boot
 admission operations. Stored bytes, schemas, retention, and update behavior are
 unchanged.
+
+Captured request authority survives worker waits and is rechecked before lookup,
+verdict commit, reconciliation, and response publication. The store shares FIFO
+admission across worker operations and the retained v2026.9.4 opaque SDK commit
+guard. That explicitly selected compatibility family runs the same kernels in a
+native transaction so a guard that uses SQLite never waits on its own worker's
+writer lock. It is not a failure fallback. Removing this exception requires an SDK
+contract that can require worker-safe guards. History remains on the read-only
+worker, with full request checks outside its storage work. Legacy exec/plugin
+read and resolution handlers carry the same original request authority through
+expiry, prefix lookup, and verdict admission. An unknown verdict outcome gets one
+readback under the original physical database admission and captured maintenance,
+schema, and coordinator scopes without retrying the write. Replacing that owner
+leaves the verdict uncertain even if the replacement contains matching approval
+bytes; local settlement rechecks the original admission after readback. Settlement
+retains auto-review provenance only from that operation's postcommit receipt and
+preserves the unanswered no-route fallback contract. Runtime resolver IDs can be
+shared or null; a matching row without a receipt cannot establish auto-review
+provenance. Such a verdict stays locally uncertain, while a distinct device or
+channel winner settles as an operator decision. A confirmed pending readback
+clears an inconclusive attempt. Delayed reconciliation retains the original
+database admission until that uncertainty is resolved. Retries recheck that owner
+before work and at transaction/commit admission; a pending readback cannot clear
+a replaced owner's fence. Cancellation still closes local executable authority
+immediately when durable admission is refused.
+
+Autonomous expiry rearms its existing timer after a definite worker overload or
+unavailability refusal. The retry retains the original database, maintenance,
+schema, and coordinator owner and checks the unchanged deadline in the same CAS.
+Later verdicts and reconciliation retain that pending entry's owner until local
+settlement. They cannot adopt a replacement or redirect the write to another store.
+Closing or replacing that owner stops the retry. Cleanup failures and uncertain
+write outcomes do not authorize replay; ordinary corruption keeps its existing
+fail-closed settlement.
+
+Request config custody follows committed policy publications. Equivalent snapshots
+and settings unrelated to approval auth or session routing preserve the request.
+Changes to those retained policy facts permanently revoke it, including a change
+restored before the next worker check. Handler completion releases its publication
+listener; worker commit checks consume the retained revocation fact without loading
+config, profiles, or session rows. Native-compatible requests retain the same
+publication fence in addition to their synchronous SDK guard.
+
+Bundled in-process agent callers still compose opaque guards from their run,
+profile, and receipt authority owners. Those callers, and delegated worker-claim
+liveness checks that still read placement state synchronously, require a separate
+owner migration before the complete approval flow is free of parent-thread SQL.
+That migration must prepare authority through those owners and retain live commit
+checks; it must not treat internal agent identity as WebSocket authority or drop
+the external SDK guard contract.
 
 Worker environment inventory is a committed, revisioned projection owned by its
 store. Startup hydrates through the read-only worker scope; runtime mutations use
