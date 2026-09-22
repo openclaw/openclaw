@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
 import { summarizeMockInferenceRequest } from "../../scripts/e2e/lib/mock-inference-facts.ts";
+import { createActivitySummaryDiagnostics } from "../../scripts/lib/gateway-bench-activity-summary.ts";
 import {
   createLiveGatewayEvidence,
   LIVE_GATEWAY_MODEL,
@@ -94,6 +95,324 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  describe("passive activity-summary diagnostics", () => {
+    const create = () => createActivitySummaryDiagnostics(performance.now());
+    const recapLog = (error: unknown = "Activity recap timed out") =>
+      JSON.stringify({
+        subsystem: "gateway/activity-summary",
+        message: "Activity recap deferred",
+        error,
+        retryScheduled: false,
+        agentId: "fixture-agent",
+        time: "2026-09-22T00:00:00.000Z",
+      });
+
+    it("is explicit mock-only opt-in and changes only synthetic logging", async () => {
+      expect(testing.parseOptions([]).activitySummaryDiagnostics).toBe(false);
+      expect(
+        testing.parseOptions(["--activity-summary-diagnostics"]).activitySummaryDiagnostics,
+      ).toBe(true);
+      expect(() =>
+        testing.parseOptions(["--provider", "openai", "--activity-summary-diagnostics"]),
+      ).toThrow("requires the mock provider");
+      await withTempDir("gateway-recap-config-", async (root) => {
+        const write = (enabled: boolean) =>
+          testing.buildConfig(root, 12345, 1, 0, 0, ["main"], "mock", enabled);
+        const normal = JSON.parse(await readFile(write(false), "utf8"));
+        const diagnostic = JSON.parse(await readFile(write(true), "utf8"));
+        expect(normal.logging).toBeUndefined();
+        expect(diagnostic.logging).toEqual({ consoleLevel: "debug", consoleStyle: "json" });
+        delete diagnostic.logging;
+        expect(diagnostic).toEqual(normal);
+      });
+    });
+
+    it("joins opaque identities while preserving absent, invalid, and late summary observations", () => {
+      const capture = create();
+      const row = {
+        key: "fixture-session",
+        agentId: "fixture-agent",
+        sessionId: "fixture-session",
+        activitySummary: { state: "updating", text: "private recap", updatedAt: 10 },
+      };
+      capture.setPhase("warmup");
+      capture.onProbe({
+        sessions: [
+          row,
+          { key: row.key },
+          { key: row.key, activitySummary: { state: "secret-invalid-state", updatedAt: -1 } },
+        ],
+      });
+      capture.setPhase("load");
+      capture.onEvent({
+        event: "agent",
+        seq: 2,
+        payload: {
+          stream: "lifecycle",
+          runId: "fixture-run",
+          sessionKey: row.key,
+          data: { phase: "end", extra: "private" },
+        },
+      });
+      capture.setPhase("shutdown");
+      capture.onEvent({
+        event: "sessions.changed",
+        seq: 3,
+        payload: {
+          ...row,
+          sessionKey: row.key,
+          reason: "activity-summary",
+          activitySummary: { state: "current", text: "private recap", updatedAt: 12 },
+        },
+      });
+      const result = capture.finish();
+      const probes = result.records.filter((record) => record.source === "probe");
+      const event = result.records.find((record) => record.source === "event")!;
+      expect(probes[0]).toMatchObject({
+        state: "updating",
+        hasText: true,
+        updatedAt: 10,
+        phase: "warmup",
+        summaryPresent: true,
+      });
+      expect(probes[1]).toMatchObject({ state: null, hasText: null, summaryPresent: false });
+      expect(probes[2]).toMatchObject({ state: null, updatedAt: null, summaryPresent: true });
+      expect(event).toMatchObject({ phase: "shutdown", seq: 3, state: "current", updatedAt: 12 });
+      expect(event.session).toBe(probes[0]!.session);
+      expect(event.sessionId).not.toBe(event.session);
+      expect(result.records.find((record) => record.source === "lifecycle")).toMatchObject({
+        lifecycle: "end",
+        session: event.session,
+      });
+      expect(result.invalidFields).toBe(1);
+      expect(result.delivery).toContain("missing events do not identify");
+      expect(result.phaseClock).toContain("observation arrival");
+      expect(result.instrumentation).toContain("not comparable performance evidence");
+      for (const privateText of [
+        "fixture-session",
+        "fixture-agent",
+        "fixture-run",
+        "private recap",
+        "secret-invalid-state",
+      ]) {
+        expect(JSON.stringify(result)).not.toContain(privateText);
+      }
+      const other = create();
+      other.onProbe({ sessions: [row] });
+      expect(other.finish().records.find((record) => record.source === "probe")!.session).not.toBe(
+        event.session,
+      );
+    });
+
+    it("frames streams separately and retains only closed error facts", () => {
+      const capture = create();
+      const secret = "synthetic-credential at /private/fixture/secret 😀";
+      const line = Buffer.from(recapLog(secret) + "\n");
+      const split = line.indexOf(Buffer.from("😀")) + 1;
+      capture.onOutput("stdout", line.subarray(0, split));
+      capture.onOutput("stderr", Buffer.from(recapLog() + "\n"));
+      capture.onOutput("stdout", line.subarray(split));
+      capture.onOutput(
+        "stderr",
+        Buffer.from(
+          JSON.stringify({
+            subsystem: "gateway",
+            message: "Activity summary publication failed",
+            error: {},
+          }) + "\n",
+        ),
+      );
+      capture.onOutput(
+        "stderr",
+        Buffer.from(recapLog().replace("gateway/activity-summary", "foreign") + "\n"),
+      );
+      const result = capture.finish();
+      const logs = result.records.filter((record) => record.source === "log");
+      expect(logs).toHaveLength(3);
+      expect(logs[0]).toMatchObject({
+        errorKind: "timeout",
+        retryScheduled: false,
+        errorPresent: true,
+        emittedAt: 1790035200000,
+      });
+      expect(logs[1]).toMatchObject({ errorKind: "unclassified", errorPresent: true });
+      expect(logs[1]!.errorFingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(logs[2]).toMatchObject({
+        errorKind: "unavailable",
+        errorPresent: true,
+        errorFingerprint: null,
+      });
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(JSON.stringify(result)).not.toContain("/private/");
+      expect(result.truncated).toBe(false);
+    });
+
+    it("uses the current nested session projection without reviving outer recap fields", () => {
+      const capture = create();
+      const payload = {
+        sessionKey: "fixture-session",
+        agentId: "fixture-agent",
+        activitySummary: { state: "stale", text: "older private recap" },
+        session: { key: "fixture-session", activitySummary: { state: "current", updatedAt: 20 } },
+      };
+      capture.onEvent({ event: "sessions.changed", payload });
+      capture.onEvent({
+        event: "sessions.changed",
+        payload: { ...payload, session: { key: "fixture-session" } },
+      });
+      const events = capture.finish().records.filter((record) => record.source === "event");
+      expect(events).toMatchObject([
+        { projection: "session", state: "current", updatedAt: 20 },
+        { projection: "session", summaryPresent: false, state: null },
+      ]);
+      expect(events[0]!.session).toBe(events[1]!.session);
+    });
+
+    it("discards oversized line continuations and reports incomplete or malformed evidence", () => {
+      const capture = create();
+      capture.onOutput("stdout", Buffer.from("x".repeat(16 * 1024 + 1)));
+      capture.onOutput("stdout", Buffer.from(recapLog() + "\n"));
+      capture.onOutput("stdout", Buffer.from(recapLog() + "\n"));
+      capture.onOutput("stderr", Buffer.from('{"broken":\n'));
+      capture.onOutput("stderr", Buffer.from(recapLog()));
+      const result = capture.finish();
+      expect(result.records.filter((record) => record.source === "log")).toHaveLength(1);
+      expect(result).toMatchObject({
+        oversizedLogLines: 1,
+        malformedLogLines: 1,
+        incompleteLogLines: 1,
+        truncated: true,
+      });
+    });
+
+    it("caps projected records and bytes, including otherwise valid observations", () => {
+      const capture = create();
+      for (let index = 0; index < 600; index += 1) {
+        capture.onProbe({
+          sessions: [
+            {
+              key: "fixture-session",
+              sessionId: "fixture-id",
+              agentId: "fixture-agent",
+              activitySummary: { state: "current", updatedAt: 1, text: "ignored" },
+            },
+          ],
+        });
+      }
+      const result = capture.finish();
+      expect(result.dropped).toBeGreaterThan(0);
+      expect(result.records.length).toBeLessThanOrEqual(result.limits.records);
+      expect(result.bytes).toBeLessThanOrEqual(result.limits.bytes);
+      expect(result.bytes).toBe(
+        result.records.reduce((sum, record) => sum + Buffer.byteLength(JSON.stringify(record)), 0),
+      );
+      expect(result.truncated).toBe(true);
+      const phases = create();
+      for (let index = 0; index < 600; index += 1) {
+        phases.setPhase("load");
+      }
+      expect(phases.finish()).toMatchObject({ dropped: 89, records: expect.any(Array) });
+      const bytes = create();
+      for (let index = 0; index < 600; index += 1) {
+        bytes.onEvent({
+          event: "sessions.changed",
+          seq: index,
+          payload: {
+            sessionKey: "fixture-session",
+            sessionId: "fixture-id",
+            agentId: "fixture-agent",
+            reason: "activity-summary",
+            activitySummary: {
+              state: "unavailable",
+              updatedAt: 1_790_035_200_000,
+              text: "ignored",
+            },
+          },
+        });
+      }
+      const byteBounded = bytes.finish();
+      expect(byteBounded.records.length).toBeLessThan(byteBounded.limits.records);
+      expect(byteBounded.bytes).toBeLessThanOrEqual(byteBounded.limits.bytes);
+      expect(byteBounded.dropped).toBeGreaterThan(0);
+    });
+
+    it("keeps readiness output internal and prevents diagnostic failure-tail leakage", async () => {
+      const capture = create();
+      const child = spawn(testNodeExecPath, [
+        "-e",
+        'console.log("startup trace: sidecars.ready synthetic-private-value"); console.error("synthetic-private-value");',
+      ]);
+      const output = testing.captureChildOutput(child, capture.onOutput);
+      await once(child, "close");
+      expect(output.readOutput()).toContain("startup trace: sidecars.ready");
+      const failure = testing.formatRunFailure(
+        new Error("nested synthetic-private-value"),
+        output,
+        { readOutput: () => "mock synthetic-private-value" },
+      );
+      expect(failure).not.toContain("synthetic-private-value");
+      expect(failure).toContain("raw output omitted");
+    });
+
+    it("omits private paths when diagnostic startup fails before a child exists", async () => {
+      await withTempDir("gateway-recap-failure-", async (root) => {
+        const result = spawnSync(
+          testNodeExecPath,
+          [
+            "scripts/bench-gateway-concurrency.ts",
+            "--activity-summary-diagnostics",
+            "--entry",
+            "/private/fixture/diagnostic-secret/entry.js",
+          ],
+          { encoding: "utf8", env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root } },
+        );
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Activity-summary diagnostic benchmark failed");
+        expect(result.stderr).toContain("[bench-gateway-concurrency] FAILED (exit 1)");
+        expect(`${result.stdout}${result.stderr}`).not.toContain("diagnostic-secret");
+      });
+    });
+
+    it("observes the existing probe response without another RPC or request-shape change", async () => {
+      const order: string[] = [];
+      const server = createHttpServer((req, res) => {
+        order.push(req.url!);
+        res.end(req.url === "/readyz" ? "{}" : "<html></html>");
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      assert(address && typeof address !== "string");
+      const capture = create();
+      try {
+        const sample = await testing.sampleGateway({
+          deadlineAt: performance.now() + 5000,
+          runStartedAt: performance.now(),
+          serial: true,
+          port: address.port,
+          activitySummaryDiagnostics: capture,
+          rpc: async <T>(method: string, params: unknown) => {
+            order.push(method);
+            expect(params).toEqual({});
+            return { sessions: [{ key: "fixture-session" }] } as T;
+          },
+        });
+        expect(order).toEqual(["/readyz", "/", "sessions.list"]);
+        expect(sample.sessionsList.ok).toBe(true);
+        expect(capture.finish().records).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ source: "probe", summaryPresent: false, state: null }),
+          ]),
+        );
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+  });
+
   it("keeps mock as the default and admits bounded live profiling without mock controls", () => {
     expect(testing.parseOptions([]).provider).toBe("mock");
     const liveArgs = ["--provider", "openai", "--runs", "1", "--warmup", "0", "--concurrency", "1"];

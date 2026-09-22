@@ -223,6 +223,60 @@ const frozenAdmissionClosure = [
   "scripts/lib/numeric-options.mjs",
 ];
 
+function frozenFixtureGit(directory: string, ...args: string[]) {
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "-C",
+      directory,
+      ...args,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+}
+
+function frozenToolingFixture(root: string, toolingPaths: string[]) {
+  const tooling = join(root, "tooling");
+  const templateKey = JSON.stringify(toolingPaths);
+  let template = toolingTemplates.get(templateKey);
+  if (!template) {
+    const directory = templateDirs.make("frozen-workflow-tooling-template-");
+    // The acquisition step also uses the existing npm-output parser.
+    for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      copyFileSync(path, join(directory, path));
+    }
+    const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    cpSync(recipes, join(directory, recipes), { recursive: true });
+    for (const path of toolingPaths) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      cpSync(path, join(directory, path), { recursive: true });
+    }
+    frozenFixtureGit(directory, "init", "-q");
+    frozenFixtureGit(directory, "add", ".");
+    frozenFixtureGit(directory, "commit", "-qm", "candidate tooling fixture");
+    // Pack the immutable source once; fault cases create their own loose blobs afterward.
+    frozenFixtureGit(directory, "repack", "-ad");
+    template = { directory, sha: frozenFixtureGit(directory, "rev-parse", "HEAD") };
+    toolingTemplates.set(templateKey, template);
+  }
+  // Fault cases remove objects and change config; never share mutable Git stores.
+  cpSync(template.directory, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { tooling, toolingSha: template.sha };
+}
+
 function frozenWorkflowFixture(
   file: string,
   jobName: string,
@@ -241,60 +295,13 @@ function frozenWorkflowFixture(
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), value);
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "maintenance.auto=false",
-        "-c",
-        "gc.auto=0",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-C",
-        target,
-        ...args,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = (...args: string[]) => frozenFixtureGit(target, ...args);
   git("init", "-q");
   git("add", ".");
   git("commit", "-qm", "fixture");
   const sha = git("rev-parse", "HEAD");
-  const tooling = join(root, "tooling");
-  const templateKey = JSON.stringify(toolingPaths);
-  let template = toolingTemplates.get(templateKey);
-  if (!template) {
-    const directory = templateDirs.make("frozen-workflow-tooling-template-");
-    // The acquisition step also uses the existing npm-output parser.
-    for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
-      mkdirSync(dirname(join(directory, path)), { recursive: true });
-      copyFileSync(path, join(directory, path));
-    }
-    const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-    cpSync(recipes, join(directory, recipes), { recursive: true });
-    for (const path of toolingPaths) {
-      mkdirSync(dirname(join(directory, path)), { recursive: true });
-      cpSync(path, join(directory, path), { recursive: true });
-    }
-    git("-C", directory, "init", "-q");
-    git("-C", directory, "add", ".");
-    git("-C", directory, "commit", "-qm", "candidate tooling fixture");
-    // Pack the immutable source once; fault cases create their own loose blobs afterward.
-    git("-C", directory, "repack", "-ad");
-    template = { directory, sha: git("-C", directory, "rev-parse", "HEAD") };
-    toolingTemplates.set(templateKey, template);
-  }
-  // Fault cases remove objects and change config; never share mutable Git stores.
-  cpSync(template.directory, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
-  const toolingGit = (...args: string[]) => git("-C", tooling, ...args);
-  const toolingSha = template.sha;
+  const { tooling, toolingSha } = frozenToolingFixture(root, toolingPaths);
+  const toolingGit = (...args: string[]) => frozenFixtureGit(tooling, ...args);
   const job = workflowJob(file, jobName);
   const plan = workflowStep(job, "Plan frozen source admission");
   const env = {
@@ -3102,7 +3109,8 @@ function runReleaseChecksInputValidation(
     workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
     "Capture selected inputs",
   );
-  const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
+  const workdir = tempDirs.make("release-checks-input-validation-");
+  const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
@@ -3111,7 +3119,6 @@ function runReleaseChecksInputValidation(
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/record-shared.mjs",
   ]);
-  const workdir = fixture.root;
   const outputPath = resolve(workdir, "github-output");
   mkdirSync(resolve(workdir, "waiver-target"));
   writeFileSync(

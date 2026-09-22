@@ -416,6 +416,15 @@ export function resolveBrowserConfig(
   };
 }
 
+/** Selector-free extension pairing follows configuration order, independently of defaultProfile. */
+export function resolveFirstExtensionProfileName(
+  resolved: Pick<ResolvedBrowserConfig, "profiles">,
+): string | undefined {
+  return Object.entries(resolved.profiles).find(
+    ([, profile]) => profile.driver === "extension",
+  )?.[0];
+}
+
 /** Resolve one configured browser profile by name. */
 export function resolveProfile(
   resolved: ResolvedBrowserConfig,

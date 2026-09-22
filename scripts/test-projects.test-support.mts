@@ -48,7 +48,6 @@ import {
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
-import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -100,13 +99,13 @@ import {
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
 import {
-  GATEWAY_SERVER_TEST_PROCESS_COUNT,
-  listGatewayServerTestTargets,
+  createGatewayServerTestTargetChunks,
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
+import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
   resolveBooleanModeFlag,
@@ -4563,10 +4562,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
         } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
-          chunks = splitTargetChunks(
-            listGatewayServerTestTargets(cwd),
-            GATEWAY_SERVER_TEST_PROCESS_COUNT,
-          );
+          chunks = createGatewayServerTestTargetChunks(cwd);
         } else {
           const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
           if (roots) {
@@ -4705,53 +4701,63 @@ export function resolveParallelFullSuiteConcurrency(
   return Math.min(resolveLocalFullSuiteProfile(env, hostInfo).shardParallelism, specCount);
 }
 
-function sanitizeVitestCachePathSegment(value: string) {
-  return (
-    value
-      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 180) || "default"
-  );
-}
-
 export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<CacheAssignedSpec<T>> {
   const baseEnv = params.env ?? process.env;
   const cwd = params.cwd ?? process.cwd();
-  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
-  // CI publishes a persistent cache root, not a writer-safe leaf. Every
-  // concurrent Vitest process still needs its own live directory below it.
-  const cacheRoot = configuredCacheRoot ?? resolveVitestFsModuleCacheRoot(cwd);
-  return specs.map((spec, index) => {
+  const sharedRoot = baseEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT?.trim();
+  // Project callers historically supplied a root through PATH. ROOT makes CI's
+  // ownership explicit while a simultaneous PATH remains a caller-owned leaf.
+  const legacyRoot = sharedRoot ? undefined : baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const cacheRoot = legacyRoot || resolveVitestCacheRoot(baseEnv, cwd);
+  const configSlots = new Map<string, number>();
+  return specs.map((spec) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
-    if (specCachePath && specCachePath !== configuredCacheRoot) {
+    if (
+      spec.cacheAssignment?.kind === "caller" ||
+      (spec.cacheAssignment?.kind !== "scheduler" && specCachePath && specCachePath !== legacyRoot)
+    ) {
       return { ...spec, cacheAssignment: spec.cacheAssignment ?? { kind: "caller" } };
     }
-    const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
+    const firstSlot = resolveVitestCacheSlotPath(cacheRoot, spec.config, 0, cwd);
+    const slot = configSlots.get(firstSlot) ?? 0;
+    configSlots.set(firstSlot, slot + 1);
     return {
       ...spec,
       cacheAssignment: { kind: "scheduler", root: cacheRoot },
       env: {
         ...spec.env,
-        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: resolveVitestCacheSlotPath(
+          cacheRoot,
+          spec.config,
+          slot,
+          cwd,
+        ),
       },
     };
   });
 }
 
-export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestSpecShape>(
+export function applyDefaultVitestCachePaths<T extends WatchableVitestSpecShape>(
   specs: T[],
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<CacheAssignedSpec<T>> {
-  if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+  if (specs.some((spec) => spec.watchMode)) {
     return specs;
   }
-  // Same-config process lifetimes run one after another and must keep the
-  // restored CI seed. Isolating them would make every Telegram file pay a
-  // silent cold import.
-  if (specs.every((spec) => spec.config === specs[0]?.config)) {
+  const baseEnv = params.env ?? process.env;
+  const oneConfig = specs.length <= 1 || specs.every((spec) => spec.config === specs[0]?.config);
+  // Before ROOT existed these serial callers owned PATH as an exact leaf.
+  if (
+    !baseEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT?.trim() &&
+    baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() &&
+    oneConfig
+  ) {
+    return specs;
+  }
+  if (process.platform === "win32" && oneConfig) {
     return specs;
   }
   return applyParallelVitestCachePaths(specs, params);

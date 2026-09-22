@@ -412,16 +412,18 @@ async function sendPreparedChatMessage(
           { type: "sendFailed", runId },
           { scope: projectionScope },
         );
+        const ownsLocalRun = host.chatRunId === ack.runId;
         reconcileChatRunLifecycle(host, {
           outcome: "interrupted",
           sessionStatus: ack.status === "error" ? "failed" : "killed",
           runId: ack.runId,
           sessionKey,
-          clearLocalRun: true,
-          clearChatStream: true,
-          clearToolStream: true,
+          clearIndicators: ownsLocalRun,
+          clearLocalRun: ownsLocalRun,
+          clearChatStream: ownsLocalRun,
+          clearToolStream: ownsLocalRun,
           publishRunStatus: false,
-          armLocalTerminalReconcile: ack.runId === runId,
+          armLocalTerminalReconcile: (!host.chatRunId || ownsLocalRun) && ack.runId === runId,
         });
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {

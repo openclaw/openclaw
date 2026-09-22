@@ -502,21 +502,20 @@ export function prepareConfigRuntimeEnvLoad(params: {
   previousConfig: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   previousOwnedEnv?: Readonly<Record<string, string>>;
+  preservedKeys?: ReadonlySet<string>;
 }): PreparedConfigRuntimeEnvLoad {
   const targetEnv = params.env ?? process.env;
   const originalEnv = cloneEnvWithPlatformSemantics(targetEnv);
   const before = snapshotEnvByPlatformKey(originalEnv);
-  const env = createConfigRuntimeEnvBase(
-    params.previousConfig,
-    targetEnv,
-    params.previousOwnedEnv ? { ownedEnv: params.previousOwnedEnv } : {},
-  );
+  const env = createConfigRuntimeEnvBase(params.previousConfig, targetEnv, {
+    ownedEnv: params.previousOwnedEnv,
+    preservedKeys: params.preservedKeys,
+  });
   const initialBase = snapshotEnvByPlatformKey(env);
   const retainedOwnedEnv = Object.fromEntries(
-    Object.entries(
-      params.previousOwnedEnv ??
-        (targetEnv === process.env ? publishedConfigRuntimeEnvState.ownedEnv : {}),
-    ).filter(([key, value]) => initialBase.get(envSnapshotKey(key))?.value === value),
+    Object.entries(params.previousOwnedEnv ?? resolveAppliedConfigEnvOwnership(targetEnv)).filter(
+      ([key, value]) => initialBase.get(envSnapshotKey(key))?.value === value,
+    ),
   );
   let dotenvBaseline = cloneEnvWithPlatformSemantics(env);
 
@@ -583,6 +582,7 @@ function prepareConfigRuntimeEnvPublication(params: {
     publish: () => {
       const processPublication = targetEnv === process.env;
       const previousPublishedState = publishedConfigRuntimeEnvState;
+      const previousOwnedEnv = resolveAppliedConfigEnvOwnership(targetEnv);
       const previousPublication = processPublication ? pendingConfigRuntimeEnvPublication : null;
       const published = new Map<string, PublishedConfigRuntimeEnvChange>();
       const keys = new Set([
@@ -625,13 +625,12 @@ function prepareConfigRuntimeEnvPublication(params: {
           const platformKey = envSnapshotKey(key);
           const currentEntry = snapshotEnvByPlatformKey(targetEnv).get(platformKey);
           const preparedEntry = afterByPlatformKey.get(platformKey);
-          const previousOwnedKey = findCaseInsensitiveEnvKey(previousPublishedState.ownedEnv, key);
+          const previousOwnedKey = findCaseInsensitiveEnvKey(previousOwnedEnv, key);
           if (
             currentEntry?.value === value &&
             envSnapshotEntriesEqual(currentEntry, preparedEntry) &&
             (published.has(platformKey) ||
-              (previousOwnedKey !== undefined &&
-                previousPublishedState.ownedEnv[previousOwnedKey] === value))
+              (previousOwnedKey !== undefined && previousOwnedEnv[previousOwnedKey] === value))
           ) {
             ownedEnv[currentEntry.key] = value;
           }

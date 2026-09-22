@@ -385,7 +385,6 @@ src/agents/tools/web-fetch.ts
 src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
-src/auto-reply/inbound.test.ts
 src/auto-reply/reply/abort.test.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts

@@ -30,17 +30,23 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
-      override run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
-        const result = super.run(...args);
-        const observe = boundary.afterReply;
-        return observe
-          ? result.then(async (reply) => {
-              await observe(reply);
-              return reply;
-            })
-          : result;
-      }
+    createOwnedWorkerTaskPool: <Input, Output>(
+      ...poolArgs: Parameters<typeof actual.createOwnedWorkerTaskPool<Input, Output>>
+    ) => {
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(...poolArgs);
+      return {
+        ...pool,
+        run(...args: Parameters<WorkerTaskPool<Input, Output>["run"]>) {
+          const result = pool.run(...args);
+          const observe = boundary.afterReply;
+          return observe
+            ? result.then(async (reply) => {
+                await observe(reply);
+                return reply;
+              })
+            : result;
+        },
+      };
     },
   };
 });

@@ -13,6 +13,7 @@ import {
   isMcpOAuthWorkerCommand,
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
+import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
@@ -27,7 +28,6 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
-  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -40,7 +40,7 @@ import {
   executeOperatorApprovalCommand,
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
-import { registerSessionGroupInDatabase } from "../gateway/session-group-registration.kernel.js";
+import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
@@ -49,7 +49,10 @@ import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
 import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
-import { executeCurrentConversationBindingCommand } from "../infra/outbound/current-conversation-bindings.worker.js";
+import {
+  executeCurrentConversationBindingCommand,
+  readCurrentConversationBindingSelectionInWorker,
+} from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
@@ -103,7 +106,10 @@ import {
   recordSessionStateEventInDatabase,
 } from "../sessions/session-state-events.kernel.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
-import { commitSkillUploadInDatabase } from "../skills/lifecycle/upload-store-commit.js";
+import {
+  isSkillUploadCommand,
+  executeSkillUploadCommand,
+} from "../skills/lifecycle/upload-store.worker.js";
 import * as skillWorkshop from "../skills/workshop/store.worker.js";
 import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
 import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
@@ -118,7 +124,6 @@ import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
-import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -145,9 +150,7 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  return prepareCronStateWorkerCommand(type);
-}
+export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
@@ -175,18 +178,14 @@ export function executeSharedStateCommand(
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
   }
-  if (command.type === "agentDatabases.releaseExitedLease") {
-    return executeAgentDatabaseCleanupCommand(
-      command,
-      open(),
-      getSqliteWorkerStateContext().environment,
-    );
-  }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());
   }
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
+  }
+  if (command.type === "conversationBindings.readSelection") {
+    return readCurrentConversationBindingSelectionInWorker(command.input, context.databasePath);
   }
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
     return executeAuditWriterCommand(
@@ -502,6 +501,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "sandboxRegistry.insertIfMissing") {
+    return importSandboxRegistryRow(command.input, writeOptions);
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -514,14 +516,14 @@ export function executeSharedStateCommand(
   if (isNodeWorkerJournalCommand(command)) {
     return executeNodeWorkerJournalCommand(command, writeOptions);
   }
-  if (command.type === "sessionGroups.register") {
-    return registerSessionGroupInDatabase(database, command.input.name, writeOptions.env);
+  if (command.type === "sessionGroups.mutate") {
+    return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
   }
   if (deliveryQueue.isDeliveryQueueCommand(command)) {
     return deliveryQueue.executeDeliveryQueueCommand(command, writeOptions);
   }
-  if (command.type === "skillUploads.commit") {
-    return commitSkillUploadInDatabase(command.input, writeOptions);
+  if (isSkillUploadCommand(command)) {
+    return executeSkillUploadCommand(command, writeOptions);
   }
   if (
     command.type === "deviceAuth.store" ||

@@ -440,12 +440,16 @@ describe("worker turn launcher build recovery", () => {
     }
   });
 
-  it.each([false, true])(
-    "persists fallback input once after pre-handoff rejection (refreshInPlace=%s)",
-    async (refreshInPlace) => {
+  it.each(
+    [false, true].flatMap((refreshInPlace) =>
+      [false, true].map((withoutRecorder) => ({ refreshInPlace, withoutRecorder })),
+    ),
+  )(
+    "persists input once after pre-handoff rejection (refreshInPlace=$refreshInPlace, withoutRecorder=$withoutRecorder)",
+    async ({ refreshInPlace, withoutRecorder }) => {
       const harness = createBuildRecoveryHarness({
         rejection: "launch",
-        withoutRecorder: true,
+        withoutRecorder,
         refreshInPlace,
       });
       await harness.execute();

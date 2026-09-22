@@ -1,13 +1,91 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
+export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
+
 type SandboxRegistryRow = Selectable<DB["sandbox_registry_entries"]>;
 type SandboxRegistryDatabase = Pick<DB, "sandbox_registry_entries">;
+
+export function containerEntryToRow(
+  entry: SandboxRegistryEntry,
+  existing?: SandboxRegistryEntry | null,
+) {
+  const next: SandboxRegistryEntry = {
+    ...entry,
+    backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
+    runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+    configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
+    configHash: entry.configHash ?? existing?.configHash,
+    runtimeState: entry.runtimeState ?? existing?.runtimeState,
+    workspaceDir: existing?.workspaceDir ?? entry.workspaceDir,
+  };
+  return {
+    registry_kind: "container",
+    container_name: next.containerName,
+    session_key: next.sessionKey,
+    backend_id: next.backendId ?? null,
+    runtime_label: next.runtimeLabel ?? null,
+    image: next.image,
+    created_at_ms: next.createdAtMs,
+    last_used_at_ms: next.lastUsedAtMs,
+    config_label_kind: next.configLabelKind ?? null,
+    config_hash: next.configHash ?? null,
+    cdp_port: null,
+    no_vnc_port: null,
+    entry_json: JSON.stringify(next),
+    updated_at: Date.now(),
+  } satisfies SandboxRegistryInsert;
+}
+
+export function browserEntryToRow(
+  entry: SandboxBrowserRegistryEntry,
+  existing?: SandboxBrowserRegistryEntry | null,
+) {
+  const next: SandboxBrowserRegistryEntry = {
+    ...entry,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+    configHash: entry.configHash ?? existing?.configHash,
+    workspaceDir: entry.workspaceDir ?? existing?.workspaceDir,
+  };
+  return {
+    registry_kind: "browser",
+    container_name: next.containerName,
+    session_key: next.sessionKey,
+    backend_id: null,
+    runtime_label: null,
+    image: next.image,
+    created_at_ms: next.createdAtMs,
+    last_used_at_ms: next.lastUsedAtMs,
+    config_label_kind: null,
+    config_hash: next.configHash ?? null,
+    cdp_port: next.cdpPort,
+    no_vnc_port: next.noVncPort ?? null,
+    entry_json: JSON.stringify(next),
+    updated_at: Date.now(),
+  } satisfies SandboxRegistryInsert;
+}
+
+export function insertSandboxRegistryRowIfMissingInDatabase(
+  db: DatabaseSync,
+  row: SandboxRegistryInsert,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SandboxRegistryDatabase>(db)
+      .insertInto("sandbox_registry_entries")
+      .values(row)
+      .onConflict((conflict) => conflict.columns(["registry_kind", "container_name"]).doNothing()),
+  );
+}
 
 function parseRegistryEntryJson(row: SandboxRegistryRow): Record<string, unknown> | null {
   try {

@@ -116,6 +116,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             requests.initialSnapshotHydration !== hydration ||
             this.state !== state ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey ||
             readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
           ) {
             return;

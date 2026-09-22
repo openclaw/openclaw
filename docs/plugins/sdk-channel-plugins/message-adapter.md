@@ -119,6 +119,14 @@ during a send in the next throttle window. Explicit `flush()` still bypasses
 the delay for attention and finalization. Cancel pending updates and await
 in-flight work before closing or rotating a stream.
 
+Use `createFinalizableDraftLifecycle` for physical deletion custody rather than
+maintaining a plugin-local retry queue. `retire(id)` claims a detached preview;
+`retire(id, { defer: true })` records it without deleting it immediately.
+`cleanupPending()` retries retired IDs without deleting the current preview.
+When transport cleanup policy must change, pass a synchronous `prepareCleanup`
+callback to `cleanupPending`; it runs in order with clears, before deletion.
+Rejected deletions remain owned for a later cleanup attempt.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.

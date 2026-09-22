@@ -108,8 +108,12 @@ function selectionVitestArgs(selection: TestSelection): string[] | undefined {
 
 function supportsRuntimePartition(args: string[]): boolean {
   // Native sharding, alternate roots/projects, filters and config overrides can
-  // change membership. Admit only resource/deadline flags with known semantics.
-  return args.every((arg) => /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg));
+  // change membership. Collection skips every body but preserves file imports.
+  return args.every(
+    (arg) =>
+      arg === "--testNamePattern=(?!)" ||
+      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg),
+  );
 }
 
 function supportsUiRuntime(args: string[]): boolean {

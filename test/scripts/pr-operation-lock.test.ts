@@ -32,6 +32,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createProcessGroupTimingPreload } from "./pr-operation-lock.test-support.js";
+import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import {
   validClawsweeperReviewCommentPages,
   validReview,
@@ -117,6 +118,15 @@ function createTemplateRepo() {
   writeFileSync(join(dir, ".git/info/exclude"), ".local/\n");
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], options);
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], options);
+  // Copies retain these settings for later commands, not just template creation.
+  for (const [key, value] of [
+    ["core.hooksPath", "/dev/null"],
+    ["commit.gpgSign", "false"],
+    ["gc.auto", "0"],
+    ["maintenance.auto", "false"],
+  ]) {
+    execFileSync("git", ["config", key!, value!], options);
+  }
   writeFileSync(join(dir, "base.txt"), "base\n");
   execFileSync("git", ["add", "base.txt"], options);
   execFileSync("git", ["commit", "-qm", "base"], options);
@@ -205,12 +215,20 @@ function bashSource(repoDir: string, supervised = false) {
     "set -euo pipefail",
     ...(supervised
       ? []
-      : ["unset OPENCLAW_PR_LOCK_NOTIFY_FD", "unset OPENCLAW_PR_LOCK_SUPERVISOR_PID"]),
+      : [
+          "unset OPENCLAW_PR_LOCK_NOTIFY_FD",
+          "unset OPENCLAW_PR_LOCK_SUPERVISOR_PID",
+          "unset OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT",
+        ]),
     `source '${worktreeScript}'`,
     `source '${lockScript}'`,
     `source '${commonScript}'`,
     `repo_root() { printf '%s\\n' '${repoDir}'; }`,
   ];
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
 function writeFixtureFile(repoDir: string, name: string, contents: string | readonly string[]) {
@@ -343,6 +361,15 @@ async function runSupervisedFixture(
   fixture: string,
   options: SupervisedFixtureOptions = {},
 ) {
+  // Entry bookkeeping is fixture-owned, not an untracked checkout transition input.
+  const entryDir = tempDirs.make("openclaw-pr-supervised-entry-");
+  const groupFile = writeFixtureFile(entryDir, "supervised-fixture.pgid", "");
+  const entry = writeFixtureFile(entryDir, "supervised-fixture-entry.sh", [
+    "#!/usr/bin/env bash",
+    `printf '%s\\n' "$$" > ${shellQuote(groupFile)}`,
+    `exec ${shellQuote(fixture)}`,
+  ]);
+  chmodSync(entry, 0o755);
   const controller = spawn(
     process.execPath,
     [
@@ -354,7 +381,7 @@ async function runSupervisedFixture(
         : []),
       processGroupRunner,
       repoDir,
-      fixture,
+      entry,
     ],
     {
       cwd: repoDir,
@@ -381,28 +408,33 @@ async function runSupervisedFixture(
       controller.once("close", onClose);
     });
   } catch (error) {
+    const failures: unknown[] = [error];
+    // The runner forwards termination even when its child has not acquired a lock.
+    controller.kill("SIGTERM");
     try {
-      if (refExists(repoDir)) {
-        const payload = execFileSync("git", ["cat-file", "blob", refOid(repoDir)], {
-          cwd: repoDir,
-          encoding: "utf8",
-        });
-        const pgid = Number(/^version=3\nstate=active\npgid=([1-9][0-9]*)\n/u.exec(payload)?.[1]);
-        if (validProcessId(pgid)) {
-          await cleanupProcessGroup(pgid);
-        }
+      const pgid = readProcessIdFile(groupFile);
+      if (pgid) {
+        await cleanupProcessGroup(pgid);
       }
-    } catch {
-      // The controller still must die even if lock metadata is malformed.
+    } catch (cleanupError) {
+      failures.push(cleanupError);
+    }
+    try {
+      await waitForExit(controller, 2000);
+    } catch (cleanupError) {
+      failures.push(cleanupError);
     } finally {
-      controller.kill("SIGKILL");
+      if (controller.exitCode === null && controller.signalCode === null) {
+        controller.kill("SIGKILL");
+      }
       try {
         await waitForExit(controller, 2000);
-      } catch {
-        // Preserve the original bounded-exit failure below.
+        await cleanupRecordedProcessGroup(groupFile);
+      } catch (cleanupError) {
+        failures.push(cleanupError);
       }
     }
-    throw error;
+    throw new AggregateError(failures, "supervised fixture did not settle", { cause: error });
   }
   return { status: controller.exitCode, signal: controller.signalCode, stdout, stderr };
 }
@@ -416,9 +448,14 @@ function runSupervisedOperation(
   return runSupervisedFixture(repoDir, writeOperationFixture(repoDir, name, commands), options);
 }
 
-function runLockShell(repoDir: string, commands: string[]) {
+function runLockShell(
+  repoDir: string,
+  commands: string[],
+  parentEnv: NodeJS.ProcessEnv = process.env,
+) {
   return spawnSync("bash", ["-c", [...bashSource(repoDir), ...commands].join("\n")], {
     cwd: repoDir,
+    env: parentEnv,
     detached: true,
     encoding: "utf8",
     timeout: 10_000,
@@ -771,6 +808,34 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
+  it("isolates unsupervised candidate-source fixtures from unrelated supervisor bindings", () => {
+    const repoDir = createRepo();
+    const result = runLockShell(
+      repoDir,
+      [
+        'test -z "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT-}"',
+        'test -z "${OPENCLAW_PR_LOCK_NOTIFY_FD-}"',
+        'test -z "${OPENCLAW_PR_LOCK_SUPERVISOR_PID-}"',
+        "acquire_pr_operation_lock 42",
+        'git rev-parse --verify "' + lockRef + '"',
+        "release_pr_operation_lock",
+      ],
+      {
+        ...process.env,
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-lock-snapshot-"),
+        OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+        OPENCLAW_PR_LOCK_SUPERVISOR_PID: "1",
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
+    const after = spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
+      cwd: repoDir,
+      encoding: "utf8",
+    });
+    expect(after.status, after.stderr).toBe(1);
+  });
+
   it.each([
     ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
     ["diff --name-only --no-renames -z", "require_no_ignored_transition_paths"],
@@ -832,8 +897,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const binDir = join(repoDir, "isolated-bin");
       const cli = join(repoDir, "scripts/pr");
       const realGit = realpathSync(join(binDir, "git"));
+      const handoff = createPrivateHandoffStoreFixture(homeDir, binDir);
       const env: NodeJS.ProcessEnv = {
         ...createPrFixtureEnv(homeDir, binDir),
+        ...handoff.env,
         TMPDIR: tmpDir,
       };
       const git = (...args: string[]) =>
@@ -1012,7 +1079,19 @@ describePosix("scripts/pr per-PR operation lock", () => {
       controller.stdout!.on("data", (chunk) => (output += chunk));
       controller.stderr!.on("data", (chunk) => (output += chunk));
       try {
-        await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        try {
+          await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        } catch (error) {
+          console.error("PR controller output before close failure:\n", output);
+          throw error;
+        }
+        if (
+          command === "review-init" &&
+          !existing &&
+          (failure === "healthy" || failure === "second")
+        ) {
+          handoff.assertProvisionersInjected();
+        }
         const events = readFileSync(eventsPath, "utf8").trim().split("\n");
         expect(git("ls-remote", "origin", "refs/pull/42/head"), output).toBe(
           `${pullHead}\trefs/pull/42/head`,

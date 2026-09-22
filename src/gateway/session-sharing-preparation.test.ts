@@ -51,7 +51,7 @@ it.each(["durable", "incognito"] as const)(
         ...(kind === "incognito" ? { incognito: true } : {}),
       };
       replaceSessionEntrySync(scope, entry);
-      addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+      await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
       const client = sharingPolicyClient({
         user: "requester",
         scopes: kind === "incognito" ? ["operator.admin"] : ["operator.read", "operator.write"],
@@ -112,7 +112,7 @@ it.each(["durable", "incognito"] as const)(
         replaceSessionEntrySync(scope, { ...entry, label: "cosmetic change", updatedAt: 2 });
         assertWithoutSql(true);
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
-        removeSessionMember(scope, "requester");
+        await removeSessionMember(scope, "requester");
         assertWithoutSql(kind === "incognito");
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: false });
         observed.length = 0;

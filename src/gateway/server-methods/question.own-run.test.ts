@@ -5,6 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -25,7 +26,6 @@ import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import * as sessionSharingPreparation from "../session-sharing-preparation.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import {
   broadcast,
@@ -96,9 +96,14 @@ async function createOwnRunFixture() {
   };
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
+  const sourceController = new AbortController();
   const source = captureGatewayOperatorRunAuthority({
     client: browser.client,
     context: { getRuntimeConfig: () => cfg },
+    sourceAuthority: {
+      signal: sourceController.signal,
+      assertCurrent: () => sourceController.signal.throwIfAborted(),
+    },
   });
   if (!source) {
     throw new Error("expected the Guest's admitted operator authority");
@@ -186,11 +191,13 @@ async function createOwnRunFixture() {
     broadcaster,
     authority,
     source,
+    revokeSource: () => sourceController.abort(new Error("Original question source revoked")),
     call,
     request,
     beginWait,
-    close: () => {
+    close: async () => {
       manager.reset();
+      await manager.drain();
       releaseAgentRunDelegatedAuthority(authority);
       source.release();
     },
@@ -205,7 +212,7 @@ async function withOwnRunQuestion(
     try {
       await run(fixture);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 }
@@ -268,6 +275,7 @@ describe("own-run question admission", () => {
               { status: "answered", answers },
               undefined,
             ]);
+            await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           } finally {
             read.mockRestore();
@@ -316,6 +324,7 @@ describe("own-run question admission", () => {
       expect((await f.call("question.get", { id }, reconnected.client))[1]).toMatchObject({
         question: { id, ...accepted },
       });
+      await manager.drain();
       expect(reconnected.socket.send).toHaveBeenCalledOnce();
       expect(JSON.parse(reconnected.socket.send.mock.calls[0]![0])).toMatchObject({
         event: "question.resolved",
@@ -336,27 +345,13 @@ describe("own-run question admission", () => {
 
   it("conceals questions from foreign viewers and members with session read and write scopes", async () => {
     await withOwnRunQuestion(async (f) => {
-      const prepare = sessionSharingPreparation.prepareSessionMutationFacts;
-      let retainedReads = 0;
-      vi.spyOn(sessionSharingPreparation, "prepareSessionMutationFacts").mockImplementation(
-        async (params) => {
-          const prepared = await prepare(params);
-          return {
-            release: prepared.release,
-            readCurrent: (cfg) => {
-              retainedReads += 1;
-              return prepared.readCurrent(cfg);
-            },
-          };
-        },
-      );
       const peers = ["viewer", "member"].map((name) =>
         questionPeer(ensureProfileForEmail(name + "@example.test"), name, [
           "operator.sessions.write",
           "operator.sessions.read",
         ]),
       );
-      addSessionMember(sessionScope, {
+      await addSessionMember(sessionScope, {
         identityId: peers[1]!.client.authenticatedUserProfile!.profileId,
         addedBy: f.profile.id,
         expectedSessionId: f.entry.sessionId,
@@ -372,6 +367,23 @@ describe("own-run question admission", () => {
         ).toBe(true);
       }
       const id = await f.request();
+      const binding = manager.observe(id)!.sessionAccess!;
+      let retainedReads = 0;
+      const assertSourceCurrent = binding.assertSourceCurrent;
+      vi.spyOn(binding, "assertSourceCurrent").mockImplementation(() => {
+        retainedReads += 1;
+        assertSourceCurrent();
+      });
+      const assertCurrent = binding.assertCurrent;
+      vi.spyOn(binding, "assertCurrent").mockImplementation((read) => {
+        retainedReads += 1;
+        assertCurrent(read);
+      });
+      const run = historyPages.run.bind(historyPages);
+      vi.spyOn(historyPages, "run").mockImplementation((...args) => {
+        retainedReads += 1;
+        return run(...args);
+      });
       const requestedEvent = broadcast.mock.calls[0];
       if (!requestedEvent || requestedEvent[0] !== "question.requested") {
         throw new Error("expected the registered question event");
@@ -427,6 +439,7 @@ describe("own-run question admission", () => {
       for (const peer of peers) {
         expect(peer.socket.send).not.toHaveBeenCalled();
       }
+      await manager.drain();
       expect(f.browser.socket.send).toHaveBeenCalledTimes(2);
     });
   });
@@ -512,19 +525,101 @@ describe("own-run question admission", () => {
     },
   );
 
+  it("settles the original source revoked during a current recipient's held worker read", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      const observation = manager.observe(id)!;
+      const waiting = manager.waitAnswer(id);
+      const recipient = questionPeer(f.profile, "independent-current-recipient");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const run = historyPages.run.bind(historyPages);
+      const spy = vi.spyOn(historyPages, "run").mockImplementationOnce(async (...args) => {
+        const result = await run(...args);
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+      const request = f.call("question.get", { id }, recipient.client);
+      const result = Promise.allSettled([request]);
+      try {
+        await entered.promise;
+        f.revokeSource();
+        expect(f.source.authority.signal?.aborted).toBe(true);
+        expect(recipient.client.invalidated).not.toBe(true);
+        expect(observation.record.status).toBe("pending");
+        release.resolve();
+        expect(await request).toMatchObject([
+          false,
+          undefined,
+          { details: { reason: "QUESTION_NOT_FOUND" } },
+        ]);
+        expect(observation.record.status).toBe("cancelled");
+        expect(await waiting).toEqual({ status: "cancelled" });
+        await manager.drain();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        release.resolve();
+        await result;
+        spy.mockRestore();
+        manager.close();
+        await waiting;
+        await manager.drain();
+      }
+    });
+  });
+
+  it("keeps a pending requester and waiter after a transient worker read failure", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      const observation = manager.observe(id)!;
+      let settled = false;
+      const waiting = manager.waitAnswer(id).then((result) => {
+        settled = true;
+        return result;
+      });
+      const failure = new Error("Transient question worker read failure");
+      const spy = vi.spyOn(historyPages, "run").mockRejectedValueOnce(failure);
+      try {
+        await expect(f.call("question.get", { id })).rejects.toThrow(failure);
+        expect(observation.isCurrent()).toBe(true);
+        expect(observation.record.status).toBe("pending");
+        expect(settled).toBe(false);
+      } finally {
+        spy.mockRestore();
+        manager.close();
+        await waiting;
+        await manager.drain();
+      }
+    });
+  });
+
   it.each(["sessionId", "lifecycleRevision"] as const)(
     "refuses the old binding after %s replacement under the same key",
     async (field) => {
       await withOwnRunQuestion(async (f) => {
         const id = await f.request();
+        const observation = manager.observe(id)!;
+        const waiting = manager.waitAnswer(id);
         replaceSessionEntrySync(sessionScope, { ...f.entry, [field]: "replacement", updatedAt: 2 });
-        for (const method of ["question.get", "question.waitAnswer", "question.resolve"]) {
+        expect(await f.call("question.get", { id })).toMatchObject([
+          false,
+          undefined,
+          { details: { reason: "QUESTION_NOT_FOUND" } },
+        ]);
+        // The first worker-confirmed denial retires the original entry without another get().
+        expect(observation.record.status).toBe("cancelled");
+        expect(await waiting).toEqual({ status: "cancelled" });
+        await manager.drain();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        for (const method of ["question.waitAnswer", "question.resolve"]) {
           expect(
             await f.call(method, { id, ...(method === "question.resolve" ? { answers } : {}) }),
           ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
         }
         expect((await f.call("question.list", {}))[1]).toEqual({ questions: [] });
         expect(manager.get(id)?.status).toBe("cancelled");
+        await manager.drain();
         expect(f.browser.socket.send).toHaveBeenCalledOnce();
       });
     },

@@ -45,7 +45,6 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
@@ -54,7 +53,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -73,6 +72,7 @@ import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
+import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
   initSessionState,
   readSessionStore as readSessionStoreFast,
@@ -149,13 +149,6 @@ async function makeStorePath(prefix: string): Promise<string> {
 const createStorePath = makeStorePath;
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
   label: string,
@@ -207,7 +200,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     );
 
     expect(
-      resolveReplySessionPreprocessingState({
+      await resolveReplySessionPreprocessingState({
         cfg: {
           agents: { list: [{ id: "ops", default: true }] },
           session: { store: storePath, mainKey: "work" },
@@ -239,7 +232,7 @@ describe("resolveReplySessionPreprocessingState", () => {
       },
     });
 
-    expect(resolvePreprocessingState(storePath)).toMatchObject({
+    expect(await resolvePreprocessingState(storePath)).toMatchObject({
       sessionKey,
       storePath,
       sessionEntry: {
@@ -268,7 +261,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     const storePath = await createStorePath(`openclaw-media-preflight-invalid-${_label}-`);
     await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
 
-    expect(() => resolvePreprocessingState(storePath)).toThrow();
+    await expect(resolvePreprocessingState(storePath)).rejects.toThrow();
   });
 });
 
@@ -450,9 +443,10 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
   it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {
@@ -2071,107 +2065,9 @@ describe("initSessionState RawBody", () => {
   );
 
   it("records accepted inputs once and keeps creation hints separate from participation", async () => {
-    const root = await makeCaseDir("openclaw-session-participant-admission-");
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const profileContext = {
-      RawBody: "authenticated input",
-      ChatType: "direct" as const,
-      SessionKey: "agent:main:profile-participant",
-    };
-    prepareSessionParticipantInput(profileContext, { type: "profile", id: "current-profile" }, 42);
-    await initSessionState({ ctx: profileContext, cfg });
-    await initSessionState({ ctx: { ...profileContext }, cfg });
-
-    await initSessionState({
-      ctx: {
-        RawBody: "channel prompt",
-        ChatType: "direct",
-        SessionKey: "agent:main:channel-participant",
-        SenderId: "channel-sender",
-      },
-      cfg,
-    });
-    await initSessionState({
-      ctx: {
-        RawBody: "unknown prompt",
-        ChatType: "direct",
-        SessionKey: "agent:main:unknown-participant",
-      },
-      cfg,
-    });
-    await initSessionState({
-      ctx: {
-        RawBody: "channel-created prompt",
-        ChatType: "direct",
-        SessionKey: "agent:main:channel-created-participant",
-        SenderId: "channel-created-sender",
-        SessionCreation: { via: "channel", actor: { type: "human", id: "channel-actor" } },
-      },
-      cfg,
-    });
-    await initSessionState({
-      ctx: {
-        RawBody: "own agent prompt",
-        ChatType: "direct",
-        SessionKey: "agent:main:own-agent-participant",
-        SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } },
-      },
-      cfg,
-    });
-    await initSessionState({
-      ctx: {
-        RawBody: "delegated agent prompt",
-        ChatType: "direct",
-        SessionKey: "agent:main:delegated-agent-participant",
-        SessionCreation: { via: "spawn", actor: { type: "agent", id: "research" } },
-      },
-      cfg,
-    });
-
-    await vi.waitFor(() => {
-      const participants = listSessionParticipantsReadOnly({ agentId: "main", storePath });
-      expect(participants.get("agent:main:profile-participant")).toEqual([
-        {
-          identity: { type: "profile", id: "current-profile" },
-          contributionCount: 1,
-          firstPromptedAt: 42,
-          lastPromptedAt: 42,
-        },
-      ]);
-      expect(participants.get("agent:main:channel-participant")).toEqual([
-        {
-          identity: {
-            type: "observation",
-            id: "channel-sender",
-            pluginId: null,
-            accountId: null,
-            senderKind: "unknown",
-          },
-          contributionCount: 1,
-          firstPromptedAt: expect.any(Number),
-          lastPromptedAt: expect.any(Number),
-        },
-      ]);
-      expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
-      expect(participants.get("agent:main:channel-created-participant")).toEqual([
-        {
-          identity: {
-            type: "observation",
-            id: "channel-created-sender",
-            pluginId: null,
-            accountId: null,
-            senderKind: "unknown",
-          },
-          contributionCount: 1,
-          firstPromptedAt: expect.any(Number),
-          lastPromptedAt: expect.any(Number),
-        },
-      ]);
-      expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
-      expect(participants.get("agent:main:delegated-agent-participant")).toBeUndefined();
-    });
+    await expectSessionParticipantInputs(
+      await makeCaseDir("openclaw-session-participant-admission-"),
+    );
   });
 
   it.each([
@@ -2799,7 +2695,7 @@ describe("initSessionState RawBody", () => {
     }
     expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
     expect(
-      resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
+      await resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
     ).toMatchObject({
       sessionKey: sourceSessionKey,
       sessionEntry: { sessionId: result.sessionId },
@@ -5299,7 +5195,7 @@ describe("drainFormattedSystemEvents", () => {
         isNewSession: false,
       });
 
-      const expectedTimestampText = requireString(expectedTimestamp, "formatted timestamp");
+      const expectedTimestampText = expectDefined(expectedTimestamp, "formatted timestamp");
       expect(result).toContain(`System: [${expectedTimestampText}] Model switched.`);
     } finally {
       resetSystemEventsForTest();

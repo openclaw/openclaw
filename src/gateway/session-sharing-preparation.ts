@@ -126,6 +126,14 @@ export async function prepareSessionMutationFacts(params: {
       return;
     }
     if (
+      !change.factsInvalidated &&
+      (change.facts?.kind === "unchanged" ||
+        change.facts?.kind === "participants" ||
+        change.facts?.kind === "category")
+    ) {
+      return;
+    }
+    if (
       !facts ||
       !selectedPaths.has(path.resolve(change.storePath)) ||
       !isPreparedSessionSharingChange(change)
@@ -134,7 +142,7 @@ export async function prepareSessionMutationFacts(params: {
     }
   };
   releases.push(
-    sessionChanges.subscribe(changed),
+    sessionChanges.subscribeFacts(changed),
     onSessionIdentityMutation((change) => {
       if (change.agentId === agentId && change.previous.sessionKeys.includes(canonicalKey)) {
         invalidate();
@@ -194,15 +202,15 @@ export async function prepareSessionMutationFacts(params: {
       facts = readFacts();
     } else {
       const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
-      const inventory = prepareSessionStoreTargetInventory(params.cfg, [
-        agentId,
-        ...(parsedAgent ? [parsedAgent] : []),
-      ]);
-      const candidates = inventory.candidates.flatMap((candidate) => [
+      const { candidates: discoveryCandidates, ...inventory } = prepareSessionStoreTargetInventory(
+        params.cfg,
+        [agentId, ...(parsedAgent ? [parsedAgent] : [])],
+      );
+      const candidates = discoveryCandidates.flatMap((candidate) => [
         candidate,
         { ...candidate, path: candidate.physicalPath },
       ]);
-      const candidateIdentities = inventory.candidates.map((candidate) => ({
+      const candidateIdentities = discoveryCandidates.map((candidate) => ({
         candidate,
         identity: readDatabasePathIdentitySync(candidate.path).key,
       }));
@@ -223,7 +231,7 @@ export async function prepareSessionMutationFacts(params: {
       >();
       const retainedReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
       const selected = await withSessionHistoryWorkerReadCandidates(
-        inventory.candidates,
+        discoveryCandidates,
         async (discovery) => {
           let sources = await discovery.readTargetInventory({
             ...inventory,
@@ -333,7 +341,7 @@ export async function prepareSessionMutationFacts(params: {
       };
       selectedPaths.add(path.resolve(selected.storePath));
       selectedPaths.add(path.resolve(sharing.source.path));
-      const sourceCandidates = inventory.candidates.filter((candidate) =>
+      const sourceCandidates = discoveryCandidates.filter((candidate) =>
         matchesAgentDatabaseReadCandidatePath(
           { ...candidate, path: candidate.physicalPath },
           sharing.source.path,

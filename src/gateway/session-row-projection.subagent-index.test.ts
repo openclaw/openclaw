@@ -133,6 +133,10 @@ it.each(["existing", "new"] as const)(
           }
           const archived = loadSessionEntry(target);
           expect(archived).toMatchObject({ sessionId, archivedAt: expect.any(Number) });
+          expect(projection.sharingTarget({ agentId: "main", key })?.entry).toMatchObject({
+            sessionId,
+            archivedAt: archived?.archivedAt,
+          });
           release.resolve();
           expect(await recovery).toEqual({ value: [replacement.runId] });
           await projection.ensureMaterialized();

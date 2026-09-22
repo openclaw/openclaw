@@ -32,6 +32,11 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import {
+  makeDirectTelegramConfig,
+  makeTelegramConfig,
+  type TelegramChannelConfig,
+} from "./bot.config.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createDirectDispatchContext } from "./bot.direct-dispatch.test-support.js";
 import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
@@ -137,14 +142,6 @@ const THUMBS_UP_EMOJI = "\u{1F44D}";
 const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
-type TelegramChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
-
-function makeTelegramConfig(
-  telegram: TelegramChannelConfig,
-  config: Omit<OpenClawConfig, "channels"> = {},
-): OpenClawConfig {
-  return { ...config, channels: { telegram } };
-}
 
 function mockTelegramConfig(
   telegram: TelegramChannelConfig,
@@ -283,22 +280,6 @@ function makeExecApprovalTelegramConfig(
     allowFrom: ["*"],
     execApprovals: { enabled: true, approvers: ["9"], target: "dm" },
     ...overrides,
-  };
-}
-
-function makeDirectTelegramConfig(
-  storePath: string,
-  telegramOverrides: TelegramChannelConfig = {},
-): OpenClawConfig {
-  return {
-    channels: {
-      telegram: {
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        ...telegramOverrides,
-      },
-    },
-    session: { store: storePath },
   };
 }
 
@@ -1252,7 +1233,10 @@ describe("createTelegramBot", () => {
   it("dedupes outbound prompt-context sends with ambient group history", async () => {
     const cfg = {
       session: { store: createTelegramTestStorePath("outbound-ambient-history") },
-      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+      messages: {
+        inbound: { debounceMs: 0 },
+        groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] },
+      },
       channels: {
         telegram: {
           groupPolicy: "open",
@@ -4713,6 +4697,7 @@ describe("createTelegramBot", () => {
       expectHydrated,
     }) => {
       const runtimeConfig = {
+        messages: { inbound: { debounceMs: 0 } },
         ...(useAccessGroup
           ? {
               accessGroups: {
@@ -4737,6 +4722,7 @@ describe("createTelegramBot", () => {
         },
       } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
       const startupConfig = {
+        messages: { inbound: { debounceMs: 0 } },
         channels: {
           telegram: {
             groupPolicy: "open",

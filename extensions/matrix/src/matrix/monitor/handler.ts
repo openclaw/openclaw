@@ -628,6 +628,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (draftStream) {
         await draftStream.stop().catch(() => undefined);
         await draftControllerRef?.previewLifecycle.cleanup();
+        await draftStream.cleanupPending();
       }
       inboundReplayClaim?.release();
     }

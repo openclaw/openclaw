@@ -134,10 +134,19 @@ function recordCommand(tool, cwd, commandArgs, configuration) {
   );
 }
 
+function notifyPublication() {
+  if (process.connected && process.send) {
+    // The owner can close IPC during cleanup. Its exit and existing watchdog
+    // still bound readiness; a closed channel must not crash an orphan actor.
+    process.send("fixture-publication", () => {});
+  }
+}
+
 function publish(name, value) {
   const target = path.join(root, name);
   fs.writeFileSync(`${target}.${process.pid}.tmp`, JSON.stringify(value));
   fs.renameSync(`${target}.${process.pid}.tmp`, target);
+  notifyPublication();
 }
 
 function stall(attempt) {
@@ -331,6 +340,7 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
       for (const watcher of watchers) watcher.close();
       child.off("exit", check);
       child.off("error", fail);
+      child.off("message", published);
       if (error) reject(error);
       else resolve(ready);
     };
@@ -344,13 +354,24 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
         fail(error);
       }
     };
+    const published = (message) => {
+      if (message === "fixture-publication") {
+        check();
+      }
+    };
     try {
-      // Install before the first read: registration and atomic readiness renames
-      // can otherwise happen between observing absence and starting the watcher.
-      for (const directory of [root, recordsDir]) {
-        const watcher = fs.watch(directory, check);
-        watchers.push(watcher);
-        watcher.on("error", fail);
+      // Owned Node actors signal after publishing. Directory notifications can
+      // be coalesced before the final rename, leaving a true predicate unwoken.
+      // Subscribe before the initial read so publication cannot fall between them.
+      if (child.channel) {
+        child.on("message", published);
+      } else {
+        // Bash cleanup/backoff waits retain their filesystem notification path.
+        for (const directory of [root, recordsDir]) {
+          const watcher = fs.watch(directory, check);
+          watchers.push(watcher);
+          watcher.on("error", fail);
+        }
       }
       child.once("exit", check);
       child.once("error", fail);
@@ -363,7 +384,14 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
 
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
-    stdio: ["ignore", "ignore", "inherit"],
+    stdio: ["ignore", "ignore", "inherit", "ipc"],
+  });
+  // The grandchild publishes tree readiness; relay its wakeup through the
+  // directly owned child while the waiter rechecks the authoritative file.
+  child.on("message", (message) => {
+    if (message === "fixture-publication") {
+      notifyPublication();
+    }
   });
   child.on("error", (error) => {
     throw error;
@@ -422,7 +450,10 @@ function writeConsumer(target, tool) {
 
 async function command() {
   holdLease();
-  if (!options.performance || mode !== "observe") await record(process.pid, mode);
+  // Tree actors publish their attempt after installing their signal handler below.
+  if (mode !== "child" && mode !== "grandchild" && (!options.performance || mode !== "observe")) {
+    await record(process.pid, mode);
+  }
   if (mode === "sentinel") {
     return;
   }
@@ -1290,7 +1321,7 @@ async function supervise() {
     sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
       // Parent teardown owns this group before self-registration. Keep startup
       // errors in the existing report so census failures do not become opaque exits.
-      stdio: ["ignore", output, output],
+      stdio: ["ignore", output, output, "ipc"],
     });
     // stop() joins the sentinel's actual close through pendingChildren before reporting.
     void track(sentinel);

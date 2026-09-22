@@ -33,6 +33,11 @@ full check even when runtime proof remains in memory.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Reclamation retains one Worker connection per database, so alternating agents
+reuse their admitted handles. Requests still share the archive FIFO. Each Worker
+retires after 30 idle minutes, on database close, or when idle under critical
+memory pressure; failed cleanup retains its original lease until settlement.
+Integrity revocation, schema checks, and update behavior are unchanged.
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.

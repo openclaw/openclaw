@@ -234,6 +234,63 @@ suite.define(() => {
     }
   });
 
+  it("keeps saved project submission gated after discovery fails until reconnect restores it", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+        featureMethods: ["users.prefs.get", "users.prefs.set", "sessions.create", "projects.list"],
+        deferredMethods: ["projects.list"],
+        methodResponses: {
+          "users.prefs.get": {
+            status: "ok",
+            entries: {
+              "new-session.migration.v1": true,
+              "new-session.v1:main": {
+                workspace: WORKSPACE,
+                folder: WORKSPACE,
+                projectId: REGISTERED_PROJECT.id,
+              },
+            },
+          },
+          "users.prefs.set": { status: "ok" },
+          "projects.list": { projects: [REGISTERED_PROJECT], recents: [] },
+          "worktrees.branches": GIT_BRANCHES,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const message = page.locator(".new-session-page__message");
+      const start = page.getByRole("button", { name: "Start session", exact: true });
+      await message.fill("work in the saved project");
+      await start.click({ force: true });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await gateway.rejectDeferred("projects.list", {
+        code: "UNAVAILABLE",
+        message: "project lookup unavailable",
+      });
+      await captureUiProof(suite, page, "saved-project-rejected.png");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await start.click({ force: true });
+      await message.press("Enter");
+      await message.press("Control+Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await page.locator('#new-session-project-trigger[data-project-id="registered"]').waitFor();
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        projectId: "registered",
+        message: "work in the saved project",
+      });
+    });
+  });
+
   it("restores identity-scoped Where, What, and Checkout defaults after discovery", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

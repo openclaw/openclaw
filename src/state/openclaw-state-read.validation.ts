@@ -5,6 +5,16 @@ import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/s
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 
+function isTaskSnapshotScope(input: unknown): boolean {
+  return (
+    isRecord(input) &&
+    typeof input.taskId === "string" &&
+    (input.flowId === undefined || typeof input.flowId === "string") &&
+    (input.runId === undefined || typeof input.runId === "string") &&
+    (input.childSessionKey === undefined || typeof input.childSessionKey === "string")
+  );
+}
+
 export function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
   if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
     return false;
@@ -65,6 +75,13 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.nowMs === "number") ||
       input.command.type === "admit" ||
       input.command.type === "subagents.sessionList" ||
+      (input.command.type === "subagents.forChildSession" &&
+        typeof input.command.childSessionKey === "string") ||
+      (input.command.type === "tasks.mutationSnapshot" &&
+        (input.command.input === undefined ||
+          (Array.isArray(input.command.input)
+            ? Array.from(input.command.input).every(isTaskSnapshotScope)
+            : isTaskSnapshotScope(input.command.input)))) ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
         ((input.command.scope.kind === "session" &&
@@ -82,6 +99,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "sessionGroups.snapshot" ||
+      (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
         (input.command.ids === undefined ||
           (Array.isArray(input.command.ids) &&

@@ -15,6 +15,10 @@ it.each([
   { entry: "open", storePath: "linked/session-store.sqlite", linked: true },
   { entry: "openBounded", storePath: "session-store.sqlite", linked: false },
   { entry: "setSessionTarget", storePath: "session-store.sqlite", linked: false },
+  { entry: "openAsync", storePath: "session-store.sqlite", linked: false },
+  { entry: "openAsync", storePath: "linked/session-store.sqlite", linked: true },
+  { entry: "openBoundedAsync", storePath: "session-store.sqlite", linked: false },
+  { entry: "setSessionTargetAsync", storePath: "session-store.sqlite", linked: false },
 ] as const)(
   "$entry captures $storePath before reads and callbacks can change cwd",
   async ({ entry, storePath, linked }) => {
@@ -53,14 +57,27 @@ it.each([
         process.chdir(firstDir);
         const onTruncated = vi.fn(() => process.chdir(secondDir));
         let manager: SessionManager;
-        if (entry === "openBounded") {
-          manager = SessionManager.openBounded(relative, {
+        if (entry === "openBounded" || entry === "openBoundedAsync") {
+          const open =
+            entry === "openBounded"
+              ? SessionManager.openBounded.bind(SessionManager)
+              : SessionManager.openBoundedAsync.bind(SessionManager);
+          manager = await open(relative, {
             cwd: firstDir,
             maxEvents: 1,
             maxBytes: 4096,
             onTruncated,
           });
           expect(onTruncated).toHaveBeenCalledOnce();
+        } else if (entry === "setSessionTargetAsync") {
+          manager = SessionManager.inMemory(firstDir);
+          const pending = manager.setSessionTargetAsync(relative);
+          process.chdir(secondDir);
+          await pending;
+        } else if (entry === "openAsync") {
+          const pending = SessionManager.openAsync(relative, firstDir);
+          process.chdir(secondDir);
+          manager = await pending;
         } else if (entry === "setSessionTarget") {
           manager = SessionManager.inMemory(firstDir);
           manager.setSessionTarget(relative);
@@ -72,7 +89,10 @@ it.each([
         expect(process.cwd()).toBe(secondDir);
         const id = await manager.appendThinkingLevelChange("high");
 
-        expect.soft(manager.getSessionTarget()).toEqual(first);
+        expect.soft(manager.getSessionTarget()).toMatchObject({
+          ...first,
+          env: { OPENCLAW_STATE_DIR: state.stateDir },
+        });
         const firstAfter = await loadTranscriptEvents(first);
         expect(firstAfter.slice(0, firstBefore.length)).toEqual(firstBefore);
         expect

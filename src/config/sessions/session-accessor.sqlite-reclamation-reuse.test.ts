@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -633,7 +634,40 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retires the previous database before opening a different agent store", async () => {
+test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+  const fixtures = [createFixture(), createFixture()];
+  const spawned = observeReclamationWorkers();
+  const threads = fixtures.map(() => new Set<number>());
+  for (let pass = 0; pass < 6; pass += 1) {
+    const index = pass % fixtures.length;
+    const fixture = fixtures[index]!;
+    const databaseOptions = { ...fixture.options, path: fixture.database.path };
+    const diagnostics: SqliteSessionReclamationDiagnostics = {};
+    const plan =
+      pass % 3 === 0
+        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
+    ).resolves.toMatchObject({ kind: plan.kind });
+    threads[index]!.add(diagnostics.workerThreadId!);
+  }
+  expect(spawned).toHaveLength(2);
+  expect(threads.map((ids) => ids.size)).toEqual([1, 1]);
+  expect(fullChecks()).toBe(0);
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(2);
+  }
+  const retired = Promise.all(spawned.map((worker) => once(worker, "exit")));
+  channel("openclaw.memory.critical").publish({});
+  await retired;
+  await closeOpenClawAgentDatabasesAsync();
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(0);
+  }
+});
+
+test("joins explicit Worker retirement before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
   invalidateOpenClawAgentDatabaseValidation(first.database.path);
@@ -649,7 +683,7 @@ test("retires the previous database before opening a different agent store", asy
         async (worker) => {
           if (options.path === first.database.path) {
             const close = worker.close.bind(worker);
-            closeRetained = close;
+            closeRetained = () => worker.close();
             vi.spyOn(worker, "close").mockImplementation(() => {
               const pending = close();
               closeEntered.resolve();
@@ -716,7 +750,9 @@ test("retires the previous database before opening a different agent store", asy
     order.push("foreground-release");
   });
   await entered.promise;
-  const switching = runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! });
+  const switching = retirePrevious().then(() =>
+    runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! }),
+  );
   void switching.catch(() => undefined);
   try {
     await Promise.race([closeEntered.promise, switching]);
@@ -805,18 +841,27 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
 
 test("retains a crashed Worker's mismatched lease and retries only its restored receipt", async () => {
   const fixture = createFixture();
+  const previousExitHooks = new Set(process.rawListeners("beforeExit"));
+  const closeAttempts: Promise<void>[] = [];
   let closeRetained: (() => Promise<void>) | undefined;
   const withWorker = reclamationWorker.withSqliteReclamationWorker;
   vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-    (options, claim, run, assertCurrent) =>
+    (options, claim, run, assertCurrent, signal) =>
       withWorker(
         options,
         claim,
         async (worker) => {
-          closeRetained = worker.close.bind(worker);
+          const close = worker.close.bind(worker);
+          closeRetained = close;
+          vi.spyOn(worker, "close").mockImplementation(() => {
+            const attempt = close();
+            closeAttempts.push(attempt);
+            return attempt;
+          });
           return run(worker);
         },
         assertCurrent,
+        signal,
       ),
   );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
@@ -828,6 +873,10 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     });
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+  const exitHooks = () =>
+    process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+  expect(exitHooks()).toHaveLength(1);
+  const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
   const retainedReceipt = received.receipt;
   const retireWorker = closeRetained;
   if (!retainedReceipt || !retireWorker) {
@@ -851,6 +900,18 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     .run(retainedReceipt.ownerPid + 1, retainedReceipt.leaseId);
   try {
     const mismatched = readLeases();
+    const memoryPressure = channel("openclaw.memory.critical");
+    memoryPressure.publish(undefined);
+    await expect(closeAttempts[0]).rejects.toThrow("receipt no longer matches");
+    memoryPressure.publish(undefined);
+    expect(closeAttempts).toHaveLength(1);
+    // The first failed close may schedule another beforeExit event; it must not retry itself.
+    emitBeforeExit();
+    await expect(closeAttempts[1]).rejects.toThrow("receipt no longer matches");
+    emitBeforeExit();
+    await Promise.allSettled(closeAttempts);
+    expect(closeAttempts).toHaveLength(2);
+    expect(readLeases()).toEqual(mismatched);
     await expect(
       closeOpenClawAgentDatabaseByPathAsync(fixture.database.path),
     ).rejects.toMatchObject({

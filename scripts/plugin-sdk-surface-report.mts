@@ -399,7 +399,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved native workspace worker argv resolver for node adapters.
       // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
       // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
-      4568,
+      // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
+      4569,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -557,7 +558,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved native workspace worker argv resolver for node adapters.
       // +6: shared Code Mode source preparation, output capture, and source-location helpers.
       // +1: approved shared preview lifecycle factory.
-      2680,
+      // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
+      2681,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
