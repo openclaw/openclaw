@@ -70,12 +70,12 @@ describe("write-package-dist-inventory direct entry", () => {
       expect(
         fs.readFileSync(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
       ).toBe("pending\n");
-      expect(fs.readdirSync(path.join(packageRoot, "dist")).sort()).toEqual(
+      expect(fs.readdirSync(path.join(packageRoot, "dist")).toSorted()).toEqual(
         [
           "entry.js",
           path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
           path.basename(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH),
-        ].sort(),
+        ].toSorted(),
       );
     });
   });

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
-let value: unknown = { type: "string", format: "date-time" };
+let serializedValue = '{"type":"string","format":"date-time"}';
 for (let index = 0; index < 2048; index += 1) {
-  value = { anyOf: [value, { type: "null" }] };
+  serializedValue = `{"anyOf":[${serializedValue},{"type":"null"}]}`;
 }
 const schema: unknown = JSON.parse(
-  JSON.stringify({ type: "object", properties: { value }, required: ["value"] }),
+  `{"type":"object","properties":{"value":${serializedValue}},"required":["value"]}`,
 );
 const normalized = cleanSchemaForGemini(schema);
 const stripped = stripUnsupportedSchemaKeywords(schema, new Set(["format"]));
