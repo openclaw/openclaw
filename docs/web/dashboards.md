@@ -337,6 +337,12 @@ permissions stay the same or shrink. A grant is preserved only when the
 approved bytes still match and the requested permissions do not widen.
 The authoring result distinguishes pending, rejected, and granted access;
 saving a widget does not imply its capabilities were approved.
+Automatic review can reuse a low-risk approval when the same agent recreates
+an HTML or registered-source widget with the same name, source, and declarations
+in another session. This bounded in-memory reuse resets when the runtime
+configuration or exec-approval policy changes. Each session's current permission
+mode and each widget's grant authority still apply. MCP apps and incognito
+sessions do not reuse these assessments. New content still waits for review.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.
