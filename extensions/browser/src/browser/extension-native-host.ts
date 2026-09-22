@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
 import {
   type BrowserNativeBootstrapResponse,
@@ -63,33 +63,6 @@ export function parseBrowserNativeHostOrigins(argv: string[]): {
   return { expectedOrigins, callerOrigin };
 }
 
-async function validateOwnedFile(filePath: string, executable: boolean): Promise<string> {
-  const resolved = path.resolve(filePath);
-  const info = await fs.lstat(resolved);
-  if (!info.isFile() || info.isSymbolicLink()) {
-    throw new Error("unsafe file type");
-  }
-  if (process.platform !== "win32") {
-    const uid = process.getuid?.();
-    if (uid !== undefined && info.uid !== uid) {
-      throw new Error("foreign file owner");
-    }
-    const mode = info.mode & 0o777;
-    if ((mode & 0o077) !== 0 || (executable && (mode & 0o100) === 0)) {
-      throw new Error("unsafe file mode");
-    }
-  }
-  const canonical = await fs.realpath(resolved);
-  if (
-    process.platform === "win32"
-      ? canonical.toLowerCase() !== resolved.toLowerCase()
-      : canonical !== resolved
-  ) {
-    throw new Error("non-canonical file path");
-  }
-  return canonical;
-}
-
 async function validateNativeManifest(params: {
   manifestPath: string;
   launcherPath: string;
@@ -97,8 +70,8 @@ async function validateNativeManifest(params: {
   expectedOrigins: string[];
   stateDir?: string;
 }): Promise<void> {
-  const manifestPath = await validateOwnedFile(params.manifestPath, false);
-  const launcherPath = await validateOwnedFile(params.launcherPath, true);
+  const manifestFile = await readPrivateNativeHostFile(params.manifestPath, false);
+  const { realPath: launcherPath } = await readPrivateNativeHostFile(params.launcherPath, true);
   const managedRoot = path.resolve(
     params.stateDir ?? resolveStateDir(),
     "browser",
@@ -107,7 +80,7 @@ async function validateNativeManifest(params: {
   if (!isPathInside(managedRoot, launcherPath)) {
     throw new Error("launcher is outside the managed root");
   }
-  const parsed: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const parsed: unknown = JSON.parse(manifestFile.buffer.toString("utf8"));
   const manifestRecord = asNullableRecord(parsed);
   if (!manifestRecord) {
     throw new Error("invalid manifest");

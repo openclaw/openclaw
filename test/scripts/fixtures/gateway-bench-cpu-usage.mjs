@@ -34,7 +34,14 @@ const worker = new Worker(
   { eval: true, execArgv: [] },
 );
 await once(worker, "message");
+let timer;
 process.on("message", async (message) => {
+  if (message.run === "timer-start" || message.run === "timer-stop") {
+    if (message.run === "timer-start") timer = setInterval(() => {}, 60_000);
+    else clearInterval(timer);
+    process.send({ timerChanged: true });
+    return;
+  }
   if (message.run === "main") {
     process.send({ completed: 1, checksum: fixedCpuWork() });
     return;

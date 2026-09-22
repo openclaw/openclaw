@@ -450,7 +450,10 @@ function writeConsumer(target, tool) {
 
 async function command() {
   holdLease();
-  if (!options.performance || mode !== "observe") await record(process.pid, mode);
+  // Tree actors publish their attempt after installing their signal handler below.
+  if (mode !== "child" && mode !== "grandchild" && (!options.performance || mode !== "observe")) {
+    await record(process.pid, mode);
+  }
   if (mode === "sentinel") {
     return;
   }

@@ -1249,8 +1249,8 @@ printf 'status=%s\\n' "$status"
 
   it.each([
     { label: "required native payload", unpackedSize: 243_066_603, exitCode: 0 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024, exitCode: 0 },
-    { label: "one byte over budget", unpackedSize: 235 * 1024 * 1024 + 1, exitCode: 1 },
+    { label: "exact budget", unpackedSize: 320 * 1024 * 1024, exitCode: 0 },
+    { label: "one byte over budget", unpackedSize: 320 * 1024 * 1024 + 1, exitCode: 1 },
   ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode }) => {
     const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz", unpackedSize }]);
 
@@ -1259,7 +1259,7 @@ printf 'status=%s\\n' "$status"
       expect(result.stderr).toBe("");
     } else {
       expect(result.stderr).toContain(
-        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 246415360 bytes`,
+        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 335544320 bytes`,
       );
     }
   });

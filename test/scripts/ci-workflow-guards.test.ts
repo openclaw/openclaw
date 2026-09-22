@@ -623,7 +623,7 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("preserves module heredocs and cleans child temporary artifacts", () => {
+  it.each([0, 7])("preserves module heredocs and cleans artifacts after exit %i", (exitCode) => {
     const parentTempDir = tmpdir();
     const run = runWorkflowShellScript(
       `node --input-type=module <<'NODE'
@@ -636,22 +636,72 @@ NODE_prefix: for (const value of ["heredoc-body-preserved"]) {
 }
 console.log(mkdtempSync(join(tmpdir(), 'openclaw-workflow-child-')));
 console.log(JSON.stringify(process.execArgv));
+process.exitCode = ${exitCode};
 NODE
 `,
       {},
     );
 
-    expect(run.status, run.stderr).toBe(0);
+    expect(run.status, run.stderr).toBe(exitCode);
     const [body, temporaryDirectory, execArgv] = run.stdout.trim().split("\n");
     const childDirectory = expectDefined(temporaryDirectory, "child temporary directory");
     try {
       expect(body).toBe("heredoc-body-preserved");
-      expect(execArgv).toBe("[]");
+      expect(JSON.parse(expectDefined(execArgv, "module arguments"))).toEqual([
+        "--input-type=module",
+      ]);
       expect(tmpdir()).toBe(parentTempDir);
       expect(existsSync(childDirectory)).toBe(false);
     } finally {
       rmSync(childDirectory, { force: true, recursive: true });
     }
+  });
+
+  it.each([
+    { name: "plain Node", setup: "", nodeOptions: "", extension: "mjs" },
+    { name: "tsx", setup: "", nodeOptions: "--import tsx ", extension: "ts" },
+    {
+      name: "manifest loader",
+      setup: "manifest_node_args=()\nmanifest_node_args+=(--import tsx)\n",
+      nodeOptions: '"${manifest_node_args[@]}" ',
+      extension: "ts",
+    },
+  ])("keeps $name heredocs outside cwd and resolves imports after cd", (fixture) => {
+    const root = tempDirs.make("openclaw-workflow-resolution-");
+    const child = path.join(root, "module's directory");
+    mkdirSync(child);
+    writeFileSync(path.join(child, "package.json"), '{"type":"module"}');
+    writeFileSync(
+      path.join(child, `value.${fixture.extension}`),
+      fixture.extension === "ts"
+        ? 'export const value: string = "resolved";'
+        : 'export const value = "resolved";',
+    );
+    const run = runWorkflowShellScript(
+      `${fixture.setup}node --input-type=module <<'BEFORE_CD'
+import { readdirSync } from 'node:fs';
+console.log(JSON.stringify(readdirSync(process.cwd())));
+BEFORE_CD
+cd ${quoteShell(child)}
+node ${fixture.nodeOptions}--input-type=module <<'AFTER_CD'
+import { readdirSync } from 'node:fs';
+import { value } from './value.${fixture.extension}';
+console.log(value);
+console.log(JSON.stringify(readdirSync(process.cwd()).sort()));
+AFTER_CD
+`,
+      { cwd: root },
+    );
+
+    const [rootFiles, value, childFiles] = run.stdout.trim().split("\n");
+    // Observe the namespace while both rewritten bodies exist, not only after cleanup.
+    expect(JSON.parse(expectDefined(rootFiles, "cwd namespace"))).toEqual([path.basename(child)]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(value).toBe("resolved");
+    expect(JSON.parse(expectDefined(childFiles, "child namespace"))).toEqual([
+      "package.json",
+      `value.${fixture.extension}`,
+    ]);
   });
 
   it("routes PR edited metadata only to interested automation", () => {

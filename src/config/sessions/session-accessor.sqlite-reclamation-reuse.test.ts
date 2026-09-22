@@ -841,18 +841,27 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
 
 test("retains a crashed Worker's mismatched lease and retries only its restored receipt", async () => {
   const fixture = createFixture();
+  const previousExitHooks = new Set(process.rawListeners("beforeExit"));
+  const closeAttempts: Promise<void>[] = [];
   let closeRetained: (() => Promise<void>) | undefined;
   const withWorker = reclamationWorker.withSqliteReclamationWorker;
   vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-    (options, claim, run, assertCurrent) =>
+    (options, claim, run, assertCurrent, signal) =>
       withWorker(
         options,
         claim,
         async (worker) => {
-          closeRetained = worker.close.bind(worker);
+          const close = worker.close.bind(worker);
+          closeRetained = close;
+          vi.spyOn(worker, "close").mockImplementation(() => {
+            const attempt = close();
+            closeAttempts.push(attempt);
+            return attempt;
+          });
           return run(worker);
         },
         assertCurrent,
+        signal,
       ),
   );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
@@ -864,6 +873,10 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     });
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+  const exitHooks = () =>
+    process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+  expect(exitHooks()).toHaveLength(1);
+  const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
   const retainedReceipt = received.receipt;
   const retireWorker = closeRetained;
   if (!retainedReceipt || !retireWorker) {
@@ -887,6 +900,18 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     .run(retainedReceipt.ownerPid + 1, retainedReceipt.leaseId);
   try {
     const mismatched = readLeases();
+    const memoryPressure = channel("openclaw.memory.critical");
+    memoryPressure.publish(undefined);
+    await expect(closeAttempts[0]).rejects.toThrow("receipt no longer matches");
+    memoryPressure.publish(undefined);
+    expect(closeAttempts).toHaveLength(1);
+    // The first failed close may schedule another beforeExit event; it must not retry itself.
+    emitBeforeExit();
+    await expect(closeAttempts[1]).rejects.toThrow("receipt no longer matches");
+    emitBeforeExit();
+    await Promise.allSettled(closeAttempts);
+    expect(closeAttempts).toHaveLength(2);
+    expect(readLeases()).toEqual(mismatched);
     await expect(
       closeOpenClawAgentDatabaseByPathAsync(fixture.database.path),
     ).rejects.toMatchObject({

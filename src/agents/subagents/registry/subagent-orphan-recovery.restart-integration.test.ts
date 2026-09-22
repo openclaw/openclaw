@@ -1,7 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
 import { describe, expect, it, vi } from "vitest";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun as makeRunRecord,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
@@ -36,11 +43,11 @@ import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cl
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
-  createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   settleSubagentRegistryPersistenceWork,
@@ -57,10 +64,6 @@ import {
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
-import {
-  makeRestartRecoveryRun as makeRunRecord,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -100,11 +103,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         endedAt: startedAt + 1,
       };
       const oldWait = createDeferred<typeof waitResult>();
-      testing.setDepsForTest({
-        ...createSubagentRegistryTestDeps(),
-        onAgentEvent,
-        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-      });
+      vi.mocked(onAgentEvent).mockReset();
       const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
         agentId: "main",
       });
@@ -347,13 +346,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         completion: { required: true, resultText: null, capturedAt: now },
       });
       addSubagentRunForTests(entry);
-      const announce = vi.fn(async () => "delivered" as const);
-      const cleanupBrowser = vi.fn(async () => {});
-      testing.setDepsForTest({
-        ...createSubagentRegistryTestDeps(),
-        runSubagentAnnounceFlow: announce,
-        cleanupBrowserSessionsForLifecycleEnd: cleanupBrowser,
-      });
+      const announce = vi.mocked(runSubagentAnnounceFlow);
+      const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
       let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
       try {
         if (owner === "run") {
@@ -632,11 +626,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
 
     resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-      onAgentEvent: vi.fn(() => () => undefined),
-    });
     initSubagentRegistry();
     activateGatewayRuntime();
     await Promise.resolve();
@@ -652,6 +641,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         },
       },
     });
+    await settleSubagentRegistryPersistenceWork();
     expect((await readSubagentSessionStore(storePath))[childSessionKey]).toMatchObject({
       abortedLastRun: true,
     });
@@ -678,6 +668,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         suppressSessionEffects: true,
       },
     });
+    await settleSubagentRegistryPersistenceWork();
     expect(restoredAgain?.execution.restartRecovery).toBeUndefined();
     expect((await readSubagentSessionStore(storePath))[childSessionKey]).toMatchObject({
       abortedLastRun: true,

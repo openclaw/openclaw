@@ -11,31 +11,13 @@ import {
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-
-it("extracts the complete eager runtime import closure without duplicate wrapper components", () => {
-  const extracted = tempDirs.make("openclaw-pr-import-closure-");
-  const components = copyPrWrapperSources(extracted);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
-  const files = readdirSync(extracted, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(extracted, join(entry.parentPath, entry.name)));
-  expect(
-    collectRuntimeImportClosure(process.cwd(), files).filter(
-      (file) => !existsSync(join(extracted, file)),
-    ),
-  ).toEqual([]);
-});
 
 function coldFixture(perWorktreeConfig = true) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
@@ -45,7 +27,14 @@ function coldFixture(perWorktreeConfig = true) {
   f.env.OPENCLAW_STATE_DIR = join(f.root, "state");
   f.env.OPENCLAW_CONFIG_PATH = join(f.root, "config.json");
   writeFileSync(f.env.OPENCLAW_CONFIG_PATH, "{}\n");
-  return f;
+  return {
+    ...f,
+    run(...args: Parameters<typeof f.run>) {
+      const result = f.run(...args);
+      f.assertPrivateHandoffVerified();
+      return result;
+    },
+  };
 }
 
 function expectSeed(f: ReturnType<typeof coldFixture>, pr = 42) {
@@ -92,9 +81,11 @@ describePosix("native PR source provisioning", () => {
         JSON.stringify({ worktreeAcceleration: acceleration }),
       );
       const preload = join(f.root, "native-provision-imports.mjs");
+      const guardReceipt = join(f.root, "native-provision-imports.txt");
       writeFileSync(
         preload,
-        `import { registerHooks } from "node:module";
+        `import { appendFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
     if (url.endsWith("/src/config/config.ts")) {
@@ -102,10 +93,12 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     }
     return nextLoad(url, context);
   } });
+  appendFileSync(${JSON.stringify(guardReceipt)}, String(process.pid) + "\\n");
 }
 `,
       );
-      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+      // Keep both guards: reject config startup and verify each private store.
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS}`;
       const parent = join(f.canonical, ".worktrees");
       const physicalParent = join(f.root, "pr-worktrees");
       rmdirSync(parent);
@@ -114,6 +107,7 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
       const result = f.run("review-init");
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toContain("PR source checkout: Git checkout.");
+      expect(readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
       expectSeed(f);
       expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
       expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);

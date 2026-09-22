@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
@@ -13,16 +14,81 @@ import {
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import type { SessionExactEntriesWorkerResult } from "./session-transcript-worker.types.js";
 
-/** Read exact keys from the configured store, including keys shaped like incognito sessions. */
-export async function readSessionEntriesFromStoreInWorker(input: {
+type SessionEntryWorkerRead = {
   agentId: string;
   storePath: string;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
   projection?: "full" | "backing" | "sharing";
+  includeMembers?: boolean;
+  includeAuthorization?: boolean;
   env?: NodeJS.ProcessEnv;
-}) {
+};
+
+export type PreparedSessionEntryWorkerRead = {
+  result: SessionExactEntriesWorkerResult;
+  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
+  assertCurrent: () => void;
+};
+
+/** Keep every discovered database and original admission alive through one synchronous consumer. */
+export async function withSessionEntriesFromStoresInWorker<T>(
+  inputs: readonly SessionEntryWorkerRead[],
+  consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
+): Promise<T> {
+  const reads: PreparedSessionEntryWorkerRead[] = [];
+  const enter = (index: number): Promise<T> => {
+    const input = inputs[index];
+    if (input) {
+      return withSessionEntriesFromStoreInWorker(input, async (read) => {
+        reads.push(read);
+        try {
+          return await enter(index + 1);
+        } finally {
+          reads.pop();
+        }
+      });
+    }
+    for (const read of reads) {
+      read.assertCurrent();
+    }
+    let active = true;
+    try {
+      const result = consume(
+        reads.map((read) => ({
+          result: read.result,
+          database: read.database,
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("Session entry read consumer is no longer active");
+            }
+            read.assertCurrent();
+          },
+        })),
+      );
+      if (isPromiseLike(result)) {
+        void Promise.resolve(result).catch(() => {});
+        throw new Error("Session entry read consumers must remain synchronous");
+      }
+      return Promise.resolve(result);
+    } finally {
+      active = false;
+    }
+  };
+  return enter(0);
+}
+
+/** The ordinary return API returns data, never a retained authority claim. */
+export function readSessionEntriesFromStoreInWorker(input: SessionEntryWorkerRead) {
+  return withSessionEntriesFromStoresInWorker([input], ([read]) => read!.result);
+}
+
+async function withSessionEntriesFromStoreInWorker<T>(
+  input: SessionEntryWorkerRead,
+  consume: (read: PreparedSessionEntryWorkerRead) => Promise<T>,
+): Promise<T> {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const agentId = normalizeAgentId(input.agentId);
@@ -32,6 +98,8 @@ export async function readSessionEntriesFromStoreInWorker(input: {
     sessionKeys: [...new Set(input.sessionKeys)],
     lifecycleSessionKey: input.lifecycleSessionKey,
     projection: input.projection,
+    includeMembers: input.includeMembers,
+    includeAuthorization: input.includeAuthorization,
   };
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   const captured = captureSessionStoreReadCandidate(target.path);
@@ -61,19 +129,38 @@ export async function readSessionEntriesFromStoreInWorker(input: {
         });
       }
     }
-    const readDatabase = async (database: { agentId: string; path: string }) => {
+    const readDatabase = async (
+      database: { agentId: string; path: string },
+      assertRoute: () => void,
+    ) => {
       const continuation = continuations.find((item) => item.path === database.path)?.owner;
-      const result = await withSessionHistoryWorkerDatabase({ ...database, env }, (owner) =>
-        owner.readExactEntries({ ...read, continuation: continuation?.receipt }),
-      );
-      continuation?.assertCurrent();
-      return result;
+      return withSessionHistoryWorkerDatabase({ ...database, env }, async (owner) => {
+        const result = await owner.readExactEntries({
+          ...read,
+          continuation: continuation?.receipt,
+        });
+        let active = true;
+        const assertCurrent = () => {
+          if (!active) {
+            throw new Error("Session entry read consumer is no longer active");
+          }
+          owner.assertCurrent();
+          continuation?.assertCurrent();
+          assertRoute();
+        };
+        try {
+          assertCurrent();
+          return await consume({ result, database: { ...database, env }, assertCurrent });
+        } finally {
+          active = false;
+        }
+      });
     };
     if (direct && target.agentId) {
       resolveSqliteAgentId({ scopedAgentId: agentId, storeAgentId: target.agentId });
-      const result = await readDatabase({ agentId: target.agentId, path: captured.physicalPath });
-      assertSessionStoreReadCandidate(target.path, [captured]);
-      return result;
+      return await readDatabase({ agentId: target.agentId, path: captured.physicalPath }, () =>
+        assertSessionStoreReadCandidate(target.path, [captured]),
+      );
     }
     const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
     return await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
@@ -101,11 +188,12 @@ export async function readSessionEntriesFromStoreInWorker(input: {
       }
       assertRegistryCurrent?.();
       discovery.assertCurrent();
-      const result = await readDatabase(resolved.database);
-      assertRegistryCurrent?.();
-      discovery.assertCurrent();
-      assertSessionStoreReadCandidate(resolved.sourcePath, candidates);
-      return result;
+      const selected = resolved;
+      return await readDatabase(selected.database, () => {
+        assertRegistryCurrent?.();
+        discovery.assertCurrent();
+        assertSessionStoreReadCandidate(selected.sourcePath, candidates);
+      });
     });
   } finally {
     for (const { owner } of continuations.toReversed()) {

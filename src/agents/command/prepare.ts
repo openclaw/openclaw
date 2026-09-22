@@ -253,6 +253,7 @@ export async function prepareAgentCommandExecution(
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
+    sessionAgentId,
     storePath,
     isNewSession,
     previousSessionId,
@@ -271,9 +272,6 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  const sessionAgentId =
-    agentIdOverride ??
-    resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,

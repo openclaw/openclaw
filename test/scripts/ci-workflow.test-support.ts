@@ -220,26 +220,22 @@ export function runWorkflowShellScript(
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
   const childTempDir = tempDir ?? root;
-  const modulePaths: string[] = [];
   try {
     let moduleIndex = 0;
-    const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script
       .replace(
         /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
         (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
-          const modulePath = path.join(
-            moduleRoot,
-            `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
-          );
+          // Keep scratch outside the checkout's compiler namespace. File-backed stdin
+          // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
+          const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
           moduleIndex += 1;
-          modulePaths.push(modulePath);
           writeFileSync(modulePath, `${body}\n`, "utf8");
           const loader =
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
         },
       )
       .replaceAll(
@@ -265,9 +261,6 @@ export function runWorkflowShellScript(
       },
     });
   } finally {
-    for (const modulePath of modulePaths) {
-      rmSync(modulePath, { force: true });
-    }
     rmSync(root, { force: true, recursive: true });
   }
 }

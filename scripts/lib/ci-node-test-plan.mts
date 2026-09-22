@@ -218,8 +218,11 @@ const policyTestWatches = [
     testFile: "test/vitest-projects-config.test.ts",
     watchGlobs: ["extensions/codex/src/app-server/**/*.test.ts"],
   },
-  {
-    testFile: "test/scripts/pr-worktree-provision.test.ts",
+  ...[
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/eager-import-closure.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
     ownerGlobs: ["scripts/pr-lib/wrapper-components.txt"],
     watchGlobs: [
       "scripts/pr",
@@ -228,7 +231,7 @@ const policyTestWatches = [
         .trim()
         .split("\n"),
     ],
-  },
+  })),
   {
     testFile: "ui/src/components/web-awesome-migration.node.test.ts",
     watchGlobs: ["ui/src/**/*.ts"],
