@@ -20,6 +20,7 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -73,6 +74,7 @@ async function legacyAgentFixture(postCore: boolean) {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(pathname);
   try {
+    restoreEmptyV21StorageForHistoricalFixture(db);
     removeCanonicalValidationFromHistoricalAgentFixture(db);
     db.exec(`
       DROP TABLE session_transcript_cold_archives;

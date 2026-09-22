@@ -222,7 +222,9 @@ it.each([
         { root, env, timeoutMs: 200, assertCurrent() {} },
         publish,
       ),
-    ).rejects.toThrow(/affected Gateway.*retry the update/);
+    ).rejects.toThrow(
+      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the update/,
+    );
     expect(publish).not.toHaveBeenCalled();
   }),
 );

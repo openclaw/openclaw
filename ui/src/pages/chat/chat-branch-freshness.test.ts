@@ -23,10 +23,6 @@ describe("chat branch freshness", () => {
       ...overrides,
     });
     if (!overrides.sessions) {
-      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
-        applied: false,
-        result: host.sessions.state.result,
-      }));
       vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
       vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
     }

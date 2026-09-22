@@ -1,6 +1,20 @@
 // Covers preserved environment-variable config normalization.
 import { describe, it, expect } from "vitest";
-import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
+import { restoreEnvVarRefs, restoreEnvVarRefsFromResolved } from "./env-preserve.js";
+
+function expectEnvRefArrayMutationError(action: () => unknown) {
+  let failure: unknown;
+  try {
+    action();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).toMatchObject({
+    name: "EnvRefArrayMutationError",
+    message: "Config write would reorder or modify an array containing environment references.",
+  });
+}
 
 describe("restoreEnvVarRefs", () => {
   const env = {
@@ -864,7 +878,7 @@ describe("restoreEnvVarRefs with edited arrays", () => {
   });
 
   it("rejects ambiguous array identities instead of matching equal secret values", () => {
-    expect(() =>
+    expectEnvRefArrayMutationError(() =>
       restoreEnvVarRefs(
         [{ id: "duplicate", token: "same" }],
         [
@@ -873,11 +887,11 @@ describe("restoreEnvVarRefs with edited arrays", () => {
         ],
         { FIRST_TOKEN: "same", SECOND_TOKEN: "same" },
       ),
-    ).toThrow(EnvRefArrayMutationError);
+    );
   });
 
   it("does not activate an escaped reference moved onto an active-reference owner", () => {
-    expect(() =>
+    expectEnvRefArrayMutationError(() =>
       restoreEnvVarRefs(
         [
           { id: "literal", token: "read-token" },
@@ -889,7 +903,7 @@ describe("restoreEnvVarRefs with edited arrays", () => {
         ],
         { TOKEN: "read-token" },
       ),
-    ).toThrow(EnvRefArrayMutationError);
+    );
   });
 
   it("keeps explicit changes without restoring a same-valued sibling literal", () => {
@@ -902,4 +916,191 @@ describe("restoreEnvVarRefs with edited arrays", () => {
       ),
     ).toEqual(incoming);
   });
+});
+
+describe("restoreEnvVarRefsFromResolved", () => {
+  it.each([{ explicit: [["0", "token"]] }, { explicit: [["0"]] }])(
+    "keeps explicit escaped activation on its uniquely retained owner ($explicit)",
+    ({ explicit }) => {
+      const authored = [{ id: "drop" }, { id: "keep", token: "$${TOKEN}", untouched: "$${OTHER}" }];
+      const resolved = [{ id: "drop" }, { id: "keep", token: "${TOKEN}", untouched: "${OTHER}" }];
+      const incoming = [{ id: "keep", token: "prefix-${TOKEN}", untouched: "$${OTHER}" }];
+      expect(restoreEnvVarRefsFromResolved(incoming, authored, resolved, explicit)).toEqual(
+        incoming,
+      );
+    },
+  );
+
+  it.each([
+    {
+      label: "different key",
+      incoming: [{ id: "keep", moved: "${TOKEN}" }],
+      explicit: [["0", "moved"]],
+    },
+    {
+      label: "different owner",
+      incoming: [{ id: "other", token: "${TOKEN}" }],
+      explicit: [["0", "token"]],
+    },
+    {
+      label: "wrong path",
+      incoming: [{ id: "keep", token: "prefix-${TOKEN}" }],
+      explicit: [["0", "other"]],
+    },
+    {
+      label: "unrelated escaped leaf",
+      incoming: [{ id: "keep", token: "${TOKEN}", untouched: "prefix-${OTHER}" }],
+      explicit: [["0", "token"]],
+    },
+  ])("rejects explicit escaped activation with $label", ({ incoming, explicit }) => {
+    expectEnvRefArrayMutationError(() =>
+      restoreEnvVarRefsFromResolved(
+        incoming,
+        [{ id: "drop" }, { id: "keep", token: "$${TOKEN}", untouched: "$${OTHER}" }],
+        [{ id: "drop" }, { id: "keep", token: "${TOKEN}", untouched: "${OTHER}" }],
+        explicit,
+      ),
+    );
+  });
+
+  it("rejects explicit escaped activation across duplicate owners or scalar moves", () => {
+    expectEnvRefArrayMutationError(() =>
+      restoreEnvVarRefsFromResolved(
+        [{ id: "duplicate", token: "prefix-${TOKEN}" }],
+        [
+          { id: "duplicate", token: "$${TOKEN}" },
+          { id: "duplicate", token: "$${TOKEN}" },
+        ],
+        [
+          { id: "duplicate", token: "${TOKEN}" },
+          { id: "duplicate", token: "${TOKEN}" },
+        ],
+        [["0", "token"]],
+      ),
+    );
+    expectEnvRefArrayMutationError(() =>
+      restoreEnvVarRefsFromResolved(
+        ["${TOKEN}", "secret"],
+        ["${TOKEN}", "$${TOKEN}"],
+        ["secret", "${TOKEN}"],
+        [[]],
+      ),
+    );
+  });
+
+  it("uses the original resolved leaves without matching same-valued sibling literals", () => {
+    const authored = {
+      value: "prefix-${TOKEN}",
+      edited: "${TOKEN}",
+      removed: "${TOKEN}",
+      literal: "$${TOKEN}",
+      sibling: "read-token",
+      indirect: "${INDIRECT}",
+    };
+    const resolved = {
+      value: "prefix-read-token",
+      edited: "read-token",
+      removed: "read-token",
+      literal: "${TOKEN}",
+      sibling: "read-token",
+      indirect: "${TOKEN}",
+    };
+    const candidate = {
+      value: resolved.value,
+      edited: "replacement",
+      literal: resolved.literal,
+      sibling: resolved.sibling,
+      indirect: resolved.indirect,
+    };
+    expect(restoreEnvVarRefsFromResolved(candidate, authored, resolved)).toEqual({
+      value: "prefix-${TOKEN}",
+      edited: "replacement",
+      literal: "$${TOKEN}",
+      sibling: "read-token",
+      indirect: "${INDIRECT}",
+    });
+    expect(candidate.edited).toBe("replacement");
+    expect(candidate.value).toBe("prefix-read-token");
+  });
+
+  it("keeps original reference owners across array edits, reordering and ordered deletion", () => {
+    const authored = [
+      { id: "first", token: "${FIRST}", obsolete: true },
+      { id: "second", token: "${SECOND}" },
+      { id: "removed", token: "${REMOVED}" },
+    ];
+    const resolved = authored.map((entry) => ({ ...entry, token: "same-read-token" }));
+    const candidate = [
+      { id: "second", token: "same-read-token", enabled: true },
+      { id: "first", token: "same-read-token" },
+      { id: "removed", token: "same-read-token" },
+    ];
+    expect(restoreEnvVarRefsFromResolved(candidate, authored, resolved)).toEqual([
+      { id: "second", token: "${SECOND}", enabled: true },
+      { id: "first", token: "${FIRST}" },
+      { id: "removed", token: "${REMOVED}" },
+    ]);
+    expect(restoreEnvVarRefsFromResolved(resolved.slice(0, 2), authored, resolved)).toEqual(
+      authored.slice(0, 2),
+    );
+  });
+
+  it("keeps explicit parent templates without materializing untouched literal descendants", () => {
+    const authored = {
+      owner: { directory: "$${OWNER}", token: "${TOKEN}", removed: "${TOKEN}" },
+      literal: "$${OWNER}",
+    };
+    const resolved = {
+      owner: { directory: "${OWNER}", token: "read-token", removed: "read-token" },
+      literal: "${OWNER}",
+    };
+    expect(
+      restoreEnvVarRefsFromResolved(
+        { owner: { directory: "${OWNER}", token: "read-token" }, literal: "${OWNER}" },
+        authored,
+        resolved,
+        [["owner"]],
+      ),
+    ).toEqual({
+      owner: { directory: "${OWNER}", token: "${TOKEN}" },
+      literal: "$${OWNER}",
+    });
+  });
+
+  it.each([false, true])(
+    "rejects ambiguous same-value owners and escaped-reference activation (explicit: %s)",
+    (explicit) => {
+      expectEnvRefArrayMutationError(() =>
+        restoreEnvVarRefsFromResolved(
+          [{ id: "duplicate", token: "same" }],
+          [
+            { id: "duplicate", token: "${FIRST}" },
+            { id: "duplicate", token: "${SECOND}" },
+          ],
+          [
+            { id: "duplicate", token: "same" },
+            { id: "duplicate", token: "same" },
+          ],
+          explicit ? [[]] : undefined,
+        ),
+      );
+      expectEnvRefArrayMutationError(() =>
+        restoreEnvVarRefsFromResolved(
+          [
+            { id: "literal", token: "read-token" },
+            { id: "active", token: "${TOKEN}" },
+          ],
+          [
+            { id: "literal", token: "$${TOKEN}" },
+            { id: "active", token: "${TOKEN}" },
+          ],
+          [
+            { id: "literal", token: "${TOKEN}" },
+            { id: "active", token: "read-token" },
+          ],
+          explicit ? [[]] : undefined,
+        ),
+      );
+    },
+  );
 });

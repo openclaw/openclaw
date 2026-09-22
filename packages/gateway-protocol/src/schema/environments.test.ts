@@ -51,6 +51,34 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: true })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: false })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: "true" })).toBe(false);
+    const gateway = { id: "gateway", type: "local", status: "available" };
+    for (const state of ["ready", "needs-server", "unsupported", "managed"]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [{ ...gateway, desktopSetup: { state } }],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...gateway,
+        desktopSetup: { state: "unsupported", detail: "VNC authentication is required" },
+      }),
+    ).toBe(true);
+    for (const desktopSetup of [
+      {},
+      { state: "unknown" },
+      { state: "ready", password: "hidden" },
+      { state: "unsupported", detail: "" },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...gateway, desktopSetup })).toBe(false);
+    }
+  });
+
   it("allows only bounded readonly profile display IDs, never settings", () => {
     const check = (profile: Record<string, unknown>) =>
       Value.Check(EnvironmentsListResultSchema, {

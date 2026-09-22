@@ -21,7 +21,6 @@ import type {
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
-const ADMISSION_TIMEOUT_MS = 5_000;
 
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
@@ -56,8 +55,19 @@ export type SqliteWorkerAdmissionFactory = (operation: RetainedWorkerTransaction
 /** The caller retains real source custody before invoking the synchronous grant. */
 export function createSqliteWorkerOperationAdmission(
   admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,
+  attachment?: unknown,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
+  if (attachment !== undefined) {
+    try {
+      // This message moves with port2; command payloads retain their v8 encoding.
+      port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
+    } catch (error) {
+      port1.close();
+      port2.close();
+      throw error;
+    }
+  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
   const cleanupFailures: unknown[] = [];
@@ -146,6 +156,9 @@ export function createSqliteWorkerOperationAdmission(
     } catch (error) {
       refuse(decision, error);
       return;
+    } finally {
+      // Repeated preparation requests must not retain every settled decision.
+      decisions.delete(decision);
     }
     if (Atomics.load(decision, 0) === REQUESTED) {
       refuse(decision, new SqliteWorkerError("SQLite worker admission was not granted", "closed"));
@@ -293,9 +306,26 @@ export function requestSqliteWorkerOperationAdmission(
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
-  Atomics.wait(decision, 0, REQUESTED, ADMISSION_TIMEOUT_MS);
+  // Host scheduling delay does not revoke the retained owner's authority. The
+  // broker keeps this port through settlement and joins worker exit on failure;
+  // only the live host owner can grant or refuse the pending request.
+  while (Atomics.load(decision, 0) === REQUESTED) {
+    Atomics.wait(decision, 0, REQUESTED);
+  }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    Atomics.compareExchange(decision, 0, REQUESTED, REFUSED);
     throw new SqliteWorkerError("SQLite transaction admission was refused", "closed");
   }
+}
+
+/** Consume owner-prepared data from this executing operation's private port. */
+export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
+  }
+  const message: unknown = receiveMessageOnPort(scope.port)?.message;
+  if (!isRecord(message) || message.kind !== "sqlite-operation-attachment") {
+    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+  }
+  return message.value;
 }

@@ -12,6 +12,16 @@ function printJson(value: unknown): void {
   defaultRuntime.writeJson(value);
 }
 
+async function readExactStateRequest(filename: string | undefined) {
+  if (!filename) {
+    return undefined;
+  }
+  const { readFile } = await import("node:fs/promises");
+  const { exactStateRetirementSchema } =
+    await import("../agents/worktrees/snapshot-exact-state-contract.js");
+  return exactStateRetirementSchema.parse(JSON.parse(await readFile(filename, "utf8")));
+}
+
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
   if (json) {
     printJson(record);
@@ -100,49 +110,72 @@ export function registerWorktreesCli(program: Command): void {
         "force",
       ),
     )
+    .addOption(
+      new Option(
+        "--exact-state <file>",
+        "Retire detached checkout using an owner-fenced exact-state JSON request",
+      ).conflicts(["force", "ifLossless"]),
+    )
     .option("--json", "Output JSON", false)
-    .action(async (id: string, opts: JsonOption & { force?: boolean; ifLossless?: boolean }) => {
-      const { managedWorktrees } = await import("../agents/worktrees/service.js");
-      if (opts.ifLossless) {
-        const removed = await managedWorktrees.removeIfLossless(id);
-        const cleanup = (await managedWorktrees.listRegistryRecords()).find(
-          (record) => record.id === id,
-        )?.runEndCleanup;
+    .action(
+      async (
+        id: string,
+        opts: JsonOption & { force?: boolean; ifLossless?: boolean; exactState?: string },
+      ) => {
+        const { managedWorktrees } = await import("../agents/worktrees/service.js");
+        if (opts.ifLossless) {
+          const removed = await managedWorktrees.removeIfLossless(id);
+          const cleanup = (await managedWorktrees.listRegistryRecords()).find(
+            (record) => record.id === id,
+          )?.runEndCleanup;
+          if (opts.json) {
+            printJson({ removed, cleanup });
+          } else {
+            defaultRuntime.log(
+              removed
+                ? `Removed ${id} without force.`
+                : `Retained ${id}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
+            );
+          }
+          return;
+        }
+        const exactState = await readExactStateRequest(opts.exactState);
+        const result = await managedWorktrees.remove({
+          id,
+          ...(exactState ? { exactState } : {}),
+          reason: "manual-delete",
+          allowSnapshotLoss: opts.force,
+        });
         if (opts.json) {
-          printJson({ removed, cleanup });
+          printJson(result);
         } else {
           defaultRuntime.log(
-            removed
-              ? `Removed ${id} without force.`
-              : `Retained ${id}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
+            result.recoveryPath
+              ? `Retired ${id}; original source retained at ${result.recoveryPath} for the snapshot recovery period.`
+              : result.snapshotError
+                ? `Removed ${id} without a snapshot: ${result.snapshotError}`
+                : `Removed ${id}.`,
           );
         }
-        return;
-      }
-      const result = await managedWorktrees.remove({
-        id,
-        reason: "manual-delete",
-        allowSnapshotLoss: opts.force,
-      });
-      if (opts.json) {
-        printJson(result);
-      } else {
-        defaultRuntime.log(
-          result.snapshotError
-            ? `Removed ${id} without a snapshot: ${result.snapshotError}`
-            : `Removed ${id}.`,
-        );
-      }
-    });
+      },
+    );
 
   worktrees
     .command("restore")
     .description("Restore a managed worktree from its snapshot")
+    .option(
+      "--recover-exact-state <file>",
+      "Reconcile a completed but unfinalized exact-state retirement using its original JSON request",
+    )
     .argument("<id>", "Managed worktree id")
     .option("--json", "Output JSON", false)
-    .action(async (id: string, opts: JsonOption) => {
+    .action(async (id: string, opts: JsonOption & { recoverExactState?: string }) => {
       const { managedWorktrees } = await import("../agents/worktrees/service.js");
-      printRecord(await managedWorktrees.restore({ id }), opts.json === true);
+      const recoverExactState = await readExactStateRequest(opts.recoverExactState);
+      printRecord(
+        await managedWorktrees.restore({ id, ...(recoverExactState ? { recoverExactState } : {}) }),
+        opts.json === true,
+      );
     });
 
   worktrees
@@ -150,6 +183,7 @@ export function registerWorktreesCli(program: Command): void {
     .description("Run managed worktree cleanup now")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
+      const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const { createManagedWorktreeOwnerPolicy } =
         await import("../agents/worktrees/owner-protection.js");
       const { managedWorktrees, resolveWorktreeCleanupLimits } =
@@ -164,9 +198,11 @@ export function registerWorktreesCli(program: Command): void {
       if (opts.json) {
         printJson(result);
       } else {
-        defaultRuntime.log(
-          `Removed ${result.removed.length}; deleted ${result.orphansDeleted} orphans; pruned ${result.snapshotsPruned} snapshots.`,
-        );
+        defaultRuntime.log(formatWorktreeGcResult(result));
+      }
+      if (result.outcome === "partial") {
+        const { exitCliAfterOutput } = await import("./one-shot-exit.js");
+        exitCliAfterOutput(defaultRuntime, 1);
       }
     });
 

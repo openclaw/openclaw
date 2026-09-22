@@ -335,6 +335,12 @@ sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
 another asset contains it. Missing paths are reported as skipped.
 
+A workspace can contain the state directory, including when the workspace is
+your home directory. A `covered` skip means that the enclosing asset includes
+those files. Repeated registrations of the same agent database resolve to one
+physical owner; distinct owners sharing one database still refuse the backup.
+This also applies with `--no-include-workspace`.
+
 Legacy audit raw archives, import claims, and scrub journals are excluded as raw
 files; recoverable audit sources receive sanitized backup replacements. Their
 `.quarantined-*` variants remain excluded and are retained locally without being
@@ -387,14 +393,16 @@ validating the database. These copies do not have a live-database consistency or
 deleted-data removal guarantee. Use the owning application's backup procedure
 when you need those guarantees.
 
-Hardlinks to a declared plugin SQLite database share one captured image, stored
+Hardlinks to a managed SQLite database share one captured image, stored
 as a separate regular archive entry for each name. Every hardlink must be an
-included SQLite file within declared plugin backup resources. If exactly
+included SQLite file owned by the core inventory or declared plugin backup resources. If exactly
 one name has a nonempty write-ahead log (WAL), that
 name supplies the committed data. Closed databases without a nonempty WAL remain
 supported. Multiple nonempty WALs, a nonempty rollback journal, or hardlinks
 outside the backup inventory cause an explicit refusal with no archive. Close
-the database writers cleanly and declare every hardlink in those resources before retrying.
+the database writers cleanly and include every hardlink in those resources before retrying.
+Changes to the shared database file during capture also refuse the backup, including
+a concurrent alias checkpoint that truncates its WAL before the journal checks repeat.
 Canonical OpenClaw database aliases retain their existing owner validation and
 sanitization.
 
@@ -444,6 +452,26 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
+
+Archive creation holds a SQLite lifetime transaction for its temporary
+`openclaw-backup-owned-*` scratch directory. The next backup run removes abandoned
+scratch only after acquiring exclusive custody; a running backup keeps its
+scratch even when it is old. Cleanup failures preserve the published archive
+and appear as warnings with the scratch path in both text and JSON output.
+The owned prefix also lets cleanup coordinate with a new creator before its
+token exists, without mistaking that allocation for legacy scratch.
+Scratch observed by the scan that disappears before cleanup is recorded as
+already reclaimed, without a warning or a claim that this pass removed it.
+
+`openclaw doctor` reports scratch in the active temporary directory and recorded
+archive destination directories. `openclaw doctor --fix` removes recognized
+scratch whose lifetime transaction has ended. Unknown contents, symbolic links,
+and legacy directories without a lifetime token are preserved with guidance for
+inspection. Older releases do not create these tokens, so stop older backup
+processes before manually removing their reported scratch directories.
+Published archives and package rollback backups are outside this cleanup.
+Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
+later pass can finish partial cleanup even after the lifetime token is gone.
 
 ## Related
 

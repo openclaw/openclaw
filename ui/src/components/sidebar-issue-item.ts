@@ -45,16 +45,16 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
       onDismiss();
     }}
   >
-    ${t("common.dismiss")}
+    ${icons.x}
   </button>`;
 }
 
 export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
-  context: Pick<ApplicationContext, "basePath" | "navigate">;
+  context: Pick<ApplicationContext, "basePath">;
   dismissing: boolean;
   onDismiss: () => void;
-  onClosePanel: () => void;
+  onNavigate: ApplicationContext["navigate"];
 }) {
   const { mention, context } = params;
   const sender: PresenceViewer = {
@@ -115,8 +115,7 @@ export function renderSidebarMentionItem(params: {
                 return;
               }
               event.preventDefault();
-              params.onClosePanel();
-              context.navigate("chat", target.options);
+              params.onNavigate("chat", target.options);
             }}
             >${t("attention.mentions.open")}</a
           >
@@ -137,7 +136,7 @@ export function renderSidebarMentionItem(params: {
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
   context: ApplicationContext | undefined;
-  onClosePanel: () => void;
+  onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
 }) {
   const context = params.context;
@@ -168,8 +167,7 @@ export function renderSidebarApprovalItem(params: {
             return;
           }
           event.preventDefault();
-          params.onClosePanel();
-          context.navigate("chat", sessionTarget.options);
+          params.onNavigate("chat", sessionTarget.options);
         }
       : undefined,
   });

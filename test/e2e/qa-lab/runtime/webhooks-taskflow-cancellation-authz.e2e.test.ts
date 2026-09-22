@@ -9,27 +9,24 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
 import webhooksPlugin from "../../../../extensions/webhooks/index.js";
 import {
   getAcpSessionManager,
   testing as acpManagerTesting,
 } from "../../../../src/acp/control-plane/manager.js";
-import { createTestAdmittedRunContext } from "../../../../src/agents/admitted-run-context.test-support.js";
-import { cancelBackgroundExecSession } from "../../../../src/agents/bash-process-control.js";
-import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
+import type { AcpRunTurnInput } from "../../../../src/acp/control-plane/manager.types.js";
+import { prepareSystemAgentRunAdmission } from "../../../../src/agents/admitted-run-context.js";
 import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { cancelActiveCronTaskRun } from "../../../../src/cron/service/active-run-cancellation.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { getGatewayE2ePortBlock } from "../../../../src/gateway/test-helpers.e2e.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
@@ -46,7 +43,6 @@ import { getTaskFlowById } from "../../../../src/tasks/task-flow-registry.js";
 import { findTaskByRunId, listTasksForFlowId } from "../../../../src/tasks/task-registry.js";
 import {
   resetTaskFlowRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
@@ -72,13 +68,17 @@ type WebhookResponse = {
   };
 };
 
-beforeEach(() => {
-  subagentRegistryTesting.setDepsForTest({
+vi.mock(
+  "../../../../src/agents/subagents/registry/subagent-registry-state.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../src/agents/subagents/registry/subagent-registry-state.js")
+    >()),
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
     restoreSubagentRunsFromDisk: () => 0,
-  });
-});
+  }),
+);
 
 afterEach(() => {
   clearConfigCache();
@@ -89,7 +89,6 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
-  subagentRegistryTesting.setDepsForTest();
 });
 
 function registerRunningSubagent(params: {
@@ -246,12 +245,6 @@ describe("webhooks TaskFlow child cancellation authority", () => {
         if (!registry) {
           throw new Error("gateway did not publish an active plugin registry");
         }
-        setTaskRegistryControlRuntimeForTests({
-          cancelActiveCronTaskRun,
-          cancelBackgroundExecSession,
-          getAcpSessionManager,
-          killSubagentRunAdmin,
-        });
         const routeCleanups: Array<() => void> = [];
         const acpxServices: OpenClawPluginService[] = [];
         const acpxRuntime = createPluginRuntimeMock({
@@ -466,6 +459,21 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           const acpChild = "agent:main:acp:webhook-replacement";
           const reusedAcpRunId = "run-webhook-acp-reused";
           const acpManager = getAcpSessionManager();
+          async function runAcpTurn(input: Omit<AcpRunTurnInput, "admittedRunContext">) {
+            const admission = prepareSystemAgentRunAdmission(
+              config,
+              input.requestId,
+              "main",
+              "webhooks-taskflow-fixture",
+            );
+            try {
+              const admittedRunContext = await admission.admit("acp");
+              await acpManager.runTurn({ ...input, admittedRunContext });
+              return admittedRunContext;
+            } finally {
+              admission.close();
+            }
+          }
           replaceSessionEntrySync(
             {
               sessionKey: acpChild,
@@ -485,9 +493,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "persistent",
             backendId: "acpx",
           });
-          const firstAcpAdmission = createTestAdmittedRunContext(reusedAcpRunId);
-          await acpManager.runTurn({
-            admittedRunContext: firstAcpAdmission,
+          const firstAcpAdmission = await runAcpTurn({
             cfg: config,
             sessionKey: acpChild,
             provenance: "system",
@@ -527,8 +533,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
 
           const elicitationEntered = createDeferred();
           const releaseElicitation = createDeferred();
-          const replacementAcpTurn = acpManager.runTurn({
-            admittedRunContext: createTestAdmittedRunContext(reusedAcpRunId),
+          const replacementAcpTurn = runAcpTurn({
             cfg: config,
             sessionKey: acpChild,
             provenance: "system",
@@ -590,16 +595,19 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             backendId: "acpx",
           });
           const queuedTargetEntered = createDeferred();
+          const queuedTargetSubmitted = createDeferred();
           const queuedTurnOrder: string[] = [];
           const queuedTargetEvents: AcpRuntimeEvent[] = [];
-          const queuedTargetTurn = acpManager.runTurn({
-            admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
+          const queuedTargetTurn = runAcpTurn({
             cfg: config,
             sessionKey: queuedAcpChild,
             provenance: "system",
             text: "Keep the target active while its same-id successor queues.",
             mode: "prompt",
             requestId: queuedAcpRunId,
+            onLifecycle: () => {
+              queuedTargetSubmitted.resolve();
+            },
             onElicitation: async (_request, context) => {
               queuedTargetEntered.resolve();
               await new Promise<void>((resolve) => {
@@ -618,7 +626,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               }
             },
           });
-          await queuedTargetEntered.promise;
+          await Promise.all([queuedTargetEntered.promise, queuedTargetSubmitted.promise]);
           const targetTurnStart = (await readAcpTrace(acpxTracePath)).findLast(
             (entry) => entry.method === "turn/start",
           );
@@ -640,8 +648,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           const queuedSuccessorEntered = createDeferred();
           const releaseQueuedSuccessor = createDeferred();
           const queuedSuccessorEvents: AcpRuntimeEvent[] = [];
-          const queuedSuccessorTurn = acpManager.runTurn({
-            admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
+          const queuedSuccessorTurn = runAcpTurn({
             cfg: config,
             sessionKey: queuedAcpChild,
             provenance: "system",

@@ -14,7 +14,7 @@ import {
 } from "../../../tasks/task-cancellation-context.js";
 import type {
   SubagentAdminKillResult,
-  TaskRegistryControlRuntime,
+  SubagentAdminKillParams,
 } from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -83,6 +83,7 @@ async function withSubagentKillScope<T>(
   const taskControl = captureTaskCancellationControl();
   const cancellationControl = params.assertCurrent
     ? {
+        prepareRead: taskControl?.prepareRead,
         assertCurrent: () => {
           taskControl?.assertCurrent();
           params.assertCurrent?.();
@@ -293,6 +294,13 @@ async function killLatestSubagentRun(params: {
   result: Awaited<ReturnType<typeof killSubagentRun>>;
 }> {
   const { tree, scope } = params;
+  for (
+    let pending = scope.cancellationControl?.prepareRead?.();
+    pending;
+    pending = scope.cancellationControl?.prepareRead?.()
+  ) {
+    await pending;
+  }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);
@@ -514,7 +522,7 @@ async function killSelectedSubagentRuns(
 
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(
-  params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
+  params: SubagentAdminKillParams,
   control?: {
     assertCurrent: () => void;
     beforeSessionKill?: () => boolean;

@@ -471,17 +471,9 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
       ["check-control-ui-performance.mts", "--report-only"],
     ] as const) {
       runSpawnCallSync(
-        resolveSpawnCall(
-          process.execPath,
-          [
-            "--import",
-            new URL("./tsx.mjs", import.meta.url).href,
-            path.join(here, validator),
-            ...validatorArgs,
-          ],
-          env,
-          { cwd: repoRoot },
-        ),
+        resolveSpawnCall(process.execPath, [path.join(here, validator), ...validatorArgs], env, {
+          cwd: repoRoot,
+        }),
         validator,
       );
     }

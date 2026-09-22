@@ -3,7 +3,10 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
-import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import {
+  attachPluginInstallOwnerMigrations,
+  resolvePluginInstallOwnerMigrations,
+} from "./install-transaction.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
@@ -264,7 +267,7 @@ async function convergePluginReleaseCohortWithLease(
     config = reconciled.config;
   }
 
-  return {
+  const result: PluginCohortConvergenceResult = {
     config,
     changed,
     npmChanged,
@@ -290,4 +293,7 @@ async function convergePluginReleaseCohortWithLease(
       })
     ).filter((entry) => !operatorManagedIds.has(entry.pluginId)),
   };
+  return Object.keys(installOwnerMigrations).length > 0
+    ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
+    : result;
 }

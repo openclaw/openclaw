@@ -49,7 +49,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @state() private overflowBelow = false;
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private panelTrigger: HTMLElement | null = null;
@@ -292,10 +292,13 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.context?.gateway.snapshot.phase !== "connected") {
+    if (!this.context) {
       return nothing;
     }
     const entries = this.currentInboxEntries();
+    if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
+      return nothing;
+    }
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
@@ -344,9 +347,9 @@ class SidebarAttention extends OpenClawLightDomElement {
               onClose: (restoreFocus) => this.closePanel(restoreFocus),
               onDismiss: (dismissal) => this.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
-              onNavigate: (routeId) => {
+              onNavigate: (routeId, options) => {
                 this.closePanel(false);
-                (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+                (this.onNavigate ?? this.context?.navigate)?.(routeId, options);
               },
               onOpen: (item) => void this.open(item),
               onScroll: this.syncOverflowCue,

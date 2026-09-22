@@ -265,7 +265,7 @@ describe("automations output contract", () => {
     }
   });
 
-  it("composes action results through generated declarations and a typechecked cell", async () => {
+  it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
@@ -292,15 +292,15 @@ describe("automations output contract", () => {
     const composition = `
 async function consume() {
   const listed = await automations({ action: "list" });
-  const names: string[] = listed.jobs.map(job => job.name);
-  const next: number | null = listed.nextOffset;
+  const names = listed.jobs.map(job => job.name);
+  const next = listed.nextOffset;
   const status = await automations({ action: "status" });
-  const enabled: boolean = status.enabled;
-  const jobCount: number | undefined = status.jobs;
+  const enabled = status.enabled;
+  const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
-  const name: string = details.name;
+  const name = details.name;
   const runs = await automations({ action: "runs", jobId: details.id });
-  const summaries: (string | undefined)[] = runs.entries.map(entry => entry.summary);
+  const summaries = runs.entries.map(entry => entry.summary);
   return { names, next, enabled, jobCount, name, summaries };
 }
 `;
@@ -352,8 +352,6 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
       details: resultDetails(
         await expectDefined(h.tools[0], "Code Mode exec").execute("compose-automations", {
           code: `${composition}\nreturn await consume();`,
-          language: "typescript",
-          typecheck: true,
         }),
       ),
       waitTool: expectDefined(h.tools[1], "Code Mode wait"),

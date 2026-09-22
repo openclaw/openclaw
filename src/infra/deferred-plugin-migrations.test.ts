@@ -267,7 +267,7 @@ describe("deferred configured-plugin migrations", () => {
     expect(readDeferredPluginMigrations({ env })).toEqual([alpha, beta]);
     expect(snapshot()).toEqual(beforeRead);
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "alpha" state migration is pending:'),
+      expect.stringContaining('Plugin "alpha" data/settings upgrade is unfinished:'),
       { pluginId: "alpha", reason: alpha.reason, action: alpha.command, status: "pending" },
     );
 
@@ -409,8 +409,12 @@ describe("deferred plugin migration repair guidance", () => {
   );
 
   it("gives immediate recovery outside an update and avoids repeating Doctor", () => {
-    expect(formatDeferredPluginMigration(pending, {})).toContain(
-      'Run "openclaw update repair", then "openclaw doctor --fix".',
+    const repair = formatDeferredPluginMigration(pending, {});
+    expect(repair).toContain('Plugin "fixture-plugin" data/settings upgrade is unfinished:');
+    expect(repair).toContain(pending.reason);
+    expect(repair).toContain("Your existing data and settings have been kept.");
+    expect(repair).toContain(
+      'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
     );
     const message = formatDeferredPluginMigration(
       { ...pending, command: "openclaw doctor --fix" },

@@ -602,7 +602,7 @@ describe("update repair ledger recovery", () => {
     });
 
     await expect(updateRepairCommand({})).rejects.toThrow(
-      "Stop the Gateway service through its owner",
+      /openclaw update repair.*openclaw gateway stop/,
     );
 
     expect(getUpdateRun(old.runId)).toEqual(old);

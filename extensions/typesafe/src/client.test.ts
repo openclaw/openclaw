@@ -154,6 +154,7 @@ describe("bounded contracts", () => {
     { ...input, questions: {} },
     { ...input, state: "x".repeat(MAX_JSON_BYTES + 1) },
     { ...input, state: "😀".repeat(MAX_JSON_BYTES / 4 + 1) },
+    { ...input, state: Array(262145) },
     { ...input, state: { bad: Infinity } },
     { ...input, state: { bad: undefined } },
     { ...input, state: JSON.parse('{"__proto__":"bad"}') },

@@ -4,7 +4,6 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -37,7 +36,6 @@ import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-s
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
-  CliBackendConfig,
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
   CliBackendPromptContext,
@@ -136,7 +134,6 @@ import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
-import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
@@ -144,7 +141,12 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
+import {
+  applyClaudeManagedMcpTimeout,
+  CLAUDE_MANAGED_MCP_TIMEOUT_MS,
+} from "./bundle-mcp-claude.js";
+import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup } from "./cleanup.js";
 import {
@@ -178,6 +180,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -190,8 +193,6 @@ type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
 };
-
-const CLAUDE_MANAGED_MCP_TIMEOUT_MS = resolveQuestionTimeoutMs(3_600);
 
 function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
   const error = new Error(
@@ -267,15 +268,6 @@ function resolveCliSessionInvalidatedReason(
   return reusableCliSession.mode === "invalidate"
     ? reusableCliSession.invalidatedReason
     : undefined;
-}
-
-function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
-  return (
-    backend.systemPromptWhen !== "never" &&
-    Boolean(
-      backend.systemPromptArg || backend.systemPromptFileArg || backend.systemPromptFileConfigKey,
-    )
-  );
 }
 
 function prependCliSessionDriftUserContext(
@@ -648,29 +640,10 @@ async function prepareCliRunContextWithinReadFence(
   const assertQuestionSourceCurrent = params.assertCurrent;
   const questionSnapshot = questionOperation
     ? undefined
-    : prepareReplyToolAuthority({
-        originatingChannel: normalizeMessageChannel(params.messageChannel),
-        toolsAllow: params.toolsAllow,
-        disableTools: params.disableTools,
-        run: {
-          ...params,
-          agentId: workspaceResolution.agentId,
-          chatType: runtimeChatType,
-          provider: params.modelProvider ?? params.provider,
-          model: params.model ?? "default",
-          workspaceDir,
-          cwd,
-          permissionMode: params.sessionEntry?.permissionMode,
-          toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
-          senderId: params.senderId ?? undefined,
-          senderName: params.senderName ?? undefined,
-          senderUsername: params.senderUsername ?? undefined,
-          senderE164: params.senderE164 ?? undefined,
-          groupId: params.groupId ?? undefined,
-          groupChannel: params.groupChannel ?? undefined,
-          groupSpace: params.groupSpace ?? undefined,
-          spawnedBy: params.spawnedBy ?? undefined,
-        },
+    : prepareCliReplyToolAuthority(params, {
+        agentId: workspaceResolution.agentId,
+        workspaceDir,
+        cwd,
       });
   let runtimeToolsAllowPolicy: string[] | undefined;
   const rootedToolsAllow = params.rootedExecution
@@ -1166,6 +1139,7 @@ async function prepareCliRunContextWithinReadFence(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        bootstrapUserProfileId: params.bootstrapUserProfileId,
         chatType: runtimeChatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
@@ -1367,12 +1341,10 @@ async function prepareCliRunContextWithinReadFence(
       },
     };
   }
-  const projectedTools = params.cliToolAvailability
-    ? applyEmbeddedAttemptToolsAllow(
-        hookFilteredProjectedTools,
-        params.cliToolAvailability.openClaw,
-      )
-    : hookFilteredProjectedTools;
+  const projectedTools = applyEmbeddedAttemptToolsAllow(
+    hookFilteredProjectedTools,
+    params.cliToolAvailability?.openClaw,
+  );
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
     : undefined;
@@ -1450,19 +1422,12 @@ async function prepareCliRunContextWithinReadFence(
         ]),
       )
     : baseExtraSystemPromptHash;
-  // Bootstrap guidance and truncation notices change resumable system context.
-  // Hash both so entering or leaving either state refreshes first-only CLI
-  // system prompts.
-  const extraSystemPromptHash =
-    bootstrapMode === "none" && bootstrapTruncationNotice === undefined
-      ? toolBoundExtraSystemPromptHash
-      : hashCliSessionText(
-          JSON.stringify([
-            toolBoundExtraSystemPromptHash ?? null,
-            bootstrapMode,
-            bootstrapTruncationNotice !== undefined,
-          ]),
-        );
+  const extraSystemPromptHash = resolveCliBootstrapPromptHash({
+    baseHash: toolBoundExtraSystemPromptHash,
+    bootstrapMode,
+    bootstrapTruncationNotice,
+    contextFiles,
+  });
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
@@ -1565,10 +1530,9 @@ async function prepareCliRunContextWithinReadFence(
                         selected ? tools.filter((name) => selected.includes(name)) : tools,
                       );
                       assertNativeCronCreatorCapabilities(capabilities);
-                      const allowed = capabilities.filter(
-                        (name) =>
-                          name !== "web_search" || params.toolOverrides?.webSearch !== false,
-                      );
+                      const allowed = resolveCliNativeWebSearchEnabled(params, backendResolved)
+                        ? capabilities
+                        : capabilities.filter((name) => name !== "web_search");
                       if (!activeCapture.captureNativeToolAuthority(allowed)) {
                         throw new Error("Native tool authority capture is no longer active.");
                       }
@@ -1594,16 +1558,7 @@ async function prepareCliRunContextWithinReadFence(
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
-        ? {
-            ...rawLoopbackServerConfig,
-            mcpServers: {
-              ...rawLoopbackServerConfig.mcpServers,
-              openclaw: {
-                ...rawLoopbackServerConfig.mcpServers.openclaw,
-                timeout: CLAUDE_MANAGED_MCP_TIMEOUT_MS,
-              },
-            },
-          }
+        ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
     const sandboxStatus = resolveSandboxRuntimeStatus({
       cfg: runConfig,
@@ -2061,8 +2016,7 @@ async function prepareCliRunContextWithinReadFence(
     let systemPrompt = transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const historyParams = await admitPreparedParams(params);
-    params = historyParams;
+    const historyParams = (params = await admitPreparedParams(params));
     const cliHistoryWriter = !isSideQuestion
       ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
       : undefined;
@@ -2078,6 +2032,7 @@ async function prepareCliRunContextWithinReadFence(
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
         : await loadCliSessionPromptContext({
+            abortSignal: params.abortSignal,
             sessionManager: params.sessionManager,
             sessionTarget: params.sessionTarget,
             allowRawTranscriptReseed,
@@ -2243,6 +2198,11 @@ async function prepareCliRunContextWithinReadFence(
       cwd,
       backendResolved,
       preparedBackend: preparedBackendFinal,
+      ...(loopbackServerConfig &&
+      !systemAgentMcpConfig &&
+      backendResolved.bundleMcpMode === "claude-config-file"
+        ? { managedMcpToolTimeoutMs: CLAUDE_MANAGED_MCP_TIMEOUT_MS }
+        : {}),
       executionTarget,
       ...(pluginExecutionConsumer ? { pluginExecutionConsumer } : {}),
       reusableCliSession,

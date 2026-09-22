@@ -32,6 +32,7 @@ import { cleanupTalkConnection } from "../talk/session-registry.js";
 import type { WebSocketHeartbeatDiagnostics } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
+import type { GatewayClientRegistry } from "./client-registry.js";
 import { closeGatewayTransportWithGrace } from "./connection-transport-close.js";
 import type {
   GatewayConnectionTransport,
@@ -61,7 +62,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = {
   bootId: string;
-  clients: Set<GatewayWsClient>;
+  clients: GatewayClientRegistry;
   connectionWork: GatewayConnectionWork;
   getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
   // Read per connection so reloads cannot leave a stale auth snapshot.
@@ -614,6 +615,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   }
 
   attachGatewayWsMessageHandlerOnDemand({
+    clients,
     ...connectionLifecycle,
     socket,
     prepareAuthenticatedReceive: params.prepareAuthenticatedReceive,

@@ -8,9 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.16.0",
+    "@openclaw/fs-safe": "0.18.1",
     "p-limit": "7.3.2",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

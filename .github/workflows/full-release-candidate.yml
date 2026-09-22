@@ -78,6 +78,12 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Discover trusted release candidate
         id: discover
         env:
@@ -157,6 +163,13 @@ jobs:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Resolve candidate binding
         if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}

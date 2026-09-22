@@ -2,9 +2,50 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { icons } from "./icons.ts";
-import { renderProviderBrandIcon, resolveCloudProfileIcon } from "./provider-icon.ts";
+import {
+  compareCloudProfiles,
+  renderProviderBrandIcon,
+  resolveCloudProfileIcon,
+} from "./provider-icon.ts";
 
 describe("cloud provider presentation", () => {
+  it.each(["aws", "azure", "daytona", "gcp", "google", "google-cloud", "hetzner", "machine0"])(
+    "orders backend %s before local/custom profiles regardless of their names",
+    (backend) => {
+      const cloud = { id: "z-local", providerId: "crabbox", providerDisplayId: backend };
+      for (const providerDisplayId of [
+        "incus",
+        "local-container",
+        "docker",
+        "local-docker",
+        "podman",
+        "local-podman",
+        "custom",
+        "constructor",
+      ]) {
+        const infrastructure = { id: "a-aws", providerId: "aws", providerDisplayId };
+        expect(compareCloudProfiles(cloud, infrastructure)).toBeLessThan(0);
+        expect(compareCloudProfiles(infrastructure, cloud)).toBeGreaterThan(0);
+      }
+      expect(
+        compareCloudProfiles(
+          { id: "z-local", providerId: backend },
+          { id: "a-aws", providerId: "crabbox" },
+        ),
+      ).toBeLessThan(0);
+    },
+  );
+
+  it("keeps alphabetical order within each group without changing the catalog", () => {
+    const profiles = [
+      { id: "b", providerId: "incus" },
+      { id: "z", providerId: "machine0" },
+      { id: "a", providerId: "custom" },
+      { id: "y", providerId: "aws" },
+    ];
+    expect(profiles.toSorted(compareCloudProfiles).map((p) => p.id)).toEqual(["y", "z", "a", "b"]);
+    expect(profiles.map((p) => p.id)).toEqual(["b", "z", "a", "y"]);
+  });
   it.each(["gcp", "google", "google-cloud"])(
     "keeps %s separate from model-provider brands",
     (providerDisplayId) => {

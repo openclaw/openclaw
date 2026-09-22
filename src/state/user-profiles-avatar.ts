@@ -1,6 +1,6 @@
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { retainUserProfileAvatarPublication } from "./user-profile-list.js";
+import { retainUserProfilePublication } from "./user-profile-list.js";
 import { isUserProfileAvatarAdmission } from "./user-profiles-avatar.types.js";
 import type { UserProfile } from "./user-profiles-internal.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
@@ -80,13 +80,14 @@ export async function adoptTailscaleProfileAvatar(
               if (request.stage !== "transaction" || !isUserProfileAvatarAdmission(request.facts)) {
                 throw new Error("Unexpected profile avatar transaction admission");
               }
-              const publication = retainUserProfileAvatarPublication(
+              const publication = retainUserProfilePublication(
                 context.admission.identity,
+                request.facts.before.id,
                 request.facts.before,
               );
               try {
                 settlementRead.bind(
-                  { type: "userProfiles.avatar.reconcile", profileId: request.facts.before.id },
+                  { type: "userProfiles.reconcile", profileId: request.facts.before.id },
                   retained.settled,
                   publication.reconcile,
                   publication.release,

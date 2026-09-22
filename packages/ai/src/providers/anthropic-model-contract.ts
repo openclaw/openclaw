@@ -21,6 +21,7 @@ import type {
   SimpleStreamOptions,
   StopReason,
 } from "../types.js";
+import { headersToRecord } from "../utils/headers.js";
 export {
   bindsClaudeThinkingPrefix,
   requiresClaudeDefaultSampling,
@@ -36,8 +37,46 @@ export {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
-export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.75";
-export const ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${ANTHROPIC_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
+// Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
+// at the published Claude Code release (2.1.278); older or absent CLIs must not downgrade it.
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.278";
+
+/** Build OAuth headers and the matching billing identity from one request snapshot. */
+export function buildAnthropicClaudeCodeIdentity(
+  betaHeader: string | undefined,
+  ...headerSources: (Record<string, string> | undefined)[]
+): { headers: Record<string, string>; version: string } {
+  const headers = new Headers({
+    accept: "application/json",
+    "anthropic-dangerous-direct-browser-access": "true",
+    ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+    "x-app": "cli",
+  });
+  for (const source of headerSources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headers.set(name, value);
+    }
+  }
+  let version = ANTHROPIC_CLAUDE_CODE_VERSION;
+  const candidate = headers.get("user-agent")?.match(/^claude-cli\/(\d+\.\d+\.\d+)$/)?.[1];
+  if (candidate) {
+    const components = candidate.split(".").map(Number);
+    const minimum = version.split(".").map(Number);
+    const differing = components.findIndex((component, index) => component !== minimum[index]);
+    const component = components[differing];
+    const minimumComponent = minimum[differing];
+    if (
+      components.every(Number.isSafeInteger) &&
+      component !== undefined &&
+      minimumComponent !== undefined &&
+      component > minimumComponent
+    ) {
+      version = candidate;
+    }
+  }
+  headers.set("user-agent", `claude-cli/${version}`);
+  return { headers: headersToRecord(headers), version };
+}
 
 type ReplayModelRef = {
   provider?: string;
@@ -166,6 +205,7 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
     case "stop_sequence":
       return "stop";
     case "max_tokens":
+    case "model_context_window_exceeded":
       return "length";
     case "tool_use":
       return "toolUse";

@@ -405,7 +405,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("./session.js", () => ({
   loadCronSessionEntryLatest: loadSessionEntryMock,
-  resolveCronSession: resolveCronSessionMock,
+  prepareCronSession: resolveCronSessionMock,
 }));
 
 export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {

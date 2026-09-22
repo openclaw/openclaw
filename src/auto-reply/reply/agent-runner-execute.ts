@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
@@ -232,6 +233,7 @@ export async function executePreparedReplyAgentRun(
             const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
               pendingFinalDeliveryCompletion: {
+                agentId: followupRun.run.agentId,
                 deliveryId: pendingFinalDeliveryDeliveryId,
                 intentId: pendingFinalDeliveryIntentId,
                 ...(activeSessionEntry?.restartRecoveryDeliveryRunId
@@ -359,6 +361,9 @@ export function createReplyAgentRestartRecoveryController(
         hasRepliedRef: undefined,
       }).sameChannelThreadRequired
     : undefined;
+  const admissionRunId =
+    normalizeOptionalString(sessionCtx.MessageSid) ??
+    normalizeOptionalString(sessionCtx.MessageSidFull);
   const {
     admitUserTurn,
     beginBeforeAgentReply,
@@ -366,10 +371,9 @@ export function createReplyAgentRestartRecoveryController(
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
+    agentId: followupRun.run.agentId,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
-    admissionRunId:
-      normalizeOptionalString(sessionCtx.MessageSid) ??
-      normalizeOptionalString(sessionCtx.MessageSidFull),
+    admissionRunId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
@@ -430,8 +434,24 @@ export function createReplyAgentRestartRecoveryController(
   });
   const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
     const result = await admitUserTurn(...args);
-    if (result === "admitted" && restartRecoverySourceTurnId) {
-      replyRunRegistry.bindSourceTurnId(replyOperation, restartRecoverySourceTurnId);
+    if (result === "admitted") {
+      let sourceTurnId = restartRecoverySourceTurnId;
+      if (
+        !sourceTurnId &&
+        admissionRunId &&
+        isInternalMessageChannel(sessionCtx.Provider ?? sessionCtx.Surface)
+      ) {
+        const entry = getActiveSessionEntry();
+        // Gateway inputs use run IDs, not channel hashes. Recovery retains the
+        // admitted source so historical terminal receipts cannot fence a later turn.
+        sourceTurnId =
+          entry?.restartRecoveryDeliveryRunId === admissionRunId
+            ? (normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ?? admissionRunId)
+            : admissionRunId;
+      }
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
+      }
     }
     return result;
   };

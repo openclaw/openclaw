@@ -1,3 +1,20 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  describe0AfterEach0,
+  backendGatewayClient,
+  expectRecordFields,
+  expectStringFieldContains,
+  getAgentTestMocks,
+  invokeAgent,
+  makeContext,
+  mockCallArg,
+  primeMainAgentRun,
+  resetAgentTaskRegistryForTests,
+  restoreAgentTaskRegistryRuntimeAfterTests,
+  useTestStateDir,
+  waitForAssertion,
+} from "./agent.test-harness.js";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -24,21 +41,6 @@ import {
   removeChatAbortControllerEntry,
   type ChatAbortControllerEntry,
 } from "../chat-abort.js";
-import {
-  describe0AfterEach0,
-  backendGatewayClient,
-  expectRecordFields,
-  expectStringFieldContains,
-  getAgentTestMocks,
-  invokeAgent,
-  makeContext,
-  mockCallArg,
-  primeMainAgentRun,
-  resetAgentTaskRegistryForTests,
-  restoreAgentTaskRegistryRuntimeAfterTests,
-  useTestStateDir,
-  waitForAssertion,
-} from "./agent.test-harness.js";
 
 resetAgentTaskRegistryForTests();
 afterAll(restoreAgentTaskRegistryRuntimeAfterTests);
@@ -270,6 +272,8 @@ describe("gateway agent detached task lifecycle", () => {
                   respond,
                   client: backendGatewayClient(),
                   reqId: runId,
+                  // Cancellation owns the terminal wait below and must not wait for dispatch.
+                  flushDispatch: outcome !== "cancelled",
                 });
                 expect(acceptedTasks).toEqual([
                   [
@@ -285,7 +289,6 @@ describe("gateway agent detached task lifecycle", () => {
                   ],
                 ]);
                 expect(aborted).toBe(outcome === "cancelled");
-                expect(mocks.agentCommand).toHaveBeenCalledTimes(outcome === "cancelled" ? 0 : 1);
               } finally {
                 execution.resolve({ payloads: [], meta: { durationMs: 1 } });
                 await waitForAssertion(() => {
@@ -297,6 +300,7 @@ describe("gateway agent detached task lifecycle", () => {
                   });
                 });
               }
+              expect(mocks.agentCommand).toHaveBeenCalledTimes(outcome === "cancelled" ? 0 : 1);
               expect(persistedTasks(runId)).toEqual([
                 expect.objectContaining({
                   taskId: acceptedTasks[0]?.[0]?.taskId,

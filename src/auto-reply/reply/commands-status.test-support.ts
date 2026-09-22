@@ -1,6 +1,12 @@
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { buildStatusReply } from "./commands-status.js";
-import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  baseCommandTestConfig,
+  buildCommandTestParams,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
 
 export async function buildStatusReplyForTest(params: {
   sessionKey?: string;
@@ -34,4 +40,28 @@ export async function buildStatusReplyForTest(params: {
     modelAuthOverride: "api-key",
     activeModelAuthOverride: "api-key",
   });
+}
+
+export async function buildKiraStatusReply(cfg: OpenClawConfig) {
+  resetTaskRegistryForTests({ persist: false });
+  configureInMemoryTaskRegistryStoreForTests();
+  try {
+    const reply = await buildStatusReply({
+      cfg,
+      command: buildCommandTestParams("/status", cfg).command,
+      sessionKey: "agent:kira:main",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 0,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+    expect(reply).toMatchObject({ presentationTextMode: "fallback" });
+    return reply;
+  } finally {
+    resetTaskRegistryForTests({ persist: false });
+  }
 }

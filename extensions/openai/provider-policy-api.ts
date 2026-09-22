@@ -713,3 +713,5 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
       return null;
   }
 }
+
+export { resolveNativeWebSearch } from "./native-web-search-policy.js";

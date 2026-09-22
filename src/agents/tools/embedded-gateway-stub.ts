@@ -140,7 +140,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,

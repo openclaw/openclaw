@@ -460,7 +460,9 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
@@ -477,11 +479,13 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
             pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "platform":
+            pathspecs += platform_scripts
         if kind == "linux-node":
             pathspecs += upgrade_scripts
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
@@ -489,9 +493,11 @@ def checkout_harness(sha):
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
         if kind == "linux-node":
             sparse_paths += [f"/{path}" for path in upgrade_scripts]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.

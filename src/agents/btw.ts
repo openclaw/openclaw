@@ -411,7 +411,7 @@ async function resolveRuntimeModel(params: {
   abortSignal?: AbortSignal;
   provider: string;
   model: string;
-  agentId?: string;
+  agentId: string;
   sessionEntry?: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;

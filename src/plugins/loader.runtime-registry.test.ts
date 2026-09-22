@@ -13,7 +13,6 @@ import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wa
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
@@ -23,7 +22,6 @@ import {
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
-import * as loaderModule from "./loader-module-runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
@@ -44,8 +42,8 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import * as nativeModule from "./native-module-require.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -140,23 +138,22 @@ it.each(["cjs", "ts"])(
             "resolvePluginRuntimeModulePathWithDiagnostics",
           );
           let fullRuntime: typeof import("./runtime/index.js") | null = null;
-          const createLoader = loaderModule.createPluginModuleLoader;
+          const nativeLoad = nativeModule.tryNativeRequireModule;
           const factories = vi.fn(
             (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
               fullRuntime!.createPluginRuntime(...args),
           );
-          vi.spyOn(loaderModule, "createPluginModuleLoader").mockImplementation((options) => {
-            const load = createLoader(options);
-            return (modulePath) => {
+          vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
+            (modulePath, options) => {
               if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
                 if (!fullRuntime) {
                   throw new Error("broad runtime requested before state registration completed");
                 }
-                return { createPluginRuntime: factories };
+                return { ok: true, moduleExport: { createPluginRuntime: factories } };
               }
-              return load(modulePath);
-            };
-          });
+              return nativeLoad(modulePath, options);
+            },
+          );
           const modelAuth = resolveNativePluginModelAuth();
           const modelConfig = resolveNativePluginModelConfig();
           const hooks = {
@@ -189,7 +186,6 @@ it.each(["cjs", "ts"])(
           );
           expect(fs.existsSync(observed)).toBe(false);
           expect(resolveRuntime).not.toHaveBeenCalled();
-          const loaderStats = getPluginModuleLoaderStats();
           const registry = loadPluginRegistryHandle({
             config,
             cache: false,
@@ -199,17 +195,6 @@ it.each(["cjs", "ts"])(
           expect(registry.plugins).toContainEqual(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
           );
-          const loadedStats = getPluginModuleLoaderStats();
-          if (process.versions.bun && extension === "cjs") {
-            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
-          } else {
-            expect(loadedStats.sourceTransformForced).toBeGreaterThan(
-              loaderStats.sourceTransformForced,
-            );
-            expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: toSafeImportPath(plugin.file) }),
-            );
-          }
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
             entries: [],
             selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },

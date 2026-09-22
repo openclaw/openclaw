@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { claimDeliveryQueueEntryPlatformSend } from "../delivery-queue-sqlite-claim.js";
+import { updateDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { failDurableDelivery, type DurableDeliveryCompletion } from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
@@ -19,6 +19,7 @@ import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.
 import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import * as queueStorage from "./delivery-queue-storage.js";
 import {
+  claimDeliveryQueueEntryForTest,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -31,12 +32,8 @@ vi.mock("./channel-resolution.js", () => ({
 
 describe("exhausted delivery producer recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
-  const startTime = Date.parse("2026-08-27T12:00:00Z");
-  let now = startTime;
 
   beforeEach(() => {
-    now = startTime;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
     resolveAdapter.mockReset();
   });
   afterEach(() => {
@@ -75,6 +72,13 @@ describe("exhausted delivery producer recovery", () => {
     return claimId;
   }
 
+  function setProducerExpiry(id: string, availableAt: number) {
+    updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir(), (entry) => ({
+      ...entry,
+      availableAt,
+    }));
+  }
+
   function queueStatus(id: string) {
     return openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
@@ -105,10 +109,9 @@ describe("exhausted delivery producer recovery", () => {
     "%s terminalizes expired final reservations and continues to later deliveries",
     async (mode) => {
       await reserveProducer("expired-producer");
-      now += 1;
       await enqueue("later-control");
       await queueStorage.reserveDeliveryAttempt("later-control", 1, tmpDir());
-      now += 60_000;
+      setProducerExpiry("expired-producer", Date.now() - 1);
       closeOpenClawStateDatabaseForTest();
 
       const log = await recover(mode);
@@ -136,12 +139,12 @@ describe("exhausted delivery producer recovery", () => {
     "%s cannot terminalize a replacement producer acquired during recovery admission",
     async (mode) => {
       const originalClaim = await reserveProducer("replaced-producer");
-      now += 60_001;
+      setProducerExpiry("replaced-producer", Date.now() - 1);
       let replacementClaim: string | undefined;
       resolveAdapter.mockReturnValue({
         durableFinal: {
           admitDeferredDelivery: () => {
-            replacementClaim = claimDeliveryQueueEntryPlatformSend({
+            replacementClaim = claimDeliveryQueueEntryForTest({
               queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
               id: "replaced-producer",
               stateDir: tmpDir(),
@@ -168,6 +171,7 @@ describe("exhausted delivery producer recovery", () => {
     payloads: ReplyPayload[] = [{ text: id }],
     maxRetries = 1,
   ) {
+    const now = Date.now();
     const completion = {
       kind: "pending-final" as const,
       deliveryId: id,
@@ -204,7 +208,7 @@ describe("exhausted delivery producer recovery", () => {
 
       await recover(mode);
       expect(readQueuedEntry(tmpDir(), id)).toMatchObject({ deliveryCompletion: completion });
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
         settlementPending: true,
       });
@@ -232,6 +236,7 @@ describe("exhausted delivery producer recovery", () => {
     "%s settles a producer-claimed entry whose durable completion has gone stale",
     async (mode) => {
       const id = "stale-producer-claimed";
+      const now = Date.now();
       const completion = {
         kind: "pending-final" as const,
         deliveryId: id,
@@ -258,7 +263,7 @@ describe("exhausted delivery producer recovery", () => {
       if (!claimId) {
         throw new Error("Expected producer custody");
       }
-      now += 60_001;
+      setProducerExpiry(id, Date.now() - 1);
 
       await recover(mode);
 
@@ -327,24 +332,34 @@ describe("exhausted delivery producer recovery", () => {
     }
   });
   it.each(["startup", "recurring"] as const)(
-    "%s preserves a platform lease renewed after its scan snapshot",
+    "%s preserves a renewed platform lease when its scan snapshot is expired",
     async (mode) => {
       const id = "renewed-platform-owner";
       const claimId = await reserveProducer(id);
       await queueStorage.markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, claimId);
-      const load = queueStorage.loadUnfinishedDelivery;
-      vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementationOnce(async (...args) => {
-        const snapshot = await load(...args);
-        now += 59_999;
-        expect(await renewDeliveryPlatformSendLease(id, tmpDir(), claimId)).toBeGreaterThan(now);
-        now += 2;
-        return snapshot;
+      const snapshot = await queueStorage.loadUnfinishedDelivery(id, tmpDir());
+      if (!snapshot || typeof snapshot.availableAt !== "number") {
+        throw new Error("Expected a leased platform snapshot");
+      }
+      const renewedUntil = await renewDeliveryPlatformSendLease(id, tmpDir(), claimId);
+      expect(renewedUntil).toEqual(expect.any(Number));
+      if (renewedUntil === undefined) {
+        throw new Error("Expected the live platform owner to renew");
+      }
+      // Fix only the host clock after real worker renewal and before recovery
+      // captures its deadline. Expire the detached view, not the authoritative row.
+      vi.spyOn(Date, "now").mockReturnValue(renewedUntil - 1);
+      vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockResolvedValueOnce({
+        ...snapshot,
+        availableAt: renewedUntil - 2,
       });
       await recover(mode);
       expect(await queueStorage.loadPendingDelivery(id, tmpDir())).toMatchObject({
         recoveryState: "send_attempt_started",
         platformSendAttemptId: claimId,
-        availableAt: startTime + 119_999,
+        availableAt: renewedUntil,
+        retryCount: 0,
+        attemptCount: 1,
       });
     },
   );
@@ -429,7 +444,7 @@ describe("exhausted delivery producer recovery", () => {
     });
     await mediaSpool.pruneOrphanedDeliveryQueueMedia({
       stateDir: tmpDir(),
-      nowMs: now + 30 * 24 * 60 * 60_000,
+      nowMs: Date.now() + 30 * 24 * 60 * 60_000,
     });
     await expect(fs.readFile(artifact, "utf8")).resolves.toBe("audio-bytes");
     fault.mockRestore();
@@ -454,7 +469,7 @@ describe("exhausted delivery producer recovery", () => {
       const log = await recover("startup");
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("terminal cleanup failed"));
       expect(audits).toEqual(["failed"]);
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
       });
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");

@@ -9,8 +9,10 @@ import {
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
+  bindPluginRegistryLifetime,
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
+  getPluginRegistryLifetime,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
@@ -21,6 +23,7 @@ import {
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -41,11 +44,10 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
-const { generations, registries, active, retirements, publications } = resolveGlobalSingleton(
+const { generations, active, retirements, publications } = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedPluginLifetimes"),
   () => ({
     generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
-    registries: new WeakMap<PluginRegistry, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
     publications: new WeakMap<
@@ -56,6 +58,7 @@ const { generations, registries, active, retirements, publications } = resolveGl
 );
 
 function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () => void) {
+  const cleanupWork = new AsyncWorkScope();
   const references = new Set<object>();
   let closing: Deferred | undefined;
   let disposing = false;
@@ -101,12 +104,14 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
       if (references.size === 0 && !disposing) {
         disposing = true;
         const completion = closing;
-        // Close admission immediately; physical disposal waits for the final borrower.
-        try {
-          void dispose().then(() => completion.resolve(), completion.reject);
-        } catch (error) {
-          completion.reject(error);
-        }
+        // A catalog lease can outlive its requesting RPC; this lifetime owns its cleanup.
+        void (async () => {
+          try {
+            await cleanupWork.track(dispose);
+          } finally {
+            await cleanupWork.run(() => cleanupWork.drain());
+          }
+        })().then(() => completion.resolve(), completion.reject);
       }
       return closing.promise;
     },
@@ -129,7 +134,7 @@ export function retainPreparedPluginRegistry(
     return inspection.retain().release;
   }
   const registry = getPluginRegistryResourceOwner(registryView);
-  let lifetime = registries.get(registry);
+  let lifetime = getPluginRegistryLifetime(registry);
   if (!lifetime) {
     // Gateway-root and other externally activated registries remain borrowed.
     if (capturePluginRegistryLifecycleEpoch(registry)) {
@@ -147,7 +152,7 @@ export function retainPreparedPluginRegistry(
         throw new PluginRuntimeCloseRetainedError(error);
       }
     });
-    registries.set(registry, lifetime);
+    bindPluginRegistryLifetime(registry, lifetime);
   }
   return lifetime.retain();
 }

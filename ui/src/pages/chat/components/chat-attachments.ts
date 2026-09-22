@@ -117,9 +117,10 @@ function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
 ): { file: File; dataUrl: string } | null {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(dataUrl.trim());
+  const trimmed = dataUrl.trim();
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(trimmed);
   const mimeType = match?.[1]?.toLowerCase();
-  const base64 = match?.[2]?.replace(/\s+/g, "");
+  const base64 = match ? trimmed.slice(match[0].length).replace(/\s+/g, "") : undefined;
   if (!mimeType || !base64) {
     return null;
   }

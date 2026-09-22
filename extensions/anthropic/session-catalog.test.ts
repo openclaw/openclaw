@@ -2047,6 +2047,8 @@ describe("Claude session catalog", () => {
 
   it("keeps the CLI records when only the Desktop store changes", async () => {
     const home = await createHome();
+    // Adding 250 to this native clock sample rounds the elapsed interval below 250 ms.
+    vi.spyOn(performance, "now").mockReturnValue(100.00001);
     const watches = createClaudeCatalogWatchDriver(home);
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -2087,9 +2089,7 @@ describe("Claude session catalog", () => {
     expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Desktop after");
     for (const spy of transcriptIo) {
       expect(
-        spy.mock.calls.filter(
-          ([target]) => typeof target === "string" && target.endsWith(".jsonl"),
-        ),
+        spy.mock.calls.filter(([file]) => typeof file === "string" && file.endsWith(".jsonl")),
       ).toEqual([]);
     }
     const projects = path.join(home, ".claude", "projects");
@@ -2498,6 +2498,7 @@ describe("Claude session catalog", () => {
 
   it("keys index and Desktop metadata parse caches by path, mtime, and size", async () => {
     const home = await createHome();
+    const watches = createClaudeCatalogWatchDriver(home);
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
@@ -2512,18 +2513,16 @@ describe("Claude session catalog", () => {
       "workspace",
       "local_metadata-cache.json",
     );
-    const indexedPath = path.join(projectDir, "indexed-session.jsonl");
-    const desktopTranscriptPath = path.join(projectDir, "desktop-session.jsonl");
     const entries = [
       {
         sessionId: "indexed-session",
-        fullPath: indexedPath,
+        fullPath: path.join(projectDir, "indexed-session.jsonl"),
         summary: "Indexed before",
         isSidechain: false,
       },
       {
         sessionId: "desktop-session",
-        fullPath: desktopTranscriptPath,
+        fullPath: path.join(projectDir, "desktop-session.jsonl"),
         summary: "Desktop index",
         isSidechain: false,
       },
@@ -2548,15 +2547,14 @@ describe("Claude session catalog", () => {
 
     await listLocalClaudeSessionPage({}, home);
     expect(metadataReads()).toEqual(expect.arrayContaining([indexPath, desktopPath]));
+    watches.arm();
     const readdir = vi.spyOn(fs, "readdir");
-    const firstRefreshTime = new Date(Date.now() + 2_000);
-    await fs.utimes(projectDir, firstRefreshTime, firstRefreshTime);
     readFileSpy.mockClear();
 
-    await expectClaudeCatalogEventually(home, () => {
-      expect(readdir).toHaveBeenCalledWith(projectDir);
-      expect(metadataReads()).toEqual([]);
-    });
+    watches.change(indexPath);
+    await listLocalClaudeSessionPage({}, home);
+    expect(readdir).toHaveBeenCalledWith(projectDir);
+    expect(metadataReads()).toEqual([]);
 
     await fs.writeFile(
       indexPath,
@@ -2581,14 +2579,14 @@ describe("Claude session catalog", () => {
     readFileSpy.mockClear();
 
     now += 60_001;
-    await expectClaudeCatalogEventually(home, (page) =>
-      expect(
-        Object.fromEntries(page.sessions.map((record) => [record.threadId, record.name])),
-      ).toEqual({
-        "desktop-session": "Desktop after a longer title",
-        "indexed-session": "Indexed after a longer title",
-      }),
-    );
+    watches.change(indexPath);
+    const page = await listLocalClaudeSessionPage({}, home);
+    expect(
+      Object.fromEntries(page.sessions.map((record) => [record.threadId, record.name])),
+    ).toEqual({
+      "desktop-session": "Desktop after a longer title",
+      "indexed-session": "Indexed after a longer title",
+    });
     expect(metadataReads()).toEqual(expect.arrayContaining([indexPath, desktopPath]));
   });
 
@@ -3096,20 +3094,22 @@ describe("Claude session catalog", () => {
       ),
     ).rejects.toThrow("unknown terminal start parameter");
     const onHost = vi.fn();
-    let rejectNodes!: (error: Error) => void;
+    const nodes = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
+    const publication = createDeferred<void>();
     const pending = provider.list({
       onHost,
-      listNodes: () =>
-        new Promise((_, reject) => {
-          rejectNodes = reject;
-        }),
+      waitUntil: publication.resolve,
+      listNodes: () => nodes.promise,
     });
-    await vi.waitFor(() =>
+    try {
+      await publication.promise;
       expect(onHost).toHaveBeenCalledWith(
         expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true, sessions: [] }),
-      ),
-    );
-    rejectNodes(new Error("node registry down"));
+      );
+    } finally {
+      nodes.reject(new Error("node registry down"));
+      await pending;
+    }
     expect(await pending).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ hostId: "gateway:local", canStartTerminal: true }),

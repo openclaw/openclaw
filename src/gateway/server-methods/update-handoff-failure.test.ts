@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
   buildStatusUpdateRows,
@@ -21,6 +21,64 @@ import {
 } from "./update.test-harness.js";
 
 describe("update.run handoff refusal diagnostics", () => {
+  it.each(["helper-start", "sentinel-write"] as const)(
+    "cancels its exact helper when admission ends during %s",
+    async (boundary) => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockGlobalInstallSurface();
+      let current = true;
+      if (boundary === "helper-start") {
+        const start = expectDefined(
+          startManagedServiceUpdateHandoffMock.getMockImplementation(),
+          "handoff fixture",
+        );
+        startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+          const started = await start(params);
+          current = false;
+          return started;
+        });
+      } else {
+        sentinelState.onSentinelWrite = () => {
+          current = false;
+        };
+      }
+      const { updateHandlers } = await import("./update.js");
+      const respond = vi.fn();
+      await expectDefined(
+        updateHandlers["update.run"],
+        "update handler",
+      )({
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({ update: {} }) },
+        sessionMutationCommitGuard: () => {
+          if (!current) {
+            throw new Error("scheduled admission ended");
+          }
+        },
+      } as never);
+      const started = expectDefined(
+        startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0],
+        "started handoff",
+      );
+      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+        kind: "managed-update-handoff",
+        handoffId: started.handoffId,
+        installRoot: "/tmp/openclaw-global",
+      });
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: false,
+          result: expect.objectContaining({ reason: "owner_required" }),
+        }),
+        undefined,
+      );
+    },
+  );
+
   it.each(["sentinel-write", "transfer-rejected", "transfer-error"])(
     "cancels managed admission and keeps serving after %s failure",
     async (failure) => {
@@ -117,6 +175,7 @@ describe("update.run handoff refusal diagnostics", () => {
             "OpenClaw update failed: managed-service-handoff-failed",
           ),
         }),
+        expect.any(Object),
       );
     },
   );

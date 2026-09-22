@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -224,12 +224,12 @@ describe("cron run receipt settlement", () => {
       const before = await loadCronStore(storePath);
       const entered = createDeferred();
       const release = createDeferred();
-      const execute = stateWorker.executeOpenClawStateWorker;
+      const execute = stateRead.executeExistingOpenClawStateRead;
       const delayed = vi
-        .spyOn(stateWorker, "executeOpenClawStateWorker")
+        .spyOn(stateRead, "executeExistingOpenClawStateRead")
         .mockImplementation(async (context, command) => {
           const result = await execute(context, command);
-          if (command.type === "cron.proposeRunRecovery") {
+          if (command.type === "cron.observeRunRecovery") {
             entered.resolve();
             await release.promise;
           }

@@ -11,7 +11,8 @@ import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -106,10 +107,10 @@ export async function createServiceActivationFixture() {
   process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
   // This fixture models an installed service even though its manager calls are simulated.
   const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
-  await fs.mkdir(path.dirname(unitPath), { recursive: true });
-  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
+  await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n", { mode: 0o600 });
   const configPath = path.join(root, ".openclaw", "openclaw.json");
-  await fs.mkdir(path.dirname(configPath));
+  await fs.mkdir(path.dirname(configPath), { mode: 0o700 });
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -310,7 +311,7 @@ export function registerRecoveryTests(params: {
     },
   );
 
-  it.each(["healthy", "unready", "exited"] as const)(
+  it.each(["healthy", "unready", "exited", "cleanup"] as const)(
     "failed-update recovery requires canonical readiness after start acceptance (%s)",
     async (outcome) => {
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -331,13 +332,20 @@ export function registerRecoveryTests(params: {
           hints: [],
         },
       }));
-      await expect(
-        maybeRestartServiceAfterFailedMutableUpdate({
-          preManagedServiceStop: before,
-          jsonMode: true,
-          recovery: { serviceRestartSafe: true, version: VERSION, buildId: "restored-git-build" },
-        }),
-      ).resolves.toBe(outcome === "healthy" ? "healthy" : "failed");
+      const cleanup = new CommandProcessCleanupError();
+      if (outcome === "cleanup") {
+        params.mocks.health.mockRejectedValueOnce(cleanup);
+      }
+      const pending = maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: before,
+        jsonMode: true,
+        recovery: { serviceRestartSafe: true, version: VERSION, buildId: "restored-git-build" },
+      });
+      if (outcome === "cleanup") {
+        await expect(pending).rejects.toBe(cleanup);
+      } else {
+        await expect(pending).resolves.toBe(outcome === "healthy" ? "healthy" : "failed");
+      }
       expect(params.mocks.health).toHaveBeenCalledWith(
         expect.objectContaining({
           expectedBuildId: "restored-git-build",

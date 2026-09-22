@@ -13,6 +13,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
@@ -46,9 +47,12 @@ type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
   // Restart remains one-way; only suspension preserves an admitted cleanup owner.
-  return isGatewayRestartDraining()
-    ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
-    : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup");
+  // The registry owns cleanup after the spawning tool's caller has retired.
+  return withoutGatewayToolCallerIdentity(() =>
+    isGatewayRestartDraining()
+      ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
+      : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup"),
+  );
 }
 
 export function scheduleResumeSubagentRun(
@@ -594,6 +598,8 @@ async function completeTerminalCleanup(
         try {
           await cleanupBrowserSessions({
             sessionKeys: [entry.childSessionKey],
+            isCurrent: () =>
+              isSessionEffectsOwnerCurrent() && !context.shouldSuppressSessionEffects(entry),
             onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
           });
         } catch (error) {

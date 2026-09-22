@@ -31,8 +31,8 @@ it("creates sessions and builds context without loading agent runtime facades", 
 
     const message = { role: "user" as const, content: "session context", timestamp: 1 };
     const entryIds = [
-      manager.appendThinkingLevelChange("high"),
-      manager.appendModelChange("test-provider", "test-model"),
+      await manager.appendThinkingLevelChange("high"),
+      await manager.appendModelChange("test-provider", "test-model"),
       manager.appendMessage(message),
     ];
     for (const id of entryIds) {

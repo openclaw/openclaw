@@ -290,7 +290,7 @@ syncFixtureBuiltinExports();\n`,
         "run",
         "--config",
         "test/vitest/vitest.gateway-database-workers.config.ts",
-        "gateway-cron-process-identity.windows.test.ts",
+        "src/gateway/gateway-cron-process-identity.windows.test.ts",
       ],
       "runtime",
     ],
@@ -553,7 +553,13 @@ describe("full-suite timing metadata", () => {
   );
 });
 
-describe("parallel cache lease completion", () => {
+describe("cache lease completion", () => {
+  beforeEach(() => {
+    // The enclosing CI test worker owns its PATH; these fixtures exercise a new scheduler.
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+  });
+
   it.each([
     { platform: "linux", phase: "preflight" },
     { platform: "linux", phase: "retry" },
@@ -609,15 +615,35 @@ describe("parallel cache lease completion", () => {
     },
   );
 
-  it.each(["linux", "win32"] as const)(
-    "preserves %s cache ownership through preflight and retry while its peer runs",
-    async (platform) => {
+  it.each([
+    { platform: "linux", concurrency: 1 },
+    { platform: "linux", concurrency: 2 },
+    { platform: "win32", concurrency: 1 },
+    { platform: "win32", concurrency: 2 },
+  ] as const)(
+    "preserves $platform cache ownership through preflight and retry (concurrency=$concurrency)",
+    async ({ platform, concurrency }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const cacheRoot = tempDirs.make("cache-policy-");
-      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", cacheRoot);
-      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+      vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", cacheRoot);
+      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", String(concurrency));
       vi.stubEnv("OPENCLAW_VITEST_NO_OUTPUT_RETRY", "1");
+      const planner = await import("../../scripts/test-projects.test-support.mts");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      if (concurrency === 1) {
+        vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
+          [
+            "test/vitest/vitest.ui-e2e.config.ts",
+            "test/vitest/vitest.cli.config.ts",
+            "test/vitest/vitest.ui-e2e.config.ts",
+          ].map((config) => ({
+            config,
+            forwardedArgs: [],
+            includePatterns: null,
+            watchMode: false,
+          })),
+        );
+      }
       const firstPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
       const retryPreflight = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
       const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
@@ -653,22 +679,25 @@ describe("parallel cache lease completion", () => {
           peerPath = cache;
           completion = peer.promise;
         }
-        if (paths.length === 2) {
+        if (paths.length === (concurrency === 1 ? 1 : 2)) {
           started.resolve();
         }
         return { completion, getForwardedSignal: () => undefined };
       });
-      const running = runTestProjects(async () => {}, [
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "test/vitest/vitest.cli.config.ts",
-      ]);
+      const running = runTestProjects(
+        async () => {},
+        concurrency === 1
+          ? []
+          : ["test/vitest/vitest.ui-e2e.config.ts", "test/vitest/vitest.cli.config.ts"],
+      );
       try {
         await withTestTimeout(started.promise, 5_000, "preflight and peer admission");
-        expect(new Set(paths).size).toBe(2);
+        expect(new Set(paths).size).toBe(concurrency);
         for (const cache of paths) {
-          expect(path.relative(cacheRoot, cache).startsWith(`slots${path.sep}`)).toBe(
-            platform !== "win32",
-          );
+          const relative = path.relative(cacheRoot, cache);
+          expect(relative).not.toBe("");
+          expect(path.isAbsolute(relative)).toBe(false);
+          expect(relative.split(path.sep)).not.toContain("..");
         }
         firstPreflight.resolve(joined);
         await withTestTimeout(retryStarted.promise, 5_000, "retry preflight admission");
@@ -682,9 +711,19 @@ describe("parallel cache lease completion", () => {
         peer.resolve(joined);
         await running;
       }
-      expect(uiPaths).toHaveLength(4);
-      expect(new Set(uiPaths).size).toBe(1);
-      expect(attempts).toBe(2);
+      expect(uiPaths).toHaveLength(concurrency === 1 ? 6 : 4);
+      expect(new Set(uiPaths.slice(0, 4)).size).toBe(1);
+      if (concurrency === 1) {
+        expect(new Set(uiPaths.slice(4)).size).toBe(1);
+        if (platform === "win32") {
+          expect(uiPaths[4]).not.toBe(uiPaths[0]);
+        } else {
+          expect(uiPaths[4]).toBe(uiPaths[0]);
+        }
+      }
+      expect(uiPaths).not.toContain(peerPath);
+      expect(preflights).toBe(concurrency === 1 ? 3 : 2);
+      expect(attempts).toBe(concurrency === 1 ? 3 : 2);
       expect(process.exitCode).toBe(0);
     },
   );

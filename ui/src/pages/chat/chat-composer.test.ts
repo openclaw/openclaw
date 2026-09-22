@@ -301,8 +301,15 @@ describe("renderChatComposer controls", () => {
       asyncQuestions: {
         scope: "archived-session",
         pending: [{ itemId: "audience", questions: [{ title: "Which audience?" }] }],
+        archived: new Map(),
+        historyKey: "",
+        resolved: new Map(),
+        delivery: new Map(),
+        discard: vi.fn(),
         drafts: new Map(),
+        dismiss: vi.fn(async () => {}),
         onChange: vi.fn(),
+        reopen: vi.fn(),
         submit: vi.fn(async () => true),
       },
       disabledBanner: {

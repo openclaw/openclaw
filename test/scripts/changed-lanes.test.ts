@@ -49,11 +49,16 @@ import {
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir as makeTempRepoRoot,
+  useAutoCleanupTempDirTracker,
+} from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempDirs: string[] = [];
+const uiCompanionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const testNodeExecPath = resolveTestNodeExecPath();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
@@ -2164,6 +2169,64 @@ describe("scripts/changed-lanes", () => {
     ).toBe(false);
   });
 
+  it.each([false, true])(
+    "selects consuming test graphs with UI CSS and docs companions (deleted UI test: %s)",
+    (deleted) => {
+      const dir = uiCompanionTempDirs.make("openclaw-ui-companion-checks-");
+      const testPath = "ui/src/e2e/fixture.e2e.test.ts";
+      const styles = ["ui/src/styles/chat/fixture-a.css", "ui/src/styles/chat/fixture-b.css"];
+      const docsPath = "docs/web/control-ui/fixture.md";
+      writeRepoFile(dir, testPath, "export {};\n");
+      for (const style of styles) {
+        writeRepoFile(dir, style, ".fixture { display: block; }\n");
+      }
+      writeRepoFile(dir, docsPath, "# Fixture\n");
+      if (deleted) {
+        unlinkSync(path.join(dir, testPath));
+      }
+
+      const changedPaths = [testPath, ...styles, docsPath];
+      const script = `
+        import { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/changed-lanes.mts")).href)};
+        import { createChangedCheckPlan } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/check-changed.mts")).href)};
+        const result = detectChangedLanes(${JSON.stringify(changedPaths)});
+        const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+        console.log(JSON.stringify({
+          lanes: result.lanes,
+          extensionImpactFromCore: result.extensionImpactFromCore,
+          commands: plan.commands.map(({ name, args, coreTestCheck }) => ({ name, args, coreTestCheck })),
+        }));
+      `;
+      const output = execFileSync(
+        testNodeExecPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", script],
+        { cwd: dir, encoding: "utf8", env: createNestedGitEnv() },
+      );
+      const plan = JSON.parse(output) as {
+        lanes: ReturnType<typeof createEmptyChangedLanes>;
+        extensionImpactFromCore: boolean;
+        commands: ReturnType<typeof createChangedCheckPlan>["commands"];
+      };
+      expectLanes(plan.lanes, { ui: true, coreTests: true, docs: true });
+      expect(plan.extensionImpactFromCore).toBe(false);
+      expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual([
+        "checkBoundary",
+        "checkTypes",
+      ]);
+      const commands = plan.commands.map((command) => command.args[0]);
+      expect(commands).toContain("tsgo:ui");
+      expect(commands).toContain("tsgo:core:test");
+      expect(commands).not.toContain("tsgo:core");
+      expect(
+        plan.commands
+          .filter((command) => command.name.startsWith("lint UI changed style"))
+          .map((command) => command.args),
+      ).toEqual([
+        ["--import", "tsx", "scripts/run-stylelint.mts", ...(deleted ? [] : [testPath]), ...styles],
+      ]);
+    },
+  );
+
   it.each([
     ...[
       "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
@@ -2180,25 +2243,6 @@ describe("scripts/changed-lanes", () => {
         coreTestChecks: ["checkBoundary", "checkTypes"],
       },
     })),
-    {
-      name: "selects consuming test graphs with UI CSS and docs companions",
-      path: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
-      extraPaths: [
-        "ui/src/styles/chat/composer.css",
-        "ui/src/styles/chat/composer-surface.css",
-        "docs/web/control-ui/sessions-and-sidebar.md",
-      ],
-      expected: {
-        lanes: { ui: true, coreTests: true, docs: true },
-        includes: ["tsgo:ui", "tsgo:core:test"],
-        excludes: ["tsgo:core"],
-        coreTestChecks: ["checkBoundary", "checkTypes"],
-        stylelintTargets: [
-          "ui/src/styles/chat/composer-surface.css",
-          "ui/src/styles/chat/composer.css",
-        ],
-      },
-    },
     ...["ui/src/app.ts", "tsconfig.ui.json", "ui/src/e2e/chat-flow.test-support.ts"].map(
       (companion) => ({
         name: `retains full test graphs with ${companion}`,
@@ -2270,13 +2314,6 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
       "coreTestChecks" in expected ? expected.coreTestChecks : [],
     );
-    if ("stylelintTargets" in expected && expected.stylelintTargets) {
-      expect(
-        plan.commands.find((command) => command.name.startsWith("lint UI changed style")),
-      ).toMatchObject({
-        args: ["--import", "tsx", "scripts/run-stylelint.mts", ...expected.stylelintTargets],
-      });
-    }
     for (const command of expected.includes) {
       expect(commands).toContain(command);
     }
@@ -3271,19 +3308,22 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.some((command) => command.args[0] === "test:macos:ci")).toBe(macosCi);
   });
 
-  it("routes appcast changes to appcast owner tests", () => {
-    const result = detectChangedLanes(["appcast.xml"]);
-    const plan = createChangedCheckPlan(result);
+  it.each(["appcast.xml", "appcast-arm64.xml", "appcast-x86_64.xml"])(
+    "routes %s changes to appcast owner tests",
+    (appcast) => {
+      const result = detectChangedLanes([appcast]);
+      const plan = createChangedCheckPlan(result);
 
-    expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "appcast owner tests",
-        args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
-      }),
-    );
-    expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
-  });
+      expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "appcast owner tests",
+          args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+        }),
+      );
+      expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
+    },
+  );
 
   it.each<[string, NodeJS.Platform, boolean, boolean]>([
     ["apps/ios/Sources/RootTabs.swift", "darwin", true, false],
@@ -3374,21 +3414,24 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each(["apps/.i18n/native-source.json", "apps/web/index.ts", "appcast.xml"])(
-    "keeps non-native app assets out of native lint: %s",
-    (changedPath) => {
-      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
-        platform: "linux",
-        swiftlintAvailable: false,
-      });
+  it.each([
+    "apps/.i18n/native-source.json",
+    "apps/web/index.ts",
+    "appcast.xml",
+    "appcast-arm64.xml",
+    "appcast-x86_64.xml",
+  ])("keeps non-native app assets out of native lint: %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
 
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
-      expect(plan.commands.map((command) => command.name)).not.toContain(
-        "lint apps (swiftlint unavailable on this host)",
-      );
-    },
-  );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands.map((command) => command.name)).not.toContain(
+      "lint apps (swiftlint unavailable on this host)",
+    );
+  });
 
   it("routes A2UI bundle source changes as extension changes", () => {
     const result = detectChangedLanes([

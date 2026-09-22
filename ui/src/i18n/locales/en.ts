@@ -14,6 +14,7 @@ export const en: TranslationMap & {
     commands: TranslationMap;
     welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
     backgroundTasks: TranslationMap;
+    goals: TranslationMap;
     messages: TranslationMap &
       Record<
         | "copySelection"
@@ -38,6 +39,7 @@ export const en: TranslationMap & {
       Record<
         | "title"
         | "eyebrow"
+        | "move"
         | "minimize"
         | "expand"
         | "lanes"
@@ -82,8 +84,7 @@ export const en: TranslationMap & {
     dashboardTitle: "Session dashboard",
     dashboardEmpty: "This session has no dashboard widgets yet.",
     customPluginsDisabled: "Custom plugin UI is off",
-    customPluginsEnableHint:
-      "Enable Custom plugin UI in Labs, then restart the Gateway and reload this browser tab.",
+    customPluginsEnableHint: "Enable Custom plugin UI in Labs.",
     openLabs: "Open Labs",
     surface: {
       "session-list": "Session list",
@@ -286,6 +287,14 @@ export const en: TranslationMap & {
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
     dismissFailed: "Could not dismiss the progress card. Try again.",
+    refresh: {
+      label: "Refresh task progress",
+      retry: "Retry progress refresh",
+      pending: "Refreshing task progress…",
+      failed: "Could not refresh. Previous update kept.",
+      timeout: "No new update yet. The request may still be running.",
+      updated: "Task progress updated",
+    },
     widgetLabel: "Session progress",
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
@@ -881,6 +890,7 @@ export const en: TranslationMap & {
     name: "Name",
     namePlaceholder: "auto",
     baseBranch: "Base branch",
+    baseBranchPlaceholder: "Remote default",
     repo: "Repository",
     empty: "No managed worktrees.",
     restorable: "Restorable",
@@ -1002,7 +1012,6 @@ export const en: TranslationMap & {
     kind: "Kind",
     updated: "Updated",
     tokens: "Tokens",
-    compaction: "Compaction",
     goal: "Goal",
     goalNote: "Goal note",
     thinking: "Thinking",
@@ -1032,25 +1041,15 @@ export const en: TranslationMap & {
     off: "off",
     full: "full",
     stream: "stream",
-    manual: "manual",
-    autoThreshold: "auto-threshold",
-    overflowRetry: "overflow retry",
-    timeoutRetry: "timeout retry",
-    tokenRange: "{before} to {after} tokens",
-    tokensBefore: "{count} tokens before",
-    tokenDeltaUnavailable: "token delta unavailable",
     contextUsage: "{percent}% of context used ({used} / {context} tokens)",
     promptBudgetUsage: "{percent}% of last-run prompt budget used ({used} / {context} tokens)",
     promptBudgetUsageApprox:
       "Approximately {percent}% of last-run prompt budget used ({used} / {context} tokens)",
     contextUsageApprox: "~{percent}% of context used ({used} / {context} tokens, approximate)",
-    checkpoints: "{count} Checkpoints",
-    checkpoint: "{count} Checkpoint",
     showSessionDetails: "Show session details for {count}",
     hideSessionDetails: "Hide session details for {count}",
     sessionDetails: "Session details",
     overrides: "Overrides",
-    compactionHistory: "Compaction history",
     status: "Status",
     statusLive: "Live",
     statusIdle: "Idle",
@@ -1252,14 +1251,6 @@ export const en: TranslationMap & {
     dateNoActivity: "No activity",
     groupRowCount: "{count} sessions",
     groupRowCountOne: "{count} session",
-    loadingCheckpoints: "Loading checkpoints…",
-    noCheckpoints: "No compaction checkpoints recorded for this session.",
-    noSummary: "No summary captured.",
-    branchFromCheckpoint: "Branch from checkpoint",
-    branchCheckpointConfirm: "Create a new child session from this compacted checkpoint?",
-    restoreCheckpoint: "Restore checkpoint",
-    restoreCheckpointConfirm:
-      "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   },
   agents: {
     noAgents: "No agents",
@@ -1444,6 +1435,7 @@ export const en: TranslationMap & {
     overlay: {
       title: "System busyness",
       eyebrow: "Live diagnostics",
+      move: "Move system busyness with arrow keys, or drag",
       minimize: "Minimize system busyness",
       expand: "Expand system busyness",
       lanes: "Lanes",
@@ -1463,8 +1455,7 @@ export const en: TranslationMap & {
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
-    storedSecretNotRevealable:
-      "Stored secrets are never sent to the browser; enter a new value to replace it",
+    storedSecretNotRevealable: "This editor cannot reveal the stored value.",
     unsupportedType: "Unsupported type: {type}. Use Raw mode.",
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
@@ -1487,7 +1478,6 @@ export const en: TranslationMap & {
     removeItem: "Remove item",
     customEntries: "Custom entries",
     addEntry: "Add Entry",
-    noCustomEntries: "No custom entries.",
     key: "Key",
     removeEntry: "Remove entry",
     renameRedactedBlocked:
@@ -1653,6 +1643,8 @@ export const en: TranslationMap & {
     appearance: {
       lobsterVisits: "Lobster visits",
       lobsterVisitsOn: "Drops by occasionally",
+      lobsterVisitsThemeHidden:
+        "The lobster stays home while the {theme} theme is active. Other visitors still drop by.",
       lobsterVisitsOff: "Never visits",
       lobsterSounds: "Lobster sounds",
       lobsterSoundsOn: "Tiny blubs when touched",
@@ -2136,6 +2128,7 @@ export const en: TranslationMap & {
     automation: "Automation",
     mcp: "MCP",
     memory: "Memory",
+    search: "Search",
     talk: "Talk",
     infrastructure: "Infrastructure",
     labs: "Labs",
@@ -2186,6 +2179,7 @@ export const en: TranslationMap & {
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, search, and dreaming.",
+    search: "Choose how agents search the web and check provider health.",
     talk: "Realtime voice: provider, model, and speaker voice.",
     infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
     labs: "Experimental agent and tool capabilities.",
@@ -2556,7 +2550,8 @@ export const en: TranslationMap & {
     intro:
       "Labs contains experimental capabilities that may change, break, or disappear between releases.",
     sectionTitle: "Experimental features",
-    sectionDescription: "Changes save immediately. Some features require a restart to take effect.",
+    sectionDescription:
+      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
     documentation: "Documentation",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
@@ -2564,7 +2559,12 @@ export const en: TranslationMap & {
     codeMode: {
       title: "Code Mode",
       description:
-        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
     },
 
     swarm: {
@@ -2585,15 +2585,13 @@ export const en: TranslationMap & {
     toolSearch: {
       title: "Tool Search for all models",
       description:
-        "Local models use Tool Search automatically. Enable this override to defer tool schemas for all models; turning it off restores each model's default.",
+        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
 
     customPluginUi: {
       title: "Custom plugin UI",
       description:
-        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available.",
-      restartRequired:
-        "Restart the Gateway and reload this browser tab after changing this setting.",
+        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
     },
 
     hostDesktop: {
@@ -3042,12 +3040,15 @@ export const en: TranslationMap & {
     },
     disconnectedTitle: "Disconnected",
     connecting: "Connecting…",
-    queuedCount: "{count} in outbox",
     starting: "Starting…",
     restoring: "Restoring…",
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
+    interruptedRetrying:
+      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
+    interrupted:
+      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",
@@ -3163,6 +3164,7 @@ export const en: TranslationMap & {
   },
   dreaming: {},
   modelProviders: {},
+  searchPage: {},
   usage: {
     common: {
       emptyValue: "—",
@@ -3206,30 +3208,11 @@ export const en: TranslationMap & {
       remaining: "{percent}% left",
       resets: "Resets {date}",
     },
-    presets: {
-      today: "Today",
-      last7d: "7d",
-      last30d: "30d",
-      last90d: "90d",
-      last1y: "1y",
-      all: "All",
-    },
-    scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
-    },
+    presets: {},
+    scope: {},
     filters: {},
     query: {},
-    export: {
-      label: "Export",
-      changed: "Session context changed while preparing the export. Refresh usage and try again.",
-      sessionsCsv: "Sessions CSV",
-      dailyCsv: "Daily CSV",
-      json: "JSON",
-    },
+    export: {},
     cacheStatus: {},
     empty: {},
     daily: {},
@@ -3329,6 +3312,7 @@ export const en: TranslationMap & {
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
+    providerReview: {},
     providerPolicy: {
       bufferingTitle: "Cyber safety review",
       bufferingBody: "OpenAI is reviewing this response for cyber safety.",
@@ -3737,8 +3721,7 @@ export const en: TranslationMap & {
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
-      description: "The compacted transcript is preserved as a checkpoint.",
-      openCheckpoints: "Open checkpoints",
+      description: "Earlier messages were summarized to make room in the context window.",
     },
     sessionReset: {
       label: "Session reset",
@@ -3918,40 +3901,34 @@ export const en: TranslationMap & {
       },
       imageCount: "Image ({count})",
     },
-    goals: {
-      composerMode: "Goal",
-      sessionChanged: "Conversation changed. Cancel and select Goal again.",
-      start: "Start goal",
-      save: "Save goal",
-      startHint: "Enter your objective.",
-      editHint: "Save without starting a run.",
-      objectivePlaceholder: "What should this goal accomplish?",
-      cancel: "Cancel goal entry",
-      offline: "Reconnect to manage goals.",
-      busy: "Wait for this run to finish. Your draft is unchanged.",
-      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
-      actionPending: "Wait for the pending goal action.",
-      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
-      edit: "Edit goal",
-      editChip: "Edit",
-      pause: "Pause goal",
-      pauseChip: "Pause",
-      resume: "Resume goal",
-      resumeChip: "Resume",
-      clear: "Clear goal",
-      clearChip: "Clear",
-      showDetails: "Show goal details",
-      hideDetails: "Hide goal details",
-    },
+    goals: {},
     asyncQuestions: {
-      title: "Answer when ready",
+      title: "Optional · work can continue",
+      dismiss: "Dismiss",
+      dismissing: "Dismissing…",
+      dismissed: "Dismissed",
+      reopening: "Restoring answer…",
+      dismissedReason: "You can still answer this question later.",
+      dismissedNotice: "Question dismissed. Work continues.",
       pendingOne: "{count} unanswered question",
       pendingMany: "{count} unanswered questions",
       inComposer: "Answer above the message box.",
+      archived: "No longer pending",
+      archivedReason: "The conversation moved on. You can still answer this question.",
       sendFailed: "Could not send your answer. Your draft is preserved.",
+      queued: "Answer queued",
+      sending: "Sending answer…",
+      sent: "Answer sent",
+      failed: "Answer not sent",
+      awaitingConfirmation: "Awaiting delivery confirmation",
+      retry: "Retry answer",
+      draftStorageFailed:
+        "This answer is not saved on this device. Keep this page open or copy your answer.",
+      draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
       other: "Type your own answer here",
+      multilineHint: "Enter adds a line · Ctrl/⌘+Enter to continue",
       answer: "Answer",
       answerPlaceholder: "{label}",
       openLink: "Open link",
@@ -3964,7 +3941,7 @@ export const en: TranslationMap & {
       skipped: "Skipped",
       collapse: "Collapse question",
       expand: "Expand question",
-      eyebrow: "Question",
+      eyebrow: "Waiting for your answer",
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
       storeRequestedBy: "Requested by {agent} · {session}",
@@ -3997,10 +3974,7 @@ export const en: TranslationMap & {
       close: "Close image preview",
       untitled: "Image",
     },
-    externalImage: {
-      notLoaded: "External image not loaded",
-      open: "Open image",
-    },
+    externalImage: { notLoaded: "External image not loaded", open: "Open image" },
     messages: {
       copySelection: "Copy",
       replyingTo: "Replying to {name}",
@@ -4414,10 +4388,7 @@ export const en: TranslationMap & {
       toolInput: "Tool input",
       toolOutput: "Tool output",
       providerResponse: "Provider tool response",
-      providerResponseNote:
-        "Captured before context processing. The exact model input is unverified.",
       executionOutput: "Execution output",
-      executionOutputNote: "Captured execution output, not a verified model input.",
       showFullOutput: "Show full output",
       fullOutputUnavailable: "Full output unavailable. Only the captured output is shown.",
       copyOutput: "Copy available output",

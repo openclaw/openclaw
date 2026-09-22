@@ -1,5 +1,3 @@
-// Restart sentinel tests protect queued post-restart delivery recovery and the
-// session/channel context used when the gateway resumes an interrupted run.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -24,7 +22,6 @@ import {
 import { renderUpdateRunNotice, renderUpdateRunReport } from "../infra/update-run-report.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -34,6 +31,8 @@ import {
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
+  createGeneratedMediaDeliveryEntry,
+  expectCapturedQueueContext,
   expectRecordFields,
   mockCallArg,
   lastMockCallArg,
@@ -120,7 +119,7 @@ const mocks = vi.hoisted(() => {
       },
     })),
     finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
-    clearRestartSentinelIfRevision: vi.fn(async () => true),
+    clearSentinel: vi.fn(async () => true),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
     resolveSystemMainSessionTarget: vi.fn(() => ({
@@ -147,7 +146,7 @@ const mocks = vi.hoisted(() => {
       legacyKey: undefined,
     })),
     deliveryContextFromSession: vi.fn<
-      typeof import("../utils/delivery-context.shared.js").deliveryContextFromSession
+      typeof import("../utils/delivery-context.read.js").deliveryContextFromSession
     >(() => undefined),
     mergeDeliveryContext: vi.fn<
       typeof import("../utils/delivery-context.shared.js").mergeDeliveryContext
@@ -163,11 +162,11 @@ const mocks = vi.hoisted(() => {
     ]),
     enqueueDeliveryOnce: vi.fn(async (_payload: unknown, id: string) => ({ id, created: true })),
     findDeliveryIntentOwner: vi.fn<
-      () => {
+      () => Promise<{
         namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
         status: "pending" | "failed" | "completed";
-      } | null
-    >(() => null),
+      } | null>
+    >(async () => null),
     ackDelivery: vi.fn(async (_id: string) => {}),
     failDelivery: vi.fn(async () => {}),
     failDeliveryAfterPlatformSend: vi.fn(async () => {}),
@@ -267,7 +266,7 @@ vi.mock("../infra/restart-sentinel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart-sentinel.js")>()),
   finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   readRestartSentinel: mocks.readRestartSentinel,
-  clearRestartSentinelIfRevision: mocks.clearRestartSentinelIfRevision,
+  clearRestartSentinelIfRevision: mocks.clearSentinel,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
@@ -361,9 +360,13 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
+vi.mock("../utils/delivery-context.read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/delivery-context.read.js")>()),
+  deliveryContextFromSession: mocks.deliveryContextFromSession,
+}));
+
 vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/delivery-context.shared.js")>()),
-  deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
 }));
 
@@ -544,7 +547,6 @@ const {
   deliverQueuedSessionDelivery,
   getLatestUpdateRestartSentinel,
   recoverPendingRestartContinuationDeliveries,
-  refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake,
   settleQueuedSessionDelivery,
 } = await import("./server-restart-sentinel.js");
@@ -554,11 +556,7 @@ const actualRestartUpdateRun = await vi.importActual<
 >("./server-restart-update-run.js");
 
 function expectNthSystemEventFields(callIndex: number, expected: Record<string, unknown>): void {
-  const call = mocks.enqueueSystemEvent.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected enqueueSystemEvent call at index ${callIndex}`);
-  }
-  expectRecordFields(call[1], expected);
+  expectRecordFields(mocks.enqueueSystemEvent.mock.calls[callIndex]?.[1], expected);
 }
 
 function expectContinuationDispatchFields(
@@ -577,14 +575,8 @@ function expectContinuationDispatchFields(
   return params;
 }
 
-type GeneratedMediaDeliveryEntry = Extract<
-  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
-  { kind: "agentTurn" }
->;
-
 function deliverGeneratedMedia(
-  overrides: Partial<GeneratedMediaDeliveryEntry> &
-    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
+  overrides: Parameters<typeof createGeneratedMediaDeliveryEntry>[0],
   stateDir?: string,
   resolveGatewayContext?: () => undefined,
 ) {
@@ -597,21 +589,7 @@ function deliverGeneratedMedia(
             env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
           }),
     ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
-    entry: {
-      kind: "agentTurn",
-      sessionKey: "agent:main:main",
-      message: "generated image ready",
-      enqueuedAt: 1,
-      retryCount: 0,
-      route: { channel: "discord", to: "channel:123", chatType: "channel" },
-      inputProvenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: "image_generate",
-      },
-      sourceReplyDeliveryMode: "automatic",
-      ...overrides,
-    },
+    entry: createGeneratedMediaDeliveryEntry(overrides),
   });
 }
 
@@ -638,15 +616,7 @@ let testState: OpenClawTestState;
 let queueContext: OpenClawStateWorkerContext;
 
 function expectQueueContext(stateDir = testState.stateDir) {
-  return expect.objectContaining({
-    environment: expect.objectContaining({ OPENCLAW_STATE_DIR: stateDir }),
-    admission: expect.objectContaining({
-      databasePath: resolveOpenClawStateSqlitePath({
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
-    }),
-  });
+  return expectCapturedQueueContext(stateDir);
 }
 
 function setNoticeOwner(owner: string) {
@@ -734,7 +704,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueDeliveryOnce.mockReset();
     mocks.enqueueDeliveryOnce.mockImplementation(async (_payload, id) => ({ id, created: true }));
     mocks.findDeliveryIntentOwner.mockReset();
-    mocks.findDeliveryIntentOwner.mockReturnValue(null);
+    mocks.findDeliveryIntentOwner.mockResolvedValue(null);
     mocks.withStableDeliveryPreparation.mockReset();
     mocks.withStableDeliveryPreparation.mockImplementation(
       async (params: {
@@ -785,8 +755,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
-    mocks.clearRestartSentinelIfRevision.mockReset();
-    mocks.clearRestartSentinelIfRevision.mockResolvedValue(true);
+    mocks.clearSentinel.mockReset();
+    mocks.clearSentinel.mockResolvedValue(true);
     mocks.formatRestartSentinelMessage.mockClear();
     mocks.summarizeRestartSentinel.mockClear();
     mocks.resolveSystemMainSessionTarget.mockReset();
@@ -868,6 +838,12 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
       "restart-sentinel-notice:agent:main:main:123",
       45,
+      undefined,
+      undefined,
+      expect.objectContaining({
+        stateDir: testState.stateDir,
+        workerContext: expectQueueContext(),
+      }),
     );
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything());
@@ -920,9 +896,9 @@ describe("scheduleRestartSentinelWake", () => {
       expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
       expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+      expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
       expect(mocks.logWarn).toHaveBeenCalledWith(
-        expect.stringContaining("target is not a configured command owner"),
+        expect.stringContaining("target is not a current command owner"),
         expect.objectContaining({ runId: run?.runId }),
       );
       if (run) {
@@ -1078,7 +1054,10 @@ describe("scheduleRestartSentinelWake", () => {
       }
       // The sentinel owns 900 one-millisecond retries under VITEST. WAL
       // maintenance has its own persistent interval and must remain running.
-      await vi.advanceTimersByTimeAsync(900);
+      await vi.advanceTimersByTimeAsync(899);
+      expect(mocks.clearSentinel).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
 
       const result = getUpdateRun(record.runId)!;
       expect(result.status).toBe(cliFinished ? "succeeded" : "running");
@@ -1087,13 +1066,24 @@ describe("scheduleRestartSentinelWake", () => {
         expect(result.finishedAtMs).toBeNull();
         expect(result.verification.noticeDelivered).toBeUndefined();
         expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
-        expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+        expect(mocks.clearSentinel).not.toHaveBeenCalled();
         const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
         await vi.advanceTimersByTimeAsync(900);
         expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
         observedRun = finishUpdateRun(record.runId, {
           status: "succeeded",
           after: { version: resolveRuntimeServiceVersion() },
+        });
+        mocks.readRestartSentinel.mockResolvedValue({
+          version: 1,
+          revision: 124,
+          payload: {
+            kind: "update",
+            status: "ok",
+            ts: 124,
+            sessionKey: "agent:main:main",
+            stats: { runId: record.runId, handoffId: "managed-update-handoff" },
+          },
         });
         await scheduleRestartSentinelWake({ deps: {} as never });
       }
@@ -1106,13 +1096,13 @@ describe("scheduleRestartSentinelWake", () => {
           idempotencyKey: `update-run-finished:${record.runId}`,
         }),
       );
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
+      expect(mocks.clearSentinel).toHaveBeenCalledOnce();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
       const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
       await vi.advanceTimersByTimeAsync(900);
       expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
+      expect(mocks.clearSentinel).toHaveBeenCalledOnce();
       finalizeSpy.mockRestore();
     },
   );
@@ -1146,8 +1136,13 @@ describe("scheduleRestartSentinelWake", () => {
         const delivery = await vi.importActual<
           typeof import("../utils/delivery-context.shared.js")
         >("../utils/delivery-context.shared.js");
+        const deliveryRead = await vi.importActual<
+          typeof import("../utils/delivery-context.read.js")
+        >("../utils/delivery-context.read.js");
         mocks.loadSessionEntry.mockImplementation(sessionUtils.loadSessionEntry);
-        mocks.deliveryContextFromSession.mockImplementation(delivery.deliveryContextFromSession);
+        mocks.deliveryContextFromSession.mockImplementation(
+          deliveryRead.deliveryContextFromSession,
+        );
         mocks.mergeDeliveryContext.mockImplementation(delivery.mergeDeliveryContext);
       } else {
         mocks.deliveryContextFromSession.mockReturnValue({ channel: "webchat" });
@@ -1205,8 +1200,8 @@ describe("scheduleRestartSentinelWake", () => {
       try {
         if (updateRun) {
           const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-          const ack = await createUpdateRunNotifier(updateRun, () => ({}), {})(updateRun, "ack");
-          expect.soft(ack).toEqual({ delivered: true, owned: true });
+          const notify = await createUpdateRunNotifier(updateRun, () => ({}), {});
+          expect.soft(await notify(updateRun, "ack")).toEqual({ delivered: true, owned: true });
           expect
             .soft(getUpdateRun(updateRun.runId)?.steps)
             .toContainEqual(expect.objectContaining({ step: "notice:ack", status: "completed" }));
@@ -1400,8 +1395,8 @@ describe("scheduleRestartSentinelWake", () => {
   it("persists every downstream intent before consuming the loaded revision", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
-    const clearOrder = mocks.clearRestartSentinelIfRevision.mock.invocationCallOrder[0] ?? 0;
+    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
+    const clearOrder = mocks.clearSentinel.mock.invocationCallOrder[0] ?? 0;
     expect(mocks.enqueueSessionDelivery.mock.invocationCallOrder[0]).toBeLessThan(clearOrder);
     expect(mocks.enqueueDeliveryOnce.mock.invocationCallOrder[0]).toBeLessThan(clearOrder);
     expect(clearOrder).toBeLessThan(mocks.enqueueSystemEvent.mock.invocationCallOrder[0] ?? 0);
@@ -1409,7 +1404,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("stops delivery when guarded sentinel consumption fails", async () => {
-    mocks.clearRestartSentinelIfRevision.mockRejectedValueOnce(new Error("database locked"));
+    mocks.clearSentinel.mockRejectedValueOnce(new Error("database locked"));
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -1425,11 +1420,11 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("preserves a newer sentinel while draining durable work from the loaded revision", async () => {
-    mocks.clearRestartSentinelIfRevision.mockResolvedValueOnce(false);
+    mocks.clearSentinel.mockResolvedValueOnce(false);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
     expect(mocks.logInfo).toHaveBeenCalledWith(
@@ -1440,14 +1435,14 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("does not resend a restart notice whose stable queue id is already owned", async () => {
     mocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
-    mocks.findDeliveryIntentOwner.mockReturnValueOnce({
+    mocks.findDeliveryIntentOwner.mockResolvedValueOnce({
       namespace: "prepared",
       status: "pending",
     });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
     expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
@@ -3491,7 +3486,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalled();
+      expect(mocks.clearSentinel).toHaveBeenCalled();
       expect(mocks.logWarn).toHaveBeenCalledWith("lifecycle notice skipped: no delivery target", {
         runId: undefined,
       });
@@ -3507,7 +3502,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+    expect(mocks.clearSentinel).not.toHaveBeenCalled();
     expect(mocks.drainPendingSessionDelivery).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
       source: "restart-sentinel",
@@ -3572,30 +3567,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
-    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
-  });
-
-  it("does not rewrite pending update sentinels during status refresh", async () => {
-    const payload: RestartSentinelPayload = {
-      kind: "update",
-      status: "skipped",
-      ts: 123,
-      stats: {
-        mode: "git",
-        handoffId: "handoff-1",
-        reason: "managed-service-handoff-started",
-      },
-    };
-    mocks.readRestartSentinel.mockResolvedValue({
-      version: 1,
-      revision: 123,
-      payload,
-    });
-
-    await expect(refreshLatestUpdateRestartSentinel()).resolves.toEqual(payload);
-
-    expect(mocks.finalizeUpdateRestartSentinelRunningVersion).not.toHaveBeenCalled();
+    expect(mocks.clearSentinel).toHaveBeenCalledOnce();
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
@@ -3635,7 +3607,12 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "room-77" });
     setNoticeOwner("telegram:room-77");
     await scheduleRestartSentinelWake({ deps: {} as never });
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey);
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(
+      sessionKey,
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR }),
+      }),
+    );
     expect(mocks.resolveSystemMainSessionTarget).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3691,7 +3668,7 @@ describe("scheduleRestartSentinelWake", () => {
     async ({ status, consumed }) => {
       const run = createUpdateRun({ trigger: "cli" });
       const terminal = finishUpdateRun(run.runId, { status, reason: "original-cli-outcome" });
-      mocks.clearRestartSentinelIfRevision.mockResolvedValueOnce(consumed);
+      mocks.clearSentinel.mockResolvedValueOnce(consumed);
       mocks.readRestartSentinel.mockResolvedValue({
         version: 1,
         revision: 123,
@@ -3705,7 +3682,7 @@ describe("scheduleRestartSentinelWake", () => {
         },
       });
       await scheduleRestartSentinelWake({ deps: {} as never });
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledExactlyOnceWith(123);
+      expect(mocks.clearSentinel).toHaveBeenCalledExactlyOnceWith(123, queueContext.environment);
       expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
@@ -3753,7 +3730,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.resolveSystemMainSessionTarget).not.toHaveBeenCalled();
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
     expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(false);
   });
 
@@ -3782,8 +3759,8 @@ describe("scheduleRestartSentinelWake", () => {
 
       await scheduleRestartSentinelWake({ deps: {} as never });
 
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
-      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+      expect(mocks.clearSentinel).toHaveBeenCalledOnce();
+      expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
       expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
@@ -3806,7 +3783,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
+    expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       "restart message",
       expect.objectContaining({ sessionKey: "agent:ops:main" }),
@@ -3843,9 +3820,9 @@ describe("scheduleRestartSentinelWake", () => {
             }),
           },
         }));
-        const delivery = await vi.importActual<
-          typeof import("../utils/delivery-context.shared.js")
-        >("../utils/delivery-context.shared.js");
+        const delivery = await vi.importActual<typeof import("../utils/delivery-context.read.js")>(
+          "../utils/delivery-context.read.js",
+        );
         mocks.deliveryContextFromSession.mockImplementation(delivery.deliveryContextFromSession);
       } else {
         mocks.deliveryContextFromSession.mockReturnValue(context);
@@ -3961,7 +3938,7 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
-    expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+    expect(mocks.clearSentinel).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {

@@ -2,49 +2,30 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import { auditOpenClawPeerDependencyLinkSync } from "./plugin-peer-link.js";
+import type {
+  PluginDependencyEntry,
+  PluginDependencySpecMap,
+  PluginDependencyStatus,
+} from "./status-dependencies.types.js";
 
 const MAX_DEPENDENCY_MANIFEST_BYTES = 1024 * 1024;
 
-/** Dependency name-to-version map from a plugin package manifest. */
-export type PluginDependencySpecMap = Record<string, string>;
-
-/** Installation status for one plugin dependency. */
-type PluginDependencyEntry = {
-  name: string;
-  spec: string;
-  installed: boolean;
-  optional: boolean;
-  resolvedPath?: string;
-};
-
-/** Aggregate installation status for required and optional plugin dependencies. */
-export type PluginDependencyStatus = {
-  hasDependencies: boolean;
-  installed: boolean;
-  requiredInstalled: boolean;
-  optionalInstalled: boolean;
-  missing: string[];
-  missingOptional: string[];
-  dependencies: PluginDependencyEntry[];
-  optionalDependencies: PluginDependencyEntry[];
-};
-
-type PluginDependencyHealthRegistry = {
+export type PluginDependencyHealthRegistry = {
   plugins: Array<{
     id: string;
     source: string;
     enabled: boolean;
+    origin?: string;
+    packageName?: string;
+    rootDir?: string;
     status: "loaded" | "disabled" | "error";
     error?: string;
     dependencyStatus?: PluginDependencyStatus;
   }>;
-  diagnostics: Array<{
-    level: "warn" | "error";
-    message: string;
-    pluginId?: string;
-    source?: string;
-  }>;
+  diagnostics: PluginDiagnostic[];
 };
 
 function normalizeDependencyMap(raw: unknown): PluginDependencySpecMap {
@@ -214,14 +195,15 @@ export function buildPluginDependencyStatus(params: {
 }
 
 /** Checks managed required dependencies, using the host audit for the OpenClaw SDK link. */
-export async function findMissingRequiredPluginDependencies(params: {
+export function buildManagedPluginDependencyStatus(params: {
   rootDir: string;
   dependencyRootDir: string;
   dependencies?: PluginDependencySpecMap;
-}): Promise<string[]> {
+  optionalDependencies?: PluginDependencySpecMap;
+}): PluginDependencyStatus {
   const status = buildPluginDependencyStatus(params);
   if (!status.dependencies.some((entry) => entry.name === "openclaw")) {
-    return status.missing;
+    return status;
   }
 
   const rootDir = safeRealpathSync(params.rootDir);
@@ -230,53 +212,116 @@ export async function findMissingRequiredPluginDependencies(params: {
   if (rootDir && boundaryRoot && isPathInside(boundaryRoot, rootDir)) {
     // The canonical host may live outside this project. Audit its identity even
     // when an in-project copy would satisfy the ordinary dependency lookup.
-    const { auditOpenClawPeerDependencyLink } = await import("./plugin-peer-link.js");
-    hostInstalled = (await auditOpenClawPeerDependencyLink({ packageDir: rootDir })) === null;
+    hostInstalled = auditOpenClawPeerDependencyLinkSync({ packageDir: rootDir }) === null;
   }
-  return status.dependencies
-    .filter((entry) => (entry.name === "openclaw" ? !hostInstalled : !entry.installed))
-    .map((entry) => entry.name);
+  const dependencies = status.dependencies.map((entry) =>
+    entry.name === "openclaw"
+      ? {
+          ...entry,
+          installed: hostInstalled,
+          resolvedPath: hostInstalled
+            ? path.join(params.rootDir, "node_modules", "openclaw")
+            : undefined,
+        }
+      : entry,
+  );
+  const missing = dependencies.filter((entry) => !entry.installed).map((entry) => entry.name);
+  return {
+    ...status,
+    dependencies,
+    missing,
+    installed: missing.length === 0,
+    requiredInstalled: missing.length === 0,
+  };
 }
 
-/** Projects missing required dependencies consistently across cold plugin status surfaces. */
+export async function findMissingRequiredPluginDependencies(
+  params: Parameters<typeof buildManagedPluginDependencyStatus>[0],
+): Promise<string[]> {
+  return buildManagedPluginDependencyStatus(params).missing;
+}
+
+export function pluginInstallIncompleteDiagnostic(
+  pluginId: string,
+  detail: string,
+  installId = pluginId,
+): PluginDiagnostic {
+  const fixHint = `Run \`openclaw plugins install ${installId} --force\` to reinstall the plugin.`;
+  return {
+    level: "error",
+    pluginId,
+    code: "plugin-verification",
+    message: `Plugin "${pluginId}" install incomplete: ${detail} ${fixHint}`,
+    fixHint,
+  };
+}
+
+/** Projects install failures consistently across cold plugin status surfaces. */
 export function projectPluginDependencyHealth<T extends PluginDependencyHealthRegistry>(
   registry: T,
+  installTargets: ReadonlyMap<string, string> = new Map(),
 ): T {
   const diagnostics = [...registry.diagnostics];
   const plugins = registry.plugins.map((plugin) => {
-    const status = plugin.dependencyStatus;
-    if (!plugin.enabled || status?.requiredInstalled !== false) {
+    if (!plugin.enabled) {
       return plugin;
     }
-    const message =
-      `Plugin "${plugin.id}" cannot load because required dependencies are missing: ` +
-      `${status.missing.join(", ")}. Install the plugin dependencies or reinstall/update the ` +
-      "plugin, then restart the Gateway.";
-    const existingDiagnosticIndex = diagnostics.findIndex(
-      (entry) => entry.level === "error" && entry.pluginId === plugin.id,
-    );
-    if (existingDiagnosticIndex === -1) {
-      diagnostics.push({ level: "error", pluginId: plugin.id, source: plugin.source, message });
-    } else {
+    const dependencyFailure: PluginDiagnostic | undefined =
+      plugin.dependencyStatus?.requiredInstalled === false
+        ? installTargets.has(plugin.id)
+          ? pluginInstallIncompleteDiagnostic(
+              plugin.id,
+              `required dependencies are missing: ${plugin.dependencyStatus.missing.join(", ")}.`,
+              installTargets.get(plugin.id),
+            )
+          : {
+              level: "error" as const,
+              pluginId: plugin.id,
+              message:
+                `Plugin "${plugin.id}" cannot load because required dependencies are missing: ` +
+                `${plugin.dependencyStatus.missing.join(", ")}. Install the plugin dependencies or reinstall/update the ` +
+                "plugin, then restart the Gateway.",
+            }
+        : undefined;
+    const failure =
+      dependencyFailure ??
+      diagnostics.find(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === plugin.id &&
+          entry.code === "plugin-verification",
+      );
+    if (!failure) {
+      return plugin;
+    }
+    const message = failure.message;
+    if (dependencyFailure) {
+      const existingDiagnosticIndex = diagnostics.findIndex(
+        (entry) => entry.level === "error" && entry.pluginId === plugin.id,
+      );
       const existingDiagnostic = diagnostics[existingDiagnosticIndex];
-      if (existingDiagnostic && !existingDiagnostic.message.includes(message)) {
+      if (!existingDiagnostic) {
+        diagnostics.push({ ...failure, source: plugin.source });
+      } else {
         diagnostics[existingDiagnosticIndex] = {
+          ...failure,
           ...existingDiagnostic,
-          message: `${existingDiagnostic.message}\n${message}`,
+          fixHint: existingDiagnostic.fixHint ?? failure.fixHint,
+          message: existingDiagnostic.message.includes(message)
+            ? existingDiagnostic.message
+            : `${existingDiagnostic.message}\n${message}`,
         };
       }
     }
-    if (plugin.status === "error") {
-      const existingError = plugin.error;
-      return {
-        ...plugin,
-        error:
-          existingError && !existingError.includes(message)
-            ? `${existingError}\n${message}`
-            : (existingError ?? message),
-      };
-    }
-    return { ...plugin, status: "error" as const, error: message };
+    const existingError = plugin.status === "error" ? plugin.error : undefined;
+    return {
+      ...plugin,
+      status: "error" as const,
+      error:
+        existingError && !existingError.includes(message)
+          ? `${existingError}\n${message}`
+          : (existingError ?? message),
+    };
   });
   return { ...registry, plugins, diagnostics };
 }

@@ -225,7 +225,7 @@ describe("applyPatch", () => {
 *** End Patch`;
 
           await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
-            /Cannot create notes\.txt: the file already exists/,
+            workspaceOnly ? /symlink/i : /Cannot create notes\.txt: the file already exists/,
           );
           await expect(fs.readFile(target, "utf8")).resolves.toBe("keep me\n");
           await expect(fs.readlink(link)).resolves.toBe("target.txt");
@@ -809,7 +809,7 @@ describe("applyPatch", () => {
 *** End Patch`;
 
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /path alias under sandbox root|symlink escapes sandbox root/i,
+          /symlink escapes sandbox root/i,
         );
         await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("before\n");
         await expectMissingPath(fs.readFile(outsideTarget, "utf8"));
@@ -886,9 +886,10 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
-              );
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toMatchObject({
+                name: "FsSafeError",
+                code: "symlink",
+              });
             },
           });
           await expectMissingPath(fs.stat(path.join(outside, "nested")));

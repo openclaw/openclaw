@@ -7,8 +7,7 @@ import {
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import {
   combineChannelAdmissionEvidence,
-  configureChannelAdmissionDecisionSink,
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import { consumeChannelRunAdmission, prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -17,9 +16,11 @@ const identityConfig = { logging: { audit: { executionIdentity: true } } } as co
 
 describe("channel run admission", () => {
   it("projects a hardened channel handoff as boundary-verified assurance", () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    const clearCollection = () => audit.close();
     try {
       const evidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });
@@ -43,17 +44,21 @@ describe("channel run admission", () => {
     const identityWork: unknown[] = [];
     const decisions: unknown[] = [];
     const admittedContexts: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({
+      enabled: true,
+      decisionSink: (receipt) => {
+        decisions.push(receipt);
+        return true;
+      },
+    });
+    const clearCollection = () => audit.close();
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       identityWork.push(work);
       return true;
     });
-    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-      decisions.push(receipt);
-      return true;
-    });
     try {
       const evidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });
@@ -92,7 +97,6 @@ describe("channel run admission", () => {
         "prepared execution context is already closed",
       );
     } finally {
-      clearDecisionSink();
       clearIdentitySink();
       clearCollection();
     }
@@ -102,12 +106,15 @@ describe("channel run admission", () => {
     "explains identifier-authentication effects in the receipt with an unevaluated contribution: %s",
     async (includeUnevaluated) => {
       const decisions: unknown[] = [];
-      const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-      const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
-      const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-        decisions.push(receipt);
-        return true;
+      const audit = createChannelAdmissionAudit({
+        enabled: true,
+        decisionSink: (receipt) => {
+          decisions.push(receipt);
+          return true;
+        },
       });
+      const clearCollection = () => audit.close();
+      const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
       try {
         const prepared = prepareChannelRunAdmission({
           cfg: identityConfig,
@@ -121,6 +128,7 @@ describe("channel run admission", () => {
               : (["affected"] as const)
             ).map((identifierAuthentication) =>
               createChannelParticipantAdmissionEvidence({
+                audit,
                 channelId: "test",
                 participantId: "private-person-value",
                 identifierAuthentication,
@@ -145,7 +153,6 @@ describe("channel run admission", () => {
         ]);
         expect(JSON.stringify(decisions)).not.toContain("private-person-value");
       } finally {
-        clearDecisionSink();
         clearIdentitySink();
         clearCollection();
       }
@@ -154,13 +161,15 @@ describe("channel run admission", () => {
 
   it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
     const identityWork: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    const clearCollection = () => audit.close();
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       identityWork.push(work);
       return true;
     });
     try {
       const evidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });

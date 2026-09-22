@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
+import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
@@ -175,6 +177,24 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       expect(plan.pluginSkillsDir).toBeUndefined();
       expect(plan.pluginSkillRoots).toEqual([]);
       expect(plan.bundledSkillsDir).toBeUndefined();
+      if (caller === "runtime") {
+        await fs.writeFile(
+          path.join(workshopDir, "workshop-wins", "skill-card.md"),
+          "Workshop card",
+        );
+        sources.status = readWorkspaceSkillStatusFacts({
+          entries: sources.entries,
+          workspaceDir: remote,
+          managedSkillsDir: path.join(remote, "skills"),
+        });
+        const status = await prepareWorkspaceSkillStatus(gateway, {
+          ...params,
+          skillCardKey: "workshop-wins",
+        });
+        expect(status.files.find((file) => file.name === "workshop-wins")?.skillCard?.content).toBe(
+          "Workshop card",
+        );
+      }
     } finally {
       release();
     }
@@ -272,3 +292,45 @@ it("preserves extra-directory precedence across Gateway and workspace sources", 
     release();
   }
 });
+
+it.each(["pinned", "stale"])(
+  "reads only authorized Gateway Library files for the %s card",
+  async (skillCardKey) => {
+    const { gateway, remote, sources, bridge, options } = await fixture();
+    await fs.writeFile(
+      path.join(library.entries[0]!.skill.baseDir, "skill-card.md"),
+      "# Library card\n",
+    );
+    await fs.writeFile(
+      path.join(gateway, "skills", "stale", "skill-card.md"),
+      "# Gateway private card\n",
+    );
+    const forged = loadWorkspaceSkills(gateway, { workspaceOnly: true })[0]!;
+    forged.skill.source = "openclaw-library";
+    forged.skill.fileHost = "gateway";
+    sources.entries.push(forged);
+    sources.status = {
+      workspaceDir: remote,
+      managedSkillsDir: path.join(remote, "managed"),
+      files: [],
+    };
+    const release = registerAgentWorkspaceAccess(gateway, {
+      bridge,
+      loadSkills: async () => sources,
+    });
+    try {
+      const prepared = await prepareWorkspaceSkillStatus(gateway, { ...options, skillCardKey });
+      expect(prepared.files.find((file) => file.name === "stale")).toBeUndefined();
+      expect(prepared.files.find((file) => file.name === "pinned")?.skillCard).toMatchObject({
+        present: true,
+      });
+      if (skillCardKey === "pinned") {
+        expect(prepared.files.find((file) => file.name === "pinned")?.skillCard?.content).toBe(
+          "# Library card\n",
+        );
+      }
+    } finally {
+      release();
+    }
+  },
+);

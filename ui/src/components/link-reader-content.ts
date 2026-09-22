@@ -6,7 +6,8 @@ import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { icons } from "./icons.ts";
-import { linkReaderAuthorHref, type LinkReaderTarget } from "./link-reader-target.ts";
+import { linkReaderAuthorHref } from "./link-reader-response.ts";
+import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";

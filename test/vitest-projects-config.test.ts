@@ -38,6 +38,7 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import codexConfig from "./vitest/vitest.extension-codex.config.ts";
 import {
   databaseWorkerExtensionTestFiles,
   databaseWorkerExtensionTestRoots,
@@ -78,6 +79,7 @@ import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-is
 import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
+const defaultPool = process.platform === "win32" ? "forks" : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/chat-metadata-runtime.cache.test.ts",
@@ -85,6 +87,7 @@ const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/tasks.test.ts",
   "server-methods/agent.task-runtime.test.ts",
   "server-methods/agent.test.ts",
+  "server-methods/agent.visitor-access.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
   "server-methods/chat.reset-visible-yield.test.ts",
   "server-methods/environments.pairing-snapshot.test.ts",
@@ -94,6 +97,7 @@ const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/system-agent-setup-control-ui.test.ts",
   "server-methods/transcripts.test.ts",
   "server-methods/users-preferences.test.ts",
+  "server-methods/users-role.worker.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
 ];
@@ -107,13 +111,14 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 const rootVitestProjects = requireTestConfig(baseConfig).projects as string[];
 
-function requireWebOptimizer(testConfig: unknown) {
-  const webOptimizer = (testConfig as { deps?: { optimizer?: { web?: { enabled?: boolean } } } })
-    .deps?.optimizer?.web;
-  if (!webOptimizer) {
-    throw new Error("expected vitest web optimizer config");
+function requireClientOptimizer(testConfig: unknown) {
+  const clientOptimizer = (
+    testConfig as { deps?: { optimizer?: { client?: { enabled?: boolean } } } }
+  ).deps?.optimizer?.client;
+  if (!clientOptimizer) {
+    throw new Error("expected vitest client optimizer config");
   }
-  return webOptimizer;
+  return clientOptimizer;
 }
 
 afterEach(() => {
@@ -121,6 +126,15 @@ afterEach(() => {
 });
 
 describe("projects vitest config", () => {
+  it("isolates Codex file globals while inheriting the shared worker budget", () => {
+    const config = requireTestConfig(codexConfig);
+    expect(config.isolate).toBe(true);
+    expect(config.pool).toBe(requireTestConfig(baseConfig).pool);
+    expect(config.runner).toBeUndefined();
+    expect(config.fileParallelism).toBe(requireTestConfig(baseConfig).fileParallelism);
+    expect(config.maxWorkers).toBe(requireTestConfig(baseConfig).maxWorkers);
+  });
+
   it("pins an explicit full-suite project worker limit", () => {
     const previous = process.env.OPENCLAW_VITEST_MAX_WORKERS;
     try {
@@ -193,7 +207,7 @@ describe("projects vitest config", () => {
       ]);
       expect(projects.map((project) => project.pool)).toEqual(["forks", "forks"]);
       const original = requireTestConfig(createGatewayVitestConfig(env));
-      expect(original.pool).toBe("threads");
+      expect(original.pool).toBe(defaultPool);
       for (const project of projects) {
         expect(project.runner).toBe(original.runner);
         expect(project.setupFiles).toEqual(original.setupFiles);
@@ -239,7 +253,9 @@ describe("projects vitest config", () => {
     const methodsConfig = requireTestConfig(createGatewayMethodsVitestConfig({}));
     const methodsIsolatedConfig = requireTestConfig(createGatewayMethodsIsolatedVitestConfig({}));
     const serverIsolatedConfig = requireTestConfig(createGatewayServerIsolatedVitestConfig({}));
-    const serverConfig = requireTestConfig(createGatewayServerVitestConfig({}));
+    const serverConfig = requireTestConfig(
+      createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
+    );
     const gatewayFallback = requireTestConfig(createGatewayVitestConfig());
 
     expect(rootVitestProjects).toContain(methodsIsolatedProject);
@@ -252,7 +268,11 @@ describe("projects vitest config", () => {
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
     expect(serverConfig.pool).toBe("forks");
     expect(serverConfig.isolate).toBe(false);
-    expect(serverConfig.fileParallelism).toBe(false);
+    expect(serverConfig.fileParallelism).toBe(true);
+    expect(
+      requireTestConfig(createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "1" }))
+        .fileParallelism,
+    ).toBe(false);
     expect(serverIsolatedConfig.isolate).toBe(true);
     expect(serverIsolatedConfig.pool).toBe("forks");
     expect(serverIsolatedConfig.runner).toBeUndefined();
@@ -429,9 +449,9 @@ describe("projects vitest config", () => {
     const configFiles = new Map<string, string[]>();
     const matches: string[] = [];
     const processLimits = [
-      ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 12],
-      ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40],
-      ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 1],
+      ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 24, 12],
+      ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40, 40],
+      ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 10, 1],
     ] as const;
     for (const plan of buildVitestRunPlans(["extensions"])) {
       let files = configFiles.get(plan.config);
@@ -444,7 +464,7 @@ describe("projects vitest config", () => {
           !plan.includePatterns ||
           plan.includePatterns.some((pattern) => path.matchesGlob(file, pattern)),
       );
-      for (const [boundedConfig, root, limit] of processLimits) {
+      for (const [boundedConfig, root, limit, workerLimit] of processLimits) {
         const inheritedWorkerLimit =
           plan.config === "test/vitest/vitest.extension-database-workers.config.ts" &&
           selected.some((file) => file.startsWith(root));
@@ -453,7 +473,9 @@ describe("projects vitest config", () => {
             selected.every((file) => file.startsWith(root)),
             plan.config,
           ).toBe(true);
-          expect(selected.length, plan.config).toBeLessThanOrEqual(limit);
+          expect(selected.length, plan.config).toBeLessThanOrEqual(
+            inheritedWorkerLimit ? workerLimit : limit,
+          );
         }
       }
       matches.push(...selected);
@@ -526,25 +548,26 @@ describe("projects vitest config", () => {
   });
 
   it("keeps root projects on their expected pool defaults", () => {
-    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(sharedVitestConfig.test.pool).toBe(defaultPool);
+    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
-      "threads",
+      defaultPool,
     );
     expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
-      "threads",
+      defaultPool,
     );
-    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("forks");
+    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");
-    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
-      "threads",
+      defaultPool,
     );
   });
 
@@ -565,6 +588,7 @@ describe("projects vitest config", () => {
         },
       }),
     ).toEqual({
+      pool: "threads",
       fileParallelism: false,
       maxWorkers: 1,
     });
@@ -580,15 +604,34 @@ describe("projects vitest config", () => {
         },
       }),
     ).toEqual({
+      pool: "threads",
       fileParallelism: true,
       maxWorkers: 3,
     });
   });
 
+  it.each([
+    { isCI: true, override: "4", maxWorkers: 4 },
+    { isCI: true, override: undefined, maxWorkers: 2 },
+    { isCI: false, override: undefined, maxWorkers: 4 },
+  ])(
+    "selects process workers on Windows without reducing parallelism ($isCI, $override)",
+    (scenario) => {
+      expect(
+        resolveSharedVitestWorkerConfig({
+          env: { OPENCLAW_VITEST_MAX_WORKERS: scenario.override },
+          isCI: scenario.isCI,
+          isWindows: true,
+          localScheduling: { fileParallelism: true, maxWorkers: 4, throttledBySystem: false },
+        }),
+      ).toEqual({ pool: "forks", fileParallelism: true, maxWorkers: scenario.maxWorkers });
+    },
+  );
+
   it("keeps contract shards on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
     const testConfig = requireTestConfig(config);
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(defaultPool);
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     const session = requireTestConfig(contractChannelSessionConfig);
@@ -725,7 +768,7 @@ describe("projects vitest config", () => {
     const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
-    expect(requireWebOptimizer(testConfig).enabled).toBe(true);
+    expect(requireClientOptimizer(testConfig).enabled).toBe(true);
   });
 
   it("registers the package Chromium owner in root and full runtime runs", async () => {
@@ -887,9 +930,9 @@ describe("projects vitest config", () => {
     },
   );
 
-  it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
+  it("keeps the bundled lane on the platform pool with the non-isolated runner", () => {
     const testConfig = requireTestConfig(bundledConfig);
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(defaultPool);
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });

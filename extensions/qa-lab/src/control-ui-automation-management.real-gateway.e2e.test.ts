@@ -1,13 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
-import { startAutomationProvider } from "./control-ui-automation-management.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild } from "./gateway-child.ts";
+import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
+import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
+import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
+import {
+  extractLastUserText,
+  extractToolOutput,
+  hasToolOutput,
+} from "./providers/mock-openai/mock-openai-input.ts";
+import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cross-channel automation management with a real Gateway",
@@ -17,8 +26,9 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
-const automationName = "Telegram-created reminder";
+const automationName = "Telegram-created reminder _literal_";
 const updatedReminderMessage = "Complete the reminder updated from Control UI.";
+const scheduledReply = "Scheduled reminder completed.";
 
 function readResult(text: string): Record<string, unknown> {
   const value: unknown = JSON.parse(text);
@@ -26,6 +36,79 @@ function readResult(text: string): Record<string, unknown> {
     throw new Error("Automation tool returned no object result");
   }
   return value;
+}
+
+async function startAutomationProvider() {
+  const requests = new Map<string, Record<string, unknown>>();
+  const results = new Map<string, string>();
+  const toolAvailability = new Map<string, boolean>();
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      if (request.method !== "POST" || request.url !== "/v1/responses") {
+        response.writeHead(404).end();
+        return;
+      }
+      const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (!isRecord(body) || !Array.isArray(body.input)) {
+        throw new Error("Expected a Responses request");
+      }
+      const input = body.input.filter(isRecord);
+      const marker = /\[automation-proof:([a-z-]+)\]/u.exec(extractLastUserText(input))?.[1];
+      const args = marker ? requests.get(marker) : undefined;
+      const output = extractToolOutput(input);
+      const hasOutput = hasToolOutput(input);
+      const toolAvailable = hasToolDefinition(body, "automations");
+      if (marker && args && !hasOutput) {
+        // A retry must not erase an earlier exposure of an owner-only tool.
+        toolAvailability.set(marker, toolAvailability.get(marker) === true || toolAvailable);
+      }
+      if (marker && args && hasOutput) {
+        results.set(marker, output);
+      }
+      const events =
+        args && !hasOutput
+          ? toolAvailable
+            ? buildToolCallEventsWithArgs("automations", args)
+            : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
+          : buildAssistantEvents(
+              marker && args ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\`` : scheduledReply,
+            );
+      if (body.stream === true) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+      } else {
+        const completed = events.find((event) => event.type === "response.completed");
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(completed?.response));
+      }
+    })().catch((error: unknown) => {
+      response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Automation provider did not bind a loopback port");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    requests,
+    results,
+    toolAvailability,
+    async stop() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
 }
 
 function managementArgs(action: AutomationAction, jobId: string) {
@@ -212,6 +295,7 @@ suite.define(() => {
           label: "Manage Telegram reminder",
         });
         const adminResults: Record<string, string> = {};
+        let observedCronRuns: string | undefined;
         await suite.withPage(
           {
             locale: "en-US",
@@ -264,21 +348,23 @@ suite.define(() => {
                   expect.objectContaining(updatedJob),
                 );
               } else if (action === "run") {
-                expect(result).toMatchObject({ ok: true });
+                expect(result).toMatchObject({ ok: true, enqueued: true });
                 await expect
                   .poll(
                     async () => {
                       const runs = await gateway.call("cron.runs", { id: jobId });
-                      return (
-                        isRecord(runs) &&
-                        Array.isArray(runs.entries) &&
-                        runs.entries.some((entry) => isRecord(entry) && entry.status === "ok")
-                      );
+                      observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
+                      return {
+                        succeeded:
+                          isRecord(runs) &&
+                          Array.isArray(runs.entries) &&
+                          runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
+                        runs: observedCronRuns,
+                      };
                     },
                     { timeout: 60_000 },
                   )
-                  .toBe(true);
-                provider.releaseRunReply();
+                  .toMatchObject({ succeeded: true });
               } else {
                 expect(result).toMatchObject({ removed: true });
               }
@@ -304,6 +390,7 @@ suite.define(() => {
               provider: "deterministic local Responses API",
               creator: "Telegram conversation",
               admin: adminResults,
+              cronRuns: observedCronRuns,
               configuredTelegramOwner: ownerResults,
               nonOwnerTelegramConversation: {
                 automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
@@ -317,8 +404,6 @@ suite.define(() => {
         );
       } catch (error) {
         errors.push(error);
-      } finally {
-        provider.releaseRunReply();
       }
       const stopped = await owner.stop({ preserveToDir: path.join(proofDir, "gateway") });
       errors.push(...stopped.errors);

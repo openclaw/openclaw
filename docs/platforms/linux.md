@@ -57,6 +57,27 @@ the draft and masks the new field. Press Enter or **Connect to Gateway** to conn
 In Connection Settings, blank credentials reuse the saved credentials for the same
 endpoint.
 
+### Chrome extension setup
+
+The app prepares the local Chrome native helper at startup and after CLI
+installation. Release builds reuse a matching CLI or install a version-matched
+browser runtime under their own app-data directory. This download does not
+create, probe, refresh, or restart a Gateway service, replace its runtime, or
+change the selected remote connection. It requires an internet connection.
+
+Choose **Set Up Chrome Extension…** in the tray to retry setup and open the
+official Chrome Web Store listing after native registration succeeds. Google
+Chrome on Linux still requires **Add to Chrome** in the Store; the app does not
+use enterprise force-install policies or reopen the Store at every startup.
+Once enabled, supported host-local setups pair automatically without a copied
+credential. A remote-only desktop connection still needs a browser node on this
+computer to expose its tabs to the remote Gateway.
+
+Development builds use an existing local CLI rather than downloading an
+unrelated stable runtime. The Windows Tauri test build does not provide this
+runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
+disconnection, and manual recovery.
+
 ### Desktop compatibility
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -308,6 +329,10 @@ See `apps/linux/README.md` in the repository for Linux build dependencies and
 development commands.
 
 ### Quick Chat
+
+`Ctrl+Shift+O` opens a new session only in the focused dashboard. The companion
+does not reserve this chord globally, so other foreground apps keep their own
+shortcut behavior.
 
 Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
 chip shows the configured avatar, emoji, or monogram; select it to switch agents.

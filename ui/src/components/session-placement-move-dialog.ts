@@ -15,6 +15,7 @@ import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { compareCloudProfiles } from "./provider-icon.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -94,6 +95,7 @@ export function showSessionPlacementTargetDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
+      const profiles = catalog.profiles.toSorted(compareCloudProfiles);
       const restart = options.mode === "restart";
       const dispatch = options.mode === "dispatch";
       const title = t(`sessionsView.${options.mode}SessionTitle`);
@@ -185,7 +187,7 @@ export function showSessionPlacementTargetDialog(
                                   <div class="new-session-page__menu-title">
                                     ${t("newSession.cloud")}
                                   </div>
-                                  ${catalog.profiles.map((profile) => {
+                                  ${profiles.map((profile) => {
                                     const profileSelected =
                                       selected?.kind === "profile" &&
                                       selected.profileId === profile.id;

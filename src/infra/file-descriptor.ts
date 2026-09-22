@@ -2,7 +2,11 @@ import type { BigIntStats } from "node:fs";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import "./fs-safe-defaults.js";
 
-export { copyFileHandle, overwriteFileHandle } from "@openclaw/fs-safe/advanced";
+export {
+  copyFileHandle,
+  overwriteFileHandle,
+  writeFileWindowFully,
+} from "@openclaw/fs-safe/advanced";
 
 export type FileMutationFingerprint = Pick<
   BigIntStats,

@@ -113,11 +113,6 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
   ].join(" ");
 }
 
-export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
-  const { resetPreparedModelCatalogStateForTest } = await loadGatewayModelCatalogModule();
-  await resetPreparedModelCatalogStateForTest();
-}
-
 type GatewayKernelOptions = {
   deferEarlyRuntime?: boolean;
   sdkResourceHost?: LegacyPluginSdkResourceHost;

@@ -1,5 +1,5 @@
 // Document Extract tests cover document extractor plugin behavior.
-import type { WorkerTaskControl } from "openclaw/plugin-sdk/process-runtime";
+import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPdfFixture } from "./document-extractor.test-support.js";
 

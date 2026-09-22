@@ -27,7 +27,7 @@ import {
 } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
-import { renderChatGoal } from "./chat-composer-goal.ts";
+import { renderChatGoal, renderChatGoalRecovery } from "./chat-composer-goal.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderComposerQuestionDock } from "./chat-composer-question.ts";
@@ -295,6 +295,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             onManipulate: props.onProgressManipulate,
             completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
           },
+          props.connected && canCompose ? props.progressCardRefresh : undefined,
         )}
       </div>`
     : props.progressCardInitialLoading
@@ -328,7 +329,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
-          canAct: props.connected && canCompose,
+          canAct: props.connected && canCompose && !props.goalRecovery,
           onGoalAction: props.onGoalAction,
           onGoalEdit: props.onGoalSubmit ? (goal) => goalComposer.begin(goal) : undefined,
           requestUpdate,
@@ -349,7 +350,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
-        ${progressCard} ${queue} ${goalCard}
+        ${progressCard} ${queue} ${renderChatGoalRecovery(props.goalRecovery, props.connected)}
+        ${goalCard}
       </div>
       ${
         showComposerInput
@@ -543,6 +545,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     placeholder=${dictation?.active ? "" : placeholder}
                     rows="1"
                   ></textarea>
+                  <span class="agent-chat__composer-placeholder" aria-hidden="true"
+                    >${dictation?.active ? "" : placeholder}</span
+                  >
                   <span
                     id=${slashMenuAnnouncementId}
                     class="sr-only"

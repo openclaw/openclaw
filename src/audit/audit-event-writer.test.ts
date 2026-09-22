@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -85,34 +86,31 @@ describe("audit event writer", () => {
     ).toEqual(["supervised-run"]);
   });
 
-  it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
+  it("keeps disabled progress absent and drains accepted progress after disabling collection", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const disabledWriter = createAuditEventWriter({ stateDir });
-    const disabledRecorder = createAuditEventRecorder({
-      messageMode: "off",
-      writer: disabledWriter,
+    let config: OpenClawConfig = { logging: { audit: { enabled: false, messages: "all" } } };
+    const writer = createAuditEventWriter({ stateDir });
+    const recorder = createAuditEventRecorder({
+      getConfig: () => config,
+      writer,
     });
-    await disabledWriter.ready;
+    await writer.ready;
     expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
       false,
     );
-    disabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
-    await disabledWriter.stop();
+    recorder.recordMessage(messageEvent("message.outbound.queued"));
     expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
       false,
     );
 
-    const enabledWriter = createAuditEventWriter({ stateDir });
-    const enabledRecorder = createAuditEventRecorder({
-      messageMode: "all",
-      writer: enabledWriter,
-    });
-    enabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
-    enabledRecorder.recordMessage(messageEvent("message.outbound.platform-started"));
-    enabledRecorder.recordMessage(messageEvent("message.outbound.finished"));
-    await enabledWriter.ready;
-    await enabledWriter.stop();
+    config = { logging: { audit: { messages: "all" } } };
+    recorder.recordMessage(messageEvent("message.outbound.queued"));
+    recorder.recordMessage(messageEvent("message.outbound.platform-started"));
+    recorder.recordMessage(messageEvent("message.outbound.finished"));
+    config = { logging: { audit: { enabled: false, messages: "all" } } };
+    recorder.recordMessage({ ...messageEvent("message.outbound.finished"), sourceId: "disabled" });
+    await recorder.stop();
 
     const { db } = openOpenClawStateDatabase(database);
     expect(

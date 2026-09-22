@@ -107,9 +107,12 @@ in the background; each completed agent becomes available, and the degraded
 status clears when the full publication finishes. An unfinished agent cannot
 serve model requests until its runtime and authentication facts are ready.
 
-After sign-in, starter models are available immediately. The provider shows
-“checking models…” while the Gateway discovers account models, then updates the
-open picker when discovery completes. Gateway startup and credential changes
+After sign-in, starter models are available immediately. While the Gateway
+discovers account models, a small spinner in the picker’s search field indicates
+a background refresh. Hover, focus, or tap it to see which providers are refreshing;
+existing models stay usable, and the open picker updates when discovery completes.
+An empty picker shows “Loading models…” until its first models arrive.
+Gateway startup and credential changes
 also refresh the affected catalog. Use **Refresh** in Models or
 `openclaw models list --refresh` to request another refresh, including newly
 released models. **Retry** requests discovery again after a failure.
@@ -118,8 +121,10 @@ For models configured to use a CLI runtime, channel picker availability follows 
 runtime's prepared authentication. A provider API key does not substitute for its
 native login.
 
-If discovery fails, OpenClaw reports the failure and keeps the last compatible
-model list. Without one, it shows prepared starter models with the failure.
+If discovery fails, **Settings > Models** and `openclaw models list` report the
+failure and keep the last compatible model list. Without one, OpenClaw shows
+prepared starter models. Chat and native Quick Chat model pickers keep usable
+choices without a catalog-wide warning; selected-model availability still applies.
 Other providers can still update. A successful empty response clears that
 provider's discovered models; it does not restore old choices. Explicitly
 configured models and independent native runtime catalogs remain.
@@ -361,7 +366,7 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
 - Immutable configuration stays unchanged. Asynchronous write errors are logged without reverting the session selection. Explicit model and auth-profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows while valid.
 - **Use the configured default:** `/model default -s` clears the current session model selection without writing configured defaults. A compatible auth-profile pin remains. An incompatible pin is cleared. Selecting the effective configured default by name also clears the session model pin, but agent/global scope still requests a write to that configured target. This does not restore an older configured default changed by a previous selection.
-- **Keep the selected runtime:** Model-only changes preserve a session runtime pin. An incompatible model is rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
+- **Follow compatible runtime selections:** Model-only changes preserve a session runtime pin when it supports the selected provider. Otherwise, the pin is cleared and the selected model follows its configured runtime automatically. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point. It can be queued for a later point, if tool activity or reply output already started.
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
@@ -455,6 +460,13 @@ values. A self-hosted mirror can be selected with an HTTPS
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default. Set `models.mode: "replace"` to use only your configured providers.
 
+In the default `merge` mode, configured model rows are combined with eligible
+provider discovery. They supply metadata and request overrides for matching
+models; they do not limit discovery to the saved IDs. Older provider model
+arrays can remain in your configuration without hiding newly advertised models.
+Use `agents.defaults.modelPolicy.allow` or a per-agent policy to restrict model
+selection, and `models.mode: "replace"` to keep a fully static configured catalog.
+
 Generated plugin catalogs supply model inventory, not request credentials. Their
 cached API keys, authentication modes, and request headers do not authorize model
 requests. Use a current auth profile or authored request configuration instead.
@@ -484,7 +496,7 @@ apart from built-in corrections for retired Google and Together model names.
     - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
-    - Explicit model lists control membership. For matching rows, an explicit `input` wins. When the source row omits `input`, plugin discovery can fill that capability metadata.
+    - Configured and discovered model lists are combined in merge mode. For matching rows, an explicit `input` wins. When the source row omits `input`, plugin discovery can fill that capability metadata.
     - Other provider fields refresh from config and normalized catalog data.
 
   </Accordion>

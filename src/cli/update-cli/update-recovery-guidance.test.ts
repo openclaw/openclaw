@@ -2,11 +2,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { recordUpdateResultNextAction } from "./update-command-result.js";
 import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -57,6 +63,75 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each([true, false, undefined])(
+    "uses raw recovery facts for immediate guidance without replacing history (running=%s)",
+    (serviceRunning) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const env = { OPENCLAW_STATE_DIR: dirs.make("recovery-guidance-observation-") };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      recordUpdateRunVerification(
+        run.runId,
+        {
+          serviceRunning: serviceRunning !== true,
+          runningVersion: "2026.8.99",
+          booted: true,
+          recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+        },
+        { env },
+      );
+      recordUpdateRunStep(
+        run.runId,
+        { step: "gateway verification", status: "failed", detail: "stale-unhealthy" },
+        { env },
+      );
+      const saved = getUpdateRun(run.runId, { env })?.verification;
+      const latest = failure({
+        reason: "post-update-plugins",
+        recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
+        verification:
+          serviceRunning === undefined ? {} : { serviceRunning, runningVersion: "2026.9.5" },
+        steps:
+          serviceRunning === false
+            ? [
+                {
+                  name: "gateway recovery verification",
+                  command: "gateway verification",
+                  cwd: "/fixture",
+                  durationMs: 0,
+                  exitCode: 1,
+                  failureFacts: [
+                    {
+                      check: "gateway-recovery",
+                      code: "current-not-ready",
+                      message: "Current Gateway readiness failed",
+                    },
+                  ],
+                },
+              ]
+            : [],
+      });
+
+      const action = recordUpdateResultNextAction({ opts: { run } }, latest);
+
+      expect(action).not.toContain("2026.8.99");
+      expect(action).not.toContain("stale-unhealthy");
+      expect(action).toContain("keep the update installed and do not roll back code alone");
+      if (serviceRunning === true) {
+        expect(action).toContain("gateway is running 2026.9.5");
+        expect(action).not.toContain("Keep the gateway stopped");
+      } else if (serviceRunning === false) {
+        expect(action).toContain("Managed gateway remains stopped");
+        expect(action).toContain("current-not-ready");
+      } else {
+        expect(action).not.toContain("gateway is running");
+        expect(action).not.toContain("Managed gateway remains stopped");
+      }
+      const recorded = getUpdateRun(run.runId, { env });
+      expect(recorded?.verification).toEqual(saved);
+      expect(recorded?.origin.nextAction).toBe(action);
+    },
+  );
+
   it.each(["node-runtime-preflight", "global-install-permission-denied"])(
     "retains the actionable %s outcome in history",
     async (reason) => {

@@ -12,6 +12,7 @@ import {
   resolveEffectiveAgentSkillFilter,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import { loadSkillLibrarySelection } from "../library/selection.js";
 import { getSkillsSourceVersion, observeSkillsSnapshotSource } from "../runtime/refresh-state.js";
@@ -256,6 +257,16 @@ export function readWorkspaceSkillSources(
     entries,
     executionEntries,
     runtime: { platform: process.platform, bins },
+    ...(request.status
+      ? {
+          status: readWorkspaceSkillStatusFacts({
+            entries,
+            workspaceDir: request.sourcePlan.workspaceDir,
+            managedSkillsDir: request.sourcePlan.managedSkillsDir,
+            skillCardKey: request.status.skillCardKey,
+          }),
+        }
+      : {}),
   };
 }
 
@@ -393,15 +404,17 @@ function mergeSkillTiers(
 }
 
 /** Acquire host source tiers before the native node/execution/Library merge. */
-async function prepareWorkspaceSkillEntries(
+export async function prepareWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: WorkspaceSkillLoadOptions & {
     entries?: SkillEntry[];
+    status?: { skillCardKey?: string };
   },
   assertCurrent?: () => void,
 ): Promise<{
   entries: SkillEntry[];
   runtime?: WorkspaceSkillSources["runtime"];
+  status?: WorkspaceSkillSources["status"];
 }> {
   assertCurrent?.();
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
@@ -446,6 +459,7 @@ async function prepareWorkspaceSkillEntries(
           ),
       ),
     ],
+    status: opts?.status,
   });
   assertCurrent?.();
   // A host-supplied source label or path must never authorize Gateway-local reads.
@@ -482,6 +496,7 @@ async function prepareWorkspaceSkillEntries(
           libraryEntries,
         )),
     runtime: sources.runtime,
+    status: sources.status,
   };
 }
 

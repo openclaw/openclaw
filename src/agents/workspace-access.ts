@@ -7,6 +7,7 @@ import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/ho
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
+import type { WorkspaceSkillLifecycle } from "../skills/lifecycle/workspace-types.js";
 import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
@@ -25,6 +26,8 @@ type WorkspaceAttachmentTurn = {
 export type AgentWorkspaceAccess = {
   /** Native Memory file operations; indexing and session state remain on Gateway. */
   memoryFiles?: MemoryWorkspaceFiles;
+  /** Execute a Gateway-approved dependency recipe on the workspace host. */
+  installSkillDependencies?: WorkspaceSkillLifecycle["installSkillDependencies"];
   /** Read native source tiers and execution-host facts without applying Gateway policy. */
   loadSkills?: (request: WorkspaceSkillSourceRequest) => Promise<WorkspaceSkillSources>;
   /** Keep a host subscription alive until aborted; notify without transferring file contents. */
@@ -34,6 +37,13 @@ export type AgentWorkspaceAccess = {
     signal: AbortSignal,
   ) => Promise<void>;
   skillResources?: SkillResourceSourceReader;
+  /** Transfer the source tree and apply it on the host; run beforeInstall on Gateway. */
+  applySkillRoot?: WorkspaceSkillLifecycle["applyExtractedSkillRoot"];
+  recordSkillSourceInstall?: WorkspaceSkillLifecycle["recordSkillSourceInstall"];
+  clawHubSkills?: Omit<
+    WorkspaceSkillLifecycle,
+    "installSkillDependencies" | "applyExtractedSkillRoot" | "recordSkillSourceInstall"
+  >;
   bridge: Pick<
     SandboxFsBridge,
     "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
@@ -264,6 +274,15 @@ export function registerAgentWorkspaceAccess(
       return note;
     };
   }
+  const installSkillDependencies = access.installSkillDependencies?.bind(access);
+  if (installSkillDependencies) {
+    boundAccess.installSkillDependencies = async (params) => {
+      assertCurrent();
+      const result = await installSkillDependencies(params);
+      assertCurrent();
+      return result;
+    };
+  }
   const loadSkills = access.loadSkills?.bind(access);
   if (loadSkills) {
     boundAccess.loadSkills = async (request) => {
@@ -319,6 +338,110 @@ export function registerAgentWorkspaceAccess(
         const result = await skillResources.readSkillFiles(skill, options);
         assertCurrent();
         return result;
+      },
+    });
+  }
+  const applySkillRoot = access.applySkillRoot?.bind(access);
+  if (applySkillRoot) {
+    boundAccess.applySkillRoot = async (params) => {
+      assertCurrent();
+      const result = await applySkillRoot({
+        ...params,
+        beforeInstall: async (mode) => {
+          assertCurrent();
+          const decision = await params.beforeInstall?.(mode);
+          assertCurrent();
+          return decision;
+        },
+      });
+      assertCurrent();
+      return result;
+    };
+  }
+  const recordSkillSourceInstall = access.recordSkillSourceInstall?.bind(access);
+  if (recordSkillSourceInstall) {
+    boundAccess.recordSkillSourceInstall = async (params) => {
+      assertCurrent();
+      await recordSkillSourceInstall(params);
+      assertCurrent();
+    };
+  }
+  const clawHubSkills = access.clawHubSkills;
+  if (clawHubSkills) {
+    boundAccess.clawHubSkills = Object.freeze({
+      async planClawHubSkillUninstall(params) {
+        assertCurrent();
+        const result = await clawHubSkills.planClawHubSkillUninstall(params);
+        assertCurrent();
+        return result;
+      },
+      async applyClawHubSkillUninstall(plan, options) {
+        assertCurrent();
+        const result = await clawHubSkills.applyClawHubSkillUninstall(plan, {
+          ...options,
+          beforePersistentApply() {
+            assertCurrent();
+            options.beforePersistentApply?.();
+          },
+          beforeRollback() {
+            assertCurrent();
+            options.beforeRollback?.();
+          },
+        });
+        assertCurrent();
+        return result;
+      },
+      async resolveClawHubSkillVerificationTarget(params) {
+        assertCurrent();
+        const result = await clawHubSkills.resolveClawHubSkillVerificationTarget(params);
+        assertCurrent();
+        return result;
+      },
+      async readClawHubSkillsLockfile(params) {
+        assertCurrent();
+        const result = await clawHubSkills.readClawHubSkillsLockfile(params);
+        assertCurrent();
+        return result;
+      },
+      async resolveRequestedUpdateSlug(params) {
+        assertCurrent();
+        const result = await clawHubSkills.resolveRequestedUpdateSlug(params);
+        assertCurrent();
+        return result;
+      },
+      async resolveTrackedUpdateTarget(params) {
+        assertCurrent();
+        const result = await clawHubSkills.resolveTrackedUpdateTarget(params);
+        assertCurrent();
+        return result;
+      },
+      async guardTrackedSkillLocalState(params) {
+        assertCurrent();
+        const result = await clawHubSkills.guardTrackedSkillLocalState(params);
+        assertCurrent();
+        return result;
+      },
+      async preflightSkillOwnerState(params) {
+        assertCurrent();
+        const result = await clawHubSkills.preflightSkillOwnerState(params);
+        assertCurrent();
+        return result;
+      },
+      async assertClawHubSkillInstallState(params) {
+        assertCurrent();
+        await clawHubSkills.assertClawHubSkillInstallState(params);
+        assertCurrent();
+      },
+      async readInstalledClawHubSkillFiles(params) {
+        assertCurrent();
+        const result = await clawHubSkills.readInstalledClawHubSkillFiles(params);
+        assertCurrent();
+        return result;
+      },
+      async recordClawHubSkillInstall(params) {
+        assertCurrent();
+        await clawHubSkills.recordClawHubSkillInstall(params);
+        assertCurrent();
       },
     });
   }

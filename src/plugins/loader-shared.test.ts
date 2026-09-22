@@ -181,6 +181,7 @@ describe("validatePluginConfig manifest schema isolation", () => {
     }
 
     expect(validatePluginConfig({ schema, value: {} })).toMatchObject({ ok: false });
+    expect(() => validatePluginConfigByOrigin({ origin: "bundled", schema, value: {} })).toThrow();
   });
 
   it("keeps malformed bundled schemas on the throwing path", () => {

@@ -41,7 +41,7 @@ suite.define(() => {
         await gateway.deferNext(method, { key: target.key });
         await row.waitFor({ state: "visible" });
         await row.hover();
-        await row.getByRole("button", { name: "Open session menu" }).click();
+        await row.click({ button: "right" });
         await activateSelfRemovingControl(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
             name: action === "delete" ? "Delete…" : "Archive session",
@@ -282,7 +282,8 @@ suite.define(() => {
           if (durable.status !== "not-found") {
             throw new Error("confirmed deletion did not leave a durable retirement fence");
           }
-          const revision = Date.now();
+          // Retirement fences can lead the wall clock; a new edit must advance that fence.
+          const revision = Math.max(Date.now(), (durable.revision ?? 0) + 1);
           local.sessions[scopeKey] = {
             draft: "post-confirm local replacement",
             draftRevision: revision,
@@ -461,7 +462,7 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })
@@ -551,7 +552,7 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })

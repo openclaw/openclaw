@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -160,6 +161,9 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     const [boot] = await Promise.allSettled([
       bootstrapLaunchAgentOrThrow({ ...params, preserveAutoStart: false, skipEnable: true }),
     ]);
+    if (boot.status === "rejected" && hasCommandProcessCleanupError(boot.reason)) {
+      throw boot.reason;
+    }
     const failures: unknown[] = boot.status === "rejected" ? [boot.reason] : [];
     if (!enabled) {
       try {
@@ -440,19 +444,4 @@ export async function probeLaunchAgentState(
     return { state: "running", runtime };
   }
   return { state: "stopped", runtime };
-}
-
-export async function waitForLaunchAgentStopped(
-  serviceTarget: string,
-): Promise<LaunchAgentProbeResult> {
-  let lastProbe: LaunchAgentProbeResult = { state: "unknown" };
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const probe = await probeLaunchAgentState(serviceTarget);
-    lastProbe = probe;
-    if (probe.state === "stopped" || probe.state === "not-loaded") {
-      return probe;
-    }
-    await sleep(100);
-  }
-  return lastProbe;
 }

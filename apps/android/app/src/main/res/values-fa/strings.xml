@@ -164,6 +164,7 @@
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نام دستگاه"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ارسال"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موقعیت مکانی"</string>
+    <string name="native_160db55194b1967c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفت‌وگوی بومی: رلهٔ Gateway برای این پیکربندی در دسترس نیست؛ از تشخیص گفتار دستگاه و صدای پیکربندی‌شدهٔ گفت‌وگو استفاده می‌شود."</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مثلاً America/New_York"</string>
     <string name="native_16524d7409d37507" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست هدف"</string>
     <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بررسی مهارت ClawHub"</string>
@@ -235,7 +236,6 @@
     <string name="native_205dac381e0872e8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"متن رویداد"</string>
     <string name="native_2065cc867eba1b39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بارگذاری پیکربندی مدل ارائه‌دهنده ممکن نشد."</string>
     <string name="native_207ccb22d618db05" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s برنامه اجازهٔ بازفرستادن دارد."</string>
-    <string name="native_20d4f92989f4fd3e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصاویر اضافی پنهان‌شده: %1$s"</string>
     <string name="native_211988ba9dd0570a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"درخواست جفت‌سازی رد شود?"</string>
     <string name="native_2132066dc9475cb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"این مهارت نصب شده است اما برای عامل فعلی در دسترس نیست. فیلترهای عامل فقط از طریق دسکتاپ یا CLI تنظیم می‌شوند."</string>
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ناشر"</string>
@@ -587,6 +587,7 @@
     <string name="native_50009ce1da4d15e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فایل"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای بارگذاری گره‌ها و دستگاه‌های جفت‌شده، به Gateway متصل شوید."</string>
     <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغییر شاخه"</string>
+    <string name="native_506ec35a250d7ff9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصاویر %1$s–%2$s از %3$s"</string>
     <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ مهارتی وجود ندارد"</string>
     <string name="native_50bae925225d054b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ‌ها با صدای بلند پخش می‌شوند"</string>
     <string name="native_50c8b81faf51e7d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"علامت‌گذاری به‌عنوان خوانده‌شده"</string>
@@ -967,6 +968,7 @@
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پیکربندی‌شده"</string>
     <string name="native_84db8228370efedd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera list"</string>
     <string name="native_84f9cb5c5662fa3b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 مورد اعمال‌شده"</string>
+    <string name="native_8581125e3bd6b2fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حالت بومی Talk: از تشخیص گفتار دستگاه و صدای تنظیم‌شدهٔ Talk استفاده می‌شود."</string>
     <string name="native_859270e63a2904d7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera clip"</string>
     <string name="native_85a39ab345d672ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بله"</string>
     <string name="native_85bb24ced460372b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آزمایش صدا"</string>
@@ -1123,6 +1125,7 @@
     <string name="native_99b6623213642793" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اطلاعات زمینه‌ای گوشی و حریم خصوصی"</string>
     <string name="native_99f818dd50c0dd7c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s متصل"</string>
     <string name="native_9a0019fcfaef0a49" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s  %2$s"</string>
+    <string name="native_9a06e0f6dc47486e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصاویر بعدی"</string>
     <string name="native_9a0bf562e602f844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بازیابی پس از راه‌اندازی مجدد Gateway همچنان در حال انجام است."</string>
     <string name="native_9a16d8b4110f4349" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جایگزینی کد راه‌اندازی، اطلاعات احراز هویت راه‌اندازی و توکن‌های دستگاه ذخیره‌شده در این تلفن را پیش از اتصال مجدد پاک می‌کند. ممکن است این تلفن دوباره به تأیید قابلیت‌های گره نیاز داشته باشد؛ فقط زمانی ادامه دهید که قصد جفت‌سازی با کد راه‌اندازی جدید Gateway را دارید."</string>
     <string name="native_9a25e9ad380dafd4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای بررسی پیکربندی و تاریخچهٔ اجرا، یک خودکارسازی را باز کنید. اتصال‌های دارای سطح دسترسی مدیر همچنین می‌توانند آن را اجرا، ویرایش، فعال، غیرفعال یا حذف کنند."</string>
@@ -1148,6 +1151,7 @@
     <string name="native_9d988c13c67e88e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن موقعیت مکانی این تلفن"</string>
     <string name="native_9db0df0afb47b562" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کلید مهارت"</string>
     <string name="native_9dd17090e788442d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دسترسی فقط خواندنی؛ قوانین تأیید ابزار بومی همچنان اعمال می‌شوند."</string>
+    <string name="native_9df78be02eef04b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفت‌وگوی بومی: Gateway پشتیبانی از رلهٔ GPT-Live را اعلام نکرده است؛ از تشخیص گفتار دستگاه و صدای تنظیم‌شدهٔ گفت‌وگو استفاده می‌شود."</string>
     <string name="native_9e37aa0704a3cf44" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s نصب شد."</string>
     <string name="native_9e4635769f0aaf0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayها"</string>
     <string name="native_9e7b2578a4302921" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اقدام‌ها: %1$s"</string>
@@ -1314,6 +1318,7 @@
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ مدل پیکربندی‌شده‌ای وجود ندارد"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway پیش از دانلود، دقیقاً همین نسخه را از طریق ClawHub اعتبارسنجی می‌کند. یافته‌های بررسی در نتیجهٔ نصب نمایش داده می‌شوند. مسدود بودن نسخه یا در دسترس نبودن اعتبارسنجی امنیتی مانع نصب می‌شود."</string>
     <string name="native_b7e3e4aa4257b9a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"غیرفعال کردن"</string>
+    <string name="native_b82c89a18faf5200" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توقف پاسخ ممکن نشد. صفحه را بازخوانی کنید و دوباره تلاش کنید."</string>
     <string name="native_b8352b44a588721c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زبان برنامه"</string>
     <string name="native_b8380b8a2317b9fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"در حال جفت‌سازی با Gateway"</string>
     <string name="native_b847ffdd0a1bfe55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عملیات انتخاب"</string>
@@ -1414,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو نیاز به رسیدگی دارد"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw نام‌ها، شناسه‌های بسته و وضعیت برنامه‌های قابل مشاهده در این تلفن را زمانی که Gateway جفت‌شدهٔ OpenClaw شما درخواست کند، جمع‌آوری و ارسال می‌کند. این به دستیار شما امکان می‌دهد با استفاده از برنامه‌های نصب‌شده به پرسش‌ها پاسخ دهد و اقداماتی انجام دهد."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway متصل نیست"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدون نتیجه"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خط‌مشی"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جایگزین %1$s می‌شود — آخرین به‌روزرسانی %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مهلت تأیید پیام ارسالی تمام شد؛ برای بررسی تحویل، تازه‌سازی کنید."</string>
@@ -1804,6 +1808,7 @@
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جستجوی دیگری را امتحان کنید یا عبارت جستجوی فعلی را پاک کنید."</string>
     <string name="native_fa8b0b30b80cd97e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اجازهٔ دسترسی به موقعیت مکانی در پس‌زمینه داده شود?"</string>
     <string name="native_fa91fd53f004be47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"آشکارسازی"</string>
+    <string name="native_fa96cc95351c426a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تصاویر قبلی"</string>
     <string name="native_faab0dc4735c1cfe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"راه‌اندازی اولیه"</string>
     <string name="native_fad13bdbe9a8cd0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s · %3$s"</string>
     <string name="native_fae8fa3bc050ab7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لغو یادداشت صوتی"</string>

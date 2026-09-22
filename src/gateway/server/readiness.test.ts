@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
@@ -278,6 +279,37 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual(failingSnapshot(["discord"]));
     });
   });
+
+  it.each([false, true])(
+    "reports core agent refusal and recovery immediately (skip channels: %s)",
+    (skipChannels) => {
+      withReadinessClock(() => {
+        const refusal = createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+          reason: "Session identities require migration before this agent can run.",
+        });
+        let refused = false;
+        const readiness = createReadinessChecker({
+          channelManager: createManager(snapshotWith({})),
+          startedAt: Date.now() - FIVE_MIN_MS,
+          cacheTtlMs: 1_000,
+          shouldSkipChannelReadiness: () => skipChannels,
+          getAgentDatabaseAdmissionRefusals: () => (refused ? [refusal] : []),
+        });
+        expect(readiness()).toEqual(readySnapshot());
+
+        refused = true;
+        expect(readiness()).toEqual({
+          ...failingSnapshot(["agent-database:main"]),
+          agentDatabases: [refusal],
+        });
+
+        refused = false;
+        expect(readiness()).toEqual(readySnapshot());
+      });
+    },
+  );
 
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {

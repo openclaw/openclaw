@@ -8,6 +8,10 @@ import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
 } from "./openclaw-agent-db-identity.js";
+import {
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "./openclaw-agent-db-lease.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -16,6 +20,7 @@ import {
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
@@ -97,6 +102,9 @@ it.each([
   "revoked-before-grant",
   "missing-metadata",
   "version-mismatch",
+  "closed-host",
+  "closed-host-revoked",
+  "closed-host-replaced",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-integrity-")) };
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -104,12 +112,18 @@ it.each([
   counter.path = database.path;
   counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const context = captureOpenClawStateWorkerContext({ env });
-  const claim: OpenClawAgentDatabaseClaim = createOpenClawAgentDatabaseClaim(
-    database,
-    retainAgentDatabase(database.db),
-  );
+  const closedHost = proof.startsWith("closed-host");
+  const siblingLease = closedHost
+    ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
+    : undefined;
+  const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
+    ? undefined
+    : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
+  if (closedHost) {
+    closeOpenClawAgentDatabaseByPath(database.path);
+  }
   const assertCurrent = () => {
-    claim.assertCurrent();
+    claim?.assertCurrent();
     context.admission.assertCurrent();
   };
   let revokedBeforeGrant = false;
@@ -149,8 +163,11 @@ it.each([
     undefined,
     () => {},
   );
-  if (proof === "invalidated") {
+  if (proof === "invalidated" || proof === "closed-host-revoked") {
     invalidateOpenClawAgentDatabaseValidation(database.path);
+  } else if (proof === "closed-host-replaced") {
+    fs.copyFileSync(database.path, `${database.path}.replacement`);
+    fs.renameSync(`${database.path}.replacement`, database.path);
   } else if (proof === "failed") {
     recordOpenClawAgentDatabaseOpenFailure(database.path, new Error("Synthetic host failure"));
   } else if (proof === "missing-metadata") {
@@ -174,14 +191,17 @@ it.each([
     }
     await expect(generation.runExisting(source, async () => "opened")).resolves.toBe("opened");
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
-      proof === "verified" ? [0, 0] : [1, 1],
+      proof === "verified" || proof === "closed-host" ? [0, 0] : [1, 1],
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
     try {
       await generation.close();
     } finally {
-      claim.release();
+      claim?.release();
+      if (siblingLease) {
+        releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
+      }
     }
   }
 });

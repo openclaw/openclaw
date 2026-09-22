@@ -356,6 +356,31 @@ describe("live meeting summaries", () => {
     expect(complete).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps prior notes without warning when session metadata changes during inference", async () => {
+    const fixture = await capture();
+    const utterance = { text: "Speech before the title changed" };
+    await fixture.source.onUtterance(utterance);
+    const previous = {
+      ...summarizeTranscripts({ session: fixture.source.session, utterances: [utterance] }),
+      overview: "Retained earlier notes",
+    };
+    await fixture.store.writeSummary(previous, fixture.source.session);
+    const pending = holdCompletion();
+    await vi.advanceTimersByTimeAsync(fiveMinutes);
+    await pending.entered;
+    try {
+      await fixture.store.writeSession({
+        ...fixture.source.session,
+        title: "Title changed while inference was pending",
+      });
+    } finally {
+      pending.resolve(modelNotes());
+      await settleSummaryUpdates(fixture.updates);
+    }
+    expect(await saved(fixture)).toEqual(previous);
+    expect(fixture.ctx.logger.warn).not.toHaveBeenCalled();
+  });
+
   it("uses total speech sequence after the bounded summary window is full", async () => {
     const fixture = await capture();
     for (let index = 0; index < 2_001; index++) {

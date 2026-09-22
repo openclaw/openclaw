@@ -1080,8 +1080,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .plugin-official-badge svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
 }
 
 /* ===========================================
@@ -2769,7 +2770,7 @@ select.input {
     transform var(--duration-fast) var(--ease-out);
 }
 
-.chip:hover {
+.chip:is(button, a, label):hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
 }
@@ -6094,6 +6095,10 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
+.session-action--touch-menu {
+  display: none;
+}
+
 .session-action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
@@ -6117,8 +6122,7 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-/* Sidebar rows are now the direct management surface after removing the
-   duplicate picker; touch users need pin/menu controls without hover. */
+/* Touch devices need tappable actions, including a menu without right-click. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
     --session-row-actions-reserve: 92px;
@@ -6126,6 +6130,14 @@ td.data-table-key-col {
 
   .sidebar-recent-session.session-row-host[data-session-row-action-count="1"] {
     --session-row-actions-reserve: 48px;
+  }
+
+  .sidebar-recent-session:has(.session-action--touch-menu):has([data-sidebar-session-pin]) {
+    --session-row-actions-reserve: 136px;
+  }
+
+  .session-action--touch-menu {
+    display: inline-flex;
   }
 
   .sidebar-recent-session .session-action {

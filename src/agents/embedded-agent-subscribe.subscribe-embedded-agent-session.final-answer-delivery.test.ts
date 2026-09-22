@@ -7,6 +7,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
 import {
@@ -593,6 +594,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     "preserves $delivery indented code in $provider replies",
     async ({ provider, delivery }) => {
       const text = "    const value = 1;\n    use(value);";
+      const code = "const value = 1;\nuse(value);\n";
       const onBlockReply = vi.fn();
       const onAgentEvent = vi.fn();
       const { emit, subscription } = createSubscribedSessionHarness({
@@ -638,7 +640,17 @@ describe("subscribeEmbeddedAgentSession", () => {
         emit({ type: "message_end", message });
         await subscription.waitForPendingEvents();
 
-        expect.soft(extractTextPayloads(onBlockReply.mock.calls)).toEqual([text]);
+        // Both delivery consumers retain prepared Markdown, not the raw stream snapshots below.
+        for (const texts of [
+          extractTextPayloads(onBlockReply.mock.calls),
+          subscription.assistantTexts,
+        ]) {
+          expect
+            .soft(texts.map((payload) => markdownToIR(payload)))
+            .toMatchObject([
+              { text: code, styles: [{ start: 0, end: code.length, style: "code_block" }] },
+            ]);
+        }
         expect
           .soft(
             onAgentEvent.mock.calls
@@ -646,7 +658,6 @@ describe("subscribeEmbeddedAgentSession", () => {
               .map(([event]) => event.data.text),
           )
           .toEqual(delivery === "streamed" ? ["    const value = 1;", text] : [text]);
-        expect.soft(subscription.assistantTexts).toEqual([text]);
       } finally {
         subscription.unsubscribe();
       }
@@ -743,6 +754,26 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
+  });
+
+  it("does not replay a final source range assembled from multiple streamed chunks", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 4 },
+    });
+    const text = "aaaaaaaaaaaa";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emit({ type: "message_end", message: textAssistant(text) as AssistantMessage });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["aaaa", "aaaa", "aaaa"]);
+
+    emitAssistantTextEnd({ emit, content: text });
+    await Promise.resolve();
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["aaaa", "aaaa", "aaaa"]);
   });
 
   it("emits legacy structured partials on text_end without waiting for message_end", async () => {

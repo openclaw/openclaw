@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { availableParallelism } from "node:os";
 import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -114,6 +115,7 @@ class WorkerTaskPoolCore<Input, Output> {
   // wrong clock the worker never retires and that test's timer count is off.
   private readonly setTimeoutFn = setTimeout;
   private readonly clearTimeoutFn = clearTimeout;
+  private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -279,6 +281,7 @@ class WorkerTaskPoolCore<Input, Output> {
     error: Error = new WorkerTaskError("worker task pool closed", "unavailable"),
   ): Promise<void> {
     this.closedError ??= error;
+    channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
     this.computeCapacity?.remove(this.resumeCompute);
     for (const task of this.queue.splice(0)) {
       this.finish(task, this.closedError);
@@ -302,6 +305,9 @@ class WorkerTaskPoolCore<Input, Output> {
   }
 
   private dispatch(): void {
+    if (!this.slots.size) {
+      channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+    }
     if (!this.queue.length || this.closedError || this.rotation || this.rotationFailed) {
       this.computeCapacity?.remove(this.resumeCompute);
     }
@@ -358,6 +364,12 @@ class WorkerTaskPoolCore<Input, Output> {
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): Worker {
+    // A zero idle timeout delegates retirement (and retained custody) to the caller.
+    if ((this.options.idleTimeoutMs ?? 60_000) > 0) {
+      const pressure = channel("openclaw.memory.critical");
+      pressure.unsubscribe(this.retireIdleOnPressure);
+      pressure.subscribe(this.retireIdleOnPressure);
+    }
     const worker = runInWorkerPoolContext(() => {
       const prepared = this.options.prepareWorker?.();
       slot.releaseResources = prepared?.releaseResources;

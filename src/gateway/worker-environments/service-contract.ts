@@ -15,6 +15,7 @@ import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
@@ -92,7 +93,7 @@ export type WorkerEnvironmentServiceContract = {
       }
     | undefined;
   assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
-  touchSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  touchSessionAttachment(binding: WorkerEnvironmentAttachment): Promise<void>;
   execSessionAttachment(
     binding: WorkerEnvironmentAttachment,
     command: import("./tunnel-contract.js").WorkerWorkspaceCommand,
@@ -122,7 +123,10 @@ export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
-  readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
+  readMachineShape(
+    environmentId: string,
+    prepared?: WorkerEnvironmentPlacementFacts,
+  ): SessionPlacementMachine | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   readProviderDisplayId(profileId: string): string | undefined;

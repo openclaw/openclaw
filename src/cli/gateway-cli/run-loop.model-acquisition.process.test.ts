@@ -79,6 +79,9 @@ it
       expect(exit, output).toEqual([0, null]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
+      expect(output).toMatch(
+        new RegExp(`shutdown budget at shutdown:.*source=.*=${stopTimeoutMs}ms`),
+      );
       if (mode === "cooperative") {
         expect(output).toContain("process proof: acquisition-joined");
         expect(output).not.toContain("shutdown deadline reached");

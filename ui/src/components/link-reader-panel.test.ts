@@ -234,9 +234,11 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
   });
 
-  it("uses only the detail contract when an agent is selected", async () => {
+  it("passes the selected agent to the detail identity owner", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (Object.keys(params as object).some((key) => key !== "url" && key !== "refresh")) {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
         throw new Error("Unexpected detail parameter");
       }
       return requestedItem(params);
@@ -247,7 +249,7 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
   });

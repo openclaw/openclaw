@@ -3,11 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import {
-  serializeSidebarEntry,
-  type NavigationRouteId,
-  type SidebarZoneEntry,
-} from "../app-navigation.ts";
+import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -158,12 +154,20 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
           }
         }}
       >
-        <img
-          class="sidebar-workspace-header__mark"
-          src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
-          alt=""
-          aria-hidden="true"
-        />
+        ${
+          host.sessionDataContext?.theme.branding.mascot === "none"
+            ? html`<span
+                class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+                aria-hidden="true"
+                >${icons.mark}</span
+              >`
+            : html`<img
+                class="sidebar-workspace-header__mark"
+                src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
+                alt=""
+                aria-hidden="true"
+              />`
+        }
         <span class="sidebar-agent-card__text">
           <span class="sidebar-agent-card__name">
             ${renderHoverMarquee(name, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}
@@ -485,16 +489,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const outboxLabel = host.queuedOutboxCount
-    ? t("connection.queuedCount", { count: String(host.queuedOutboxCount) })
-    : null;
-  const accessibleDetail = [identityDetail, outboxLabel].filter(Boolean).join(" · ");
-  const announcement = [
-    statusLabel ? statusLabel : host.connected ? t("nav.gateway.connected") : null,
-    outboxLabel,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const accessibleDetail = identityDetail;
+  const announcement = statusLabel ?? (host.connected ? t("nav.gateway.connected") : "");
   return html`
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <button
@@ -513,7 +509,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             connectionStatus
               ? renderGatewayStatus({
                   kind: connectionStatus,
-                  queuedOutboxCount: host.queuedOutboxCount,
                   lastError: host.lastError,
                   announce: false,
                 })
@@ -526,7 +521,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                         </span>`
                       : nothing
                   }
-                  ${renderGatewayStatus({ kind: null, queuedOutboxCount: host.queuedOutboxCount, announce: false })}
                 `
           }
         </span>
@@ -631,7 +625,7 @@ function renderAppSidebarPluginTab(host: AppSidebarRenderHost, tab: GatewayContr
 function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
     .activeRouteId=${host.activeRouteId}
-    .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
+    .onNavigate=${host.onNavigate}
     .watchUpdateProgress=${host.watchUpdateProgress}
   ></openclaw-sidebar-attention>`;
 }

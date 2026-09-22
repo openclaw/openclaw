@@ -12,7 +12,11 @@ type Report = {
   mode: string;
   blocked: boolean;
   writable: boolean;
-  outcome: string;
+  registered: boolean;
+  failed: boolean;
+  callbackFailure: boolean;
+  retainedFailure: boolean;
+  acquisitionFailure: { pluginIds: string[]; message: string } | null;
 };
 
 let reports: Report[] = [];
@@ -28,7 +32,7 @@ beforeAll(async () => {
     90_000,
     { requireProcessTreeExit: true },
   );
-  expect(result.error).toBeUndefined();
+  expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   reports = JSON.parse(result.stdout.trim().split("\n").at(-1)!) as Report[];
 }, 100_000);
@@ -43,7 +47,17 @@ it.for(["success", "callback-failure", "retained-release", "retained-acquire"])(
       mode,
       blocked: mode.startsWith("retained"),
       writable: mode.startsWith("retained"),
-      outcome: mode === "success" ? "completed" : "refused",
+      registered: true,
+      failed: mode !== "success",
+      callbackFailure: mode === "callback-failure",
+      retainedFailure: mode.startsWith("retained"),
+      acquisitionFailure:
+        mode === "retained-acquire"
+          ? {
+              pluginIds: ["doctor-custody-fixture-retained-acquire"],
+              message: expect.stringContaining("registration failed after resource acquisition"),
+            }
+          : null,
     });
   },
 );

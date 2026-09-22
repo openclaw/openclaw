@@ -8,6 +8,7 @@ import { DesktopClient } from "../../components/desktop/desktop-client.ts";
 import { createConnectionHandle } from "../../components/desktop/desktop-panel.test-support.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
@@ -20,7 +21,13 @@ import "./systems-page.ts";
 import "./systems-sidebar.ts";
 
 setupSidebarTest();
-afterEach(() => vi.restoreAllMocks());
+const runtimeConfigs: ReturnType<typeof createRuntimeConfigCapability>[] = [];
+afterEach(() => {
+  for (const config of runtimeConfigs.splice(0)) {
+    config.dispose();
+  }
+  vi.restoreAllMocks();
+});
 
 const host: EnvironmentSummary = {
   id: "gateway",
@@ -96,12 +103,21 @@ function harness(
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: gatewayHelloForMethods(
-      ["environments.list", "node.list", "system.info", "desktop.observe"],
+      [
+        "environments.list",
+        "node.list",
+        "system.info",
+        "desktop.observe",
+        "config.get",
+        "config.patch",
+      ],
       ["operator.admin"],
     ),
   });
   const context = createContext(gateway.gateway, createSessions("main", []));
-  Object.assign(context, { basePath: "", navigate: vi.fn() });
+  const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
+  runtimeConfigs.push(runtimeConfig);
+  Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
   const controller = new SystemsController(context);
   return { controller, gateway, context, request };
 }
@@ -119,6 +135,35 @@ async function mount(controller: SystemsController) {
 }
 
 describe("Systems workspace", () => {
+  it.each(["selection", "authority"])(
+    "cancels pending desktop enablement when %s changes",
+    async (change) => {
+      const loaded = createDeferred();
+      const { controller, context, gateway } = harness(async () => [
+        { ...host, desktopSetup: { state: "ready" } },
+        { ...worker, desktop: false },
+      ]);
+      vi.spyOn(context.runtimeConfig, "ensureLoaded").mockReturnValue(loaded.promise);
+      const patch = vi.spyOn(context.runtimeConfig, "patch");
+      const { page } = await mount(controller);
+      page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
+      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(true));
+      if (change === "selection") {
+        controller.select(worker.id);
+      } else {
+        gateway.publish({
+          hello: gatewayHelloForMethods(
+            ["environments.list", "node.list", "system.info", "config.get", "config.patch"],
+            ["operator.read"],
+          ),
+        });
+      }
+      loaded.resolve();
+      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(false));
+      expect(patch).not.toHaveBeenCalled();
+    },
+  );
+
   it("sorts and filters the machine inventory without replacing the selected machine", async () => {
     const environments: EnvironmentSummary[] = [
       host,

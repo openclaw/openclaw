@@ -92,6 +92,28 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Doctor cannot enter maintenance during finalization
+
+`finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
+still owns the selected state directory. A starting Gateway and a healthy serving
+Gateway retain that ownership for their entire process lifetime; waiting for
+readiness does not release the lock.
+
+Finalizers with this recovery wait for startup through the existing readiness
+observer. If the same holder is verified serving the installed version and build,
+the update finishes with a warning and leaves the Gateway running. Update history
+names the holder and records the skipped Doctor pass. Config and plugin maintenance
+remain pending. At the next maintenance window, stop that Gateway through its
+service or deployment owner, run `openclaw update repair`, then start it through
+the same owner. Check `openclaw update status --json` and
+`openclaw gateway status --deep` for the recorded warning and current health.
+
+Do not delete lock files to force entry. A dead process releases the physical lock,
+and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
+database, incompatible schemas, active database writers, or unconfirmed subprocess
+cleanup still require their named recovery action; a maintenance warning does not
+authorize concurrent repair or discard recovery backups.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -124,15 +146,23 @@ probe, or unreadable layout stops the update before staging; an unknown
 destination is never treated as empty. Restore inspection access or make
 `npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
-The report names the destination (or says that npm could not resolve it), the cause,
-and the selected service's launcher when available. Switch the runtime back and
+The saved outcome and public failure report name the destination prefix, package,
+launcher, running installation, and classified ownership cause. Public paths
+replace your home with `~` and redact other home-directory usernames. `openclaw
+update status` and Doctor retain the warning and recovery step. A symlinked prefix
+that resolves to the same installation is admitted; spelling alone does not make
+a destination foreign. Switch the runtime back and
 retry through the retained absolute launcher. Alternatively, with the destination
 owner's agreement, explicitly select that installation for the intended service
 using a printed `gateway install --force` command when available, then update. This changes
 the service binding; it is not permission to overwrite another deployment's
 package. A protected service definition uses deployment-owner instructions instead;
 `--force` cannot replace a sealed mount. Dry-run returns the same refusal. Recorded attempts remain in update
-history and are shown by Doctor.
+history and are shown by Doctor. If the active CLI and service point at different
+installations, follow [Gateway service recovery](/cli/doctor/recovery#gateway-service-recovery)
+to select the intended installation while preserving its state and service account.
+An older updater that refuses before staging cannot load a candidate's improved
+diagnostics; resolve its prefix mismatch before retrying the update.
 
 If the ranges do not overlap, install a supported Node and select a compatible
 OpenClaw target; that candidate cannot run through this updater on a supported
@@ -206,6 +236,21 @@ restarting the same 2026.9.4 fleet resolves the failed-update condition.
 
 ## Plugin repair warnings
 
+`post-update-plugins` / `plugin-convergence` with
+`post-plugin-doctor-execution-failed` can describe a Doctor child failure after
+the package was already installed. Updated convergence records that execution
+failure as a warning, retains its exit reason and available plugin diagnostics,
+and continues to config validation, readiness checks, and Gateway activation.
+`openclaw update status` shows the warning even when the update succeeds. A later
+failure report keeps it in a separate **Warnings** section.
+
+A throwing plugin config-repair hook leaves that plugin's input unchanged and
+names the plugin in its warning. Repair the plugin, then run
+`openclaw doctor --fix` or `openclaw update repair`.
+Explicit state-migration or config-write refusals remain blocking. So does a
+Doctor child whose shutdown could not be confirmed: it may still write state.
+Preserve the backup and resolve that specific refusal before retrying.
+
 Doctor's configured-plugin repair and payload-verification warnings do not block
 Gateway readiness. A tracked plugin whose payload is unavailable is marked
 unavailable, and its configuration and pending migration inputs stay preserved.
@@ -236,6 +281,35 @@ Official version-bound runtime plugins installed through ClawHub use their
 declared ClawHub source for the new core release cohort. The released 2026.9.4
 catalog omitted that source for Codex; the correction is on main in
 [#148518](https://github.com/openclaw/openclaw/pull/148518).
+
+### Missing temporary plugin captures
+
+An `ENOENT` path containing `openclaw-plugin-build-` can identify a missing
+runtime source capture even when the installed plugin files still exist.
+Reloading or replacing that plugin reports the unavailable recovery snapshot
+as a warning and loads the installed replacement after normal cleanup.
+Run `openclaw plugins reload <id>`, or reinstall the plugin if its installed
+payload also needs repair. If replacement fails, the missing previous code
+cannot be restored; healthy plugins retain their available recovery snapshots.
+
+Older releases can reject enable, uninstall, and reinstall while trying to copy
+that same missing capture. Restart the Gateway through its service owner before
+retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+### Large model-catalog temporary directories
+
+Older releases can retain several complete plugin copies inside
+`openclaw-model-catalog-*` directories. A scan of only top-level
+`openclaw-plugin-build-*` paths misses those nested copies. Current catalog
+workers reuse the selected runtime capture for provider discovery and remove
+their scratch tree when its owner retires.
+
+Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
+`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+when no other OpenClaw process is running. Do not delete captures based on their
+age or absence from open-file or memory-map lists: an idle owner can still need
+them. Modern captures use SQLite custody to prove retirement. See
+[plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
 ## Reason codes
 
@@ -295,6 +369,14 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
+  when updating from 2026.9.4: the installed updater shares that deadline across
+  the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
+  failure duration is not Gateway startup time alone. Use the same
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw doctor --fix` and restart the Gateway. See
+  [#144858](https://github.com/openclaw/openclaw/issues/144858) and
+  [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

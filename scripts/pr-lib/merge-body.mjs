@@ -175,7 +175,45 @@ function prunePreview(lines, unsupported, machineIndexes) {
   return body;
 }
 
-function compose({ preview, source, authors, prAuthor, captured, queue, sourceCredit = false }) {
+function squashPreview(preview, { title, message, commits }) {
+  if (
+    !(title === "PR_TITLE" && ["BLANK", "PR_BODY", "COMMIT_MESSAGES"].includes(message)) &&
+    !(title === "COMMIT_OR_PR_TITLE" && message === "COMMIT_MESSAGES")
+  ) {
+    throw new Error("Cannot preserve unsupported repository squash message defaults.");
+  }
+  if (message === "BLANK") {
+    return "";
+  }
+  if (message === "PR_BODY") {
+    return preview;
+  }
+  if (
+    !Array.isArray(commits) ||
+    commits.length === 0 ||
+    commits.some((item) => typeof item !== "string")
+  ) {
+    throw new Error("Cannot preserve squash commit messages without the published commits.");
+  }
+  if (title === "COMMIT_OR_PR_TITLE" && commits.length === 1) {
+    const newline = commits[0].indexOf("\n");
+    return newline === -1 ? "" : commits[0].slice(newline + 1).replace(/^\n+/, "");
+  }
+  return commits.map((commit) => `* ${commit.trimEnd()}`).join("\n\n");
+}
+
+function compose({
+  preview: initialPreview,
+  source,
+  authors,
+  prAuthor,
+  captured,
+  queue,
+  sourceCredit = false,
+  squashDefault = null,
+}) {
+  const preview =
+    squashDefault === null ? initialPreview : squashPreview(initialPreview, squashDefault);
   const explicit = captured !== "";
   const sourceTrailers = source.split("\n").filter(Boolean);
   const eligibleEmails = new Set();

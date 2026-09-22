@@ -11,13 +11,18 @@ read_when:
 OpenClaw exposes four user-facing update channels:
 
 - stable: the promoted regular release on npm `latest`
-- extended-stable: the trailing completed month's `.33+` maintenance line on
-  npm `extended-stable`
+- extended-stable: a `.33+` maintenance line from either of the two trailing
+  completed months on npm `extended-stable`
 - beta: prerelease tags on npm `beta`
 - dev: the moving head of `main`
 
-Extended-stable ships the trailing month's Gateway, official npm plugins, and
-Docker images without moving regular `latest` or `main` selectors.
+Extended-stable ships a Gateway from either of the two trailing completed
+months, along with official npm plugins and Docker images, without moving
+regular `latest` or `main` selectors. Each release also has a GitHub Release
+with shared validation evidence that is never marked Latest. Its release notes
+start with a generated notice identifying the Gateway-only LTS-equivalent track,
+the source month, and the regular stable version captured by the immutable
+publication tooling.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -33,7 +38,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - Alpha/nightly builds use the next unreleased patch train and increment only `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds move to the following patch.
 - npm versions are immutable: never delete, republish, or reuse a published tag. Cut the next prerelease number or the next monthly patch instead.
 - `latest` continues to follow the current regular/daily npm line. For core and every published official plugin, `beta` must always resolve to a version greater than or equal to `latest` under semver ordering; a same-train prerelease is older than its final release.
-- `extended-stable` means the supported trailing-month Gateway distribution, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
+- `extended-stable` means a supported Gateway distribution from either trailing completed month, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Gateway extended-stable publishes core, every npm-publishable official plugin,
   and its Docker images at one exact version; see the dedicated workflow below.
@@ -162,9 +167,14 @@ bytes still require their own qualification.
 For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish
 `.33+` from that branch. Tag, branch, checkout, package version, preflight, and
 validation must identify one commit. Before `.33`, protected `main` must contain
-a final version below patch `33` exactly one calendar month later, making the
-release the trailing completed month. Maintenance patches remain eligible only
-while that holds; the older line retires when `main` advances another month.
+a final version below patch `33` one or two calendar months later, making the
+release one of the two trailing completed months. Maintenance patches remain
+eligible only while that holds; the older line retires when `main` advances a
+third month.
+The shared publisher checks live `main` before dispatching publication children;
+each plugin checks it again immediately before npm publication, including
+trusted-main recovery. Saved qualification does not authorize a retired line.
+A missing or unreadable current-main version blocks publication.
 
 ### Prepare and stabilize the candidate
 
@@ -246,75 +256,41 @@ equals `VALIDATION_SHA`, then push signed `vYYYY.M.P`. Later changes need the ne
 patch; never move or delete the tag. Tagging fixes the immutable release
 identity; it does not publish Docker images.
 
-### Publish the npm packages
+### Publish the release
 
-Publish every npm-publishable official plugin from the same SHA and save the
-successful run ID:
-
-```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run plugin-npm-release.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f publish_scope=all-publishable \
-  -f ref="$RELEASE_SHA" \
-  -f npm_dist_tag=extended-stable
-```
-
-The workflow covers all `all-publishable` packages, including unchanged ones,
-and verifies every exact version and selector. Reruns reuse published versions.
-
-For a plugin workflow-only recovery, use the same command with `--ref main`.
-The trusted workflow still requires `ref` to equal the canonical monthly branch
-tip and runs its tooling against that frozen source. This retains validated
-dependency pins when the candidate's older tooling rejects later npm `latest`
-drift. Save the successful recovery run ID and use the trusted-main core
-recovery command below; it verifies the plugin workflow's main ancestry and
-exact candidate-bound run identity.
-
-Then publish the prepared core tarball with all three saved run identities:
+Run the shared release orchestrator from a protected lightweight tooling tag
+at the frozen trusted-main Tooling SHA, selecting the extended-stable npm track.
+With publication/tag-push authority, create and push that tooling tag before
+dispatch; keep it distinct from the immutable product release tag:
 
 ```bash
-gh workflow run openclaw-npm-release.yml \
-  --ref extended-stable/YYYY.M.33 \
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISH_REF="release-publish/$(printf '%s' "$TOOLING_SHA" | cut -c1-12)-$(date +%s)"
+git tag "$PUBLISH_REF" "$TOOLING_SHA"
+git push origin "refs/tags/$PUBLISH_REF"
+gh workflow run openclaw-release-publish.yml \
+  --ref "$PUBLISH_REF" \
   -f tag=vYYYY.M.P \
-  -f preflight_only=false \
-  -f npm_dist_tag=extended-stable \
   -f preflight_run_id=<npm-preflight-run-id> \
   -f full_release_validation_run_id=<full-validation-run-id> \
   -f full_release_validation_run_attempt=<full-validation-run-attempt> \
-  -f plugin_npm_run_id=<plugin-npm-run-id>
-```
-
-If the immutable candidate has already passed its saved preflight and Full
-Release Validation but core publication needs a workflow-only recovery, dispatch
-the trusted current-`main` workflow instead. Keep the same tag and evidence
-identities; do not move the tag or republish plugins:
-
-```bash
-gh workflow run openclaw-npm-release.yml \
-  --ref main \
-  -f tag=vYYYY.M.P \
-  -f preflight_only=false \
   -f npm_dist_tag=extended-stable \
-  -f release_candidate_branch=extended-stable/YYYY.M.33 \
-  -f preflight_run_id=<npm-preflight-run-id> \
-  -f full_release_validation_run_id=<full-validation-run-id> \
-  -f full_release_validation_run_attempt=<full-validation-run-attempt> \
-  -f plugin_npm_run_id=<plugin-npm-run-id>
+  -f plugin_publish_scope=all-publishable \
+  -f publish_openclaw_npm=true
 ```
 
-This recovery path checks out and publishes the immutable tag and requires the
-canonical branch implied by that tag. It accepts Full Release Validation
-evidence from the canonical candidate branch directly, from current `main`
-directly when its workflow SHA is reachable from current `main`, or from the
-trusted main-pinned harness. Every accepted form must attest the immutable
-tag's SHA. Use it only when the candidate source and recorded evidence are
-unchanged.
+The parent derives the canonical `extended-stable/YYYY.M.33` branch from the
+tag and passes it to both npm children. It creates the draft GitHub Release,
+publishes every `all-publishable` official plugin and core under the
+`extended-stable` selector, verifies registry bytes, attaches dependency and
+validation evidence, publishes Docker, then finalizes the release with
+`latest=false`. ClawHub and native-app stages are disabled by the selected
+track. Use the lower-level plugin/core workflows only for an approved recovery;
+never republish an immutable version.
 
-For non-production rehearsal only, add
-`-f bypass_extended_stable_guard=true` to preflight and publish. It bypasses the
-month guard only, never canonical-ref, SHA/tag/version equality, provenance,
-approval, or readback checks. Never use it for production.
+For non-production child-workflow rehearsal only, the lower-level npm workflow
+has `bypass_extended_stable_guard=true`. The normal parent publish does not
+expose that bypass. Never use it for production.
 
 ### Verify and recover
 
@@ -331,24 +307,15 @@ preflight, and tarball-digest binding to the release SHA. Both commands must
 return `YYYY.M.P`. Verify every prepared core package and `all-publishable`
 official plugin at its exact version and selector.
 
-If only the root selector fails, use the generated
-`npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command printed in
-the workflow summary. Repair existing plugin or other prepared-core selectors
-through approved credential-isolated tooling; the OIDC source cannot mutate
-them. Never republish an immutable version.
+If core npm published but the parent failed afterward, repeat the same
+`OpenClaw Release Publish` command with
+`-f openclaw_npm_resume_run_id=<successful-core-publish-run-id>`. The parent
+must prove the live registry tarball is the preflight artifact before it resumes
+release evidence, Docker, and the shared finalizer.
 
-Require `Docker Release` to verify exact default, slim, browser, and architecture
-images in GHCR and Docker Hub, including attestations and platform versions. It
-must advance only
-`extended-stable`, `extended-stable-slim`, and `extended-stable-browser` by
-digest; regular aliases remain unchanged and automatic rollback is rejected.
-
-After that core registry readback succeeds, start Docker publication only through
-`OpenClaw Release Publish`. Its Docker-only extended-stable path rechecks the
-saved npm preflight artifact, exact `Full Release Validation` evidence, exact npm
-version and `extended-stable` selector, and published tarball digest before it
-calls the reusable `Docker Release` workflow. A tag push never publishes Docker
-images by itself:
+If npm publication and its selector are already complete but only Docker
+publication needs recovery, use the narrower Docker-only path from current
+`main`:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
@@ -362,14 +329,73 @@ gh workflow run openclaw-release-publish.yml \
   -f publish_docker_only=true
 ```
 
+This path rechecks the exact npm version, `extended-stable` selector, preflight
+tarball digest, and validation evidence before invoking `Docker Release`. It
+does not run the shared GitHub Release finalizer; use the core-resume path when
+the draft release also needs evidence attachment or publication.
+
+To promote an already-published core version to `extended-stable`, use
+**OpenClaw NPM Dist-Tag Operations** in
+`openclaw/releases`, not the publish or resume path. The `promote_extended_stable`
+mode requires [openclaw/releases#27](https://github.com/openclaw/releases/pull/27)
+to be merged and available on that repository's `main`:
+
+```bash
+gh workflow run openclaw-npm-dist-tags.yml \
+  --repo openclaw/releases --ref main \
+  -f mode=promote_extended_stable \
+  -f tag=vYYYY.M.PATCH
+```
+
+Replace `vYYYY.M.PATCH` with the exact approved final extended-stable release tag
+(patch `33` or higher, without a suffix). Extended-stable fixes increment the
+patch (`33`, `34`, `35`, and so on), never a correction suffix. Regular stable/beta
+promotion and sync reject patch `33`
+or higher, including the scheduled beta floor. Promotion can select a newer version or roll back to an older one. The action checks
+that the public Git tag and exact npm version exist, permits older monthly lines
+and historical unsuffixed final versions, and changes only core `openclaw`'s
+`extended-stable` selector. It uses the release repository's `NPM_TOKEN`; no local
+npm login or source-repository publish credentials are needed. It does not write
+`latest`, `beta`, plugin or other prepared-core selectors, Docker aliases, Git
+tags, or GitHub Releases, and does not republish packages.
+
+Wait for the run to succeed and verify the intended target:
+
+```bash
+npm view openclaw dist-tags --json --prefer-online --registry=https://registry.npmjs.org/
+```
+
+The job summary records the previous and target versions. The action skips an
+already-correct selector and retries registry readback, not the tag write. After
+an unconfirmed write or exhausted readback, inspect the live selector before
+retrying. Repair plugin or other prepared-core selectors separately through
+approved credential-isolated tooling. A selector rollback neither repairs the
+bad version's published bytes nor downgrades existing installations. Do not
+resume publication of a rejected release as part of rollback.
+
+Require `Docker Release` to verify exact default, slim, browser, and architecture
+images in GHCR and Docker Hub, including attestations and platform versions. It
+must advance only `extended-stable`, `extended-stable-slim`, and
+`extended-stable-browser` by digest; regular aliases remain unchanged and
+automatic rollback is rejected. Confirm the GitHub Release contains the shared
+dependency, Full Release Validation, and postpublish evidence assets but no
+native-app assets.
+
 For alias repair, run approval-gated `Docker Channel Promotion` from current
 `main` with the tag. It repeats digest, attestation, and platform checks, allows
-an explicit rollback, and never rebuilds images.
+an explicit rollback, and never rebuilds images. npm retagging does not invoke
+this action; if Docker aliases must also move, dispatch it separately with an
+existing extended-stable image tag and verify all three aliases on both
+registries. Docker derives the channel from the target version,
+so a historical regular-stable tag is not an extended-stable Docker rollback.
 
 Slack, Discord, and Codex are the initial documented support surfaces, not a
-release allowlist: every npm-publishable official plugin ships. The regular
-checklist alone owns beta/`latest`, GitHub Releases, ClawHub, native apps, mobile,
-website, and private dist-tags; do not run those steps for this Gateway path.
+release allowlist: every npm-publishable official plugin ships. The shared
+pipeline attaches dependency, Full Release Validation, and postpublish evidence
+to the extended-stable GitHub Release. The selected npm tag is
+`extended-stable`, so npm `latest` remains unchanged. Do not publish ClawHub
+packages, native apps, website artifacts, or private dist-tags from this Gateway
+track.
 
 ## Regular release operator checklist
 
@@ -449,7 +475,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
      --skip-dispatch
    ```
 
-   Include `--plugin-sdk-api-acknowledgement` only when the preflight reported Plugin SDK API changes. Stable candidates need no Windows tag. Optionally pass `--windows-node-tag vX.Y.Z` to record the approved installer digest map and include both Windows inputs in the printed publish command. Beta and alpha candidates defer Parallels install/update proof to the postpublish `pnpm release:beta-smoke` roster by default; pass `--run-parallels` only when the operator explicitly wants that proof before publish. Stable and full candidates run Parallels by default. The helper verifies release-note provenance, npm preflight bytes, and plugin publish plans, then prints the publish command. When admitted Full Release Validation evidence carries `coveragePolicy=npm-beta-v1`, it records Telegram package proof as `deferred-postpublish`; other evidence retains the existing Telegram check. After it completes green, create and push the final signed tag at that same Release SHA, then run the printed publish command.
+   Include `--plugin-sdk-api-acknowledgement` only when the preflight reported Plugin SDK API changes. Stable candidates need no Windows tag. Optionally pass `--windows-node-tag vX.Y.Z` to record the approved installer digest map and include both Windows inputs in the printed publish command. For a stable tag validated with the beta profile and no soak, pass the operator-approved `--stable-soak-waiver '<reason>'`; the embedded preflight evaluates the [same waiver](#check-publication-gates) and the printed command carries `stable_soak_waiver`. Beta and alpha candidates defer Parallels install/update proof to the postpublish `pnpm release:beta-smoke` roster by default; pass `--run-parallels` only when the operator explicitly wants that proof before publish. Stable and full candidates run Parallels by default. The helper verifies release-note provenance, npm preflight bytes, and plugin publish plans, then prints the publish command. When admitted Full Release Validation evidence carries `coveragePolicy=npm-beta-v1`, it records Telegram package proof as `deferred-postpublish`; other evidence retains the existing Telegram check. After it completes green, create and push the final signed tag at that same Release SHA, then run the printed publish command.
 
    `pnpm release:candidate` validates the current frozen branch tip by default (or the explicit `--target-sha`), and rejects a tag that already exists. After validating its evidence, it runs the [publish preflight](#check-publication-gates), reusing the downloaded manifests and exact run attempt. It records the gate table in the evidence bundle before the final signed tag is pushed. The planned tag is a warning until created; any failed gate leaves the checklist incomplete.
 
@@ -662,7 +688,7 @@ design approval and package-manager integration proof before implementation.
 - Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version or config change: plugin versions, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and Control UI locale bundles. It also blocks until native app translations and platform-generated locale resources match the source inventory; if they lag, wait for or dispatch `Native App Locale Refresh` before freezing the Code SHA. `pnpm release:check` re-runs those guards plus transient npm package-lock validation in check mode (including the strict locale gates plus the plugin SDK surface budget) and reports every failure in one pass before running package release checks. The npm preflight separately compares the exact release SHA with the prior published dist-tag and reports any Plugin SDK API changes.
 - For reviewed native translation repairs, configure the translation provider and run `pnpm native:i18n:sync --locale <code> --refresh-id <native-id>`. Find IDs in `apps/.i18n/native-source.json`; repeat the selector for up to 64 distinct IDs. Selected entries join ordinary pending work, including missing strings and glossary invalidation. Requests include bounded nearby owner code and instructions to preserve printf argument roles; excerpts are request-only and do not enter the source inventory. Unknown IDs fail before provider work, and selected refresh cannot be combined with `--force`. Then run `pnpm native:i18n:sync` to regenerate platform resources and `pnpm native:i18n:check` to validate them.
 - For reviewed Control UI translation repairs, run `pnpm ui:i18n:sync --locale <code> --refresh-key <key>`. Repeat the selector for up to 64 distinct catalog keys. It refreshes those keys alongside ordinary pending work while leaving still-valid unselected cached aliases reusable. A configured provider is required even when ordinary synchronization allows optional authentication; unknown keys and combining selected refresh with `--force` are rejected.
-- Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
+- Plugin version sync updates the publishable `@openclaw/ai` runtime package and official plugin package versions to the OpenClaw release version. It raises lower `openclaw.compat.pluginApi` floors to that version and preserves higher floors required by the plugin. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to select the pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA and dispatches manual `CI`, plugin prerelease, and `OpenClaw Release Checks` for the selected profile. Canonical beta `all` without soak uses the bounded `npm-beta-v1` policy described in [Full release validation](/reference/full-release-validation); install, package, Linux cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates remain; Windows/macOS cross-OS outcomes are advisory. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` requests an explicit beta soak. Package Acceptance provides package Telegram E2E when selected, avoiding a second concurrent live poller for an unpublished candidate.
 
   Provide `release_package_spec` after publishing a beta to reuse the shipped npm package across release checks, Package Acceptance, and package Telegram E2E without rebuilding the release tarball. Provide `npm_telegram_package_spec` only when Telegram should use a different published package from the rest of release validation. Provide `package_acceptance_package_spec` when Package Acceptance should use a different published package from the release package spec. Provide `evidence_package_spec` when the release evidence report should prove that validation matches a published npm package without forcing Telegram E2E.
@@ -987,8 +1013,9 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 Run the read-only publish preflight before regular beta or stable publication
 through the protected `OpenClaw Release Publish` route, including after a failed
-attempt. Alpha uses its matching Tideclaw workflow branch; extended-stable retains
-its separate owner workflows and is not admitted by this command. Use the same
+attempt. Alpha uses its matching Tideclaw workflow branch; extended-stable uses
+the shared publisher with its dedicated track inputs but is not admitted by
+this regular-release preflight command. Use the same
 tag, validation run and attempt, channel, plugin selection, waiver, and frozen
 publication tooling ref as the intended dispatch:
 
@@ -1121,8 +1148,9 @@ This button covers core and plugin npm, ClawHub, the existing Docker/Windows
 contracts, and GitHub release visibility. It does **not** claim that independent
 macOS signing/feed promotion, Android completion, app-store submission, or
 website publication is ready. Those owners retain their existing release steps.
-Alpha, extended-stable, selected-plugin repairs, and historical releases without
-a readiness receipt continue to use their existing owner workflows.
+Alpha, selected-plugin repairs, and historical releases without a readiness
+receipt continue to use their existing owner workflows. Extended-stable uses
+the shared direct publisher with its dedicated track inputs, not this button.
 
 ### Recover a failed download
 
@@ -1230,9 +1258,9 @@ non-publishing child, then rerun only the outer seal.
 
 For beta, `latest`, plugin, GitHub Release, and platform publication,
 `OpenClaw Release Publish` remains the protected mutating owner. The monthly
-`.33+` Gateway extended-stable path does not use this orchestrator. The
-regular workflow orchestrates the trusted-publisher workflows in the order the
-release needs. Linux cross-OS validation remains blocking; Windows/macOS
+`.33+` Gateway extended-stable path uses this same publisher with its own
+track inputs, non-Latest GitHub release, and no ClawHub or native publication.
+The workflow orchestrates the trusted publishers for the selected track. Linux cross-OS validation remains blocking; Windows/macOS
 cross-OS conclusions are advisory and cannot block the saved validation
 evidence. macOS app signing, notarization, appcast updates, and Windows Hub asset
 promotion can run in parallel with or after npm publication and never delay
@@ -1240,13 +1268,13 @@ npm. Their artifact contracts still govern platform readiness and GitHub
 release closeout. Full Release Validation and qualified package artifacts must already be green; no app artifact is a prerequisite:
 
 1. Check out the release tag and resolve its commit SHA.
-2. Verify the tag is reachable from `main` or `release/*` (or a Tideclaw alpha branch for alpha prereleases).
+2. Verify the tag is reachable from `main` or `release/*`, a Tideclaw alpha branch for alpha prereleases, or the canonical `extended-stable/YYYY.M.33` branch for extended-stable.
 3. Run `pnpm plugins:sync:check`.
 4. Dispatch `Plugin NPM Release` with `publish_scope=all-publishable` and `ref=<release-sha>`.
-5. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
+5. Dispatch `Plugin ClawHub Release` with the same scope and SHA, except for extended-stable.
 6. After plugin npm succeeds, dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and saved `preflight_run_id` after verifying the saved `full_release_validation_run_id` and exact run attempt. ClawHub proceeds in parallel.
-7. Verify the published npm package and selector readback, then call reusable `Docker Release` with the immutable tag and SHA. By default, finalize the draft GitHub release after npm and Docker evidence succeeds. The explicitly requested `finalize_release_before_docker=true` fast path activates after npm verification and evidence uploads, then publishes Docker; Docker remains part of the Gateway distribution.
-8. For stable, optionally dispatch `Windows Node Release` after finalization with both `windows_node_tag` and candidate-approved `windows_node_installer_digests`. It attaches signed installers and checksums to the public release as a detached child. Omit both inputs to skip Windows dispatch. When the tagged `apps/android/version.json` matches the release train, qualify and dispatch `Android Release` independently for its exact-tag signed APK, checksum, and provenance; run macOS validation/preflight/publish through `openclaw/releases` in parallel or afterward. No app workflow delays npm or GitHub release finalization. Track app failures through their summaries and evidence, then recover only the failed platform.
+7. Verify the published npm package and selector readback, then call reusable `Docker Release` with the immutable tag and SHA. By default, finalize the draft GitHub release after npm and Docker evidence succeeds. The explicitly requested `finalize_release_before_docker=true` fast path activates after npm verification and evidence uploads, then publishes Docker; Docker remains part of the Gateway distribution. Extended-stable finalization uses the shared finalizer with `latest=false` and skips native stages.
+8. For regular stable, optionally dispatch `Windows Node Release` after finalization with both `windows_node_tag` and candidate-approved `windows_node_installer_digests`. It attaches signed installers and checksums to the public release as a detached child. Omit both inputs to skip Windows dispatch. When the tagged `apps/android/version.json` matches the release train, qualify and dispatch `Android Release` independently for its exact-tag signed APK, checksum, and provenance; run macOS validation/preflight/publish through `openclaw/releases` in parallel or afterward. No app workflow delays npm or GitHub release finalization. Track app failures through their summaries and evidence, then recover only the failed platform.
 
 The Android train is pinned independently. If its tagged version differs from
 the stable tag's base version, the parent skips both native qualification and
@@ -1551,8 +1579,11 @@ SHA-256, and npm integrity. A mismatch requires a new package version.
 behavior or `npm_dist_tag=extended-stable` for the guarded monthly path. The
 extended-stable option requires `publish_scope=all-publishable`, an empty
 `plugins` input, a final patch at or above `33`, and the canonical
-`extended-stable/YYYY.M.33` branch at its exact tip. The workflow may run from
-that branch or trusted `main` for workflow-only recovery. It never moves plugin
+`extended-stable/YYYY.M.33` branch at its exact tip, or the same immutable
+target dispatched by `OpenClaw Release Publish` from its protected
+`release-publish/<sha12>-<epoch>` tooling tag with that canonical branch named
+in `release_candidate_branch`. The direct workflow may also run from trusted
+`main` for approved workflow-only recovery. It never moves plugin
 `latest` or `beta`. New package versions receive `extended-stable` atomically
 through OIDC trusted publication (`npm publish --tag extended-stable`); this
 source workflow does not use token-authenticated `npm dist-tag add`. Retries
@@ -1568,6 +1599,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `windows_node_tag`: optional exact non-prerelease `openclaw/openclaw-windows-node` release tag for detached Windows promotion after stable GitHub publication; omit both Windows inputs to skip dispatch
 - `windows_node_installer_digests`: candidate-approved compact JSON map of the current Windows installer names to pinned `sha256:` digests; required only when `windows_node_tag` is supplied
 - `npm_telegram_run_id`: optional successful `NPM Telegram Beta E2E` run id to include in final release evidence
+- `openclaw_npm_resume_run_id`: successful original core publish run ID; verifies the registry tarball against preflight before resuming release evidence, Docker, and finalization without republishing core
 - `npm_dist_tag`: npm target tag for the OpenClaw package, one of `alpha`, `beta`, `latest`, or `extended-stable`
 - `finalize_release_before_docker`: explicit direct-publication fast path; default `false`. Activates the verified GitHub release before Docker, preserving the same environment approval and latest policy. Requires `publish_openclaw_npm=true` and no `prepared_plugins`. Docker failure leaves the release public for Docker-only recovery.
 - `publish_docker_only`: beta, regular stable (`latest`), or extended-stable recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selected dist-tag, and tarball digest before invoking Docker publication.
@@ -1592,7 +1624,9 @@ Rules:
 
 ## Regular beta/latest stable release sequence
 
-This legacy sequence is for the regular orchestrated release that also owns plugins, GitHub Release, Windows, and other platform work. It is not the monthly `.33+` Gateway extended-stable path documented at the top of this page.
+This sequence uses the same orchestrator as extended-stable. Its `beta` or
+`latest` track additionally enables ClawHub and the applicable native/platform
+stages.
 
 When cutting a regular orchestrated stable release:
 

@@ -218,6 +218,28 @@ ports.
 Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
 request or require this Gateway grant.
 
+Authenticated, same-origin plugin tabs can request session navigation without
+loosening the iframe sandbox. Send this session-only message to the parent
+after a user click:
+
+```typescript
+window.parent.postMessage(
+  { type: "openclaw-plugin-session-open", sessionKey: "agent:writer:project-review" },
+  window.location.origin,
+);
+```
+
+Only `type`, `sessionKey`, and an optional `agentId` are accepted. Omit absent
+fields. The key must be routable, at most 512 UTF-16 code units, and contain no
+control characters or surrounding whitespace. An explicit agent must match the
+agent in a qualified key. The host checks the currently mounted frame,
+authenticated descriptor, connection, and frame-grant lifetime before using
+normal session navigation. This message grants no session access, accepts no
+arbitrary URL, and returns no credentials or session content. Standalone pages
+should retain an ordinary Control UI link as their non-embedded path. Use
+`buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
+that path.
+
 ```typescript
 api.session.controls.registerControlUiDescriptor({
   surface: "tab",
@@ -449,13 +471,17 @@ The UI clears removed contributions and ignores stale request results.
 
 The `linkReader` fields are:
 
-| Field           | Contract                                                                                                                                                                               |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                            |
-| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable. |
-| `detailMethod`  | Same-plugin read method receiving `{ url, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                                   |
-| `previewMethod` | Optional same-plugin read method receiving `{ url }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews.        |
-| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                               |
+| Field           | Contract                                                                                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+
+Preview and detail requests include the selected `agentId` when available; detail
+requests also accept `refresh: true`. The receiving owner must authorize identity
+selection rather than treating this hint as access authority.
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
 URLs are never intercepted. A descriptor is a routing hint, not authorization

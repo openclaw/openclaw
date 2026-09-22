@@ -96,6 +96,14 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
   }),
 );
 
+/** Runtime reads and opens share the generation-aware process-local damage latch. */
+export function assertAgentDatabaseTerminalOpenAllowed(pathname: string): void {
+  const failure = cache.terminal.get(pathname);
+  if (failure) {
+    throw failure;
+  }
+}
+
 function logResourceCloseFailure(pathname: string, error: unknown): void {
   agentDbLog.warn("Agent database resource close failed", { path: pathname, error });
 }
@@ -505,6 +513,16 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
       (left, right) =>
         left.agentId.localeCompare(right.agentId) || left.storePath.localeCompare(right.storePath),
     );
+}
+
+/** Borrow committed process-held facts without opening or querying a private store. */
+export function getOpenIncognitoAgentDatabase(agentId: string, pathname: string) {
+  const database = cache.databases.get(path.resolve(pathname));
+  return database?.db.isOpen &&
+    database.agentId === normalizeAgentId(agentId) &&
+    cache.incognito.has(database)
+    ? database
+    : undefined;
 }
 
 /** Return the generation of process-held incognito database membership. */

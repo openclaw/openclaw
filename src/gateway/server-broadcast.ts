@@ -12,21 +12,10 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
-import {
-  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
-  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
-  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
-} from "./events.js";
-import {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  QUESTIONS_SCOPE,
-  READ_SCOPE,
-  TALK_SCOPE,
-  WRITE_SCOPE,
-} from "./method-scopes.js";
+import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { hasEventScope } from "./server-broadcast-scopes.js";
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -41,81 +30,6 @@ import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
-
-// Pairing scope is for device-pairing handshakes only; chat transcript events
-// require operator-level session access. Pairing-scoped and node-role clients
-// must not passively receive chat-class broadcasts.
-const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
-  agent: [READ_SCOPE],
-  chat: [READ_SCOPE],
-  "chat.metadata.changed": [READ_SCOPE],
-  "board.changed": [READ_SCOPE],
-  "board.command": [READ_SCOPE],
-  "progressCard.changed": [READ_SCOPE],
-  "ui.command": [READ_SCOPE],
-  "chat.send_timing": [READ_SCOPE],
-  "chat.side_result": [READ_SCOPE],
-  cron: [READ_SCOPE],
-  health: [],
-  "exec.approval.requested": [APPROVALS_SCOPE],
-  "exec.approval.resolved": [APPROVALS_SCOPE],
-  "question.requested": [QUESTIONS_SCOPE],
-  "question.resolved": [QUESTIONS_SCOPE],
-  heartbeat: [],
-  "plugin.approval.requested": [APPROVALS_SCOPE],
-  "plugin.approval.resolved": [APPROVALS_SCOPE],
-  "openclaw.approval.requested": [APPROVALS_SCOPE],
-  "openclaw.approval.resolved": [APPROVALS_SCOPE],
-  // The frame cadence itself exposes person activity; match system-presence access.
-  presence: [READ_SCOPE],
-  shutdown: [],
-  "gateway.suspension": [],
-  tick: [],
-  "talk.event": [READ_SCOPE],
-  "talk.mode": [TALK_SCOPE],
-  "talk.voice.change": [TALK_SCOPE],
-  task: [READ_SCOPE],
-  "task.suggestion": [READ_SCOPE],
-  "update.available": [],
-  [GATEWAY_EVENT_UPDATE_RUN_CHANGED]: [ADMIN_SCOPE],
-  // Hash-only change notice after a persisted config write; content stays
-  // behind the operator-scoped config.get.
-  "config.changed": [READ_SCOPE],
-  "users.prefs.changed": [READ_SCOPE],
-  "mentions.changed": [READ_SCOPE],
-  "skills.changed": [READ_SCOPE],
-  "plugins.changed": [READ_SCOPE],
-  "voicewake.changed": [READ_SCOPE],
-  "voicewake.routing.changed": [READ_SCOPE],
-  [GATEWAY_EVENT_DEVICE_PAIR_CHANGED]: [PAIRING_SCOPE],
-  "device.pair.requested": [PAIRING_SCOPE],
-  "device.pair.resolved": [PAIRING_SCOPE],
-  "device.pair.setup.completed": [PAIRING_SCOPE],
-  "device.pair.setup.deliveryUncertain": [PAIRING_SCOPE],
-  "node.pair.requested": [PAIRING_SCOPE],
-  "node.pair.resolved": [PAIRING_SCOPE],
-  "node.presence": [READ_SCOPE],
-  "node.hostStats": [READ_SCOPE],
-  [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
-  "sessions.catalog.host": [READ_SCOPE],
-  "sessions.changed": [READ_SCOPE],
-  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
-  "plugins.controlUi.changed": [READ_SCOPE],
-  "session.approval": [APPROVALS_SCOPE],
-  "session.message": [READ_SCOPE],
-  "session.observer": [READ_SCOPE],
-  "session.operation": [READ_SCOPE],
-  "session.sharing": [READ_SCOPE],
-  "session.sharing.evidence": [READ_SCOPE],
-  "session.suggestion": [READ_SCOPE],
-  "session.typing": [READ_SCOPE],
-  "session.tool": [READ_SCOPE],
-  // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
-  // methods; also targeted to the owning connection at broadcast time.
-  "terminal.data": [ADMIN_SCOPE],
-  "terminal.exit": [ADMIN_SCOPE],
-  "portal.changed": [READ_SCOPE],
-};
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
 // authoritative registry key, including malformed/sessionless agent events.
@@ -167,58 +81,6 @@ function resolveBroadcastSessionScope(
     sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
     ...(agentId ? { agentId } : {}),
   };
-}
-
-function hasEventScope(
-  client: GatewayWsClient,
-  event: string,
-  explicitPluginScope?: GatewayPluginEventScope,
-): boolean {
-  if (client.connectionKind === "worker") {
-    return false;
-  }
-  const role = client.connect.role ?? "operator";
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
-  if (explicitPluginScope) {
-    if (role !== "operator") {
-      return false;
-    }
-    if (scopes.includes(ADMIN_SCOPE)) {
-      return true;
-    }
-    return explicitPluginScope === READ_SCOPE
-      ? scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)
-      : explicitPluginScope === WRITE_SCOPE && scopes.includes(WRITE_SCOPE);
-  }
-  const required = EVENT_SCOPE_GUARDS[event];
-  // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
-  // for operator.write and operator.admin scopes. Explicit plugin.* entries
-  // in EVENT_SCOPE_GUARDS take precedence (e.g., plugin.approval.*).
-  if (!required && event.startsWith("plugin.")) {
-    if (role !== "operator") {
-      return false;
-    }
-    return scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE);
-  }
-  if (!required) {
-    return false;
-  }
-  if (required.length === 0) {
-    return true;
-  }
-  if (role !== "operator") {
-    return false;
-  }
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  if (required.includes(READ_SCOPE)) {
-    return scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  if (required.includes(TALK_SCOPE)) {
-    return scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  return required.some((scope) => scopes.includes(scope));
 }
 
 type FrameFields = {
@@ -432,7 +294,17 @@ export function createGatewayBroadcaster(params: {
       ) {
         continue;
       }
-      if (!hasEventScope(c, event, explicitPluginScope)) {
+      const questionRecipient =
+        event === "question.requested" || event === "question.resolved"
+          ? opts?.questionRecipient
+          : undefined;
+      const ownRunQuestion =
+        questionRecipient !== undefined &&
+        !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
+      if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion)) {
+        continue;
+      }
+      if (questionRecipient && !isCurrent(() => questionRecipient(c))) {
         continue;
       }
       const requiresSessionSubscription =
@@ -469,6 +341,8 @@ export function createGatewayBroadcaster(params: {
         }
       }
       if (
+        // The question owner consumes prepared sharing and original-source facts together.
+        !questionRecipient &&
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
         !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)

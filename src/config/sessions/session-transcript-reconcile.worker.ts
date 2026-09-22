@@ -4,7 +4,7 @@ import {
   attachStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../../infra/state-database-coordinator.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,

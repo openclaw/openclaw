@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
+import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -257,7 +257,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "From main",
+        "Starting branch",
       );
       await checkoutTrigger.click();
       const currentCheckout = checkout.locator('[data-value="checkout"]');
@@ -315,7 +315,8 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await checkoutTrigger.click();
       const baseRef = checkout.getByLabel("From", { exact: true });
-      await expect.poll(() => baseRef.inputValue()).toBe("main");
+      await expect.poll(() => baseRef.getAttribute("placeholder")).toBe("main");
+      expect(await baseRef.inputValue()).toBe("");
       await baseRef.fill("release");
       await expect.poll(() => baseRef.inputValue()).toBe("release");
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
@@ -415,6 +416,8 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
         );
       }
+      // Hold each retry's deadline until the next deferred response is installed.
+      await pauseVirtualClock(page);
       await gateway.rejectDeferred("environments.list", profileCatalogError);
 
       // A recorded request is not a processed failure. Let the page settle and
@@ -470,11 +473,11 @@ suite.define(() => {
         titleSource: message,
         projectId: "openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
         worktreeName: "cloud-e2e",
         thinkingLevel: "high",
         fastMode: true,
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
@@ -690,7 +693,7 @@ suite.define(() => {
       const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
       await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
-      await sessionRow.getByRole("button", { name: "Open session menu" }).click();
+      await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });

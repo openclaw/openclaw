@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -32,10 +31,10 @@ import {
   listOpenClawRegisteredAgentDatabases,
 } from "../state/openclaw-agent-db.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   agentCommandMock,
-  getGatewayTestPort,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
@@ -67,7 +66,7 @@ beforeAll(async () => {
     return kernel;
   });
   try {
-    server = await startTestGatewayServer(await getGatewayTestPort());
+    server = await startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
   } finally {
     capture.mockRestore();
   }
@@ -182,7 +181,10 @@ async function arrangeAuthorityProof(name: string) {
 
 it("rejects an unrelated visible controller without consuming input or producing a child result", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("unrelated-controller");
@@ -205,7 +207,10 @@ it("rejects an unrelated visible controller without consuming input or producing
 
 it("rejects a child without task-owned completion before input or execution", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("completion-disabled");
@@ -248,7 +253,10 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       return input;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   let sending: ReturnType<Awaited<ReturnType<typeof arrangeAuthorityProof>>["send"]> | undefined;
   try {
@@ -320,7 +328,10 @@ it("fences a cancelled successor after adoption before queued input consumption"
       return executionCompletion;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("cancelled-successor");
@@ -399,7 +410,10 @@ it.each(["explicit", "automatic"] as const)(
     const release = createDeferred();
     const started = createDeferred();
     const announce = vi
-      .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+      .spyOn(
+        await import("../agents/subagents/announce/subagent-announce.js"),
+        "runSubagentAnnounceFlow",
+      )
       .mockResolvedValue("delivered");
     testState.sessionStorePath = path.join(root, "sessions.json");
     try {

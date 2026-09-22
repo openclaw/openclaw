@@ -30,6 +30,7 @@ import {
 } from "../../gateway/cli-session-history.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
+import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -524,4 +525,22 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.attemptExecutionHelpersTestApi")
   ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
+}
+
+export function rebaseExecApprovalContinuationPromptRange(params: {
+  body: string;
+  prompt: string;
+  range?: ExecApprovalContinuationPromptRange;
+}): ExecApprovalContinuationPromptRange | undefined {
+  if (!params.range) {
+    return undefined;
+  }
+  if (!params.prompt.endsWith(params.body)) {
+    throw new Error("exec approval continuation prompt range could not be rebased");
+  }
+  const offset = params.prompt.length - params.body.length;
+  return {
+    start: offset + params.range.start,
+    end: offset + params.range.end,
+  };
 }

@@ -245,6 +245,30 @@ describe.each(deniedInvocations)(
 );
 
 describe("eligible status recovery", () => {
+  it("directs version-manager runtime findings to Doctor before reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (accountHome, print) => {
+        const status = await createStatus("config-audit", accountHome);
+        status.service.configAudit = {
+          ok: false,
+          issues: [
+            {
+              code: "gateway-runtime-node-version-manager",
+              message:
+                "Gateway service uses Node from a version manager; it can break after upgrades.",
+              level: "recommended",
+            },
+          ],
+        };
+        print(status, { json: false });
+        expect(humanOutput()).toContain("openclaw doctor");
+        expect(humanOutput()).toContain("Reinstalling alone may select the same runtime");
+        expect(humanOutput()).not.toContain("openclaw gateway install --force");
+      },
+    );
+  });
+
   it.each([false, true])(
     "keeps remote service-install facts diagnostic-only when install blocked=%s",
     async (blocked) => {

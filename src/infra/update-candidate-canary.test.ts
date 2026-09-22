@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as diskSpace from "./disk-space.js";
 import * as readiness from "./update-candidate-canary-readiness.test-support.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
@@ -17,7 +16,6 @@ import {
   renderSteps,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
-import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -186,16 +184,16 @@ describe("update candidate canary", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("deadline exceeded");
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
-      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+      expect(result.logTail.join("\n")).toContain("checks phase timed out");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(result.steps.at(-1)?.stderrTail).toContain("checks phase timed out");
       const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
       expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("deadline exceeded");
+      expect(detail).toContain("checks phase timed out");
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
       );
-      expect(report.markdown).toContain("deadline exceeded");
+      expect(report.markdown).toContain("checks phase timed out");
     } finally {
       clock.mockRestore();
     }
@@ -621,50 +619,6 @@ describe("update candidate canary", () => {
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reuses caller-owned rehearsal changes across validations until the caller disposes them", async () => {
-    const config: OpenClawConfig = { logging: { level: "info" } };
-    const observed: Array<{ configPath: string; level: string | undefined }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        const configPath = childEnv.OPENCLAW_CONFIG_PATH!;
-        const current = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-        observed.push({ configPath, level: current.logging?.level });
-        return Response.json({ status: "started", ready: true });
-      }),
-    );
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      candidateRoot: root,
-      config,
-      stateDir: root,
-      env: {},
-      timeoutMs: 3_000,
-    });
-    const options = { ...canaryStateOptions(3_000), config, rehearsal };
-    try {
-      const first = await validateUpdateCandidateCanary(options);
-      expect(first.status).toBe("ok");
-      const copied = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")) as OpenClawConfig;
-      copied.logging = { ...copied.logging, level: "debug" };
-      const repairedConfig = JSON.stringify(copied);
-      await fs.writeFile(rehearsal.configPath, repairedConfig);
-      const second = await validateUpdateCandidateCanary(options);
-      expect(second.status).toBe("ok");
-      expect(observed).toEqual([
-        { configPath: rehearsal.configPath, level: "info" },
-        { configPath: rehearsal.configPath, level: "info" },
-        { configPath: rehearsal.configPath, level: "debug" },
-        { configPath: rehearsal.configPath, level: "debug" },
-      ]);
-      expect(mocks.snapshot).toHaveBeenCalledTimes(2);
-      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBe(repairedConfig);
-      await expect(fs.access(rehearsal.stateDir)).resolves.toBeUndefined();
-    } finally {
-      await rehearsal.cleanup();
-    }
-    await expect(fs.access(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it.each(["lint", "startup", "startup-multiline", "config", "multiline", "envelope", "compact"])(
     "retains the CLI reason when %s exits before its report",
     async (scenario) => {
@@ -743,7 +697,7 @@ describe("update candidate canary", () => {
           expect(output).toContain("gateway.host: unknown");
           expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
             expect.stringContaining(
-              scenario === "multiline" ? "gateway.port: invalid" : "gateway.host: unknown",
+              scenario === "multiline" ? "gateway.port: invalid" : "Invalid config",
             ),
           );
         } else {

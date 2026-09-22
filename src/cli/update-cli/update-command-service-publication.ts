@@ -20,6 +20,7 @@ import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
   observedSystemdManagerUid,
@@ -62,7 +63,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     const refuse = (cause?: unknown): never => {
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        "Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run `openclaw gateway status --deep`, stop the affected Gateway through its service owner, and retry the update.",
+        `Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the update.`,
         { cause },
       );
     };

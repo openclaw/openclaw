@@ -137,7 +137,7 @@ async function createFakeGateway(): Promise<FakeGateway> {
     findSessionAttachment: () => undefined,
     getSessionAttachmentStatus: () => undefined,
     assertSessionAttachment: () => {},
-    touchSessionAttachment: () => {},
+    touchSessionAttachment: async () => {},
     createSessionAttachment: async () => {
       throw new Error("conversation attachments are outside the SDK environment RPC proof");
     },

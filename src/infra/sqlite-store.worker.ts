@@ -42,6 +42,7 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 import type { acquireStateDatabaseCoordinator } from "./state-database-coordinator.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 const port = parentPort;
@@ -451,6 +452,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
+          ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
       });
@@ -578,8 +580,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     resultPort?.close();
     lifecycleReply = undefined;
+    scheduleWorkerIdleGc();
   }
 }
 
 // The broker sends one request at a time, including module initialization.
-port.on("message", (request: SqliteWorkerRequest) => void receive(request));
+port.on("message", (request: SqliteWorkerRequest) => {
+  cancelWorkerIdleGc();
+  void receive(request);
+});

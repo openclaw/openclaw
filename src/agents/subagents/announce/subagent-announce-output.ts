@@ -30,7 +30,6 @@ import {
   readSubagentRunAnnounceResultUsing,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
-  type SubagentAnnounceResultDeps,
 } from "./subagent-announce-result.js";
 import {
   callSubagentLifecycleGateway,
@@ -43,24 +42,6 @@ import {
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-type SubagentAnnounceOutputDeps = SubagentAnnounceResultDeps & {
-  callGateway: typeof callSubagentLifecycleGateway;
-  readSessionMessagesAsync: typeof readSessionMessagesAsync;
-};
-
-const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
-  findTranscriptEvent,
-  findSessionTranscriptArchiveEventReadOnly,
-  callGateway: callSubagentLifecycleGateway,
-  getRuntimeConfig,
-  readSubagentSessionEntry,
-  readSessionMessagesAsync,
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-};
-
-let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
-
 function isFastTestMode() {
   return isFastTestRuntimeEnv();
 }
@@ -229,19 +210,16 @@ export async function readSubagentOutput(
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
   if (options?.sessionTarget) {
-    const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
-      options.sessionTarget,
-      {
-        mode: "recent",
-        maxMessages: 100,
-        maxBytes: 1024 * 1024,
-      },
-    );
+    const transcriptMessages = await readSessionMessagesAsync(options.sessionTarget, {
+      mode: "recent",
+      maxMessages: 100,
+      maxBytes: 1024 * 1024,
+    });
     messages = transcriptMessages;
   }
   const history =
     messages === undefined
-      ? await subagentAnnounceOutputDeps.callGateway({
+      ? await callSubagentLifecycleGateway({
           method: "chat.history",
           params: { sessionKey, limit: 100 },
         })
@@ -288,7 +266,7 @@ export async function waitForSubagentRunOutcome(
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await subagentAnnounceOutputDeps.callGateway({
+  return await callSubagentLifecycleGateway({
     method: "agent.wait",
     params: {
       runId,
@@ -378,7 +356,14 @@ export async function captureSubagentCompletionReply(
 export async function readSubagentRunAnnounceResult(
   child: Parameters<typeof readSubagentRunAnnounceResultUsing>[0],
 ): Promise<PreparedAnnounceResult> {
-  return await readSubagentRunAnnounceResultUsing(child, subagentAnnounceOutputDeps);
+  return await readSubagentRunAnnounceResultUsing(child, {
+    findTranscriptEvent,
+    findSessionTranscriptArchiveEventReadOnly,
+    getRuntimeConfig,
+    readSubagentSessionEntry,
+    resolveAgentIdFromSessionKey,
+    resolveSessionStorePathCore,
+  });
 }
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
@@ -472,12 +457,12 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
-  const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = subagentAnnounceOutputDeps.resolveSessionStorePathCore(cfg.session?.store, {
+  const cfg = getRuntimeConfig();
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId,
   });
-  let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
+  let entry = readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     if (
@@ -492,7 +477,7 @@ export async function buildCompactAnnounceStatsLine(params: {
         setTimeout(resolve, 150);
       });
     }
-    entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
+    entry = readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
   const input = entry?.inputTokens;
@@ -517,20 +502,4 @@ export async function buildCompactAnnounceStatsLine(params: {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
   return `Stats: ${parts.join(" • ")}`;
-}
-
-const testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
-    subagentAnnounceOutputDeps = overrides
-      ? {
-          ...defaultSubagentAnnounceOutputDeps,
-          ...overrides,
-        }
-      : defaultSubagentAnnounceOutputDeps;
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentAnnounceOutputTestApi")
-  ] = testing;
 }

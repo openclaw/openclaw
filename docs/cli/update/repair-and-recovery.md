@@ -39,10 +39,9 @@ and managed-service handoff runs do not prompt or collect automatic diagnostics.
 
 For failures without a verified rollback, updates using `--yes`, `--json`, or a
 non-interactive session (including piped input or output) collect diagnostics
-and print handoff commands without starting an external coding agent. The updater's
-earlier
-[unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
-can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
+and print handoff commands without starting an external coding agent. Eligible
+failures can start [post-failure triage](/install/updating#unattended-repair-on-your-own-inference)
+on configured inference after update ownership and service compensation settle. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
 failure.
 
@@ -162,6 +161,15 @@ run are revalidated before every native operation. A restoration failure names
 the cause and the commands to inspect and restart the Gateway. Normal update
 finalization continues to leave activation with its outer updater.
 
+If Doctor reports that the update parent must stop the managed Gateway, wait
+for that update to exit, then run `openclaw gateway stop` and retry
+`openclaw update repair` from an independent shell with the same profile and
+state/config overrides. On macOS, stop unloads the LaunchAgent and verifies that
+its process exited. A still-loaded service or surviving PID after a successful
+stop is a service shutdown failure. If stop cannot unload the service, use the
+exact `launchctl bootout` command printed in the refusal from the owning user's
+logged-in macOS GUI session.
+
 An unrelated update whose driver is live or cannot be inspected still blocks
 repair, even after a long period without activity. Manual `doctor --fix` also
 refuses to stop a service while that update is active. The refusal identifies the
@@ -232,6 +240,17 @@ availability, installation, or load failures appear in
 successfully when required checks pass. Failed required Doctor execution,
 invalid configuration or state, ownership errors, and failed required readiness
 checks still exit nonzero.
+
+After post-update or finalization work fails and its child processes settle,
+OpenClaw probes the installed Gateway using the normal startup and readiness
+budget. Update history and failure reports record the observed serving version
+and readiness, including for a foreground Gateway. A failed finalization step
+can therefore report **verified serving** while retaining its original failure
+and repair guidance. The observation does not restart the Gateway or grant
+maintenance authority. Failed probes retain their specific diagnostic; a
+Gateway that is still starting keeps that outcome instead of being restarted.
+If command cleanup remains uncertain, the run stays open and retains its recovery
+artifacts instead of publishing completion or starting another repair.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,

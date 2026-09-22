@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-usage-cache-read.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerInput,
@@ -15,19 +14,18 @@ import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
-import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
-import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import {
   sessionHistoryCleanupError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
-import { listSessionMembers } from "./session-sharing-store.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import type { SessionStoreTargetInventoryResult } from "./session-store-target-inventory.js";
+import {
+  createSessionHistoryWorkerReaders,
+  type SessionHistoryWorkerRequestRunner,
+} from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -45,37 +43,12 @@ import {
   type SessionDatabaseCleanup,
 } from "./session-transcript-worker-resources.js";
 import type {
-  SessionTranscriptHistoryWorkerInput,
+  SessionHistoryWorkerDatabase,
+  SessionHistoryWorkerInput,
   SessionRowPresenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionEntryListWorkerInput,
-  SessionEntryListWorkerResult,
-  SessionIdentityEvidenceWorkerInput,
-  SessionIdentityEvidenceWorkerResult,
-  SessionUsageCacheWorkerInput,
 } from "./session-transcript-worker.types.js";
 
-export type SessionHistoryWorkerDatabase = {
-  generation: number;
-  assertCurrent: () => void;
-  run: (
-    prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
-    inputBytes: number,
-  ) => Promise<SessionHistoryWorkerResult>;
-  readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
-  readIdentityEvidence: (
-    input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
-  ) => Promise<SessionIdentityEvidenceResult[]>;
-  readEntries: (
-    scope: SessionEntryListWorkerInput["scope"],
-  ) => Promise<SessionEntryListWorkerResult["entries"]>;
-  readMembers: (
-    input: Omit<SessionMembersWorkerInput, "kind" | "database">,
-  ) => Promise<SessionMember[]>;
-  readUsageCache: (
-    input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
-  ) => Promise<SessionCostUsageCacheReadResult>;
-};
+export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type SessionCostUsageWorkerOptions = Pick<
   WorkerTaskOptions<UsageCostWorkerInput>,
@@ -125,26 +98,8 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
   };
 }
 
-/** Full membership evidence shares the existing read-only agent database worker. */
-export async function listSessionMembersInWorker(
-  input: SessionAccessScope,
-): Promise<SessionMember[]> {
-  const env = { ...(input.env ?? process.env) };
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = resolveSqliteScope({ ...input, env });
-  const options = toDatabaseOptions(resolved);
-  const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    // Incognito SQLite exists only in this process and keeps its native owner.
-    return listSessionMembers({ ...input, env });
-  }
-  return await withSessionHistoryWorkerDatabase(options, (owner) =>
-    owner.readMembers({ sessionKey: resolved.sessionKey, env }),
-  );
-}
-
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
-function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
+export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
   const assertCurrent = () => {
@@ -163,28 +118,17 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
   };
   try {
     assertCurrent();
-    const runRequest = async <TResult>(
-      prepare: () =>
-        | Omit<SessionTranscriptHistoryWorkerInput, "database">
-        | Omit<SessionRowPresenceWorkerInput, "database">
-        | Omit<SessionMembersWorkerInput, "database">
-        | Omit<SessionEntryListWorkerInput, "database">
-        | Omit<SessionIdentityEvidenceWorkerInput, "database">
-        | Omit<SessionUsageCacheWorkerInput, "database">,
-      inputBytes: number,
-      receive: (
-        value:
-          | SessionHistoryWorkerResult
-          | boolean
-          | SessionMember[]
-          | SessionEntryListWorkerResult
-          | SessionStoreTargetInventoryResult
-          | SessionIdentityEvidenceWorkerResult
-          | SessionCostUsageCacheReadResult,
-      ) => TResult,
-    ): Promise<TResult> => {
+    const runRequest: SessionHistoryWorkerRequestRunner = async (
+      prepare,
+      inputBytes,
+      receive,
+      signal,
+      onRequest,
+    ) => {
       assertCurrent();
+      const deadline = performance.now() + 60_000;
       let sequence = 0;
+      let executionRetired = false;
       try {
         const reply = await historyPages.run(
           () => {
@@ -195,18 +139,33 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             owned.nativeSequences.set(historyLane, sequence);
             return { ...input, database };
           },
-          { inputBytes, timeoutMs: 60_000 },
+          {
+            inputBytes,
+            timeoutMs: 60_000,
+            signal,
+            onRequest: onRequest
+              ? async (value, context) => {
+                  context.signal.throwIfAborted();
+                  assertCurrent();
+                  onRequest(value);
+                  assertCurrent();
+                  const remaining = deadline - performance.now();
+                  if (remaining <= 0) {
+                    throw new WorkerTaskError("worker task timed out", "timeout");
+                  }
+                  return { input: null, timeoutMs: remaining };
+                }
+              : undefined,
+            onExecutionSettled: ({ retired }) => {
+              if (retired) {
+                executionRetired = true;
+                releaseRetiredDatabaseCustody(historyLane, sequence);
+              }
+            },
+          },
         );
         const value = receive(
-          unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-          >(reply),
+          unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply),
         );
         if (reply.ok && reply.closedHistoryDatabase) {
           // A later dispatched request may already hold this target's next native custody.
@@ -215,7 +174,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
         assertCurrent();
         return value;
       } catch (error) {
-        if (sequence > 0) {
+        if (sequence > 0 && !executionRetired) {
           try {
             await rotateDatabaseWorkers(historyLane);
           } catch (cleanupError) {
@@ -228,94 +187,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
     const owner: SessionHistoryWorkerDatabase = {
       generation: owned.generation,
       assertCurrent,
-      run: async (prepare, inputBytes) =>
-        await runRequest(prepare, inputBytes, (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind === "session-entry-list" ||
-            value.kind === "session-target-inventory" ||
-            value.kind === "session-target-registry-required" ||
-            value.kind === "session-identity-evidence" ||
-            value.kind === "usage-refresh-lock"
-          ) {
-            throw new Error("Session history worker returned metadata instead of history");
-          }
-          return value;
-        }),
-      readUsageCache: async (input) =>
-        await runRequest(
-          () => ({ kind: "usage-cache", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "usage-refresh-lock"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of usage cache",
-              );
-            }
-            return value;
-          },
-        ),
-      readMembers: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-members", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (!Array.isArray(value)) {
-              throw new Error("Session history worker returned another result instead of members");
-            }
-            return value;
-          },
-        ),
-      readEntryPresence: async (scope) =>
-        await runRequest(
-          () => ({ kind: "session-row-presence", scope }),
-          JSON.stringify(scope).length * 2,
-          (value) => {
-            if (typeof value !== "boolean") {
-              throw new Error(
-                "Session history worker returned history instead of metadata presence",
-              );
-            }
-            return value;
-          },
-        ),
-      readEntries: async (scope) =>
-        await runRequest(
-          () => ({ kind: "session-entry-list", scope }),
-          JSON.stringify(scope).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-entry-list"
-            ) {
-              throw new Error("Session history worker returned another result instead of entries");
-            }
-            return value.entries;
-          },
-        ),
-      readIdentityEvidence: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-identity-evidence", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-identity-evidence"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of identity evidence",
-              );
-            }
-            return value.evidence;
-          },
-        ),
+      ...createSessionHistoryWorkerReaders(runRequest),
     };
     return { owner, release };
   } catch (error) {

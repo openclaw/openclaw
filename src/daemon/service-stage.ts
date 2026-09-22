@@ -17,7 +17,7 @@ const fileState = z.strictObject({
   mtimeMs: z.number().finite(),
   ctimeMs: z.number().finite(),
 });
-export const GatewayServiceStagedFilesSchema = z.strictObject({
+const GatewayServiceStagedFilesSchema = z.strictObject({
   files: z
     .array(
       z.strictObject({
@@ -51,6 +51,7 @@ export type GatewayServiceDefinitionBackupReceipt = z.infer<
   typeof GatewayServiceDefinitionBackupReceiptSchema
 >;
 export type GatewayServiceDefinitionTransactionHooks = {
+  preservePolicy?: readonly string[];
   assertCurrent: () => void;
   beforeWrite: () => Promise<void>;
   filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;

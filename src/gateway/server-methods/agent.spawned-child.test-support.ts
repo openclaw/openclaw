@@ -7,7 +7,12 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { type AgentHandlerArgs, backendGatewayClient, requireValue } from "./agent.test-harness.js";
+import {
+  type AgentHandlerArgs,
+  getAgentTestMocks,
+  backendGatewayClient,
+  requireValue,
+} from "./agent.test-harness.js";
 
 export const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>> = {
   backend: "acpx",
@@ -31,6 +36,11 @@ export function createPluginSubagentTestLifetime(params: {
   runId: string;
   childSessionKey: string;
 }) {
+  getAgentTestMocks().registryCallGateway.mockImplementation(async () => ({
+    status: "ok",
+    startedAt: Date.now(),
+    endedAt: Date.now(),
+  }));
   const work = new AsyncWorkScope();
   const cleanupCompleted = createDeferred();
   const unsubscribe = onSubagentRegistryPersisted(() => {

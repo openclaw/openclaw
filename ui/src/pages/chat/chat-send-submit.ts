@@ -7,6 +7,7 @@ import {
 } from "../../../../src/chat/work-context.js";
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
@@ -24,6 +25,7 @@ import {
 } from "./chat-commands.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
   admitQueuedMessageForSessionResult,
@@ -83,7 +85,10 @@ import {
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+registerChatGoalsEnglish();
+
 export type ChatSendSubmitOptions = {
+  asyncQuestionItemId?: string;
   intent?: ChatSendIntent;
   attachmentsOverride?: readonly ChatAttachment[];
   mentionsOverride?: readonly HumanMention[];
@@ -112,6 +117,13 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
+  if (
+    chatProviderReviewRow(host)?.providerReview &&
+    !isChatStopCommand(messageOverride ?? host.chatMessage)
+  ) {
+    setChatError(host, t("chat.providerReview.pausedBody"));
+    return undefined;
+  }
   if (
     isInitialChatHistoryUnavailable(host) &&
     (opts?.intent ||
@@ -574,6 +586,8 @@ export async function handleSendChat(
       return;
     }
     let queued = submission.item;
+    queued.asyncQuestionItemId =
+      resumedEdit?.source.asyncQuestionItemId ?? opts?.asyncQuestionItemId;
     if (queued.attachments?.length) {
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);

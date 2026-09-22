@@ -1,18 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { migrateDoctorDeliveryQueues } from "../commands/doctor-outbound-delivery.js";
+import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
-import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 
 const modes = ["success", "callback-failure", "retained-release", "retained-acquire"] as const;
 type Mode = (typeof modes)[number];
 
 async function runMode(stateDir: string, mode: Mode) {
+  process.stderr.write(`Doctor custody case: ${mode}\n`);
   process.env.HOME = stateDir;
   process.env.USERPROFILE = stateDir;
   process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -22,8 +24,14 @@ async function runMode(stateDir: string, mode: Mode) {
   const pluginId = `doctor-custody-fixture-${mode}`;
   const pluginDir = path.join(stateDir, "plugin");
   await fs.mkdir(pluginDir, { recursive: true });
-  const nativeState: { native?: DatabaseSync; failure: Error; nativePath: string } = {
+  const nativeState: {
+    native?: DatabaseSync;
+    failure: Error;
+    callbackFailure: Error;
+    nativePath: string;
+  } = {
     failure: new PluginRuntimeCloseRetainedError(new Error("synthetic native resource retained")),
+    callbackFailure: new Error("settled callback failure"),
     nativePath: path.join(stateDir, "native.sqlite"),
   };
   Object.defineProperty(globalThis, "__doctorCustodyFixture", {
@@ -44,7 +52,7 @@ async function runMode(stateDir: string, mode: Mode) {
   api.registerRuntimeLifecycle({ id: "native-custody", dispose() {
     if (${JSON.stringify(mode)}.startsWith("retained")) throw state.failure;
     state.native.close();
-    if (${JSON.stringify(mode)} === "callback-failure") throw new Error("settled callback failure");
+    if (${JSON.stringify(mode)} === "callback-failure") throw state.callbackFailure;
   } });
   if (${JSON.stringify(mode)} === "retained-acquire") throw new Error("registration failed after resource acquisition");
   api.on("message_sending", (event) => ({ content: event.content + "|prepared" }));
@@ -88,15 +96,14 @@ async function runMode(stateDir: string, mode: Mode) {
   if (!maintenance) {
     throw new Error("Expected Doctor maintenance");
   }
-  const result = await maintenance.run(() =>
-    autoMigrateLegacyState({
-      cfg,
-      env: process.env,
-      doctorOnlyStateMigrations: true,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    }),
-  );
-  await maintenance.release();
+  let failure: unknown;
+  try {
+    await maintenance.run(() => migrateDoctorDeliveryQueues({ cfg, stateDir, env: process.env }));
+  } catch (error) {
+    failure = error;
+  } finally {
+    await maintenance.release();
+  }
   const writable = nativeState.native?.isOpen === true;
   if (nativeState.native?.isOpen) {
     nativeState.native.exec("INSERT INTO effects VALUES ('after failed cleanup')");
@@ -108,8 +115,20 @@ async function runMode(stateDir: string, mode: Mode) {
   if (nativeState.native?.isOpen) {
     nativeState.native.close();
   }
-  const receipt = result.stepReceipts.find((item) => item.id === "delivery-queues");
-  return { mode, blocked, writable, outcome: receipt?.outcome };
+  const errors = collectNestedErrorCandidates(failure);
+  const acquisitionFailure = errors.find((error) => error instanceof PluginLoadFailureError);
+  return {
+    mode,
+    blocked,
+    writable,
+    registered: nativeState.native !== undefined,
+    failed: failure !== undefined,
+    callbackFailure: errors.includes(nativeState.callbackFailure),
+    retainedFailure: errors.includes(nativeState.failure),
+    acquisitionFailure: acquisitionFailure
+      ? { pluginIds: acquisitionFailure.pluginIds, message: acquisitionFailure.message }
+      : null,
+  };
 }
 
 const [stateRoot, requestedMode] = process.argv.slice(2);

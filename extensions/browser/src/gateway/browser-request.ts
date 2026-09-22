@@ -56,6 +56,7 @@ import {
   type GatewayRequestHandlers,
   type NodeSession,
 } from "../core-api.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -431,7 +432,11 @@ export async function handleBrowserGatewayRequest({
   // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable()),
+    );
     return;
   }
 

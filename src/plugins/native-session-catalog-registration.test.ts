@@ -10,6 +10,7 @@ import { SessionCatalogListLifetime } from "../gateway/server-methods/session-ca
 import { listSessionCatalogProvider } from "../gateway/server-methods/session-catalog-provider-access.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -327,8 +328,8 @@ describe("registered native catalog access", () => {
         list: () => blockers.promise,
         read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
       };
-      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, () =>
-        listSessionCatalogProvider(blocker, {}),
+      const active = Array.from({ length: phase === "queued" ? 15 : 0 }, (_, index) =>
+        listSessionCatalogProvider({ ...blocker, id: `blocking-${index}` }, {}),
       );
       const pending = withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
@@ -344,6 +345,7 @@ describe("registered native catalog access", () => {
           ? listSessionCatalogProvider(
               {
                 ...blocker,
+                id: "successor",
                 list: () => {
                   successorStarted.resolve();
                   return blockers.promise;
@@ -361,11 +363,21 @@ describe("registered native catalog access", () => {
           expect(close).toHaveBeenCalledOnce();
         }
         vi.useFakeTimers();
-        const disposal = state.dispose();
-        await vi.advanceTimersByTimeAsync(5_050);
+        const disposal = state.instance.dispose();
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(cleanup).not.toHaveBeenCalled();
         expect(state.instance.lifecycle.signal.aborted).toBe(false);
         expect(state.instance.hasRetainedConsumers).toBe(true);
+        await vi.advanceTimersByTimeAsync(51);
+        const timeout = (await disposal).errors[0];
+        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected bounded logical retirement");
+        }
+        expect(timeout.forcedRetirement).toEqual({ activeCallCount: 0, retainedConsumerCount: 1 });
+        expect(state.instance.lifecycle.signal.aborted).toBe(true);
+        expect(state.instance.hasRetainedConsumers).toBe(true);
+        expect(cleanup).not.toHaveBeenCalled();
         if (phase === "queued") {
           const retirement = new Error("catalog owner retired");
           owner.abort(retirement);
@@ -375,7 +387,7 @@ describe("registered native catalog access", () => {
         expect(next).toHaveBeenCalledOnce();
         expect(published).not.toHaveBeenCalled();
         publication.resolve();
-        await disposal;
+        await timeout.settled;
         expect(published).toHaveBeenCalledOnce();
         expect(cleanup).toHaveBeenCalledOnce();
         expect(state.instance.hasRetainedConsumers).toBe(false);

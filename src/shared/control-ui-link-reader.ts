@@ -26,7 +26,9 @@ export type ControlUiLinkReaderPreviewParams = {
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
 };
-export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  refresh?: boolean;
+};
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
   url: string;

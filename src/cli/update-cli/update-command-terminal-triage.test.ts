@@ -20,12 +20,12 @@ import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-servic
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,

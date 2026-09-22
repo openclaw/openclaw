@@ -97,8 +97,14 @@ walk the home to completion without consuming a foreground request's budget.
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
-pages. Its first list waits for a usable native page or confirmed empty inventory,
-within the existing app-server request timeout. That single request budget also
+pages. Progressive lists serve resident rows immediately. If a local home is still
+loading after 250 ms, the list returns that host as pending, preserving previously
+displayed rows; the existing progress callback publishes its page or error when ready.
+The page producer and publication remain owned by the list's background completion.
+One-shot lists, host-specific lookups, and pagination wait for a usable native
+page or confirmed empty inventory for at most five seconds (or the configured
+app-server request timeout when shorter).
+That single request budget also
 covers loading saved state and draining earlier cache writes after a configuration
 reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
 a continuation that catches up with discovery waits for the next page within its
@@ -324,6 +330,11 @@ through `sandbox_exec`. Denying `process` removes `sandbox_process` and backgrou
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
 
+Sandbox turns also use these tools when Codex allows only managed hooks and cannot
+install the native process-admission hook. OpenClaw selects this existing execution
+path before preparing the tool catalog and prompt. Existing policies that require
+other enforcing native hooks still require their normal preflight to pass.
+
 The sandbox exec-server option does not bypass those tool restrictions. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
@@ -352,9 +363,18 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
-Stopping an active Codex run interrupts its turn, then stops the native background
-terminals listed on that Codex thread before releasing the run. Other Codex
-threads and deliberately backgrounded `gateway_process` jobs are unaffected.
+Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
+exec-server, cleanup stops the concrete processes admitted by that turn and
+preserves independent background work in the same reused thread. Each process
+retains its original source until settlement, including after foreground
+completion. Visitor Access expiry and revocation stop the guest's retained
+processes without interrupting a later maintainer turn. Native command admission and subsequent
+process input recheck the original source; cleanup remains available after
+revocation.
+
+Other native execution modes retain thread-wide background-terminal cleanup.
+Other Codex threads and deliberately backgrounded `gateway_process` jobs are
+unaffected.
 If native terminal cleanup fails, the run reports an error instead of silently
 claiming cleanup succeeded. Inspect that thread's running terminals before
 starting more work. This uses Codex's terminal ownership. It does not guarantee
@@ -386,8 +406,9 @@ Store environment values never enter the Codex app-server process, native
 shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
-[OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
-for generic OpenClaw runs with a different `exec` input shape. For the
+[OpenClaw Code Mode](/tools/code-mode), a separate JavaScript runtime with its
+own automatic per-model activation and explicit overrides. It has a different
+`exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another

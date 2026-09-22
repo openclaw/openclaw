@@ -3,7 +3,10 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -82,7 +85,35 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     );
   }
 
-  protected refreshSessionPullRequests(options: { refresh?: boolean } = {}): boolean {
+  private applyPullRequestPresentation(
+    result?: ControlUiSessionPullRequestSnapshot,
+    dismissed = this.dismissedSessionPullRequestIds,
+  ): void {
+    const pullRequests = result?.pullRequests ?? [];
+    const repository = sessionGitHubRepository(result);
+    const status = result?.status ?? "ready";
+    const changed =
+      (this.sessionPullRequests !== pullRequests &&
+        (this.sessionPullRequests.length > 0 || pullRequests.length > 0)) ||
+      this.sessionPullRequestsBranch !== result?.branch ||
+      this.githubRepo?.owner !== repository?.owner ||
+      this.githubRepo?.repo !== repository?.repo ||
+      this.sessionPullRequestsStatus !== status ||
+      this.dismissedSessionPullRequestIds.size !== dismissed.size ||
+      [...dismissed].some((id) => !this.dismissedSessionPullRequestIds.has(id));
+    this.sessionPullRequests = pullRequests;
+    this.sessionPullRequestsBranch = result?.branch;
+    this.githubRepo = repository;
+    this.sessionPullRequestsStatus = status;
+    this.dismissedSessionPullRequestIds = dismissed;
+    if (changed) {
+      this.requestUpdate();
+    }
+  }
+
+  protected refreshSessionPullRequests(
+    options: { refresh?: boolean; automatic?: boolean } = {},
+  ): boolean {
     if (!this.presented) {
       sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
       return false;
@@ -98,21 +129,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (scope) {
         sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       }
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.githubRepo = null;
-      this.sessionPullRequestsStatus = "ready";
-      this.requestUpdate();
+      this.applyPullRequestPresentation();
       return false;
     }
     const sessionKey = scope.state.sessionKey;
     if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
       sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.githubRepo = null;
-      this.sessionPullRequestsStatus = "ready";
-      this.requestUpdate();
+      this.applyPullRequestPresentation();
       return false;
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
@@ -123,7 +146,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         resolveChatAgentId(scope.state),
     );
     store.watch(this, [pullRequestKey], { foreground: true });
-    const refreshAdmitted = options.refresh === true && store.refresh(pullRequestKey);
+    const refreshAdmitted = options.refresh === true && store.refresh(pullRequestKey, options);
     const result = store.get(pullRequestKey);
     if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
       return refreshAdmitted;
@@ -132,12 +155,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
         scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
       }
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.githubRepo = null;
-      this.sessionPullRequestsStatus = "ready";
-      this.dismissedSessionPullRequestIds = new Set();
-      this.requestUpdate();
+      this.applyPullRequestPresentation(undefined, new Set());
       return refreshAdmitted;
     }
     const repository = sessionGitHubRepository(result);
@@ -145,8 +163,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.githubRepo != null &&
       repository !== null &&
       (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
-    this.githubRepo = repository;
-    this.sessionPullRequests = result.pullRequests;
+    this.applyPullRequestPresentation(result, listDismissedChatPullRequests(sessionKey));
     if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
@@ -172,10 +189,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     ) {
       this.githubPublication?.reset();
     }
-    this.sessionPullRequestsBranch = result.branch;
-    this.sessionPullRequestsStatus = result.status;
-    this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
-    this.requestUpdate();
     return refreshAdmitted;
   }
 

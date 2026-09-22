@@ -1,25 +1,26 @@
-// Reads, normalizes, and inserts rows from the legacy task-runs SQLite sidecar.
+// Reads, normalizes, and inserts rows from legacy task and flow SQLite sidecars.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 export type SqliteBindRow = Record<string, SQLInputValue>;
 
-export function normalizeLegacySqliteInteger(value: number | bigint | null): number | null {
-  return value === null ? null : sqliteNumber(value);
+export function normalizeLegacySqliteInteger(value: number | bigint | null): number | null;
+export function normalizeLegacySqliteInteger(value: SQLInputValue): SQLInputValue;
+export function normalizeLegacySqliteInteger(value: SQLInputValue): SQLInputValue {
+  return typeof value === "bigint" ? Number(value) : value;
 }
 
-export function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
+function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>;
   return new Set(rows.flatMap((row) => (row.name ? [row.name] : [])));
 }
 
-export function pickLegacyColumn(columns: Set<string>, name: string, fallbackSql = "NULL"): string {
+function pickLegacyColumn(columns: Set<string>, name: string, fallbackSql = "NULL"): string {
   return columns.has(name) ? name : `${fallbackSql} AS ${name}`;
 }
 
-export function legacyBindValue(value: unknown): SQLInputValue {
+function legacyBindValue(value: unknown): SQLInputValue {
   if (
     value == null ||
     typeof value === "string" ||
@@ -185,6 +186,101 @@ export function insertTaskDeliveryRowSql(db: DatabaseSync, row: SqliteBindRow): 
         task_id, requester_origin_json, last_notified_event_at
       ) VALUES (
         @task_id, @requester_origin_json, @last_notified_event_at
+      )
+    `,
+  ).run(row);
+}
+
+function normalizeLegacyFlowRow(row: SqliteBindRow): SqliteBindRow {
+  const syncMode =
+    row.sync_mode === "task_mirrored" || row.shape === "single_task" ? "task_mirrored" : "managed";
+  const ownerKey =
+    typeof row.owner_key === "string" && row.owner_key.trim()
+      ? row.owner_key.trim()
+      : typeof row.owner_session_key === "string"
+        ? row.owner_session_key.trim()
+        : "";
+  const controllerId =
+    syncMode === "managed"
+      ? typeof row.controller_id === "string" && row.controller_id.trim()
+        ? row.controller_id.trim()
+        : "core/legacy-restored"
+      : null;
+  return {
+    flow_id: legacyBindValue(row.flow_id ?? ""),
+    shape: legacyBindValue(row.shape),
+    sync_mode: syncMode,
+    owner_key: ownerKey,
+    requester_origin_json: legacyBindValue(row.requester_origin_json),
+    controller_id: controllerId,
+    revision: normalizeLegacySqliteInteger(row.revision ?? null) ?? 0,
+    status: legacyBindValue(row.status ?? ""),
+    notify_policy: legacyBindValue(row.notify_policy ?? ""),
+    goal: legacyBindValue(row.goal ?? ""),
+    current_step: legacyBindValue(row.current_step),
+    blocked_task_id: legacyBindValue(row.blocked_task_id),
+    blocked_summary: legacyBindValue(row.blocked_summary),
+    state_json: legacyBindValue(row.state_json),
+    wait_json: legacyBindValue(row.wait_json),
+    cancel_requested_at: normalizeLegacySqliteInteger(row.cancel_requested_at ?? null),
+    created_at: normalizeLegacySqliteInteger(row.created_at ?? null) ?? 0,
+    updated_at: normalizeLegacySqliteInteger(row.updated_at ?? null) ?? 0,
+    ended_at: normalizeLegacySqliteInteger(row.ended_at ?? null),
+  };
+}
+
+export function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
+  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+  try {
+    const columns = listSqliteColumns(db, "flow_runs");
+    if (columns.size === 0) {
+      return [];
+    }
+    const selectColumns = [
+      "flow_id",
+      pickLegacyColumn(columns, "shape"),
+      pickLegacyColumn(columns, "sync_mode"),
+      pickLegacyColumn(columns, "owner_key"),
+      pickLegacyColumn(columns, "owner_session_key"),
+      pickLegacyColumn(columns, "requester_origin_json"),
+      pickLegacyColumn(columns, "controller_id"),
+      pickLegacyColumn(columns, "revision", "0"),
+      "status",
+      "notify_policy",
+      "goal",
+      pickLegacyColumn(columns, "current_step"),
+      pickLegacyColumn(columns, "blocked_task_id"),
+      pickLegacyColumn(columns, "blocked_summary"),
+      pickLegacyColumn(columns, "state_json"),
+      pickLegacyColumn(columns, "wait_json"),
+      pickLegacyColumn(columns, "cancel_requested_at"),
+      "created_at",
+      "updated_at",
+      pickLegacyColumn(columns, "ended_at"),
+    ];
+    return db
+      .prepare(
+        `SELECT ${selectColumns.join(", ")} FROM flow_runs ORDER BY created_at ASC, flow_id ASC`,
+      )
+      .all()
+      .map(normalizeLegacyFlowRow);
+  } finally {
+    db.close();
+  }
+}
+
+export function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
+  db.prepare(
+    `
+      INSERT INTO flow_runs (
+        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
+        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
+        wait_json, cancel_requested_at, created_at, updated_at, ended_at
+      ) VALUES (
+        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
+        @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
+        @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
+        @updated_at, @ended_at
       )
     `,
   ).run(row);

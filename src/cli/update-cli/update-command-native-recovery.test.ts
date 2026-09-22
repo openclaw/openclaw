@@ -11,8 +11,9 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 const mocks = vi.hoisted(() => ({
   state: vi.fn(),
@@ -177,8 +178,33 @@ it("retains the live update run while recovering a failed update before reportin
     await fs.mkdir(control);
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     const env = { HOME: home, OPENCLAW_STATE_DIR: home };
+    await fs.writeFile(path.join(home, "package.json"), JSON.stringify({ version: "1.0.0" }));
     const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
     const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+    const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(verification.verifyUpdatedGateway);
+    const observation = vi
+      .spyOn(await import("./update-command-readiness.js"), "observeUpdateGatewayReadiness")
+      .mockImplementationOnce(async (params) => {
+        params.assertCurrent?.();
+        expect(params.expectedVersion).toBe("1.0.0");
+        expect(getUpdateRun(runId, { env })?.status).toBe("running");
+        return {
+          health: {
+            healthy: true,
+            runtime: { status: "running", pid: 4242 },
+            gatewayVersion: "1.0.0",
+            expectedVersion: "1.0.0",
+            portUsage: { port: params.gatewayPort, status: "busy", listeners: [], hints: [] },
+            staleGatewayPids: [],
+          },
+          readyz: true,
+          http: undefined,
+          launchAgentRecovery: null,
+        };
+      });
     const service = gatewayService.resolveGatewayService();
     vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
       ...service,
@@ -219,6 +245,23 @@ it("retains the live update run while recovering a failed update before reportin
       });
       expect(recoverService).toHaveBeenCalledOnce();
       expect(recoveryRun).toBe(run);
+      expect(observation).toHaveBeenCalledOnce();
+      const recorded = getUpdateRun(runId, { env });
+      expect(recorded?.verification).toEqual({
+        serviceRunning: true,
+        pid: 4242,
+        port: 18789,
+        runningVersion: "1.0.0",
+        versionMatch: true,
+        pluginErrors: [],
+        channelsReady: true,
+        settled: true,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+      });
+      expect(
+        recorded?.steps.filter((step) => step.step === "gateway recovery verification"),
+      ).toEqual([{ step: "gateway recovery verification", status: "completed", exitCode: 0 }]);
     });
   });
 });

@@ -1,7 +1,14 @@
+import { Type } from "typebox";
 import { vi } from "vitest";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  streamMocks,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -10,6 +17,7 @@ export function prepareCatalogExecutor(
   projections: NestedToolActivity[],
   options?: {
     activeSession?: AgentSession;
+    hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["hookRunner"];
     attempt?: Partial<Parameters<typeof prepareEmbeddedAttemptStream>[0]["attempt"]>;
     getRunState?: () => {
       aborted: boolean;
@@ -49,7 +57,7 @@ export function prepareCatalogExecutor(
         sessionManager: SessionManager.inMemory(),
         subscribe: () => () => {},
       } as never),
-    hookRunner: undefined as never,
+    hookRunner: options?.hookRunner,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({
@@ -79,4 +87,77 @@ export function prepareCatalogExecutor(
     replaySafeToolNames: new Set(),
     trustedLocalMediaToolNames: options?.trustedLocalMediaToolNames ?? new Set(),
   });
+}
+
+export function createBeforeFinalizeEvent() {
+  return {
+    messages: [],
+    willRetry: false,
+    assistantEntryId: "canonical-entry-id",
+    lastAssistant: {
+      role: "assistant",
+      content: [{ type: "text", text: "Draft answer" }],
+      stopReason: "stop",
+    },
+    assistantTexts: ["Draft answer"],
+    hasAssistantVisibleText: true,
+    isError: false,
+    incompleteTerminalAssistant: false,
+    hadDeterministicSideEffect: false,
+  };
+}
+
+export async function createTurnHandoffSession() {
+  let activeSession: AgentSession;
+  const { session } = await createTestSession({
+    customTools: [
+      {
+        name: "handoff",
+        label: "Handoff",
+        description: "Hand off the current turn",
+        parameters: Type.Object({}),
+        execute: async () => {
+          activeSession.agent.abort({ code: "turn_handoff", turnHandoff: true });
+          return { content: [{ type: "text", text: "Handed off." }], details: {} };
+        },
+      },
+    ],
+  });
+  activeSession = session;
+  streamMocks.streamSimple.mockImplementation((model) =>
+    createAssistantResultStream(
+      createAssistant(
+        model,
+        [{ type: "toolCall", id: "handoff-call", name: "handoff", arguments: {} }],
+        "toolUse",
+      ),
+    ),
+  );
+  return session;
+}
+
+export async function trackPreparedStreamSubscriptions(
+  setSubscribe: (
+    subscribe: typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession,
+  ) => void,
+) {
+  const { session } = await createTestSession();
+  const listeners = new Set<Parameters<AgentSession["subscribe"]>[0]>();
+  const releases: Array<ReturnType<typeof vi.fn>> = [];
+  const subscribe = session.subscribe.bind(session);
+  vi.spyOn(session, "subscribe").mockImplementation((listener) => {
+    listeners.add(listener);
+    const unsubscribe = subscribe(listener);
+    const release = vi.fn(() => {
+      listeners.delete(listener);
+      unsubscribe();
+    });
+    releases.push(release);
+    return release;
+  });
+  const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
+    "../../embedded-agent-subscribe.js",
+  );
+  setSubscribe(actual.subscribeEmbeddedAgentSession);
+  return { session, listeners, releases };
 }

@@ -207,11 +207,11 @@ async function loadSkillsStatusReport(
     ) {
       throw error;
     }
-    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    const { prepareWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
       config: resolved.config,
       agentId: resolved.agentId,
-    });
+    }).then(({ report }) => report);
   }
 }
 

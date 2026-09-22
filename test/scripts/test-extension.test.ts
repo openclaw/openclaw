@@ -25,6 +25,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -262,7 +263,7 @@ describe("scripts/test-extension.mts", () => {
       name: "Telegram",
       config: "test/vitest/vitest.extension-telegram.config.ts",
       root: "telegram",
-      limit: 1,
+      limit: 10,
     },
   ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
     const roots = [bundledPluginRoot(root)];
@@ -563,6 +564,7 @@ describe("scripts/test-extension.mts", () => {
         extensionIds: [
           "acpx",
           "browser",
+          "diffs",
           "feishu",
           "matrix",
           "mattermost",
@@ -590,7 +592,7 @@ describe("scripts/test-extension.mts", () => {
             ),
           ),
           bundledPluginRoot("memory-core"),
-          ...["msteams", "feishu", "acpx", "browser", "qa-lab"].flatMap((extensionId) =>
+          ...["msteams", "feishu", "acpx", "diffs", "browser", "qa-lab"].flatMap((extensionId) =>
             databaseWorkerExtensionTestFiles.filter((file) =>
               file.startsWith(`extensions/${extensionId}/`),
             ),
@@ -725,6 +727,14 @@ describe("scripts/test-extension.mts", () => {
   });
 
   it("balances extension test shards by estimated CI cost", () => {
+    for (const [config, singletonSeconds, tenFileSeconds] of [
+      ["test/vitest/vitest.extension-slack.config.ts", 2, 12],
+      ["test/vitest/vitest.extension-telegram.config.ts", 6, 43],
+      ["test/vitest/vitest.extension-database-workers.config.ts", 8, 76],
+    ] as const) {
+      expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
+      expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
+    }
     const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
@@ -798,21 +808,23 @@ describe("scripts/test-extension.mts", () => {
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
     const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(firstRunGroupParams).toEqual({
+    expect(firstRunGroupParams).toMatchObject({
       args: ["--reporter=dot"],
       config: "heavy",
       env: {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-          process.cwd(),
-          ".cache",
-          "vitest",
-          "extension-batch",
-          "0-heavy",
-        ),
       },
       targets: ["two"],
     });
+    const cachePaths = runGroup.mock.calls.map(([params]) =>
+      params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/"),
+    );
+    expect(new Set(cachePaths).size).toBe(3);
+    expect(
+      cachePaths.every((cachePath) =>
+        /\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u.test(cachePath ?? ""),
+      ),
+    ).toBe(true);
   });
 
   it("stops admitting extension batch groups after a parallel failure", async () => {
@@ -1172,9 +1184,14 @@ await new Promise(()=>{});export default {};`,
       databaseWorkerExtensionTestFiles.includes(`extensions/${file}`),
     ).length;
     expect(calls).toHaveLength(
-      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 12),
+      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 24),
     );
-    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.every((call) => call.targets.length <= 24)).toBe(true);
+    expect(
+      calls
+        .filter((call) => call.config === "test/vitest/vitest.extension-database-workers.config.ts")
+        .every((call) => call.targets.length <= 12),
+    ).toBe(true);
     expect(calls.flatMap((call) => call.targets).toSorted()).toEqual(expectedFiles.toSorted());
     expect(new Set(calls.flatMap((call) => call.targets)).size).toBe(expectedFiles.length);
     for (const call of calls) {

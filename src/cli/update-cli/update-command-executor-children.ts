@@ -8,7 +8,7 @@ import {
 } from "../../infra/update-managed-service-handoff-lease.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Private correlation sent only to the spawned candidate's stdin. The receiver
  * independently reads both live owners and checks its own PID/start identity. */

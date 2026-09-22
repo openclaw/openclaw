@@ -56,6 +56,8 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  // Only the in-process deferral owner can attest that the drain budget was spent.
+  drainBudgetExhausted?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";

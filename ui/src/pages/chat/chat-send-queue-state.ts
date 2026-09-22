@@ -24,6 +24,7 @@ import type {
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
+import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import {
   readQueuedMessageById,
   updateQueuedMessage,
@@ -226,11 +227,9 @@ export function deliveryStateWriter(
   id: string,
 ) {
   return (sendState: ChatQueueItem["sendState"], sendError?: string) =>
-    updateQueuedSendItem(host, storageMode, id, (item) => ({
-      ...item,
-      sendError,
-      sendState,
-    }));
+    updateQueuedSendItem(host, storageMode, id, (item) =>
+      item.sendState === "held" ? item : { ...item, sendError, sendState },
+    );
 }
 
 export function finishChatDeliveryAdmission(
@@ -247,11 +246,18 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
+  if (current.sendState === "held" || (current.sendState === "unconfirmed" && !current.sendRunId)) {
+    return "pending";
+  }
   if (current.workContextUnavailable) {
     const error = t("chat.messages.attachedContext.restoreFailed");
     setState("failed", error);
     surfaceChatDeliveryFailure(host, route, current.agentId, error);
     return "failed";
+  }
+  if (chatProviderReviewRow(host, route, current.agentId)?.providerReview) {
+    holdProviderReviewQueuedInputs(host, route, current.agentId);
+    return "pending";
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
@@ -314,6 +320,12 @@ export function settleQueuedChatSendFailure(
   const error = activeLeafChanged
     ? t("chat.sendErrors.activeLeafChanged")
     : formatConnectError(err);
+  // A review can hold an already-dispatched request. Its later failure cannot
+  // restore passive retry authority, even after the provider pause has cleared.
+  if (readQueuedMessageById(host, id)?.sendState === "held") {
+    recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
+    return "pending";
+  }
   if (err instanceof GatewayPayloadLimitError) {
     if (!restoreRejectedChatDelivery(host, prepared, options)) {
       setState("failed", error);

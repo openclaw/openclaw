@@ -122,7 +122,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.updatePlan":
     "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
+    "Compact large OpenClaw, MCP, and client tool catalogs. OpenClaw runtimes use structured Tool Search automatically when unset; engaged Code Mode takes precedence and Codex uses its native search. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
     "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
@@ -134,23 +134,23 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
   "tools.codeMode":
-    "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
+    'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":
-    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
-  "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
+    'Global OpenClaw Code Mode activation. A completely absent global setting defaults to `"auto"`; an authored object without `enabled` remains off. `"auto"` engages catalog-preferred models, while `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
+  "tools.codeMode.executor":
+    'JavaScript executor: "node" (default) uses Node vm for trusted code and is not a security sandbox; "quickjs" uses the bundled QuickJS WASM plugin for hardened guest execution. Tool permissions apply to both. A missing selected executor fails closed.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
-  "tools.codeMode.languages":
-    'Accepted source languages for `exec`. Supported values are "javascript" and "typescript".',
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
-  "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
+  "tools.codeMode.memoryLimitBytes":
+    "QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes. Node runtime overhead and minimum engine allocations affect the effective budget; external buffers and process RSS are excluded. This is not a security guarantee.",
   "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
   "tools.codeMode.maxSnapshotBytes":
     "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
   "tools.codeMode.maxPendingToolCalls":
     "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
   "tools.codeMode.snapshotTtlSeconds":
-    "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
+    "How long suspended Code Mode runs can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
     "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
@@ -207,7 +207,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.experimental":
     "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
+    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":

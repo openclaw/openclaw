@@ -145,7 +145,7 @@ export async function fetchPullChecks(
   const items: Check[] = [];
   let total = 0;
   let truncated = false;
-  // Two bounded anonymous pages, no per-job reads or pagination. Sequential
+  // Two bounded pages, no per-job reads or pagination. Sequential
   // dispatch lets the existing API cooldown stop a second request on exhaustion.
   for (const kind of ["runs", "statuses"] as const) {
     try {

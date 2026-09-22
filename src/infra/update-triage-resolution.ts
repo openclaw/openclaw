@@ -90,7 +90,7 @@ function validateTriagePendingMigrations(
   env: NodeJS.ProcessEnv,
 ): UpdateRepairValidation | undefined {
   const warnings = readDeferredPluginMigrations({ env }).map((pending) =>
-    formatDeferredPluginMigration(pending),
+    formatDeferredPluginMigration(pending, env),
   );
   return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
 }

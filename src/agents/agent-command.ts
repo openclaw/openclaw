@@ -4,7 +4,6 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
   createSessionWorkStartChangedError,
-  isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
 } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
@@ -20,10 +19,9 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
-import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.read.js";
 import {
   executionIdentity,
   prepareAgentCommandExecutionIdentity,
@@ -57,7 +55,10 @@ import {
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
-import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
+import {
+  prepareCommandSessionDiffBaseline,
+  prepareEmbeddedSessionState,
+} from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
   AgentCommandGatewayIngressOpts,
@@ -193,6 +194,7 @@ async function agentCommandInternal(
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
             ? sessionStoreRuntime.loadSessionEntry({
+                agentId: sessionAgentId,
                 storePath,
                 sessionKey,
                 readConsistency: "latest",
@@ -347,6 +349,7 @@ async function agentCommandInternal(
           }),
         };
         const persisted = await persistAgentSession({
+          agentId: sessionAgentId,
           sessionStore,
           sessionKey,
           storePath,
@@ -376,25 +379,15 @@ async function agentCommandInternal(
         });
       }
       if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
-        try {
-          sessionEntry = await ensureSessionDiffBaseline({
-            cwd: cwd ?? workspaceDir,
-            entry: sessionEntry,
-            isNewSession,
-            sessionKey,
-            storePath,
-          });
-          if (sessionStore) {
-            sessionStore[sessionKey] = sessionEntry;
-          }
-        } catch (error) {
-          if (isSessionWorkStartInvalidatedError(error)) {
-            throw error;
-          }
-          log.warn(
-            `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
-          );
-        }
+        sessionEntry = await prepareCommandSessionDiffBaseline({
+          agentId: sessionAgentId,
+          cwd: cwd ?? workspaceDir,
+          entry: sessionEntry,
+          isNewSession,
+          sessionKey,
+          storePath,
+          sessionStore,
+        });
       }
       await prepareDeliveryForRun(sessionEntry);
 

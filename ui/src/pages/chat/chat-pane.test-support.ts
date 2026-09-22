@@ -107,7 +107,7 @@ export type TestChatPane = HTMLElement & {
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  refreshSessionPullRequests: (options?: { refresh?: boolean }) => boolean;
+  refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   githubRepo: MarkdownRenderOptions["githubRepo"];
@@ -352,7 +352,10 @@ export function createSessionCapabilityFixture(
     createSessionRowProvenance(),
   );
   return {
+    captureConnectionScope: () => null,
+    isConnectionScopeCurrent: () => false,
     deletionState: () => undefined,
+    think: () => undefined,
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,
     ...overrides,
@@ -620,7 +623,7 @@ class RenderTestChatPane extends ChatPane {
     super.applySessionsState(state);
   }
 
-  override refreshSessionPullRequests(options: { refresh?: boolean } = {}) {
+  override refreshSessionPullRequests(options: { refresh?: boolean; automatic?: boolean } = {}) {
     return super.refreshSessionPullRequests(options);
   }
 }

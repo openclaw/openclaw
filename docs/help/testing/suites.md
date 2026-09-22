@@ -101,13 +101,20 @@ Native dependency policy:
 
   <Accordion title="Vitest pool and isolation defaults">
 
-    - Base Vitest config defaults to `threads`.
+    - Base Vitest config defaults to `forks` on Windows and `threads` elsewhere.
+      Windows workers need separate native handle tables: concurrent thread
+      spawns can inherit another worker's temporary output pipe handles and
+      prevent that worker's child cleanup from observing EOF. Worker counts
+      and file parallelism remain unchanged.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
-    - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
-      defaults from the shared Vitest config.
+    - Provider plugin shards reuse workers with the shared cleanup runner.
+      Track global replacements with `vi.stubGlobal` so cleanup can restore them
+      before the next file.
+    - Each `pnpm test` shard inherits the platform pool and `isolate: false`
+      defaults from the shared Vitest config unless its owner selects otherwise.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node
       processes by default to reduce V8 compile churn during big local runs.
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
@@ -171,10 +178,16 @@ Native dependency policy:
       Content, compiler, configuration, or resolution changes invalidate the
       seed; timestamp-only touches do not. Build provenance and resource receipts
       are refreshed for each invocation, and source/output verification still
-      runs before lending and after completion. Cold local preparation overlaps
+      runs before lending and after completion. Cold cache-enabled preparation overlaps
       the independent worker and finalizer builds when at least 8 GiB of memory
-      is available; smaller hosts keep sequential compilation. CI, Bun, and custom Node loader
-      runs keep fresh compilation. This cache does not share Vitest's writable
+      is available; smaller hosts keep sequential compilation. CI keeps fresh compilation
+      unless its workflow enables `OPENCLAW_VITEST_WORKER_CACHE=1` after restoring
+      a protected cache. Only the protected warmer publishes shared generations;
+      ordinary CI jobs remain remote-cache readers. Reuse requires the same
+      absolute checkout and reserved output paths, Node version, compiler options,
+      and verified inputs. Incompatible or missing generations compile normally.
+      Bun and custom Node loader runs keep fresh compilation.
+      This cache does not share Vitest's writable
       filesystem module cache with another checkout.
 
   </Accordion>

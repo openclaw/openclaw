@@ -25,6 +25,32 @@ import {
 const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("runCommandWithTimeout", () => {
+  it("inherits a caller-owned stdin descriptor without reading it into JavaScript", async () => {
+    const descriptor = openSync(fileURLToPath(import.meta.url), "r");
+    let running: ReturnType<typeof runCommandWithTimeout>;
+    try {
+      running = runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        { stdinFileDescriptor: descriptor, timeoutMs: 3_000 },
+      );
+    } finally {
+      // Spawn duplicates the descriptor before returning to the caller.
+      closeSync(descriptor);
+    }
+    const result = await running;
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("// Exec tests cover command execution");
+  });
+
+  it("rejects competing stdin sources before spawning", async () => {
+    await expect(
+      runCommandWithTimeout([process.execPath, "-e", "process.exit(99)"], {
+        input: "buffered",
+        stdinFileDescriptor: 0,
+      }),
+    ).rejects.toThrow("either input or stdinFileDescriptor");
+  });
+
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
     expect(
       shouldSpawnWithShell({
@@ -66,6 +92,7 @@ describe("runCommandWithTimeout", () => {
       }
       const result = await running;
       expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
+      expect(result.killIssuedByAbort).toBe(mode === "normal" ? undefined : true);
       if (mode === "default-signal") {
         expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
       }
@@ -298,6 +325,7 @@ describe("runCommandWithTimeout", () => {
         termination: "signal",
         cleanup: "uncertain",
       });
+      expect(result.killIssuedByAbort).toBeUndefined();
     },
   );
 
@@ -335,18 +363,6 @@ describe("runCommandWithTimeout", () => {
           process.env.comspec = previousComspec;
         }
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "swallows stdin EPIPE when the child exits before input is consumed (#75438)",
-    { timeout: 5_000 },
-    async () => {
-      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
-        timeoutMs: 3_000,
-        input: "this input will EPIPE because the child ignores stdin\n",
-      });
-      expect(result.code).toBe(0);
     },
   );
 
@@ -946,77 +962,5 @@ describe("attachChildProcessBridge", () => {
     child.emit("exit");
     expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
     detach();
-  });
-});
-
-describe("child input admission", () => {
-  it("publishes input only after binding the actual spawned PID and argv", async () => {
-    let admittedPid: number | undefined;
-    let admittedArgv: readonly string[] | undefined;
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({pid:process.pid,argv:[process.argv0,...process.execArgv,...process.argv.slice(1)],input})))",
-      ],
-      {
-        input: "owned",
-        timeoutMs: 5_000,
-        beforeInput: (pid, argv) => {
-          admittedPid = pid;
-          admittedArgv = argv;
-        },
-      },
-    );
-    expect(result.code).toBe(0);
-    expect(admittedArgv).toBeDefined();
-    expect(JSON.parse(result.stdout)).toEqual({
-      pid: admittedPid,
-      argv: admittedArgv,
-      input: "owned",
-    });
-  });
-
-  it("joins the child without delivering input when admission rejects", async () => {
-    let pid: number | undefined;
-    const refusal = new Error("authority lost before input");
-    const work = runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
-      ],
-      {
-        input: "forbidden",
-        timeoutMs: 5_000,
-        killProcessTree: true,
-        beforeInput: (childPid) => {
-          pid = childPid;
-          throw refusal;
-        },
-      },
-    );
-    await expect(work).rejects.toBe(refusal);
-    expect(refusal).toMatchObject({
-      cleanup: process.platform === "win32" ? "forced" : "cooperative",
-    });
-    expect(pid).toBeTypeOf("number");
-    expect(isPidAlive(pid!)).toBe(false);
-  });
-
-  it("rejects asynchronous admission and drains its rejection before returning", async () => {
-    let pid: number | undefined;
-    const options = { input: "forbidden", timeoutMs: 5_000, killProcessTree: true };
-    // Model an untyped JS caller; the typed callback contract forbids a Promise.
-    Reflect.set(options, "beforeInput", async (childPid: number) => {
-      pid = childPid;
-      throw new Error("late refusal");
-    });
-    const work = runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdin.resume();setInterval(()=>{},1000)"],
-      options,
-    );
-    await expect(work).rejects.toThrow("must complete synchronously");
-    expect(isPidAlive(pid!)).toBe(false);
   });
 });

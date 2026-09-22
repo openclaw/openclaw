@@ -33,6 +33,34 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry provider metadata", () => {
+  it("preserves provider and executor contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        codeModeExecutors: [" quickjs ", ""],
+        externalAuthProviders: ["acme-ai"],
+        usageProviders: ["acme-ai"],
+        workerProviders: [" static-ssh ", ""],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      codeModeExecutors: ["quickjs"],
+      externalAuthProviders: ["acme-ai"],
+      usageProviders: ["acme-ai"],
+      workerProviders: ["static-ssh"],
+    });
+  });
+
   it("normalizes provider metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

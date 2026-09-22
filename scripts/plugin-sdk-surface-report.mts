@@ -207,7 +207,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved host-owned workspace access runtime entrypoint.
       // +1: passive docked link-reader contracts.
       // +1: typed decision provider contract.
-      157,
+      // +1: shared Code Mode executor contract for the bundled QuickJS owner.
+      158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -395,7 +396,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: prepare admitted input attachments and bind a workspace transfer adapter.
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
-      4529,
+      // +1: approved native workspace worker argv resolver for node adapters.
+      // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
+      // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
+      // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
+      4569,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -550,7 +555,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: prepare admitted input attachments and bind a workspace transfer adapter.
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
-      2672,
+      // +1: approved native workspace worker argv resolver for node adapters.
+      // +6: shared Code Mode source preparation, output capture, and source-location helpers.
+      // +1: approved shared preview lifecycle factory.
+      // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
+      2681,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

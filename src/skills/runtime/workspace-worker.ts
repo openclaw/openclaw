@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
+import type * as Status from "../lifecycle/clawhub-status.js";
+import type * as Store from "../lifecycle/clawhub-store.js";
+import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.js";
 import {
   decodeSkillWorkerRequest,
@@ -7,7 +12,14 @@ import {
   writeSkillWorkerResult,
 } from "./workspace-worker-io.js";
 
+type ApplyRequest = Omit<
+  Parameters<typeof applyExtractedSkillRoot>[0],
+  "workspaceDir" | "logger" | "beforeInstall"
+>;
+type RemovalRequest = { plan: Uninstall.ClawHubSkillUninstallPlan; reportChange?: boolean };
+type Decision = { decision: null | { error: string; failureKind?: unknown } };
 type WatchRequest = Pick<WorkspaceSkillSourceRequest, "sourcePlan" | "executionWorkspaceDir">;
+type HostRequest<T> = Omit<T, "workspaceDir">;
 
 /** A dedicated subprocess reuses native Skills owners on either kind of workspace host. */
 export async function serveWorkspaceSkills(options: {
@@ -17,8 +29,95 @@ export async function serveWorkspaceSkills(options: {
   input: Readable;
   output: Writable;
 }): Promise<void> {
-  const { workspace, operation, input, output } = options;
+  const { workspace, home, operation, input, output } = options;
   const write = (value: unknown) => writeSkillWorkerResult(output, value);
+  if (operation === "applyRoot") {
+    const { applyExtractedSkillRoot } = await import("../lifecycle/archive-install.js");
+    const lines = skillWorkerLines(input);
+    try {
+      // SAFETY: The provisioned publisher sends ApplyRequest; the upload root is checked below.
+      const request = (await lines.read()) as ApplyRequest;
+      if (
+        typeof request.extractedRoot !== "string" ||
+        path.dirname(request.extractedRoot) !== path.join(home, ".cache/openclaw/skill-installs")
+      ) {
+        throw new Error("Skill source is outside the upload directory");
+      }
+      const result = await applyExtractedSkillRoot({
+        ...request,
+        workspaceDir: workspace,
+        logger: { info: console.error, warn: console.error },
+        beforeInstall: async (mode) => {
+          await write({ type: "prepared", mode });
+          // SAFETY: The Gateway policy reply is checked for null or a valid error decision below.
+          const reply = (await lines.read()) as Decision;
+          if (reply.decision === null) {
+            return undefined;
+          }
+          if (
+            typeof reply.decision?.error !== "string" ||
+            (reply.decision.failureKind !== "invalid-request" &&
+              reply.decision.failureKind !== "unavailable")
+          ) {
+            throw new Error("Invalid Gateway skill policy decision");
+          }
+          return { error: reply.decision.error, failureKind: reply.decision.failureKind };
+        },
+      });
+      await write({ type: "result", result });
+    } finally {
+      lines.close();
+    }
+    return;
+  }
+  if (operation === "removeSkill") {
+    const { applyClawHubSkillUninstall } = await import("../lifecycle/clawhub-uninstall.js");
+    const { resolveWorkspaceSkillInstallDir } = await import("../lifecycle/install-paths.js");
+    const lines = skillWorkerLines(input);
+    try {
+      // SAFETY: The publisher sends its native uninstall plan; the target is checked below.
+      const request = (await lines.read()) as RemovalRequest;
+      if (
+        request.plan?.targetDir !== resolveWorkspaceSkillInstallDir(workspace, request.plan?.slug)
+      ) {
+        throw new Error("Skill removal is outside the provisioned workspace");
+      }
+      const checkpoint = async (phase: string, event?: unknown) => {
+        await write({ type: "prepared", phase, event });
+        // SAFETY: The Gateway checkpoint reply is checked for null or an error string below.
+        const reply = (await lines.read()) as Decision;
+        if (reply.decision === null) {
+          return;
+        }
+        if (typeof reply.decision?.error !== "string") {
+          throw new Error("Invalid Gateway removal decision");
+        }
+        throw new Error(reply.decision.error);
+      };
+      const assertConnected = () => {
+        if (input.destroyed || input.readableEnded) {
+          throw new Error("Skill removal transport closed");
+        }
+      };
+      const result = await applyClawHubSkillUninstall(
+        { ...request.plan, workspaceDir: workspace },
+        {
+          beforePersistentApply: assertConnected,
+          beforeRollback: assertConnected,
+          authorizeMutation: (phase) => checkpoint(phase),
+          ...(request.reportChange
+            ? {
+                onCommittedChange: (event: unknown) => checkpoint("committed", event),
+              }
+            : {}),
+        },
+      );
+      await write({ type: "result", result });
+    } finally {
+      lines.close();
+    }
+    return;
+  }
   if (operation === "watch") {
     const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
       await import("./refresh.js");
@@ -84,6 +183,109 @@ export async function serveWorkspaceSkills(options: {
   }
   const text = Buffer.concat(chunks).toString("utf8");
   const decoded = decodeSkillWorkerRequest(text);
+  if (operation === "installDependencies") {
+    const { installSkillDependencies } = await import("../lifecycle/install.js");
+    await write(
+      // SAFETY: The Gateway adapter serializes the approved native dependency recipe for this operation.
+      await installSkillDependencies(decoded as Parameters<typeof installSkillDependencies>[0]),
+    );
+    return;
+  }
+  // These operations retain native error envelopes used by the Gateway callers.
+  if (operation.startsWith("clawhub")) {
+    const store = await import("../lifecycle/clawhub-store.js");
+    const status = await import("../lifecycle/clawhub-status.js");
+    const uninstall = await import("../lifecycle/clawhub-uninstall.js");
+    try {
+      let result: unknown;
+      switch (operation) {
+        case "clawhubPlanRemoval":
+          result = await uninstall.planClawHubSkillUninstall({
+            // SAFETY: The paired adapter sends native plan arguments; the host supplies workspaceDir.
+            ...(decoded as HostRequest<Parameters<typeof Uninstall.planClawHubSkillUninstall>[0]>),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubVerifyTarget":
+          result = await status.resolveClawHubSkillVerificationTarget({
+            // SAFETY: The paired adapter sends native verification arguments; workspaceDir is host-owned.
+            ...(decoded as HostRequest<
+              Parameters<typeof Status.resolveClawHubSkillVerificationTarget>[0]
+            >),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubPreflight":
+          result = await status.preflightSkillOwnerState({
+            // SAFETY: The paired adapter sends native preflight arguments; workspaceDir is host-owned.
+            ...(decoded as HostRequest<Parameters<typeof Status.preflightSkillOwnerState>[0]>),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubReadLock":
+          result = await store.readClawHubSkillsLockfile(workspace);
+          break;
+        case "clawhubUpdateSlug":
+          result = await status.resolveRequestedUpdateSlug({
+            // SAFETY: The paired adapter serializes the native update selector and lock snapshot.
+            ...(decoded as HostRequest<Parameters<typeof Status.resolveRequestedUpdateSlug>[0]>),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubUpdateTarget":
+          result = await status.resolveTrackedUpdateTarget({
+            // SAFETY: The paired adapter serializes native target lookup arguments; roots stay host-owned.
+            ...(decoded as HostRequest<Parameters<typeof Status.resolveTrackedUpdateTarget>[0]>),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubUpdateGuard":
+          result = await uninstall.guardTrackedSkillLocalState({
+            // SAFETY: The paired adapter sends the native guard arguments; the native owner checks state.
+            ...(decoded as HostRequest<
+              Parameters<typeof Uninstall.guardTrackedSkillLocalState>[0]
+            >),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubCheckInstall":
+          await store.assertClawHubSkillInstallState({
+            // SAFETY: The paired adapter sends native install-check arguments; workspaceDir is host-owned.
+            ...(decoded as HostRequest<Parameters<typeof Store.assertClawHubSkillInstallState>[0]>),
+            workspaceDir: workspace,
+          });
+          break;
+        case "clawhubReadFiles": {
+          // SAFETY: The adapter sends the installed path; its workspace boundary is checked next.
+          const request = decoded as Parameters<typeof Store.readInstalledClawHubSkillFiles>[0];
+          assertSkillDir(request.skillDir, workspace);
+          result = await store.readInstalledClawHubSkillFiles(request);
+          break;
+        }
+        case "clawhubRecordInstall": {
+          // SAFETY: The adapter sends native provenance; path and slug consistency are checked below.
+          const request = decoded as HostRequest<
+            Parameters<typeof Store.recordClawHubSkillInstall>[0]
+          >;
+          const { resolveWorkspaceSkillInstallDir } = await import("../lifecycle/install-paths.js");
+          assertSkillDir(request.skillDir, workspace);
+          if (
+            request.skillDir !== resolveWorkspaceSkillInstallDir(workspace, request.origin.slug)
+          ) {
+            throw new Error("ClawHub metadata does not match the installed skill");
+          }
+          await store.recordClawHubSkillInstall({ ...request, workspaceDir: workspace });
+          break;
+        }
+        default:
+          throw new Error(`Unknown skill worker operation: ${operation}`);
+      }
+      await write({ result: result ?? null });
+    } catch (error) {
+      await write({ error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
   switch (operation) {
     case "readInstructions": {
       const { filePath } = decoded;
@@ -91,6 +293,19 @@ export async function serveWorkspaceSkills(options: {
         throw new Error("Skill instruction path is required");
       }
       await write(await fs.readFile(filePath, "utf8"));
+      return;
+    }
+    case "recordSource": {
+      // SAFETY: The publisher sends native source provenance; the host derives its installation path.
+      const request = decoded as Pick<Parameters<typeof recordSkillSourceInstall>[0], "origin">;
+      const { recordSkillSourceInstall } = await import("../lifecycle/source-install-metadata.js");
+      const { resolveWorkspaceSkillInstallDir } = await import("../lifecycle/install-paths.js");
+      await recordSkillSourceInstall({
+        workspaceDir: workspace,
+        targetDir: resolveWorkspaceSkillInstallDir(workspace, request.origin.slug),
+        origin: request.origin,
+      });
+      await write(null);
       return;
     }
     case "resolveResource": {
@@ -131,5 +346,11 @@ export async function serveWorkspaceSkills(options: {
 function assertWorkspace(request: WatchRequest, workspace: string) {
   if (request.sourcePlan.workspaceDir !== workspace) {
     throw new Error("Skill request does not match the provisioned workspace");
+  }
+}
+
+function assertSkillDir(skillDir: string, workspace: string) {
+  if (path.dirname(skillDir) !== path.join(workspace, "skills")) {
+    throw new Error("ClawHub skill is outside the provisioned workspace");
   }
 }

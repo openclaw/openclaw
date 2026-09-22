@@ -12,17 +12,39 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 const AGENT_ID = "recreated-agent";
 const EXTERNAL_STATE_AGENT_ID = "external-state-agent";
 const SESSION_KEY = `agent:${AGENT_ID}:product-proof`;
+const SESSION_KEYS = [SESSION_KEY, `${SESSION_KEY}-second`];
+
+async function expectSessionListPages(client: GatewayClient) {
+  const first = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 1,
+  });
+  const full = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 100,
+  });
+  const next = await client.request<SessionsListResult>("sessions.list", {
+    agentId: AGENT_ID,
+    limit: 1,
+    offset: 1,
+  });
+  expect(first).toMatchObject({ count: 1, totalCount: 2 });
+  expect(full).toMatchObject({ count: 2, totalCount: 2 });
+  expect(next).toMatchObject({ count: 1, totalCount: 2 });
+  expect(new Set(full.sessions.map((row) => row.key))).toEqual(new Set(SESSION_KEYS));
+  expect(new Set([...first.sessions, ...next.sessions].map((row) => row.key))).toEqual(
+    new Set(SESSION_KEYS),
+  );
+}
 
 installGatewayTestHooks();
 
@@ -31,10 +53,10 @@ describe("agent database recreation product proof", () => {
     "recreates and registers a deleted agent database through one real Gateway process",
     { timeout: 180_000 },
     async () => {
-      const port = await getGatewayTestPort();
       const token = "agent-database-recreation-product-proof-token";
-      const url = `ws://127.0.0.1:${port}`;
-      const server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const url = `ws://127.0.0.1:${portClaim.port}`;
+      const server = await startTestGatewayServer(portClaim, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -57,12 +79,12 @@ describe("agent database recreation product proof", () => {
           workspace,
         });
         expect(created).toMatchObject({ agentId: AGENT_ID, ok: true });
-        await expect(
-          client.request("sessions.create", { agentId: AGENT_ID, key: SESSION_KEY }),
-        ).resolves.toMatchObject({ key: SESSION_KEY });
-        await expect(client.request("sessions.list", { agentId: AGENT_ID })).resolves.toMatchObject(
-          { sessions: [expect.objectContaining({ key: SESSION_KEY })] },
-        );
+        for (const key of SESSION_KEYS) {
+          await expect(
+            client.request("sessions.create", { agentId: AGENT_ID, key }),
+          ).resolves.toMatchObject({ key });
+        }
+        await expectSessionListPages(client);
 
         const databasePath = resolveOpenClawAgentSqlitePath({
           agentId: AGENT_ID,
@@ -80,12 +102,12 @@ describe("agent database recreation product proof", () => {
           workspace,
         });
         expect(recreated).toMatchObject({ agentId: AGENT_ID, ok: true });
-        await expect(
-          client.request("sessions.create", { agentId: AGENT_ID, key: SESSION_KEY }),
-        ).resolves.toMatchObject({ key: SESSION_KEY });
-        await expect(client.request("sessions.list", { agentId: AGENT_ID })).resolves.toMatchObject(
-          { sessions: [expect.objectContaining({ key: SESSION_KEY })] },
-        );
+        for (const key of SESSION_KEYS) {
+          await expect(
+            client.request("sessions.create", { agentId: AGENT_ID, key }),
+          ).resolves.toMatchObject({ key });
+        }
+        await expectSessionListPages(client);
         await expect(client.request("health", { probe: true })).resolves.toBeDefined();
 
         const recreatedIdentity = await fs.stat(databasePath, { bigint: true });
@@ -129,9 +151,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
       const realTmp = await fs.realpath(os.tmpdir());
       const tmpOverride = await fs.mkdtemp(path.join(realTmp, "openclaw-tmp-override-"));
       const stateDir = await fs.mkdtemp(path.join(realTmp, "openclaw-external-state-"));
-      const port = await getGatewayTestPort();
       const token = "agent-delete-external-state-dir-token";
-      const url = `ws://127.0.0.1:${port}`;
       try {
         await withEnvAsync(
           {
@@ -143,7 +163,8 @@ describe("agent deletion product proof with a state dir outside home and the tem
           async () => {
             expect(isPathInside(await fs.realpath(os.homedir()), stateDir)).toBe(false);
             expect(isPathInside(await fs.realpath(os.tmpdir()), stateDir)).toBe(false);
-            const server = await startTestGatewayServer(port, {
+            const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+            const server = await startTestGatewayServer(portClaim, {
               bind: "loopback",
               auth: { mode: "token", token },
               controlUiEnabled: false,
@@ -151,7 +172,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
             let client: GatewayClient | undefined;
             try {
               client = await connectGatewayClient({
-                url,
+                url: `ws://127.0.0.1:${portClaim.port}`,
                 token,
                 role: "operator",
                 scopes: ["operator.admin", "operator.read", "operator.write"],

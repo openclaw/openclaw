@@ -50,7 +50,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -62,6 +62,7 @@ import { transitionMainSessionRecovery } from "../main-session-recovery/main-ses
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
+  sessionAgentId: string;
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
@@ -678,6 +679,7 @@ export function resolveSession(opts: {
     : undefined;
 
   return {
+    sessionAgentId,
     sessionId,
     sessionKey,
     sessionEntry: resolvedSessionEntry,

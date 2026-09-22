@@ -59,10 +59,12 @@ export function measureConnectedTranscriptRows(
   let changed = false;
   for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
     const index = virtualizer.indexFromElement(row);
-    const height = row.offsetHeight;
+    // Rows are border-boxes; read their fractional layout height, not a scaled
+    // client rect when a containing board or sidebar is transitioning.
+    const height = Number.parseFloat(getComputedStyle(row).height);
     const key = virtualizer.options.getItemKey(index);
     const previousSize = virtualizer.itemSizeCache.get(key);
-    virtualizer.resizeItem(index, height);
+    virtualizer.resizeItem(index, Number.isFinite(height) ? height : row.offsetHeight);
     changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
   }
   return changed;
@@ -73,7 +75,8 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  const size = measureElement(element, entry, virtualizer);
+  // Rounded row heights accumulate when skipped overscan uses those measurements.
+  const size = entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
   if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
     // A hidden panel has no row geometry. Retain the last measurement instead
     // of replacing it with zero and moving the restored viewport.

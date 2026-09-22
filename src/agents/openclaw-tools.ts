@@ -545,6 +545,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
       supportsActiveOnly: !embedded,
+      requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({
       ...sessionLookupToolOptions,

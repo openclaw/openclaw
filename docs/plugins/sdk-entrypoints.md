@@ -61,6 +61,35 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 - [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
 
+## Code Mode executor runtime
+
+Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`
+executor choice. Code Mode has two selectable IDs: `node`, owned by core, and
+`quickjs`, supplied by an executor plugin. The plugin's installation ID can
+differ from its executor ID. Declare `quickjs` in `contracts.codeModeExecutors`
+and export `codeModeExecutor` from the plugin's top-level `code-mode-executor-api`
+artifact. The host resolves this artifact only when QuickJS is selected;
+ordinary plugin registration remains lightweight.
+
+Selected bundled executors preserve core runtime availability despite global
+plugin disablement or a restrictive allowlist. Explicit owner denies and
+disabled entries still apply. External executors retain the full plugin policy.
+
+`CodeModeExecutor.execute(input, options)` receives the guest source,
+tool declarations, namespace descriptors, resource limits, and a scoped host
+bridge. Return a bounded completion or failure, or a waiting result containing
+an executor-owned `CodeModeExecutorContinuation`. Its `resume` method transfers
+custody once, `retainedBytes` reports a diagnostic size estimate, and `dispose` joins
+cleanup and keeps failed cleanup retryable. Disposing an already consumed continuation has no effect. The selected
+executor stays attached to the continuation across configuration changes.
+
+The SDK supplies the common guest controller, source preparation, result
+capture, bounded error text, and worker protocol types. Executors own their
+engine and suspended state. Core owns permissions, approvals, tool dispatch,
+settlement receipts, output delivery, expiry, and cancellation. Missing or
+disabled executors fail explicitly; the host never substitutes a less isolated
+executor.
+
 ## MCP subprocess runtime
 
 **Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
@@ -125,7 +154,8 @@ file operations to the host. Compound writes reuse native atomic publication and
 conflict handling; maintenance decisions, locks and SQLite state stay on Gateway.
 A remote binding without maintenance support fails instead of using Gateway files.
 The file worker implements these operations and native change notifications.
-Paired-node adapter wiring is still required before a complete storage cutover.
+The paired-node file-transfer adapter connects these operations through the
+existing service-owned node channel and node file policy.
 
 Task-time Skill preparation uses remote discovery. Channel-native menus use
 Gateway-owned Skills without waiting for the Harness; remote menu support is
@@ -140,6 +170,19 @@ and uses existing resource delivery for workers. Discovery assigns file ownershi
 request Gateway-local reads by returning a source label or `fileHost` value.
 Stopping the binding revokes retained host readers.
 
+The Skills worker also runs install and ClawHub operations. Install/remove use
+an authenticated adapter's duplex channel so Gateway policy and mutation checks
+run before the native filesystem operation. The adapter admits source roots and
+uploads; the worker uses its host account's permissions.
+
+For a remote workspace, dependency installation uses `installSkillDependencies`.
+Gateway selects the recipe and runs install policy; the host runs the existing
+installer through the worker's `installDependencies` operation. Requests contain
+the Skill key, recipe, installation preferences and timeout. Recipe choices use
+the host's OS and binaries. Missing host support fails without installing on Gateway.
+File-inspecting Gateway policies receive a temporary tree from the existing Skill
+resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
+
 `readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
 File-transfer adapters can check each file's requested and verified canonical paths
 before returning a bundle; admitting the Skill directory alone does not admit every child.
@@ -151,6 +194,16 @@ until aborted, and send `change` after the initial scan and later edits. Send
 without reopening the subscription. Hosts without `watchSkills` use that same
 fallback. `skills.load.watch: false` disables the subscription and this fallback.
 Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
+
+The paired-node file-transfer adapter also connects Skill discovery, resource reads,
+watching and dependency installation through `workspace.skills`. Its native worker
+launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
+`agent-workspace-runtime`, then appends the operation arguments. Use the same
+OpenClaw version on Gateway and node.
+
+This adapter does not implement remote Skill source install/update/remove or
+ClawHub lifecycle operations; those remain tracked in
+[Enterprise #242](https://github.com/openclaw/openclaw-enterprise/issues/242).
 
 ## Tool failure diagnostics
 

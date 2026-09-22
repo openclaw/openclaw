@@ -28,7 +28,10 @@ import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/proce
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
-import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
+import {
+  assertFixtureProcessGroupStopped,
+  exitedDescendantReaper,
+} from "./exited-descendant-reaper.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -141,12 +144,19 @@ describe("managed-child-process", () => {
       fs.writeFileSync(
         runnerPath,
         `
+import assert from "node:assert/strict";
 import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+import { assertFixtureProcessGroupStopped } from ${JSON.stringify(pathToFileURL(path.resolve("test/scripts/exited-descendant-reaper.test-support.ts")).href)};
+let pgid;
 process.exitCode = await runManagedCommand({
   bin: process.execPath,
   args: ["--import", ${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)}, ${JSON.stringify(childPath)}],
   requireProcessTreeExit: true,
+  onReady(child) { pgid = child.pid; },
 });
+assert.equal(process.exitCode, 0);
+assert.doesNotThrow(() => process.kill(-pgid, 0));
+assertFixtureProcessGroupStopped(pgid);
 `,
       );
       // Linux may reap orphaned tool services after the leader's close. Adopt
@@ -168,6 +178,60 @@ process.exitCode = await runManagedCommand({
       expect(output).toMatch(/successfully reaped: [1-9]/u);
     },
   );
+
+  it.each([
+    { name: "absent group", firstError: "ESRCH", accepted: true },
+    { name: "permission denied", firstError: "EPERM", accepted: false },
+    { name: "unknown probe failure", firstError: "EIO", accepted: false },
+    { name: "all zombie threads", stdout: "12345 Z\n12345 Z\n", accepted: true },
+    { name: "live group", stdout: "12345 S\n", accepted: false },
+    { name: "live sibling thread", stdout: "12345 Z\n12345 S\n", accepted: false },
+    { name: "wrong group", stdout: "54321 Z\n", accepted: false },
+    { name: "unknown state", stdout: "12345 ?\n", accepted: false },
+    { name: "malformed row", stdout: "12345 Z extra\n", accepted: false },
+    { name: "empty snapshot", stdout: "", accepted: false },
+    { name: "partial row", stdout: "12345 Z", accepted: false },
+    { name: "failed snapshot", stdout: "12345 Z\n", status: 1, accepted: false },
+    { name: "truncated snapshot", stdout: "12345 Z\n", error: "ENOBUFS", accepted: false },
+    { name: "signaled snapshot", stdout: "12345 Z\n", signal: "SIGKILL" as const, accepted: false },
+    { name: "reaped during snapshot", stdout: "", finalError: "ESRCH", accepted: true },
+    { name: "unavailable final probe", stdout: "", finalError: "EPERM", accepted: false },
+    { name: "non-Linux group", platform: "darwin" as const, accepted: false },
+  ])("verifies stopped fixture groups: $name", (scenario) => {
+    let probes = 0;
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      const code = probes++ === 0 ? scenario.firstError : scenario.finalError;
+      if (code) {
+        throw Object.assign(new Error("process group lookup failed"), { code });
+      }
+      return true;
+    });
+    const ps = vi.mocked(spawnSync).mockImplementation((...call) => ({
+      pid: 12346,
+      output: [],
+      status: scenario.status ?? 0,
+      signal: scenario.signal ?? null,
+      // Without thread enumeration, a zombie leader can conceal a live thread.
+      stdout:
+        scenario.name === "live sibling thread" &&
+        !(Array.isArray(call[1]) && call[1].includes("-L"))
+          ? "12345 Z\n"
+          : (scenario.stdout ?? ""),
+      stderr: "",
+      ...(scenario.error ? { error: new Error(scenario.error) } : {}),
+    }));
+    try {
+      const verify = () => assertFixtureProcessGroupStopped(12345, scenario.platform ?? "linux");
+      if (scenario.accepted) {
+        expect(verify).not.toThrow();
+      } else {
+        expect(verify).toThrow();
+      }
+    } finally {
+      ps.mockRestore();
+      kill.mockRestore();
+    }
+  });
 
   async function runNestedCleanupFixture(
     {

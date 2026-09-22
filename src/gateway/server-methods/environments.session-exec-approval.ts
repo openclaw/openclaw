@@ -74,7 +74,7 @@ export async function approveSessionEnvironmentCommand(params: {
   if (runtime?.executionIdentity) {
     record.executionIdentityToken = runtime.executionIdentity;
   }
-  const decision = manager.register(record, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS);
+  const { decision } = await manager.register(record, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS);
   void decision.catch(() => undefined);
   let approved = false;
   await handlePendingExecApprovalRequest({
@@ -92,9 +92,10 @@ export async function approveSessionEnvironmentCommand(params: {
         throw new Error(error?.message ?? "Execution approval failed");
       }
     },
-    afterDecision: (resolved) => {
+    afterDecision: async (resolved) => {
       assertCurrent();
-      approved = resolved === "allow-once" && manager.consumeAllowOnce(record.id);
+      approved = resolved === "allow-once" && (await manager.consumeAllowOnce(record.id));
+      assertCurrent();
     },
     afterDecisionErrorLabel: "environment exec approvals: approval follow-up failed",
   });

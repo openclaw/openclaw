@@ -42,7 +42,7 @@ import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
 import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {

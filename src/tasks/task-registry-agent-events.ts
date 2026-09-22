@@ -26,6 +26,10 @@ import {
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
 import { recoverTaskAgentEventPublication } from "./task-registry-agent-event-commit.js";
+import {
+  publishTaskAgentEventDelivery,
+  type TaskAgentEventDelivery,
+} from "./task-registry-agent-event-delivery.js";
 import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
 import {
   captureTaskAgentEventChange,
@@ -38,10 +42,6 @@ import {
   type TaskAgentEventPublication,
   type TaskAgentEventReceipt,
 } from "./task-registry-agent-event.operation.js";
-import {
-  maybeDeliverTaskStateChangeUpdate,
-  maybeDeliverTaskTerminalUpdate,
-} from "./task-registry-delivery.js";
 import { updateTaskWithPublication } from "./task-registry-mutation.js";
 import {
   captureTaskPersistenceReceipt,
@@ -56,7 +56,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
-import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
 type EventSource = {
@@ -80,6 +80,7 @@ type PendingEvent = {
   claimed: Error;
   receipt?: TaskAgentEventReceipt | null;
   publication?: TaskAgentEventPublication;
+  delivery?: TaskAgentEventDelivery;
   commitFacts?: unknown;
   committedTarget?: TaskAgentEventInput["expectedTask"];
   lineageResident?: TaskRecord;
@@ -209,18 +210,6 @@ function retainCommittedEventAfterResultFailure(pending: PendingEvent): void {
   }
 }
 
-function publishDelivery(receipt: TaskAgentEventPublication): void {
-  if (receipt.task.deliveryStatus === "not_applicable" || receipt.task.notifyPolicy === "silent") {
-    return;
-  }
-  if (receipt.nextEvent) {
-    void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
-  }
-  if (isTerminalTaskStatus(receipt.task.status)) {
-    void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);
-  }
-}
-
 function prepareNativeEventConsumption(): { consume: () => void; release: () => void } | undefined {
   const store = getTaskRegistryStore();
   const pending = [...pendingEvents].filter(
@@ -310,7 +299,7 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
             // A later enclosing write can replace this row, including an ABA replacement.
             const latest = tasks.get(entry.input.taskId);
             if (latest && publication.isCurrent() && isEquivalentTaskRecord(latest, receipt.task)) {
-              publishDelivery(receipt);
+              entry.delivery = { receipt, isCurrent: publication.isCurrent };
             }
           };
           const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
@@ -327,6 +316,18 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
 
 export const taskAgentEventMutations = {
   prepare: prepareNativeEventConsumption,
+  pendingTaskIds(): readonly string[] {
+    const taskIds: string[] = [];
+    for (const [taskId, entries] of pendingByTask) {
+      for (const entry of entries) {
+        if (entry.phase.kind !== "consumed") {
+          taskIds.push(taskId);
+          break;
+        }
+      }
+    }
+    return taskIds;
+  },
   pending(taskId?: string) {
     const entries = taskId === undefined ? pendingEvents : pendingByTask.get(taskId);
     for (const entry of entries ?? []) {
@@ -442,7 +443,10 @@ async function persist(pending: PendingEvent): Promise<void> {
               pending.phase.kind !== "consumed" &&
               isEquivalentTaskRecord(task, pending.publication.task)
             ) {
-              publishDelivery(pending.publication);
+              pending.delivery = {
+                receipt: pending.publication,
+                isCurrent: () => tasks.get(taskId) === task,
+              };
             }
           },
         },
@@ -550,6 +554,17 @@ function startDrain(): void {
         } finally {
           forget(entry);
           active = undefined;
+          // A committed notification starts after its own accepted event settles;
+          // cleanup failure still rejects external readers without suppressing delivery.
+          const delivery = entry.delivery;
+          if (delivery) {
+            publishTaskAgentEventDelivery(delivery, () =>
+              assertCurrent(entry, {
+                ...entry.input,
+                expectedTask: captureTaskPersistenceReceipt(delivery.receipt.task),
+              }),
+            );
+          }
         }
       }
     } finally {
@@ -676,7 +691,6 @@ export function enqueueTaskAgentEvent(
     previous.input.change = {
       ...change,
       toolStarts: previous.input.change.toolStarts + change.toolStarts,
-      refreshStartedAt: previous.input.change.refreshStartedAt || change.refreshStartedAt,
       refreshError: previous.input.change.refreshError || change.refreshError,
       patch: { ...previous.input.change.patch, ...change.patch },
     };

@@ -10,18 +10,26 @@ import {
   redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import {
+  classifyUpdateOutcome,
+  UPDATE_FOREIGN_DESTINATION_REASON,
+} from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
+import {
+  isPublicUpdateFailureCode,
+  projectPublicUpdateFailureIdentifiers,
+} from "./update-failure-public-identifiers.js";
+import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -29,10 +37,15 @@ import {
 } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { readUpdateRunReportHealth } from "./update-run-report-health.js";
-import { formatUpdateRunCurrentHealth, formatUpdateRunIdentity } from "./update-run-report.js";
+import {
+  formatUpdateRunRecovery,
+  formatUpdateRunCurrentHealth,
+  formatUpdateRunIdentity,
+  updateRunReportInputFromResult,
+} from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
-import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner.js";
+import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
+import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
@@ -201,45 +214,35 @@ function resolveRecoveryOutcome(
   input: UpdateFailureReportInput,
   context: UpdateFailureReportContext,
 ): string {
-  const result = {
-    ...input.result,
-    recovery: input.result.recovery ?? input.recordedRun?.verification?.recovery,
-  };
-  if (result.recovery?.serviceRestartSafe === true) {
-    const version = redactPublicSupportVersion(result.recovery.version);
-    const restored = result.recovery.packageRollbackVerified === true;
-    if (result.recovery.service === "healthy") {
-      return `${restored ? "package rollback verified; " : ""}Gateway serving ${version}; health verified`;
-    }
-    const packageOutcome = restored
-      ? `package rollback verified (${version})`
-      : "runtime files verified";
-    const reason = sanitizeReportField(result.recovery.reason ?? "not-recorded", context, 96);
-    const nextCommand =
-      "Run `openclaw gateway status --deep` to check the serving version and readiness.";
-    if (result.recovery.service === "failed") {
-      return `${packageOutcome}; Gateway health failed (${reason}). ${nextCommand}`;
-    }
-    if (restored) {
-      return `${packageOutcome}; Gateway health unverified (${reason}). ${nextCommand}`;
-    }
-    return "verified safe to restart";
-  }
-  if (result.recovery?.serviceRestartSafe === false) {
-    const outcome =
-      result.recovery.packageRollbackVerified === true
-        ? "package rollback verified; service restart not verified"
-        : "not verified";
-    return truncateUtf8Prefix(
-      `${outcome} (${sanitizeReportField(result.recovery.reason, context)})`,
-      UPDATE_REPORT_FIELD_MAX_BYTES,
-    );
-  }
-  return input.recordedRun?.steps.some(
-    (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
-  )
-    ? "package rollback not needed: no package mutation"
-    : "not recorded";
+  const { verification, steps } = updateRunReportInputFromResult(input.result, input.recordedRun);
+  const recovery = verification.recovery;
+  const observation = steps.findLast((step) => step.step === "gateway recovery verification");
+  return (
+    formatUpdateRunRecovery(
+      {
+        ...verification,
+        recovery: recovery?.serviceRestartSafe
+          ? { ...recovery, version: redactPublicSupportVersion(recovery.version) }
+          : recovery,
+        runningVersion: verification.runningVersion
+          ? redactPublicSupportVersion(verification.runningVersion)
+          : undefined,
+      },
+      observation && {
+        exitCode: observation.exitCode,
+        failureFacts: observation.failureFacts?.map((fact) => ({
+          check: fact.check,
+          code: isPublicUpdateFailureCode(fact.code) ? fact.code : "gateway-probe-failed",
+        })),
+      },
+      sanitizeReportField(recovery?.reason ?? "not-recorded", context, 96),
+    ) ??
+    (steps.some(
+      (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
+    )
+      ? "package rollback not needed: no package mutation"
+      : "not recorded")
+  );
 }
 
 async function renderBoundedDiagnostics(
@@ -254,6 +257,9 @@ async function renderBoundedDiagnostics(
   ];
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
+  }
+  if (input.result.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    diagnostics.push(`Next step: ${UPDATE_DESTINATION_RECOVERY}`);
   }
   for (const finding of normalizeUpdateDoctorLintFindings(
     input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
@@ -302,24 +308,28 @@ async function renderBoundedDiagnostics(
           ? diagnostic
           : `${exit} (${diagnostic})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
+    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env).map(async (fact) =>
-          formatUpdateFailureFact({
-            ...(await projectPublicUpdateFailureIdentifiers(fact)),
-            ...(fact.location ? { location: fact.location } : {}),
-            ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
-            ...(fact.message
-              ? {
-                  message:
-                    updatePreflightDetailMessage(fact.code) ??
-                    (fact.errorName
-                      ? redactSupportDiagnosticLine(fact.message, context)
-                      : redactPublicSupportDiagnosticLine(fact.message, context)),
-                }
-              : {}),
-          }),
-        ),
+        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
+          .filter((fact) => fact.check !== "npm")
+          .map(async (fact) =>
+            formatUpdateFailureFact({
+              ...(await projectPublicUpdateFailureIdentifiers(fact)),
+              ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.destination ? { destination: fact.destination } : {}),
+              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.message
+                ? {
+                    message:
+                      updatePreflightDetailMessage(fact.code) ??
+                      (fact.errorName
+                        ? redactSupportDiagnosticLine(fact.message, context)
+                        : redactPublicSupportDiagnosticLine(fact.message, context)),
+                  }
+                : {}),
+            }),
+          ),
       )),
     );
   }
@@ -360,13 +370,41 @@ export async function prepareUpdateFailureReport(
   const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
   const action = recordedRun?.trigger ?? input.action;
   const installation = recordedRun?.target?.installationMethod;
-  const verification = recordedRun?.verification;
-  const identity = verification
-    ? formatUpdateRunIdentity(verification, recordedRun?.after ?? input.result.after ?? {})
+  const projection =
+    input.result.verification || recordedRun?.verification
+      ? updateRunReportInputFromResult(input.result, recordedRun)
+      : undefined;
+  const verification = projection?.verification;
+  const identity = projection
+    ? formatUpdateRunIdentity(projection.verification, projection.after)
     : undefined;
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })
     : undefined;
+  const warnings = [
+    ...new Set([
+      ...(await Promise.all(
+        (input.result.postUpdate?.plugins?.warnings ?? []).slice(-3).map(async (warning) => {
+          const { code, pluginId } = await projectPublicUpdateFailureIdentifiers({
+            check: "plugin-convergence",
+            code: warning.reason,
+            pluginId: warning.pluginId,
+          });
+          const diagnostic = redactPublicSupportDiagnosticLine(
+            [warning.errorCode, warning.message].filter(Boolean).join("\n"),
+            context,
+          );
+          return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
+        }),
+      )),
+      ...updateRunWarningMessages([
+        ...(recordedRun?.steps ?? []),
+        ...updateRunReportInputFromResult(input.result).steps,
+      ])
+        .slice(-3)
+        .map((message) => redactPublicSupportDiagnosticLine(message, context)),
+    ]),
+  ];
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -403,6 +441,7 @@ export async function prepareUpdateFailureReport(
           "- Recovery and verification above describe the update attempt, not a current instruction to stop or restart the Gateway.",
         ]
       : []),
+    ...(warnings.length ? ["", "## Warnings", "", ...warnings.map((line) => `- ${line}`)] : []),
     "",
     "## Bounded diagnostics",
     "",

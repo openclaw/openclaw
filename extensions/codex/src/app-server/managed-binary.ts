@@ -214,6 +214,9 @@ function resolveManagedCodexAppServerCommandCandidates(
 ): string[] {
   const packageCommand = resolveManagedCodexPackageEntrypoint(pluginRoot);
   const packageCommandPaths = packageCommand ? [packageCommand] : [];
+  if (managedCommandOrder === "package-only") {
+    return packageCommandPaths;
+  }
   const desktopCommandPaths = resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
   // Ordinary turns must honor the pinned package version. Computer Use opts
   // into the desktop app owner because its macOS TCC permissions live there.

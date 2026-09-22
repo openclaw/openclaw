@@ -18,7 +18,10 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
@@ -50,8 +53,9 @@ type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
   onCompactionRejected?: (rejected: OpenAIResponsesCompactionRejection) => void;
 };
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 

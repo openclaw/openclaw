@@ -34,12 +34,12 @@ const mocks = vi.hoisted(() => ({
     routeReady: vi.fn(async () => {}),
     processOutputSuppressed: vi.fn(() => true),
     writeOutputAudio: vi.fn(),
+    getPlaybackState: vi.fn(() => []),
     finishOutputAudio: vi.fn(),
     clearOutputAudio: vi.fn(),
     playedAudioFrames: vi.fn(() => 0),
     queuedAudioFrames: vi.fn(() => 0),
     suspendMedia: vi.fn(async () => {}),
-    failClosed: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   },
   pumpParams: undefined as

@@ -118,7 +118,6 @@ export const forcedUnitFastTestFiles = [
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
-  "src/node-host/invoke-system-run.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
@@ -167,7 +166,7 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
 const ownerRoutedUnitTestPatterns = [
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
-  // Real Git process-tree fixtures stay in serial tooling even when their
+  // Real Git process-tree fixtures stay in tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
@@ -182,8 +181,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/infra/update-managed-service-handoff-recovery-launchd.test.ts",
   "src/infra/update-managed-service-handoff-terminal-result.test.ts",
   "src/infra/update-managed-service-handoff-triage.test.ts",
-  "src/infra/update-managed-service-handoff-repair-validating.test.ts",
-  "src/infra/update-managed-service-handoff-repair-verifying.test.ts",
   // Command compaction tests need the scoped runtime registry even when their
   // mocks live in a shared helper.
   // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
@@ -191,6 +188,9 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  // Source plugin workers retain the agent runtime owner after test extraction.
+  "src/agents/code-mode-quickjs.integration.test.ts",
+  "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",

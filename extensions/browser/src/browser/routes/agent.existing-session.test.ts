@@ -829,7 +829,7 @@ describe("existing-session browser routes", () => {
     expect(documentParams.userDataDir).toBeUndefined();
     expect(documentParams.targetId).toBe("7");
     expect(evaluate).toHaveBeenCalledOnce();
-    expect(String(evaluate.mock.calls[0]?.[0])).toContain("globalThis.location.href");
+    expect(String(evaluate.mock.calls[0]?.[0])).toContain("location.href");
   });
 
   it("forwards click timeoutMs to the existing-session click executor", async () => {

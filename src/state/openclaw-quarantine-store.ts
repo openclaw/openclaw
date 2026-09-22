@@ -17,7 +17,13 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import {
+  OpenClawQuarantineReadCleanupError,
+  type OpenClawDatabaseKind,
+  type OpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
 
@@ -25,8 +31,6 @@ const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_QUARANTINE_DIR_MODE = 0o700;
 const OPENCLAW_QUARANTINE_FILE_MODE = 0o600;
-
-type OpenClawDatabaseKind = "agent" | "state";
 
 function resolveAgentIntegrityPath(pathname: string): string {
   try {
@@ -90,17 +94,9 @@ export function readOpenClawAgentIntegrityVerification(
   };
   if (consume) {
     // Failure cannot admit a writer while leaving an old clean receipt reusable.
-    return withQuarantineWriter(env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
-        const record = read(database);
-        database.exec("COMMIT;");
-        return record;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+    return withQuarantineWriter(env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => read(database)),
+    );
   }
   const storePath = resolveQuarantineStorePath(env);
   if (!existsSync(storePath)) {
@@ -184,16 +180,11 @@ export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  withQuarantineWriter(env, (database) => {
-    database.exec("BEGIN IMMEDIATE;");
-    try {
-      deleteAgentIntegrityVerification(database, pathname);
-      database.exec("COMMIT;");
-    } catch (error) {
-      database.exec("ROLLBACK;");
-      throw error;
-    }
-  });
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(database, () =>
+      deleteAgentIntegrityVerification(database, pathname),
+    ),
+  );
 }
 
 function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
@@ -248,22 +239,8 @@ export function markOpenClawAgentIntegrityClean(
   });
 }
 
-type OpenClawDatabaseQuarantine = {
-  kind: OpenClawDatabaseKind;
-  quarantinedAt: number;
-  reason: string;
-};
-
-/** Reading quarantine metadata is best effort; unfinished native cleanup is a separate fact. */
-export class OpenClawQuarantineReadCleanupError extends AggregateError {
-  constructor(errors: unknown[]) {
-    super(errors, "OpenClaw quarantine reader cleanup failed.", { cause: errors[0] });
-    this.name = "OpenClawQuarantineReadCleanupError";
-  }
-}
-
 // Read admission needs this error without importing schema migrations.
-export function createOpenClawDatabaseVerificationError(
+function createOpenClawDatabaseVerificationError(
   kind: "agent" | "state",
   pathname: string,
   storedError: string | null,
@@ -357,7 +334,10 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
     completed = true;
     return result;
   } finally {
-    database.close();
+    // Failed rollback retires the handle; a second close would mask the write error.
+    if (database.isOpen) {
+      database.close();
+    }
     if (completed || !existed) {
       applyPrivateModeSync(storePath, OPENCLAW_QUARANTINE_FILE_MODE);
     }
@@ -365,7 +345,7 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
 }
 
 /** Read one authoritative quarantine decision without creating the store. */
-export function readOpenClawDatabaseQuarantine(
+function readOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): OpenClawDatabaseQuarantine | undefined {
@@ -386,6 +366,7 @@ export function readOpenClawDatabaseQuarantine(
   } catch (closeError) {
     throw new OpenClawQuarantineReadCleanupError(
       "error" in outcome ? [outcome.error, closeError] : [closeError],
+      "value" in outcome ? outcome.value : undefined,
     );
   }
   if ("error" in outcome) {
@@ -402,20 +383,16 @@ export function assertOpenClawStateDatabaseNotQuarantined(
 ): void {
   let quarantineFailure: Error | undefined;
   try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
-    }
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
   } catch (error) {
-    // A broken quarantine store must not brick every state read.
-    // The process latch and daily verifier still cover known damage.
-    if (error instanceof OpenClawQuarantineReadCleanupError) {
-      onNativeCleanupFailure?.(error);
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      throw error;
     }
+    onNativeCleanupFailure?.(error);
+    return;
+  }
+  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
+    onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
     throw quarantineFailure;
@@ -483,6 +460,37 @@ function readQuarantineDecision(
   return { kind: row.kind, quarantinedAt: row.quarantined_at, reason: row.reason };
 }
 
+/** Runtime opens refuse recorded damage while tolerating a broken quarantine index. */
+export function readOpenClawDatabaseQuarantineFailure(
+  kind: OpenClawDatabaseKind,
+  pathname: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Error | undefined {
+  let quarantine: OpenClawDatabaseQuarantine | undefined;
+  let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
+  try {
+    quarantine = readOpenClawDatabaseQuarantine(pathname, options);
+  } catch (error) {
+    // Unreadable metadata stays best effort; unfinished cleanup retains its disposal owner.
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      return undefined;
+    }
+    if (!error.quarantine) {
+      throw error;
+    }
+    quarantine = error.quarantine;
+    cleanupFailure = error;
+  }
+  if (!quarantine) {
+    return undefined;
+  }
+  const failure = createOpenClawDatabaseVerificationError(kind, pathname, quarantine.reason);
+  if (cleanupFailure) {
+    failure.cause = cleanupFailure;
+  }
+  return failure;
+}
+
 /** Persist one authoritative quarantine decision. */
 export function recordOpenClawDatabaseQuarantine(options: {
   env?: NodeJS.ProcessEnv;
@@ -495,9 +503,8 @@ export function recordOpenClawDatabaseQuarantine(options: {
     ? serializeSqliteFileGeneration(options.generation)
     : null;
   try {
-    return withQuarantineWriter(options.env ?? process.env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
+    return withQuarantineWriter(options.env ?? process.env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => {
         database
           .prepare(
             `
@@ -523,13 +530,9 @@ export function recordOpenClawDatabaseQuarantine(options: {
         if (options.kind === "agent") {
           deleteAgentIntegrityVerification(database, options.path);
         }
-        database.exec("COMMIT;");
         return true;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+      }),
+    );
   } catch {
     return false;
   }
@@ -545,20 +548,15 @@ export function clearOpenClawDatabaseQuarantine(
     return true;
   }
   try {
-    return withQuarantineWriter(env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
+    return withQuarantineWriter(env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => {
         database
           .prepare("DELETE FROM quarantined_databases WHERE path = ?")
           .run(path.resolve(pathname));
         deleteAgentIntegrityVerification(database, pathname);
-        database.exec("COMMIT;");
         return true;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+      }),
+    );
   } catch {
     return false;
   }

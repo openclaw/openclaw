@@ -32,6 +32,8 @@ openclaw health --debug
 
 - Local Gateway startup uses the shared 60-second readiness budget and reports its observed phase. An explicit `--timeout` overrides that budget. Startup still in progress at the deadline returns a non-failing result; JSON reports `{ "status": "starting", "startupPhase": "…" }` instead of a health snapshot.
 
+- Local readiness recognizes wildcard listeners that serve loopback, including on macOS where a separate loopback bind can succeed on the same port.
+
 - Without `--verbose`, the Gateway can return a cached snapshot and refresh it in the background for the next caller. A cached snapshot is fresh for up to 60 seconds and unchanged from live channel runtime state.
 - `--verbose` forces a live probe of each channel account. It also prints Gateway connection details. It expands human-readable output across all configured accounts and agents, instead of just the default agent.
 - An unconfigured or disabled preferred account does not hide probe results from other active accounts. Ordinary output still follows the default agent's account bindings. `--verbose` includes all accounts.

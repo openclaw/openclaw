@@ -28,7 +28,6 @@ import {
   type DevUpdateTarget,
   UPDATE_DEV_TARGET_REF_ENV,
 } from "../../infra/update-dev-target.js";
-import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
@@ -70,7 +69,7 @@ import {
   DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -85,6 +84,7 @@ import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
+  retireMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -317,9 +317,16 @@ export async function admitUpdateCommandRun(params: {
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
   const requester = resolveManagedUpdateRequester(record.origin.requester);
-  const requesterAuthority = requester
-    ? await createManagedUpdateRequesterAuthority(requester, env)
-    : undefined;
+  const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+    ? Object.freeze({
+        requester: Object.freeze({ ...requester }),
+        isCurrent: () => {
+          throw new Error("Profile update continuation has not acquired its native owner.");
+        },
+      })
+    : requester
+      ? await createManagedUpdateRequesterAuthority(requester, env)
+      : undefined;
   const run = {
     runId: record.runId,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
@@ -399,50 +406,6 @@ export async function withUpdatePreviewSignals<T>(
   }
 }
 
-export function failUpdateCommandRun(
-  error: unknown,
-  run: NonNullable<UpdateCommandOptions["run"]>,
-): ReturnType<typeof createUpdateErrorFact> | undefined {
-  const options = { env: run.env };
-  // Recovery owns failure/outcome publication; outer unwind must not rewrite a
-  // database whose exact contents may still be needed to reconcile restoration.
-  if (loadUpdateRecovery(run.runId, options)) {
-    return undefined;
-  }
-  const active = getUpdateRun(run.runId, options);
-  if (active?.status !== "running") {
-    return undefined;
-  }
-  const step =
-    active.steps.findLast((entry) => entry.status === "in_progress")?.step ?? active.phase;
-  const fact = createUpdateErrorFact(step, error, run.env);
-  recordUpdateRunDiagnostics(
-    run.runId,
-    { failure: { step, detail: fact.message, failureFacts: [fact] } },
-    defaultRuntime.error,
-    options,
-  );
-  if (!active.verification.rollbackOutcome) {
-    recordUpdateRunDiagnostics(
-      run.runId,
-      (recorded) => ({
-        rollbackOutcome:
-          recorded.rollbackOutcome ??
-          (active.phase === "requested"
-            ? { status: "not-needed", reason: "Update admission failed before package mutation" }
-            : {
-                status: "not-attempted",
-                reason:
-                  "CLI unwind does not attempt package rollback after an unexpected exception",
-              }),
-      }),
-      defaultRuntime.error,
-      options,
-    );
-  }
-  return fact;
-}
-
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateDisplayProgress,
@@ -471,7 +434,9 @@ export function createUpdateRunProgress(
   return {
     pendingSteps,
     onRollbackOutcome: (rollbackOutcome) => {
-      recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      if (!deferred) {
+        recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+      }
     },
     onHeartbeat() {
       if (!deferred) {
@@ -482,6 +447,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
+      retireMutableUpdateSignalRun(run);
     },
     flushLedgerWrites() {
       deferred = false;
@@ -554,19 +520,6 @@ export function completeUpdateCommandRun(
     };
   }
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
-  const active = getUpdateRun(run.runId, recordOptions);
-  if (active) {
-    recordUpdateRunPhase(
-      run.runId,
-      active.phase,
-      { before: result.before, after: result.after },
-      recordOptions,
-    );
-    recordUpdateRunDiagnostics(run.runId, result, defaultRuntime.error, recordOptions);
-  }
-  for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
-    recordUpdateRunStep(run.runId, step, recordOptions);
-  }
   // Both finalization and outer CLI unwind come here. A verified restored generation
   // stays with its helper until native recovery finishes; neither caller may close it early.
   const helperRecoveryPending =
@@ -579,10 +532,8 @@ export function completeUpdateCommandRun(
     run.gatewayRestartRequired === true &&
     result.status === "ok" &&
     !completion.rolledBack;
-  if (gatewayRestartPending) {
-    recordUpdateRunPhase(run.runId, "restarting", {}, recordOptions);
-  } else if (!helperRecoveryPending) {
-    finishUpdateRun(
+  if (!gatewayRestartPending && !helperRecoveryPending) {
+    const finished = finishUpdateRun(
       run.runId,
       {
         status: completion.rolledBack
@@ -592,12 +543,30 @@ export function completeUpdateCommandRun(
             : result.status === "error"
               ? "failed"
               : "skipped",
+        diagnostics: result,
+        before: result.before,
         reason: result.reason,
         after: result.after,
         downtimeMs: completion.downtimeMs,
       },
       recordOptions,
     );
+    if (result.verification) {
+      result.recovery = finished.verification.recovery ?? undefined;
+    }
+  } else {
+    recordUpdateRunPhase(
+      run.runId,
+      gatewayRestartPending ? "restarting" : "requested",
+      { before: result.before, after: result.after },
+      recordOptions,
+    );
+    recordUpdateRunDiagnostics(run.runId, result, defaultRuntime.error, recordOptions);
+    if (!result.verification) {
+      for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
+        recordUpdateRunStep(run.runId, step, recordOptions);
+      }
+    }
   }
   return { ...result, runId: run.runId };
 }

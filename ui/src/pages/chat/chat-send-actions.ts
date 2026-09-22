@@ -1,5 +1,6 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -15,6 +16,7 @@ import {
   scheduleStoredChatOutboxDrain,
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
@@ -39,13 +41,24 @@ import {
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 
+registerChatGoalsEnglish();
+
+function hasUncertainChatDelivery(entry: ChatQueueItem): boolean {
+  return Boolean(
+    entry.sendRunId &&
+    !entry.localCommandName &&
+    (entry.sendState === "unconfirmed" ||
+      (entry.sendState === "held" &&
+        ((entry.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined))),
+  );
+}
+
 const resetRetryState = (
   entry: ChatQueueItem,
   sendState: ChatQueueItem["sendState"],
 ): ChatQueueItem => {
   // An ID-less post-clear review barrier has no transport attempt to preserve.
-  const uncertain =
-    entry.sendState === "unconfirmed" && Boolean(entry.sendRunId) && !entry.localCommandName;
+  const uncertain = hasUncertainChatDelivery(entry);
   return {
     ...entry,
     // Local payload failure cannot erase an uncertain transport attempt. Keep its
@@ -64,7 +77,7 @@ const resetRetryState = (
 };
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
-  if (isInitialChatHistoryUnavailable(host)) {
+  if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
     return;
   }
   if (readQueuedMessageById(host, id)?.intent) {
@@ -163,13 +176,16 @@ export async function retryQueuedChatMessage(
   id: string,
   canDispatch?: () => boolean,
 ) {
-  if (isInitialChatHistoryUnavailable(host) || (canDispatch && !canDispatch())) {
+  if (
+    chatProviderReviewRow(host)?.providerReview ||
+    isInitialChatHistoryUnavailable(host) ||
+    (canDispatch && !canDispatch())
+  ) {
     return;
   }
   const item = host.chatQueue.find((entry) => entry.id === id);
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
-  const retriesUnconfirmed =
-    item?.sendState === "unconfirmed" && Boolean(item.sendRunId) && !item.localCommandName;
+  const retriesUnconfirmed = item !== undefined && hasUncertainChatDelivery(item);
   if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
     return;
@@ -197,7 +213,9 @@ export async function retryQueuedChatMessage(
         wasVolatile &&
         !item.localCommandName &&
         item.sendRunId &&
-        (item.sendState === "failed" || item.sendState === "unconfirmed") &&
+        (item.sendState === "failed" ||
+          item.sendState === "unconfirmed" ||
+          item.sendState === "held") &&
         canSendVolatileQueueItem(host, item)
       ) {
         const retry = updateVolatileQueuedMessage(host, id, (entry) =>

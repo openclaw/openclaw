@@ -542,22 +542,74 @@ export async function triageCommand(
   }
 
   if (automatic && !automatic.diagnosticOnly) {
-    const result = await withInstallationTarget(target, async () => {
-      const { agentExecCommand } = await import("./agent-exec.js");
-      if (!isCurrent()) {
-        return { exitCode: 1 };
-      }
-      return agentExecCommand(prompt, agentOptions, runtime, {
-        abortSignal: automatic.signal,
-        timeoutMs: 600_000,
-        maxToolCalls: 40,
-        assertSourceCurrent: automatic.assertCurrent,
+    const deadline = Date.now() + 600_000;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([automatic.signal, controller.signal]);
+    const timer = setTimeout(
+      () => controller.abort(new Error("Automatic triage timed out.")),
+      600_000,
+    );
+    try {
+      const result = await withInstallationTarget(target, async () => {
+        const { prepareUpdateRepairInference, runUpdateRepairTurn } =
+          await import("../infra/update-repair-agent.runtime.js");
+        if (!isCurrent()) {
+          return {
+            status: "unavailable" as const,
+            reason: "Repair authority is no longer current.",
+          };
+        }
+        const selected = await prepareUpdateRepairInference(
+          signal,
+          Math.max(1, deadline - Date.now()),
+        );
+        if (!isCurrent()) {
+          return {
+            status: "unavailable" as const,
+            reason: "Repair authority is no longer current.",
+          };
+        }
+        if (!selected.ok) {
+          return { status: "unavailable" as const, reason: selected.reason };
+        }
+        signal.throwIfAborted();
+        return runUpdateRepairTurn({
+          target: {
+            stateDir: target.stateDir,
+            configPath: target.configPath,
+            workspaceDir: target.defaultWorkspaceDir,
+            installRoot: agentCwd ?? process.cwd(),
+          },
+          route: selected.route,
+          modelFallbacks: selected.modelFallbacks,
+          prompt,
+          signal,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          maxToolCalls: 40,
+          isCurrent,
+        });
       });
-    });
-    if (result.exitCode !== 0) {
-      exitCliAfterOutput(runtime, result.exitCode);
+      if (result.status === "unavailable") {
+        runtime.error(triageCollectionError(result.reason, redaction));
+        exitCliAfterOutput(runtime, controller.signal.aborted ? 2 : 1);
+      }
+      if (result.envelope.final) {
+        runtime.log(
+          redactSupportString(result.envelope.final, redaction, { maxLength: 32 * 1024 }),
+        );
+      }
+      if (result.envelope.error?.message) {
+        runtime.error(triageCollectionError(result.envelope.error.message, redaction));
+      }
+      if (controller.signal.aborted || result.envelope.status !== "ok") {
+        exitCliAfterOutput(
+          runtime,
+          controller.signal.aborted || result.envelope.status === "timeout" ? 2 : 1,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
     }
-
     return;
   }
 

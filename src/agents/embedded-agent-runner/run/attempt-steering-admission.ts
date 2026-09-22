@@ -39,7 +39,7 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
   try {
     unsubscribeSteering = session.subscribe((event) => {
       if (event.type === "agent_settled" || event.type === "agent_handoff") {
-        accepting = false;
+        stop();
       }
     });
     signal.addEventListener("abort", stop, { once: true });

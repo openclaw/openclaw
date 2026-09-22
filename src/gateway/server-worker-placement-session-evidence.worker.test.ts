@@ -273,10 +273,10 @@ it("captures config, environment, cwd and placement identity before discovery yi
     const gate = pauseRegistry();
     const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
-    const originalCwd = process.cwd();
+    const cwd = vi.spyOn(process, "cwd");
     try {
       await gate.entered;
-      process.chdir(state.stateDir);
+      cwd.mockReturnValue(state.stateDir);
       cfg.session!.store = state.statePath("successor.sqlite");
       process.env.OPENCLAW_STATE_DIR = state.statePath("other-root");
       gate.resume();
@@ -288,7 +288,7 @@ it("captures config, environment, cwd and placement identity before discovery yi
       expect(fs.existsSync(process.env.OPENCLAW_STATE_DIR)).toBe(false);
     } finally {
       process.env.OPENCLAW_STATE_DIR = originalRoot;
-      process.chdir(originalCwd);
+      cwd.mockRestore();
       gate.resume();
       await pending;
       gate.restore();

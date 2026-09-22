@@ -1,3 +1,4 @@
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { runSqliteWorkerStoreOperation } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
@@ -27,7 +28,13 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
     params.lease.sharedStatePath,
     context,
     () => params.assertOwned(),
-  );
+  ).catch((error: unknown) => {
+    if (error instanceof Error) {
+      error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;
+      error.stack = `${error.name}: ${error.message}\n${error.stack ?? ""}`;
+    }
+    throw error;
+  });
   if (!store) {
     throw new Error("Retired agent cleanup lost its original shared database");
   }
@@ -47,12 +54,5 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   } catch (error) {
     errors.push(error);
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Retired agent lease cleanup and Worker close failed", {
-      cause: errors[0],
-    });
-  }
+  throwSqliteLifecycleErrors(errors, "Retired agent lease cleanup and Worker close failed");
 }

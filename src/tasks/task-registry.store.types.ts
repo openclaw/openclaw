@@ -9,7 +9,6 @@ export type TaskRegistryStoreSnapshot = {
 };
 
 export type TaskExecutionRestoreStore = {
-  repairLegacyIdentifiers?: () => void;
   loadSnapshot: () => TaskRegistryStoreSnapshot;
   withMutation?: <T>(operation: () => T) => T;
   upsertTaskWithDeliveryState: (params: {
@@ -42,6 +41,11 @@ export type TaskLiveFlowAuthority = {
 };
 
 type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
+
+export type TaskRegistryObservers = {
+  // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
+  onEvent?: (event: TaskRegistryObserverEvent) => void;
+};
 
 export type TaskRegistryObserverEvent =
   | {

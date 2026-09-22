@@ -14,16 +14,20 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
+import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { getTranscriptLibrary } from "../transcripts/library.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
 import { readTranscriptLibraryStatus } from "../transcripts/status.js";
+import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptLibraryError } from "../transcripts/store-read.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
@@ -179,6 +183,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   const databasePath = resolveOpenClawStateSqlitePath(env);
   expect(existsSync(databasePath)).toBe(false);
   await withoutParentSql(async () => {
+    expect(await store.listReadEntries({ limit: 2 })).toEqual([]);
     expect(await store.listSessionEntries()).toEqual([]);
     expect(await store.readLatestEntry()).toBeUndefined();
     expect(await store.readSession("missing")).toBeUndefined();
@@ -247,6 +252,83 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
     "Second speech",
   ]);
 });
+
+it("publishes captured summary notes without caller-thread transcript SQL", async () => {
+  const { env, store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "summary-worker",
+    startedAt: "2026-09-20T12:00:00.000Z",
+    source: { providerId: "manual-transcript" },
+  };
+  await store.writeSession(session);
+  await store.appendUtteranceForSession(session, { text: "We agreed to simplify setup." });
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+    const result = await persistTranscriptSummary({
+      config: resolveTranscriptsConfig(undefined),
+      store,
+      session,
+    });
+    expect(result.summary.transcript).toEqual(["We agreed to simplify setup."]);
+  });
+  expect(await store.readSummary(session)).toMatchObject({
+    summary: { transcript: ["We agreed to simplify setup."], utteranceCount: 1 },
+    markdown: expect.stringContaining("We agreed to simplify setup."),
+  });
+});
+
+it.each(["transaction", "commit"] as const)(
+  "retains prior notes when the summary owner is revoked at the worker %s grant",
+  async (stage) => {
+    const { store } = fixture();
+    const session: TranscriptSessionDescriptor = {
+      sessionId: `summary-revoked-${stage}`,
+      startedAt: "2026-09-20T12:00:00.000Z",
+      source: { providerId: "manual-transcript" },
+    };
+    await store.writeSession(session);
+    await store.appendUtteranceForSession(session, { text: "Fresh captured speech" });
+    await store.writeSummary(
+      summarizeTranscripts({ session, utterances: [{ text: "Retained earlier notes" }] }),
+      session,
+    );
+    const previous = await store.readSummary(session);
+    const failure = new TranscriptsSummaryChangedError();
+    let current = true;
+    const requests: workerAdmission.SqliteWorkerAdmissionRequest["stage"][] = [];
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const observer = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit) =>
+        createAdmission((request, grant) => {
+          requests.push(request.stage);
+          if (request.stage === stage) {
+            current = false;
+          }
+          admit(request, grant);
+        }),
+      );
+    try {
+      await expect(
+        persistTranscriptSummary({
+          config: resolveTranscriptsConfig(undefined),
+          store,
+          session,
+          assertCurrent: () => {
+            if (!current) {
+              throw failure;
+            }
+          },
+        }),
+      ).rejects.toBe(failure);
+    } finally {
+      observer.mockRestore();
+    }
+    expect(requests).toContain(stage);
+    expect(await store.readSummary(session)).toEqual(previous);
+  },
+);
 
 it("reads populated transcripts after existing-only status and through reopen without parent SQL", async () => {
   const { env, store } = fixture();

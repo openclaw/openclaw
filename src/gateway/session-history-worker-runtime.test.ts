@@ -1,20 +1,31 @@
+import { performance } from "node:perf_hooks";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
+  SessionHistoryDelta,
 } from "../config/sessions/session-history-types.js";
+import {
+  SessionHistoryDeltaPreparationError,
+  sessionHistoryCleanupError,
+} from "../config/sessions/session-history-worker-errors.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
+import * as stateContext from "../state/openclaw-state-worker-context.js";
 
 const runWorker = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: (
     _options: unknown,
-    operation: (owner: { generation: number; run: typeof runWorker }) => unknown,
-  ) => operation({ generation: 1, run: runWorker }),
+    operation: (owner: {
+      generation: number;
+      run: typeof runWorker;
+      assertCurrent: () => void;
+    }) => unknown,
+  ) => operation({ generation: 1, run: runWorker, assertCurrent: () => {} }),
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => read(),
@@ -61,6 +72,90 @@ function page(text: string): SessionHistoryWorkerResult {
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
+
+it.each([false, true])(
+  "keeps delta followers and their captured authority separate (deferred error: %s)",
+  async (failed) => {
+    const capture = stateContext.captureOpenClawStateWorkerContext;
+    const assertions: Array<ReturnType<typeof vi.fn>> = [];
+    const context = vi
+      .spyOn(stateContext, "captureOpenClawStateWorkerContext")
+      .mockImplementation((...args) => {
+        const bound = capture(...args);
+        const assertCurrent = vi.fn(bound.admission.assertCurrent);
+        assertions.push(assertCurrent);
+        return { ...bound, admission: { ...bound.admission, assertCurrent } };
+      });
+    try {
+      const rpc = request().params;
+      const deltaRequest: Extract<SessionHistoryWorkerRequest, { kind: "delta" }> = {
+        kind: "delta",
+        params: {
+          target: {
+            agentId: rpc.sessionAgentId,
+            sessionId: rpc.sessionId,
+            sessionKey: rpc.canonicalKey,
+            sessionEntry: rpc.entry,
+            storePath: rpc.storePath,
+          },
+          limits: { maxEvents: 200, maxBytes: 1_000_000 },
+        },
+      };
+      const first = readSessionHistoryPageInWorker(deltaRequest);
+      const second = readSessionHistoryPageInWorker(deltaRequest);
+      expect(queued).toHaveLength(1);
+      const partial: SessionHistoryDelta = {
+        delta: { kind: "missing" },
+        subagentCoordination: { sessions: [["source", false]], runMessages: [] },
+      };
+      queued[0]!.prepare();
+      if (failed) {
+        queued[0]!.result.reject(new SessionHistoryDeltaPreparationError(partial));
+      } else {
+        queued[0]!.result.resolve({ kind: "delta", ...partial });
+      }
+      const [a, b] = await Promise.all([first, second]);
+      a.subagentCoordination.sessions[0]![1] = true;
+      expect(b.subagentCoordination.sessions[0]![1]).toBe(false);
+      assertions[0]!.mockImplementation(() => {
+        throw new Error("original source revoked");
+      });
+      expect(a.assertCurrent).toThrow("original source revoked");
+      expect(b.assertCurrent).not.toThrow();
+    } finally {
+      context.mockRestore();
+    }
+  },
+);
+
+it("does not recover partial delta facts when worker retirement fails", async () => {
+  const rpc = request().params;
+  const pending = readSessionHistoryPageInWorker({
+    kind: "delta",
+    params: {
+      target: {
+        agentId: rpc.sessionAgentId,
+        sessionId: rpc.sessionId,
+        sessionKey: rpc.canonicalKey,
+        storePath: rpc.storePath,
+        sessionEntry: rpc.entry,
+      },
+      limits: {},
+    },
+  });
+  const failure = sessionHistoryCleanupError(
+    new SessionHistoryDeltaPreparationError({
+      delta: { kind: "missing" },
+      subagentCoordination: { sessions: [], runMessages: [] },
+    }),
+    new Error("retirement failed"),
+    "worker retirement",
+  );
+  const rejected = expect(pending).rejects.toBe(failure);
+  queued[0]!.prepare();
+  queued[0]!.result.reject(failure);
+  await rejected;
+});
 
 it("shares queued equivalent pages but starts a fresh read after dispatch", async () => {
   const first = readSessionHistoryPageInWorker(request());
@@ -137,50 +232,92 @@ it("discards a rejected queued read so a later request can succeed", async () =>
   });
 });
 
-it("bounds coalesced waiters and releases their capacity without cloning cancelled replies", async () => {
-  const controller = new AbortController();
-  const readers = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, (_, index) =>
-    readSessionHistoryPageInWorker(request(), index === 0 ? controller.signal : undefined),
-  );
-  const settled = Promise.allSettled(readers);
-  expect(queued).toHaveLength(1);
-  await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
-    code: "overloaded",
-  });
-  const cancelled = new Error("caller closed");
-  controller.abort(cancelled);
-  // The cancelled callback remains retained by the shared promise until its job settles.
-  await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
-    code: "overloaded",
-  });
-  expect(queued).toHaveLength(1);
-
-  const clone = vi.spyOn(globalThis, "structuredClone");
-  try {
-    queued[0]!.prepare();
-    queued[0]!.result.resolve(page("shared result"));
-    const results = await settled;
-    expect(results[0]).toEqual({ status: "rejected", reason: cancelled });
-    expect(results.slice(1).every((result) => result.status === "fulfilled")).toBe(true);
-    expect(clone).toHaveBeenCalledTimes(DEFAULT_WORKER_PENDING_TASKS - 1);
-  } finally {
-    clone.mockRestore();
-  }
-
-  const fresh = Promise.all(
-    Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
-      readSessionHistoryPageInWorker(request()),
-    ),
-  );
-  expect(queued).toHaveLength(2);
-  queued[1]!.prepare();
-  queued[1]!.result.resolve(page("capacity released"));
-  for (const result of await fresh) {
-    expect(result).toEqual({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
+it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
+  "bounds coalesced waiters when reader %i cancels",
+  async (cancelledIndex) => {
+    const controller = new AbortController();
+    const readers = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, (_, index) =>
+      readSessionHistoryPageInWorker(
+        request(),
+        index === cancelledIndex ? controller.signal : undefined,
+      ),
+    );
+    const settled = Promise.allSettled(readers);
+    expect(queued).toHaveLength(1);
+    await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
+      code: "overloaded",
     });
-  }
-});
+    const cancelled = new Error("caller closed");
+    controller.abort(cancelled);
+    // The cancelled callback remains retained by the shared promise until its job settles.
+    await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
+      code: "overloaded",
+    });
+    expect(queued).toHaveLength(1);
+
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      queued[0]!.prepare();
+      queued[0]!.result.resolve(page("shared result"));
+      const results = await settled;
+      expect(results[cancelledIndex]).toEqual({ status: "rejected", reason: cancelled });
+      expect(
+        results
+          .filter((_, index) => index !== cancelledIndex)
+          .every((result) => result.status === "fulfilled"),
+      ).toBe(true);
+      expect(clone).toHaveBeenCalledTimes(
+        DEFAULT_WORKER_PENDING_TASKS - (cancelledIndex === 0 ? 2 : 1),
+      );
+    } finally {
+      clone.mockRestore();
+    }
+
+    const fresh = Promise.all(
+      Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
+        readSessionHistoryPageInWorker(request()),
+      ),
+    );
+    expect(queued).toHaveLength(2);
+    queued[1]!.prepare();
+    queued[1]!.result.resolve(page("capacity released"));
+    for (const result of await fresh) {
+      expect(result).toEqual({
+        messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
+      });
+    }
+  },
+);
+
+it.runIf(process.env.OPENCLAW_BENCH_HISTORY_HANDOFF === "1")(
+  "measures coalesced history handoff",
+  async () => {
+    const text = "x".repeat(1024 * 1024);
+    const samples = [];
+    for (let sample = 0; sample < 7; sample++) {
+      const start = performance.now();
+      const cpu = process.cpuUsage();
+      for (let iteration = 0; iteration < 20; iteration++) {
+        const first = readSessionHistoryPageInWorker(request());
+        const second = readSessionHistoryPageInWorker(request());
+        expect(queued).toHaveLength(1);
+        queued[0]!.prepare();
+        queued[0]!.result.resolve(page(text));
+        const [a, b] = await Promise.all([first, second]);
+        expect(a.messages[0]).not.toBe(b.messages[0]);
+        queued.length = 0;
+      }
+      const used = process.cpuUsage(cpu);
+      samples.push({
+        msPerGroup: (performance.now() - start) / 20,
+        cpuMsPerGroup: (used.user + used.system) / 1000 / 20,
+      });
+    }
+    console.log(
+      JSON.stringify({ readers: 2, textBytes: text.length, groupsPerSample: 20, samples }),
+    );
+  },
+);
 
 it.each([
   {

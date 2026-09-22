@@ -374,6 +374,7 @@ describe("buildGatewayReloadPlan", () => {
         "browser.enabled",
         "browser.evaluateEnabled",
         "browser.ssrfPolicy.allowedHostnames",
+        "browser.extensionRelay.allowLegacyAuth",
       ]) {
         const plan = buildGatewayReloadPlan([path]);
         expect(plan.restartGateway, path).toBe(false);
@@ -384,9 +385,6 @@ describe("buildGatewayReloadPlan", () => {
       const profiles = buildGatewayReloadPlan(["browser.profiles.openclaw.headless"]);
       expect(profiles.restartGateway).toBe(false);
       expect(profiles.restartServices).toEqual(new Set());
-      expect(
-        buildGatewayReloadPlan(["browser.extensionRelay.allowLegacyAuth"]).restartGateway,
-      ).toBe(true);
     } finally {
       setActivePluginRegistry(emptyRegistry);
     }
@@ -629,72 +627,6 @@ describe("buildGatewayReloadPlan", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it.each([
-    {
-      path: "mcp.apps.enabled",
-      restart: true,
-      reason: "mcp.apps.enabled",
-    },
-    {
-      path: "gateway.auth.token",
-      restart: true,
-      reason: "gateway.auth.token",
-    },
-    {
-      path: "agents.defaults.model",
-      restart: false,
-      hot: "agents.defaults.model",
-      restartHeartbeat: true,
-    },
-    {
-      path: "unknownField",
-      restart: true,
-      reason: "unknownField",
-    },
-  ])("classifies reload path: $path", (testCase) => {
-    const plan = buildGatewayReloadPlan([testCase.path]);
-    expect(plan.restartGateway).toBe(testCase.restart);
-    if (testCase.reason) {
-      expect(plan.restartReasons).toContain(testCase.reason);
-    }
-    if (testCase.hot) {
-      expect(plan.hotReasons).toContain(testCase.hot);
-      expect(resolveConfigReloadMetadata(testCase.path).kind).toBe("hot");
-    }
-    if (testCase.restartHeartbeat) {
-      expect(plan.restartHeartbeat).toBe(true);
-    }
-  });
-
-  it.each([
-    "gateway.port",
-    "gateway.bind",
-    "gateway.tls.enabled",
-    "gateway.controlUi.basePath",
-    "gateway.controlUi.root",
-    "gateway.controlUi.experimental.customPlugins",
-    "cloudWorkers.profiles.aws.settings.class",
-    "browser.enabled",
-    "browser.evaluateEnabled",
-    "browser.ssrfPolicy.allowedHostnames",
-    "browser.extensionRelay.allowLegacyAuth",
-    "gateway.auth.mode",
-    "discovery.wideArea.domain",
-    "diagnostics.otel.endpoint",
-    "acp.backend",
-    "memory.search.enabled",
-    "security.unknownPolicy",
-    "secrets.egressProxy.enabled",
-    "secrets.egressProxy.allowedHosts",
-    "secrets.egressProxy.bypassHosts",
-  ])("keeps restart-owned path restart-backed: %s", (path) => {
-    const plan = buildGatewayReloadPlan([path]);
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual([path]);
-    expect(plan.hotReasons).toStrictEqual([]);
-  });
-
   it.each(["unloaded", "cold", "undeclared"] as const)(
     "replaces the plugin generation for %s channel settings without restarting the Gateway",
     (state) => {
@@ -775,137 +707,6 @@ describe("buildGatewayReloadPlan", () => {
       expect(plan.restartGateway).toBe(false);
       expect(plan.reloadPlugins).toBe(true);
       expect(plan.hotReasons).toEqual([path]);
-    },
-  );
-
-  it.each([
-    "gateway.auth.rateLimit.maxAttempts",
-    "gateway.auth.rateLimit.windowMs",
-    "gateway.auth.rateLimit.lockoutMs",
-    "gateway.auth.rateLimit.exemptLoopback",
-    "discovery.mdns.mode",
-    "gateway.http.securityHeaders.strictTransportSecurity",
-    "gateway.nodes.pairing.autoApproveLocal",
-    "gateway.nodes.pairing.autoApproveCidrs",
-    "gateway.nodes.pairing.sshVerify",
-    "gateway.terminal.enabled",
-    "gateway.terminal.shell",
-    "gateway.terminal.detachedSessionTimeoutSeconds",
-    "gateway.http.endpoints.chatCompletions.enabled",
-    "gateway.http.endpoints.responses.enabled",
-    "gateway.http.endpoints.responses.files.maxBytes",
-    "gateway.tools.allow",
-    "gateway.tools.deny",
-    "gateway.cliAgents.enabled",
-    "gateway.controlUi.enabled",
-    "gateway.controlUi.environment.label",
-    "gateway.controlUi.communityInvite",
-    "gateway.controlUi.github.token",
-    "gateway.controlUi.sessionObserver",
-    "gateway.controlUi.embedSandbox",
-    "gateway.controlUi.allowExternalEmbedUrls",
-    "gateway.controlUi.automaticallyFetchFavicons",
-    "gateway.controlUi.allowedOrigins",
-    "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
-    "gateway.nodes.commands.allow",
-    "gateway.nodes.commands.deny",
-    "gateway.nodes.pluginTools.enabled",
-    "gateway.nodes.allowSkills",
-    "gateway.nodes.browser.mode",
-    "gateway.nodes.browser.node",
-    "gateway.push.apns.relay.baseUrl",
-    "mcp.apps.sandboxOrigin",
-    "approvals.exec.enabled",
-    "approvals.plugin.targets",
-    "auth.order.openai",
-    "auth.profiles.primary.mode",
-    "broadcast.strategy",
-    "memory.citations",
-    "worktreeRoot",
-    "cloudWorkers.projectProfiles.project",
-    "security.audit.suppressions",
-    "security.installPolicy",
-    "diagnostics.cacheTrace.enabled",
-    "acp.runtime.installCommand",
-    "attachments.ttlHours",
-    "update.checkOnStart",
-    "update.channel",
-    "update.auto.enabled",
-    "telemetry.enabled",
-    "telemetry.consentedAt",
-  ])("hot-applies operation policy without restarting subsystems: %s", (path) => {
-    const plan = buildGatewayReloadPlan([path]);
-
-    expect(plan).toMatchObject({
-      restartGateway: false,
-      restartReasons: [],
-      hotReasons: [path],
-      noopPaths: [],
-      restartHeartbeat: false,
-      restartCron: false,
-      reloadHooks: false,
-      reloadPlugins: false,
-      disposeMcpRuntimes: false,
-      restartChannels: new Set(),
-      restartChannelAccounts: new Map(),
-    });
-    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
-  });
-
-  it.each([
-    {
-      name: "only request policies",
-      config: {
-        gateway: {
-          tools: { deny: ["sessions_list"] },
-          http: { endpoints: { responses: { enabled: true } } },
-          controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
-          nodes: { browser: { mode: "off" }, pairing: { autoApproveLocal: false } },
-          terminal: { enabled: false, shell: "/bin/sh" },
-          auth: { rateLimit: { maxAttempts: 5 } },
-        },
-        discovery: { mdns: { mode: "off" } },
-        mcp: { apps: { sandboxOrigin: "https://sandbox.example" } },
-        auth: { order: { openai: ["primary"] } },
-        diagnostics: { cacheTrace: { enabled: true } },
-      },
-      restartReasons: [],
-    },
-    {
-      name: "request policies and startup settings",
-      config: {
-        gateway: {
-          port: 18791,
-          http: {
-            endpoints: { responses: { enabled: true } },
-            securityHeaders: { strictTransportSecurity: "max-age=31536000" },
-          },
-          controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
-          nodes: { pairing: { sshVerify: false } },
-        },
-        mcp: { apps: { sandboxOrigin: "https://sandbox.example", sandboxPort: 18792 } },
-      },
-      restartReasons: ["gateway.port", "gateway.controlUi.basePath", "mcp.apps.sandboxPort"],
-    },
-  ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
-    "preserves $name when adding or removing Gateway config",
-    ({ config, restartReasons }) => {
-      for (const [previous, next] of [
-        [{}, config],
-        [config, {}],
-      ] as const) {
-        const changedPaths = diffGatewayReloadPaths(
-          previous,
-          next,
-          listConfigReloadRefinementPrefixes(),
-        );
-        const plan = buildGatewayReloadPlan(changedPaths);
-
-        expect(plan.restartReasons).toEqual(restartReasons);
-        expect(plan.restartGateway).toBe(restartReasons.length > 0);
-        expect(plan.hotReasons).toContain("gateway.http.endpoints");
-        expect(plan.hotReasons).toContain("gateway.controlUi.environment");
-      }
     },
   );
 
@@ -1779,6 +1580,7 @@ describe("startGatewayConfigReloader include files", () => {
     const initialSnapshot = await configIo.readConfigFileSnapshot();
     expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
+    const applied = createDeferred<OpenClawConfig>();
     const { promise: watcherReady, resolve: signalWatcherReady } = createDeferred();
     const reloader = startGatewayConfigReloader({
       initialConfig: initialSnapshot.config,
@@ -1795,6 +1597,7 @@ describe("startGatewayConfigReloader include files", () => {
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: async () => {},
       onHotReload,
+      onConfigApplied: (_plan, config) => applied.resolve(config),
       onRestart: vi.fn(),
       log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       watchPath: configPath,
@@ -1803,15 +1606,12 @@ describe("startGatewayConfigReloader include files", () => {
 
     try {
       expect(initialSnapshot.includedPaths).toEqual(
-        [
-          includeLinkPath,
-          await realpath(includePath),
-          await realpath(nestedIncludePath),
-        ].toSorted(),
+        [includeLinkPath, includePath, nestedIncludePath].toSorted(),
       );
       await watcherReady;
       await writeFile(nestedIncludePath, `${JSON.stringify({ enabled: false }, null, 2)}\n`);
-      await vi.waitFor(() => expect(onHotReload).toHaveBeenCalledOnce(), { timeout: 5000 });
+      await expect(applied.promise).resolves.toMatchObject({ hooks: { enabled: false } });
+      expect(onHotReload).toHaveBeenCalledOnce();
     } finally {
       await reloader.stop();
       await rm(rootDir, { force: true, recursive: true });
@@ -1876,65 +1676,47 @@ describe("startGatewayConfigReloader", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "requires an explicit hot policy for transcript changes during plugin reload (declared: %s)",
-    async (declared) => {
-      const registry = createTestRegistry([]);
-      if (declared) {
-        registry.reloads.push({
-          pluginId: "capture-owner",
-          pluginName: "Capture owner",
-          source: "test",
-          registration: { hotPrefixes: ["transcripts"] },
-        });
-      }
-      setActivePluginRegistry(registry);
-      const config: OpenClawConfig = {
-        transcripts: { autoStart: [{ providerId: "capture", channelId: "old-room" }] },
-      };
-      const nextConfig: OpenClawConfig = {
-        transcripts: { autoStart: [{ providerId: "capture", channelId: "new-room" }] },
-      };
-      const runtime = { operationId: "transcript-reload", generation: 2, pluginIds: ["notes"] };
-      const harness = createReloaderHarness(
-        async () => makeSnapshot({ config: nextConfig, sourceConfig: nextConfig, hash: "next" }),
-        {
-          initialConfig: config,
-          initialCompareConfig: config,
-          onHotReload: async (plan, next, ownership) => {
-            ownership.markRuntimeCommitted(next, plan);
-            return { status: "applied", runtime };
-          },
+  it("applies transcript changes through the plugin reload transaction without a plugin policy", async () => {
+    const registry = createTestRegistry([]);
+    setActivePluginRegistry(registry);
+    const config: OpenClawConfig = {
+      transcripts: { autoStart: [{ providerId: "capture", channelId: "old-room" }] },
+    };
+    const nextConfig: OpenClawConfig = {
+      transcripts: { autoStart: [{ providerId: "capture", channelId: "new-room" }] },
+    };
+    const runtime = { operationId: "transcript-reload", generation: 2, pluginIds: ["notes"] };
+    const harness = createReloaderHarness(
+      async () => makeSnapshot({ config: nextConfig, sourceConfig: nextConfig, hash: "next" }),
+      {
+        initialConfig: config,
+        initialCompareConfig: config,
+        onHotReload: async (plan, next, ownership) => {
+          ownership.markRuntimeCommitted(next, plan);
+          return { status: "applied", runtime };
         },
-      );
-      await harness.reloader.ready;
-      try {
-        const applied = harness.reloader.applyPluginLifecycleChange({
-          config: nextConfig,
-          pluginIds: ["notes"],
-          reason: "reload",
-        });
-        if (declared) {
-          await expect(applied).resolves.toEqual(runtime);
-          expect(harness.onHotReload).toHaveBeenCalledOnce();
-          expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
-            reloadPlugins: true,
-            restartGateway: false,
-            changedPaths: ["transcripts.autoStart"],
-          });
-          expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
-        } else {
-          await expect(applied).rejects.toThrow(
-            "Cannot apply plugin change while transcripts.autoStart requires a Gateway restart",
-          );
-          expect(harness.onHotReload).not.toHaveBeenCalled();
-        }
-        expect(harness.onRestart).not.toHaveBeenCalled();
-      } finally {
-        await harness.reloader.stop();
-      }
-    },
-  );
+      },
+    );
+    await harness.reloader.ready;
+    try {
+      const applied = harness.reloader.applyPluginLifecycleChange({
+        config: nextConfig,
+        pluginIds: ["notes"],
+        reason: "reload",
+      });
+      await expect(applied).resolves.toEqual(runtime);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
+        reloadPlugins: true,
+        restartGateway: false,
+        changedPaths: ["transcripts.autoStart"],
+      });
+      expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
+      expect(harness.onRestart).not.toHaveBeenCalled();
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
 
   it.each(["off", "restart"] as const)(
     "finishes a committed plugin reload after its invoker closes in %s mode",

@@ -15,7 +15,7 @@ import {
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Inspect the same published --check contract consumed by candidate canary. */
 export async function inspectUpdateDoctorChildSupport(
@@ -91,6 +91,7 @@ export type UpdateDoctorChildContext = {
   requester?: Readonly<UpdateRequester>;
   /** The parent mutation fence is suspended while its child owns effects. */
   assertRequesterCurrent: () => void;
+  onStateHandoff?: () => void;
 };
 
 /** Package and finalization Doctors use the same private-input/native-child owner. */
@@ -125,6 +126,9 @@ export async function withUpdateDoctorChild<T>(
           beforeInput: (pid, spawnedArgv) => {
             context.assertRequesterCurrent();
             bindChild(pid, spawnedArgv);
+            // Only the bound target may read state-backed policy after migration.
+            // The parent retains identity and native custody, never schema admission.
+            context.onStateHandoff?.();
           },
           killProcessTree: true,
           requireProcessTreeExtinction: true,
