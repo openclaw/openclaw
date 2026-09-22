@@ -9,8 +9,6 @@ function mount(manualOpen?: boolean | number) {
     type: "mount",
     open: true,
     manualOpen,
-    activeRunId: "run-1",
-    completedRunId: null,
     readingHistory: true,
   });
 }
@@ -44,32 +42,6 @@ describe("progress disclosure transitions", () => {
     expect(state.open).toBe(false);
   });
 
-  it.each([true, false])(
-    "applies a matching completion once, with reading history %s",
-    (readingHistory) => {
-      let state = collapse();
-      state = resolve(state, { type: "history", readingHistory });
-      expect(resolve(state, { type: "complete", runId: "older-run", reopen: true }).open).toBe(
-        false,
-      );
-      state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
-      expect(state.open).toBe(!readingHistory);
-      state = resolve(state, { type: "history", readingHistory: false });
-      state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
-      expect(state.open).toBe(!readingHistory);
-    },
-  );
-
-  it("keeps a manual close through completion, new runs, and later visits", () => {
-    let state = resolve(mount(), { type: "click", open: false });
-    state = resolve(state, { type: "history", readingHistory: false });
-    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
-    expect(state.open).toBe(false);
-    state = resolve(state, { type: "run", runId: "run-2", open: true });
-    expect(state.open).toBe(false);
-    expect(mount(state.manualOpen).open).toBe(false);
-  });
-
   it("raises the bar after reopening and pins open after the second reopen", () => {
     let state = resolve(collapse(), { type: "click", open: true });
     state = resolve(resolve(state, historyScroll(320)), historyScroll(320));
@@ -92,40 +64,10 @@ describe("progress disclosure transitions", () => {
     state = resolve(state, { type: "settle" });
     expect(state.open).toBe(true);
     expect(collapse(mount(state.manualOpen)).open).toBe(false);
-    state = resolve(state, { type: "run", runId: "run-2", open: true });
-    expect(state.open).toBe(true);
-    expect(collapse(state).open).toBe(false);
-  });
-
-  it("preserves initially completed and collapsed defaults without replaying completion", () => {
-    let state = resolve(undefined, {
-      type: "mount",
-      open: false,
-      activeRunId: null,
-      completedRunId: "run-1",
-      readingHistory: false,
-    });
-    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
-    expect(state.open).toBe(false);
-    state = resolve(state, { type: "run", runId: "run-2", open: true });
-    expect(state.open).toBe(false);
-    state = resolve(state, { type: "complete", runId: "run-2", reopen: true });
-    expect(state.open).toBe(true);
   });
 });
 
 describe("elastic progress disclosure", () => {
-  it("retains pixel choices through history and completion, resetting only for a new run", () => {
-    let state = resolve(mount(), { type: "extent", extent: 48 });
-    state = resolve(state, { type: "history", readingHistory: false });
-    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
-    state = resolve(state, { type: "run", runId: "run-1", open: false });
-    expect(state).toMatchObject({ open: true, manualOpen: 48 });
-    expect(mount(state.manualOpen).manualOpen).toBe(48);
-    state = resolve(state, { type: "run", runId: "run-2", open: false });
-    expect(state).toMatchObject({ open: false, manualOpen: undefined });
-  });
-
   it("takes over pending history input and counts a reopen once, not once per frame", () => {
     let state = resolve(resolve(mount(), historyScroll(160)), historyScroll(160));
     state = resolve(state, { type: "takeover" });

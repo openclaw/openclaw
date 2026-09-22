@@ -126,6 +126,25 @@ suite.define(() => {
         }
         expect(await textarea.inputValue()).toBe("");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        if (name === "header-closed desktop" || name === "expanded mobile") {
+          await gateway.setMethodResponse("progressCard.get", { card: null });
+          await gateway.emitGatewayEvent("progressCard.changed", {
+            sessionKey: scenario.sessionKey,
+            revision: null,
+          });
+          await card.waitFor({ state: "hidden" });
+          await gateway.setMethodResponse("progressCard.get", {
+            card: { ...scenario.methodResponses["progressCard.get"].card, revision: 4 },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", {
+            sessionKey: scenario.sessionKey,
+            revision: 4,
+          });
+          await card.waitFor({ state: "visible" });
+          expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+            !mobile,
+          );
+        }
       } finally {
         await suite.closeBrowserContext(context);
       }
