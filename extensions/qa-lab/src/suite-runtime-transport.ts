@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   findFailureOutboundMessage as findTransportFailureOutboundMessage,

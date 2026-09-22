@@ -100,7 +100,8 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       }
       unsubs = startGatewayEventSubscriptions(createParams(connectionWork.signal));
       if (phase === "before startup") {
-        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("stale");
+        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
+        expect(prepared).not.toHaveBeenCalled();
         expect(complete).not.toHaveBeenCalled();
         return;
       }

@@ -48,6 +48,15 @@ export function formatMattermostPendingMediaText(params: {
   return [params.body, formatMediaPlaceholderText(params.media)].filter(Boolean).join("\n").trim();
 }
 
+function sanitizeOptionalAttachmentName(fileName: string): string {
+  const sanitized = sanitizeUntrustedFileName(fileName, "_");
+  // Distinguish an unusable name from a real filename matching the fallback.
+  if (sanitized === "_" && sanitizeUntrustedFileName(fileName, "-") === "-") {
+    return "";
+  }
+  return sanitized;
+}
+
 export function formatMattermostInboundMediaText(params: {
   body: string;
   nativeMedia: readonly MediaPlaceholderTextFact[];
@@ -62,7 +71,7 @@ export function formatMattermostInboundMediaText(params: {
   }
   const unavailableFileNames = params.materializedMedia
     .filter((media) => !media.path && !media.url && media.fileName)
-    .map((media) => sanitizeUntrustedFileName(media.fileName ?? "", ""))
+    .map((media) => sanitizeOptionalAttachmentName(media.fileName ?? ""))
     .filter(Boolean)
     .join(", ");
   const fileNameNotice = unavailableFileNames

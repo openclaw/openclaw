@@ -7,7 +7,6 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
 import type {
   MusicGenerationOutputFormat,
@@ -46,7 +45,7 @@ import {
   executeMusicGenerationJob,
   normalizeMusicGenerationTimeoutMs,
 } from "./music-generate-tool.execution.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
@@ -140,35 +139,6 @@ function normalizeReferenceImageInputs(args: Record<string, unknown>): string[] 
   });
 }
 
-function validateMusicGenerationCapabilities(params: {
-  provider: MusicGenerationProvider | undefined;
-  inputImageCount: number;
-}) {
-  const provider = params.provider;
-  if (!provider) {
-    return;
-  }
-  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
-    provider,
-    inputImageCount: params.inputImageCount,
-  });
-  if (params.inputImageCount > 0) {
-    if (!caps) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
-    }
-    if ("enabled" in caps && !caps.enabled) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
-    }
-    const maxInputImages =
-      ("maxInputImages" in caps ? caps.maxInputImages : undefined) ?? MAX_INPUT_IMAGES;
-    if (params.inputImageCount > maxInputImages) {
-      throw new ToolInputError(
-        `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
-  }
-}
-
 const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "music_generate",
   onCrash: (message, meta) => log.error(message, meta),
@@ -178,6 +148,8 @@ async function loadReferenceImages(params: {
   inputs: string[];
   maxBytes: number;
   workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
   sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
@@ -195,6 +167,8 @@ async function loadReferenceImages(params: {
     expectedKind: "image",
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    fsPolicy: params.fsPolicy,
     maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     timeoutMs: params.timeoutMs,
@@ -354,13 +328,11 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
             inputs: imageInputs,
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
             workspaceDir: options?.workspaceDir,
+            cwd: options?.cwd,
+            fsPolicy: options?.fsPolicy,
             sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,
-          });
-          validateMusicGenerationCapabilities({
-            provider: selectedProvider,
-            inputImageCount: loadedReferenceImages.length,
           });
           return {
             kind: "task" as const,

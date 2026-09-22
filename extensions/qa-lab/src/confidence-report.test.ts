@@ -3,11 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  buildQaConfidenceReport,
-  renderQaConfidenceMarkdownReport,
-  writeQaConfidenceSelfTestArtifacts,
-} from "./confidence-report.js";
+import { buildQaConfidenceReport, renderQaConfidenceMarkdownReport } from "./confidence-report.js";
+import { writeQaConfidenceSelfTestArtifacts } from "./confidence-self-test.js";
 
 type QaConfidenceManifest = Parameters<typeof buildQaConfidenceReport>[0]["manifest"];
 
@@ -873,18 +870,35 @@ describe("qa confidence report", () => {
   });
 
   it("requires JSONL replay summaries to contain replayed user turns", async () => {
-    for (const [artifact, expectedDetail] of [
-      [{ transcripts: [] }, "no transcripts"],
-      [
-        { transcripts: [{ transcriptPath: "empty.jsonl", userTurnCount: 0, drift: [] }] },
-        "no replayed user turns",
-      ],
-      [
-        { transcripts: [{ transcriptPath: "missing-drift.jsonl", userTurnCount: 1 }] },
-        "missing drift array",
-      ],
+    const full = {
+      transcriptPath: "complete.jsonl",
+      userTurnCount: 1,
+      drift: ["none"],
+      cells: { openclaw: [{}], codex: [{}] },
+    };
+    const empty = { ...full, userTurnCount: 0, drift: [], cells: { openclaw: [], codex: [] } };
+    const mismatch = "runtime cell counts do not match userTurnCount";
+    const replayCase = (row: object, reason: string) => [[full, row], reason] as const;
+    for (const [transcripts, expectedDetail, expectedPass = false] of [
+      [[], "no transcripts"],
+      [[empty], "no replayed user turns"],
+      [[{ ...full, drift: undefined }], "missing drift array"],
+      ...[
+        undefined,
+        empty.cells,
+        { openclaw: [], codex: [{}] },
+        { openclaw: [{}], codex: [] },
+        { openclaw: [{}], codex: [{}, {}] },
+      ].map((cells) => replayCase({ ...full, cells }, mismatch)),
+      ...[undefined, { openclaw: [{}], codex: [] }, { openclaw: [], codex: [{}] }].map((cells) =>
+        replayCase({ ...empty, cells }, mismatch),
+      ),
+      ...[undefined, null, -1, 1.5, "1"].map((userTurnCount) =>
+        replayCase({ ...empty, userTurnCount }, "invalid userTurnCount"),
+      ),
+      [[full, empty], "replay turns=1, drifted transcripts=0", true],
     ] as const) {
-      await writeJson("jsonl/qa-jsonl-replay-summary.json", artifact);
+      await writeJson("jsonl/qa-jsonl-replay-summary.json", { transcripts });
 
       const report = await buildQaConfidenceReport({
         manifest: {
@@ -903,12 +917,10 @@ describe("qa confidence report", () => {
         },
         artifactRoot: tempRoot,
         strictZeroUnknowns: true,
-        generatedAt: "2026-05-13T00:00:00.000Z",
       });
 
-      expect(report.pass).toBe(false);
-      expect(report.counts).toMatchObject({ failed: 0, unknown: 1 });
-      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.pass).toBe(expectedPass);
+      expect(report.lanes[0]).toMatchObject({ status: expectedPass ? "pass" : "unknown" });
       expect(report.lanes[0]?.details).toContain(expectedDetail);
     }
   });
@@ -986,6 +998,7 @@ describe("qa confidence report", () => {
         {
           transcriptPath: "curated.jsonl",
           userTurnCount: 2,
+          cells: { openclaw: [{}, {}], codex: [{}, {}] },
           drift: ["none", "tool-result-shape"],
           firstDriftAtTurn: 2,
         },

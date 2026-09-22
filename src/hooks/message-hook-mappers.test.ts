@@ -255,6 +255,95 @@ describe("message hook mappers", () => {
     });
   });
 
+  it.each([
+    { name: "absent", fields: {}, expected: {} },
+    {
+      name: "undefined",
+      fields: {
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+      },
+      expected: {},
+    },
+    {
+      name: "empty and false",
+      fields: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+      expected: {
+        replyToId: "",
+        replyToIdFull: "",
+        replyToBody: "",
+        replyToSender: "",
+        replyToIsQuote: false,
+      },
+    },
+  ])("preserves $name optional reply fields across hook projections", ({ fields, expected }) => {
+    const canonical = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+      ...fields,
+    };
+    const { context, event } = toPluginInboundClaimPair(canonical);
+    const received = toPluginMessageReceivedEvent(canonical);
+    for (const output of [toPluginMessageContext(canonical), context, event, received]) {
+      const entries = Object.entries(output).filter(([key]) => key.startsWith("replyTo"));
+      expect(entries).toEqual(Object.entries(expected));
+    }
+    for (const metadata of [event.metadata, received.metadata]) {
+      expect(metadata).toMatchObject({
+        replyToId: undefined,
+        replyToIdFull: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+        ...expected,
+      });
+      expect(Object.keys(metadata ?? {}).filter((key) => key.startsWith("replyTo"))).toEqual([
+        "replyToId",
+        "replyToIdFull",
+        "replyToBody",
+        "replyToSender",
+        "replyToIsQuote",
+      ]);
+    }
+  });
+
+  it("checks reply-field presence before reading a sent context", () => {
+    const reads: PropertyKey[] = [];
+    const canonical = new Proxy(
+      buildCanonicalSentMessageHookContext({
+        to: "target",
+        content: "reply",
+        success: true,
+        channelId: "demo-chat",
+      }),
+      {
+        get(target, key, receiver) {
+          if (typeof key === "string" && key.startsWith("replyTo")) {
+            reads.push(key);
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    expect(toPluginMessageContext(canonical)).toEqual({
+      channelId: "demo-chat",
+      accountId: undefined,
+      conversationId: "target",
+    });
+    expect(reads).toEqual([]);
+  });
+
   it("falls back to raw body when command body is blank", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({

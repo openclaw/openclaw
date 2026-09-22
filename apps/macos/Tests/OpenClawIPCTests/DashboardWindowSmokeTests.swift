@@ -564,6 +564,19 @@ struct DashboardWindowSmokeTests {
             "url": "https:hostless",
             "target": "external",
         ]) == nil)
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": "openclaw://dashboard",
+            "target": "external",
+        ]) == nil)
+        for url in ["openclaw://unknown", "file:///tmp/private", "other-app://dashboard"] {
+            #expect(DashboardWindowController.linkRequest(from: [
+                "type": "open-link", "url": url, "target": "external",
+            ]) == nil)
+        }
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link", "url": "openclaw://dashboard", "target": "inline",
+        ]) == nil)
     }
 
     @Test func `dashboard accepts only typed window drag requests`() {

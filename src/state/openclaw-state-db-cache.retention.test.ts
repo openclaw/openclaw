@@ -16,8 +16,9 @@ it("releases closed shared database wrappers after path and global retirement", 
     } from ${JSON.stringify(moduleUrl)};
     import { closeOpenClawStateDatabaseByPath } from ${JSON.stringify(cacheModuleUrl)};
 
+    const control = new WeakRef({ uncached: true });
     function retire(byPath) {
-      const owner = openOpenClawStateDatabase();
+      let owner = openOpenClawStateDatabase();
       const ref = new WeakRef(owner.db);
       for (let i = 0; i < 3; i++) {
         assert.equal(openOpenClawStateDatabase(), owner);
@@ -28,13 +29,19 @@ it("releases closed shared database wrappers after path and global retirement", 
         closeOpenClawStateDatabase();
       }
       assert.equal(owner.db.isOpen, false);
+      owner = undefined;
       return ref;
     }
-    const refs = [retire(true), retire(false)];
+    // WeakRef targets stay live through the task that creates them. Finish that
+    // task before forcing collection so the check measures cache ownership.
+    const refs = await new Promise(resolve =>
+      setImmediate(() => resolve([retire(true), retire(false)]))
+    );
     for (let i = 0; i < 30; i++) {
       await new Promise(setImmediate);
       globalThis.gc();
     }
+    assert.equal(control.deref(), undefined, "the unowned GC control must be collected");
     process.stdout.write(JSON.stringify(refs.map(ref => ref.deref() === undefined)));
   `;
   const result = spawnSync(

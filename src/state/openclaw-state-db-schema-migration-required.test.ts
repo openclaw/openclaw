@@ -193,9 +193,7 @@ describe("shared state schema publication", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", options.env.OPENCLAW_STATE_DIR);
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await expect(
-        guardUpdateDoctorSchemaUpgrade({ schemas: preflight, runtime }),
-      ).resolves.toBeUndefined();
+      await guardUpdateDoctorSchemaUpgrade({ schemas: preflight, runtime });
       expect(runtime.exit).not.toHaveBeenCalled();
     },
   );

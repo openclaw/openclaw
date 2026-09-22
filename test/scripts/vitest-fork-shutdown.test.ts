@@ -79,6 +79,12 @@ it.for([
   { scenario: "hung-exit", setup: "shared", fail: false },
   { scenario: "bad-exit", setup: "shared", fail: false },
   { scenario: "forced", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-zero", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-nonzero", setup: "raw", fail: false },
+  { scenario: "unexpected-start", setup: "raw", fail: false },
+  ...(process.platform === "win32"
+    ? []
+    : [{ scenario: "unexpected-signal", setup: "raw", fail: false }]),
 ])("joins $scenario shutdown with $setup setup (test failure: $fail)", (options, context) =>
   runJoinedShutdownTest(context, async () => {
     const tempDirs = createTempDirTracker();
@@ -97,7 +103,8 @@ it.for([
       return;
     }
     const brokenShutdown = scenario.startsWith("hung-") || scenario === "bad-exit";
-    expect(result.code, result.output).toBe(fail || brokenShutdown ? 1 : 0);
+    const unexpectedExit = scenario.startsWith("unexpected-");
+    expect(result.code, result.output).toBe(fail || brokenShutdown || unexpectedExit ? 1 : 0);
     if (fail) {
       expect(result.output).toContain("intentional fixture failure");
     }
@@ -115,7 +122,17 @@ it.for([
       );
     }
     expect(result.callerPreserved).toBe(true);
-    if (scenario.startsWith("hung-")) {
+    if (unexpectedExit) {
+      expect(result.output).toContain("Worker exited unexpectedly");
+      if (scenario === "unexpected-start") {
+        expect(result.output).toContain("during starting state");
+      }
+      expect(result.output).toContain("unexpected-exit-tail");
+      expect(result.output).not.toContain("[test] passed");
+      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
+        false,
+      );
+    } else if (scenario.startsWith("hung-")) {
       // Advance the real stop deadline only after the worker reaches the hung boundary.
       expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
       expect(result.output).toContain("Timeout waiting for worker to respond");

@@ -1,109 +1,38 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
-import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
-import {
-  isIncognitoSessionKey,
-  LEGACY_IMPLICIT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
-import { projectActivitySummaryList } from "./session-activity-summary-list.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
+import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
-  projectSessionOwner,
-  addSessionOwnerFacetIdentity,
-  sortSessionOwnerFacet,
-  projectSessionParticipants,
-  projectSessionPeople,
-  projectSessionPeopleFacet,
-  resolveSessionListProfileReference,
-} from "./session-identity-projection.js";
-import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionListActiveRunProjector,
-  SessionListRowContext,
-  SessionListRowContextProvider,
-} from "./session-utils-contracts.js";
-import {
-  deriveSessionTitle,
-  buildStoreChildSessionIndexWork,
-  isFinitePositiveTimestamp,
-  resolveSessionChildOwners,
-} from "./session-utils-core.js";
+  filterSessionCandidateEntries,
+  filterSessionEntries,
+  projectSessionListCandidateOptions,
+  type SessionListFilteredEntries,
+  type SessionListFilterParams,
+} from "./session-list-filters.js";
+import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { bindSessionListRowRead } from "./session-list-read-result.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import type { Query as SessionRowQuery } from "./session-row-projection-record.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
-import {
-  buildSessionListRowMetadataContext,
-  populateSessionListAcpMetadata,
-} from "./session-utils-projection.js";
-import { buildGatewaySessionRow } from "./session-utils-row.js";
-import { createSessionListSearchMatcher } from "./session-utils-search.js";
-import type {
-  GatewaySessionRow,
-  SessionListModelCatalog,
-  SessionsListResult,
-} from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-// Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
-const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
-
-const SESSIONS_LIST_DEFAULT_LIMIT = 100;
-const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
-
-export type SessionListProjectionTiming = {
-  prepareSyncMs: number;
-  rowSyncMs: number;
-  yieldWaitMs: number;
-  yieldCount: number;
-};
-
-type SessionSelectionScope =
-  | { opts: SessionsListParams; targetsBySessionKey: GatewayStoredSessionTargets }
-  | {
-      opts: Omit<SessionsListParams, "search"> & { search?: never };
-      targetsBySessionKey?: never;
-    };
-
-type ListSessionsFromStoreParams = {
-  cfg: OpenClawConfig;
-  durableStorePath?: string;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  // Sentinels retain the first projected store's owner; their raw key cannot recover it.
-  targetsBySessionKey: GatewayStoredSessionTargets;
-  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
-  opts: SessionsListParams;
-  involvingActorId?: string;
-  ownerFirstActorId?: string;
-  projectActiveRun?: SessionListActiveRunProjector;
-};
-
-type SessionEntrySelection = {
-  entries: SessionEntryPair[];
+type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
   ownerCount: number;
-  ownerFacet: SessionOwnerFacetIdentity[];
-  people?: SessionsListResult["people"];
-  peopleIncomplete?: boolean;
-  peopleSessionCount?: number;
-  involvingProfileId?: string;
   totalCount: number;
   limitApplied?: number;
   offset: number;
@@ -136,279 +65,9 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* filterSessionEntries(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  targetsBySessionKey?: GatewayStoredSessionTargets;
-  opts: SessionsListParams;
-  now: number;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-  configuredAgentIds?: ReadonlySet<string>;
-  getRowContext?: SessionListRowContextProvider;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-  restrictProfileReferences?: boolean;
-  involvingActorId?: string;
-  ownerFirstActorId?: string;
-  projectActiveRun?: SessionListActiveRunProjector;
-  shouldYield?: () => boolean;
-}): SynchronousWork<
-  Pick<
-    SessionEntrySelection,
-    | "ownerFacet"
-    | "entries"
-    | "people"
-    | "peopleIncomplete"
-    | "peopleSessionCount"
-    | "involvingProfileId"
-  > & { ownerEntries: SessionEntryPair[] }
-> {
-  const { cfg, store, opts, now, shouldYield } = params;
-  let rowContext: SessionListRowContext | undefined;
-  const getRowContext = () =>
-    (rowContext ??= params.getRowContext?.() ?? buildSessionListRowMetadataContext({ now }));
-  const includeGlobal = opts.includeGlobal === true;
-  const includeUnknown = opts.includeUnknown === true;
-  const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
-  const label = normalizeOptionalString(opts.label) ?? "";
-  const boardFace = opts.boardFace;
-  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const search = normalizeLowercaseStringOrEmpty(opts.search);
-  const activeMinutes =
-    typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
-      ? Math.max(1, Math.floor(opts.activeMinutes))
-      : undefined;
-  const creatorId = normalizeOptionalString(opts.creatorId);
-  const ownerId = normalizeOptionalString(opts.ownerId);
-  const involvingActorId = normalizeOptionalString(params.involvingActorId);
-  const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
-  const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
-  const entries: SessionEntryPair[] = [];
-  const ownerEntries: SessionEntryPair[] = [];
-  const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
-  const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
-  let peopleSessionCount = 0;
-  let peopleIncomplete = false;
-  const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
-  const identities =
-    params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
-  // The caller owns this store snapshot and its prepared visibility filter.
-  // Allocate pairs incrementally instead of materializing every pair before the first yield.
-  const visibleEntries: SessionEntryPair[] = [];
-  for (const key of Object.keys(store)) {
-    const entry = store[key]!;
-    if (params.entryFilter?.(key, entry) ?? true) {
-      visibleEntries.push([key, entry]);
-    }
-    if (shouldYield?.()) {
-      yield;
-    }
-  }
-  const allowedProfileIds =
-    opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
-  if (allowedProfileIds) {
-    for (const [, entry] of visibleEntries) {
-      const owner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
-      for (const person of projectSessionPeople(entry, identities, cfg, owner)) {
-        allowedProfileIds.add(person.identity.id);
-      }
-      if (shouldYield?.()) {
-        yield;
-      }
-    }
-  }
-  const profileReference = opts.involvingProfileId
-    ? yield* resolveSessionListProfileReference(
-        opts.involvingProfileId,
-        visibleEntries,
-        identities,
-        allowedProfileIds,
-        shouldYield,
-      )
-    : undefined;
-  if (profileReference && !profileReference.ok) {
-    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
-  }
-  const selectedProfileId = profileReference?.value;
-
-  const keepCandidate = ([key, entry]: SessionEntryPair) => {
-    const target = params.targetsBySessionKey?.get(key);
-    const storeKey = target?.storeKey ?? key;
-    if (
-      isCronRunSessionKey(key) ||
-      (opts.excludeSubagents === true && isSubagentSessionKey(key)) ||
-      (!includeGlobal && storeKey === "global") ||
-      (!includeUnknown && storeKey === "unknown")
-    ) {
-      return false;
-    }
-    if (agentId && storeKey !== "global") {
-      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
-      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
-        return false;
-      }
-    }
-    if (isPhantomAgentStoreListEntry(key, entry)) {
-      return false;
-    }
-    if (spawnedBy) {
-      if (storeKey === "unknown" || storeKey === "global") {
-        return false;
-      }
-      const keepSpawned = resolveSessionChildOwners({
-        key,
-        entry,
-        now,
-        subagentRuns: getRowContext().subagentRuns,
-      }).includes(spawnedBy);
-      if (!keepSpawned) {
-        return false;
-      }
-    }
-    if (opts.archived !== "all") {
-      const archived = entry.archivedAt !== undefined;
-      if (opts.archived === true ? !archived : archived) {
-        return false;
-      }
-    }
-    if (
-      opts.requireLastInteraction === true &&
-      (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
-        normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
-    ) {
-      return false;
-    }
-    if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
-      return false;
-    }
-    return true;
-  };
-  const candidateEntries: SessionEntryPair[] = [];
-  for (const pair of visibleEntries) {
-    if (keepCandidate(pair)) {
-      candidateEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
-    }
-  }
-  // Search batches runtime metadata; excluded rows must not participate in ownership resolution.
-  const matchesSearch = search
-    ? createSessionListSearchMatcher({
-        cfg,
-        search,
-        now,
-        visibleEntries: candidateEntries,
-        targetsBySessionKey: expectDefined(params.targetsBySessionKey, "search row owners"),
-        getRowContext,
-        projectActiveRun: params.projectActiveRun,
-      })
-    : undefined;
-
-  for (const pair of candidateEntries) {
-    if (shouldYield?.()) {
-      yield;
-    }
-    const [key, entry] = pair;
-    if (matchesSearch && !matchesSearch(key, entry)) {
-      continue;
-    }
-    if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
-      continue;
-    }
-    const effectiveOwner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
-    if (effectiveOwner) {
-      addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
-    }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
-      continue;
-    }
-    if (ownerId && effectiveOwner?.id !== ownerId) {
-      continue;
-    }
-    if (involvingActorId) {
-      const viewerOwns =
-        effectiveOwner?.identity?.type === "profile" &&
-        effectiveOwner.identity.id === involvingActorId;
-      const viewerParticipates = projectSessionParticipants(entry, identities, cfg).has(
-        JSON.stringify({ type: "profile", id: involvingActorId }),
-      );
-      if (!viewerOwns && !viewerParticipates) {
-        continue;
-      }
-    }
-    if (opts.includePeople || opts.involvingProfileId) {
-      const associated = projectSessionPeople(entry, identities, cfg, effectiveOwner);
-      peopleSessionCount += 1;
-      peopleIncomplete ||=
-        (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
-        entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
-      for (const person of associated) {
-        const existing = people.get(person.identity.id);
-        people.set(person.identity.id, {
-          ...person,
-          sessionCount: (existing?.sessionCount ?? 0) + 1,
-        });
-      }
-      if (opts.involvingProfileId) {
-        if (!associated.some((person) => person.identity.id === selectedProfileId)) {
-          continue;
-        }
-      }
-    }
-    if (
-      effectiveOwner?.identity?.type === "profile" &&
-      effectiveOwner.identity.id === ownerFirstActorId
-    ) {
-      ownerEntries.push(pair);
-    }
-    entries.push(pair);
-  }
-
-  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
-    people.values(),
-    selectedProfileId,
-  );
-  return {
-    entries,
-    ownerEntries,
-    ownerFacet: sortSessionOwnerFacet(ownerFacet),
-    // Empty time/search windows do not invalidate a resolved person link.
-    involvingProfileId: selectedProfileId,
-    ...(opts.includePeople
-      ? {
-          people: visiblePeople,
-          peopleIncomplete: peopleIncomplete || overflow,
-          peopleSessionCount,
-        }
-      : {}),
-  };
-}
-
-function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
-  return (
-    entry?.updatedAt == null &&
-    !normalizeOptionalString(entry?.sessionId) &&
-    parseAgentSessionKey(key)?.rest === "sessions"
-  );
-}
-
-function* selectSessionEntries(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  targetsBySessionKey?: GatewayStoredSessionTargets;
-  opts: SessionsListParams;
-  now: number;
-  getRowContext?: SessionListRowContextProvider;
-  defaultLimit?: number;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-  configuredAgentIds?: ReadonlySet<string>;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-  restrictProfileReferences?: boolean;
-  involvingActorId?: string;
-  ownerFirstActorId?: string;
-  projectActiveRun?: SessionListActiveRunProjector;
-  shouldYield?: () => boolean;
-}): SynchronousWork<SessionEntrySelection> {
+function* selectSessionEntries(
+  params: SessionListFilterParams & { defaultLimit?: number },
+): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
@@ -448,89 +107,11 @@ function* selectSessionEntries(params: {
   };
 }
 
-function* prepareSessionList(params: ListSessionsFromStoreParams, shouldYield: () => boolean) {
-  const { cfg, store, opts } = params;
-  const now = Date.now();
-  const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
-  const configuredAgentIds = new Set(listAgentIds(cfg));
-  let rowContext: SessionListRowContext | undefined;
-  const getRowContext = () =>
-    (rowContext ??= buildSessionListRowMetadataContext({ now, userProfileIdentityById }));
-  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
-  const filteredSessionKeys = new Set<string>();
-  let hasIncognito = false;
-  const entryFilter = (key: string, entry: SessionEntry) => {
-    if (params.entryFilter && !params.entryFilter(key, entry)) {
-      filteredSessionKeys.add(key);
-      return false;
-    }
-    hasIncognito ||= entry.incognito === true || isIncognitoSessionKey(key);
-    return true;
-  };
-  const selection = yield* selectSessionEntries({
-    cfg,
-    store,
-    targetsBySessionKey: params.targetsBySessionKey,
-    opts,
-    now,
-    entryFilter,
-    // This wrapper also tracks incognito for unrestricted callers; preserve the original scope.
-    restrictProfileReferences: params.entryFilter !== undefined,
-    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
-    getRowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext
-        : undefined,
-    userProfileIdentityById,
-    configuredAgentIds,
-    involvingActorId: params.involvingActorId,
-    ownerFirstActorId: params.ownerFirstActorId,
-    projectActiveRun: params.projectActiveRun,
-    shouldYield,
-  });
-  // Filtering, child links, and row display share one registry snapshot per response.
-  const sharedRowContext = selection.entries.length > 0 ? getRowContext() : undefined;
-  const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
-  const storeChildSessionsByKey = yield* buildStoreChildSessionIndexWork(
-    {
-      store,
-      keys: [
-        ...new Set(
-          selection.entries.map(([key]) => params.targetsBySessionKey.get(key)?.storeKey ?? key),
-        ),
-      ],
-      now,
-      subagentRuns: sharedRowContext?.subagentRuns,
-      excludedChildKeys: filteredSessionKeys,
-    },
-    shouldYield,
-  );
-  populateSessionListAcpMetadata({
-    cfg,
-    entries: selection.entries,
-    targetsBySessionKey: params.targetsBySessionKey,
-    rowContext: sharedRowContext,
-  });
-  return {
-    ...selection,
-    includeDerivedTitles: opts.includeDerivedTitles === true,
-    includeLastMessage: opts.includeLastMessage === true,
-    // The independent owner window must not consume the shared page's transcript budget.
-    transcriptFieldRows: SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS + selection.ownerCount,
-    now,
-    configuredAgentIds,
-    rowContext: sharedRowContext,
-    storeChildSessionsByKey,
-    storePath,
-  };
-}
-
 function buildSessionsListResult(
-  params: ListSessionsFromStoreParams,
-  list: ReturnType<typeof prepareSessionList> extends SynchronousWork<infer T> ? T : never,
+  params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
+  list: SessionEntrySelection & { now: number; storePath: string },
   sessions: GatewaySessionRow[],
 ): SessionsListResult {
-  projectActivitySummaryList(params, sessions);
   const { cfg, opts, modelCatalog } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
@@ -564,6 +145,7 @@ function buildSessionsListResult(
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       allowPluginNormalization: false,
       providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+      metadataSnapshot: readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog),
     }),
     sessions,
   };
@@ -578,16 +160,136 @@ function resolveSessionsListDefaultsAgentId(
     : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
-export function filterAndSortSessionEntries(
-  params: {
-    cfg: OpenClawConfig;
-    entryFilter?: (key: string, entry: SessionEntry) => boolean;
-    store: Record<string, SessionEntry>;
-    now: number;
-    getRowContext?: SessionListRowContextProvider;
-    involvingActorId?: string;
-  } & SessionSelectionScope,
-): [string, SessionEntry][] {
+type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
+const sentinel = (key: string) => key === "global" || key === "unknown";
+
+type SessionRowSelection = {
+  winners: Map<string, RecordRow>;
+  entries: SessionEntryPair[];
+};
+
+// Publications release the token and stale row graphs without waiting for another list.
+// Retain broad selections per topology scope; keyed reads never displace them.
+const sessionRowSelections = new WeakMap<
+  SessionRowProjection["state"]["revision"],
+  WeakMap<ReturnType<SessionRowProjection["state"]["scope"]>, Map<boolean, SessionRowSelection>>
+>();
+
+/** Preserve federation before caller visibility and activity filters. */
+export function prepareSessionRowSelection(
+  projection: SessionRowProjection,
+  opts: SessionsListParams,
+  prepared?: Pick<SessionRowQuery, "key" | "sessionIdOrKey"> & {
+    now?: number;
+    rowContext?: SessionListRowContext;
+  },
+) {
+  const { cfg, modelCatalog, scope, revision, rowContext: residentContext } = projection.state;
+  const selectedScope = scope(opts);
+  const now = prepared?.now ?? Date.now();
+  const rowContext = prepared?.rowContext ?? {
+    ...residentContext,
+    subagentRuns: residentContext.subagentRuns.atTime(now),
+  };
+  const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  const activeOnly = opts.activeOnly === true;
+  let selection = keyed
+    ? undefined
+    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  if (!selection) {
+    const rows = projection
+      .selectEntries({
+        agentId: selectedScope.agentId,
+        key: prepared?.key,
+        sessionIdOrKey: prepared?.sessionIdOrKey,
+        sortBy: null,
+      })
+      .filter(
+        (row) =>
+          selectedScope.paths.has(row.storeTarget.storePath) &&
+          (!selectedScope.configuredAgentIds ||
+            isConfiguredGatewaySessionEntry(
+              cfg,
+              selectedScope.configuredAgentIds,
+              row.key,
+              row.entry,
+            )),
+      );
+    const winners = new Map<string, RecordRow>();
+    const keyFor = (row: RecordRow) =>
+      sentinel(row.key) && opts.activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
+    for (const row of rows) {
+      const key = keyFor(row);
+      const previous = winners.get(key);
+      if (previous && !sentinel(row.key)) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `duplicate rows resolve to canonical session key ${row.key}`,
+        );
+      }
+      // Equal precedence retains the first resident row, as a stable sort would.
+      if (
+        !previous ||
+        selectedScope.paths.get(row.storeTarget.storePath)! <
+          selectedScope.paths.get(previous.storeTarget.storePath)!
+      ) {
+        winners.set(key, row);
+      }
+    }
+    const entries: SessionEntryPair[] = [];
+    for (const row of rows) {
+      const key = keyFor(row);
+      if (winners.get(key) === row) {
+        entries.push([key, row.entry]);
+      }
+    }
+    selection = { winners, entries };
+    if (!keyed) {
+      const currentRevision = projection.state.revision;
+      let scopes = sessionRowSelections.get(currentRevision);
+      if (!scopes) {
+        scopes = new WeakMap();
+        sessionRowSelections.set(currentRevision, scopes);
+      }
+      let variants = scopes.get(selectedScope);
+      if (!variants) {
+        variants = new Map();
+        scopes.set(selectedScope, variants);
+      }
+      variants.set(activeOnly, selection);
+    }
+  }
+  const { winners, entries } = selection;
+  return {
+    cfg,
+    opts,
+    now,
+    modelCatalog,
+    entries,
+    storePath: selectedScope.path,
+    userProfileIdentityById: rowContext.userProfileIdentityById,
+    getRowContext: () => rowContext,
+    getTarget: (
+      key: string,
+    ):
+      | (RecordRow & {
+          storeKey?: string;
+          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
+        })
+      | undefined => {
+      const winner = winners.get(key);
+      if (!winner || (!opts.search && key === winner.key)) {
+        return winner;
+      }
+      return {
+        ...winner,
+        ...(key !== winner.key ? { storeKey: winner.key } : {}),
+        getModelFacts: () => projection.modelFacts(winner),
+      };
+    },
+  };
+}
+
+export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionEntryPair[] {
   return withAgentRosterFactsBatch(params.cfg, () =>
     runSynchronousWork(
       selectSessionEntries({
@@ -598,145 +300,218 @@ export function filterAndSortSessionEntries(
   ).entries;
 }
 
-/** Projects lightweight list rows while sharing the event loop with other requests. */
-export async function listSessionsFromStoreAsync(
-  params: ListSessionsFromStoreParams & {
-    workStartedAt?: number;
-    projectionTiming?: SessionListProjectionTiming;
-  },
-): Promise<SessionsListResult> {
-  // Pin the active plugin-registry workspace dir for the duration of this
-  // call so per-row metadata lookups use a stable memo key. Without this pin,
-  // concurrent agent turns / crons mutate the process-global workspace dir
-  // between rows, the memo never hits, and each row triggers a full
-  // loadPluginMetadataSnapshot scan (~100 ms).
-  return withPinnedActivePluginRegistryWorkspaceDir(async () => {
-    let workStartedAt = params.workStartedAt ?? performance.now();
-    const timing = params.projectionTiming;
-    let syncStartedAt = timing ? performance.now() : 0;
-    let syncPhase: "prepareSyncMs" | "rowSyncMs" | undefined = "prepareSyncMs";
-    const yieldIfNeeded = (): Promise<void> | undefined => {
-      const checkpoint = performance.now();
-      if (checkpoint - workStartedAt < SESSIONS_LIST_YIELD_INTERVAL_MS) {
-        return undefined;
-      }
-      const phase = syncPhase;
-      if (timing && phase) {
-        timing[phase] += checkpoint - syncStartedAt;
-      }
-      syncPhase = undefined;
-      return yieldToEventLoop().then(() => {
-        workStartedAt = performance.now();
-        if (timing) {
-          timing.yieldWaitMs += workStartedAt - checkpoint;
-          timing.yieldCount++;
-          syncStartedAt = workStartedAt;
-        }
-        syncPhase = phase;
-      });
-    };
+// One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
+const sessionListCandidates = new WeakMap<
+  SessionEntryPair[],
+  { key: string; entries: SessionEntryPair[] }
+>();
+
+/** Shared synchronous membership policy for list pages and full-roster transcript search. */
+export function prepareProjectedSessionList(params: {
+  projection: SessionRowProjection;
+  opts: SessionsListParams;
+  key?: string;
+  context?: GatewayRequestContext;
+  client?: GatewayClient | null;
+  now: number;
+}) {
+  const { projection, opts, key: exactKey, context, client, now } = params;
+  const presentation = prepareProjectedSessionPresentation(
+    projection,
+    client,
+    now,
+    context
+      ? createVisibleActiveSessionRunProjector(
+          context,
+          projection.state.rowContext.projectedAgentRuns,
+        )
+      : undefined,
+  );
+  const prepared = prepareSessionRowSelection(projection, opts, {
+    key: exactKey,
+    now,
+    rowContext: presentation.rowContext,
+  });
+  const { getTarget } = prepared;
+  const { active } = presentation;
+  const identity = gatewayClientSessionCreator(client ?? null)?.id;
+  let candidates: SessionEntryPair[] | undefined;
+  // Person references resolve against the full visible roster before candidate filtering.
+  if (!opts.spawnedBy && !opts.involvingProfileId) {
+    const candidateOptions = projectSessionListCandidateOptions(opts);
+    const key = JSON.stringify([exactKey, candidateOptions]);
+    let cached = sessionListCandidates.get(prepared.entries);
+    if (cached?.key !== key) {
+      cached = {
+        key,
+        entries: runSynchronousWork(
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
+        ),
+      };
+      sessionListCandidates.set(prepared.entries, cached);
+    }
+    candidates = cached.entries;
+  }
+  const filters: SessionListFilterParams = {
+    ...prepared,
+    ...(candidates ? { entries: candidates, candidatesPrepared: true } : {}),
+    involvingActorId: opts.involvingMe ? identity : undefined,
+    ownerFirstActorId: opts.ownerFirst ? identity : undefined,
+    restrictProfileReferences: client !== undefined,
+    projectActiveRun: context
+      ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
+      : undefined,
+    entryFilter: (key, entry) => {
+      const row = getTarget(key);
+      const visible = Boolean(
+        row &&
+        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+      );
+      return (
+        visible &&
+        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
+      );
+    },
+  };
+  return { prepared, presentation, filters };
+}
+
+/** Prepare selected rows, then authorize and present them in one synchronous boundary. */
+export async function listProjectedSessions(params: {
+  projection: SessionRowProjection;
+  opts: SessionsListParams;
+  key?: string;
+  context?: GatewayRequestContext;
+  client?: GatewayClient | null;
+  diagnostics?: SessionListDiagnostics;
+  onResult?: (result: SessionsListResult) => void;
+}): Promise<SessionsListResult> {
+  const { projection, opts, key: exactKey, context, client, diagnostics } = params;
+  const dirtyRowCount = projection.dirtyRowCount;
+  const materializedBefore = projection.materializedCount;
+  diagnostics?.mark("materialize");
+  const waitStarted = performance.now();
+  let yieldCount = 0;
+  do {
+    yieldCount++;
+    await projection.ensureMaterialized();
+  } while (projection.needsMaterialization);
+  let prepareSyncMs = 0;
+  const selectPage = () => {
+    const started = performance.now();
+    const syncCpu = diagnostics?.startSyncCpu();
     try {
-      const { cfg, store, targetsBySessionKey } = params;
-      let checkedItems = 0;
-      // Sample the clock in small batches, and leave nested generators only when work is due.
-      const shouldYieldPreparation = () =>
-        ++checkedItems % 16 === 0 &&
-        performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS;
-      const preparation = prepareSessionList(params, shouldYieldPreparation);
-      // Each chunk shares roster facts, then releases them before another request can run.
-      let step = withAgentRosterFactsBatch(cfg, () => preparation.next());
-      while (!step.done) {
-        const pause = yieldIfNeeded();
-        if (pause) {
-          await pause;
-        }
-        step = withAgentRosterFactsBatch(cfg, () => preparation.next());
+      diagnostics?.mark("storeLoad");
+      const now = Date.now();
+      const { presentation, prepared, filters } = prepareProjectedSessionList({
+        projection,
+        opts,
+        key: exactKey,
+        context,
+        client,
+        now,
+      });
+      diagnostics?.mark("filterSetup");
+      const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
+        runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
+      );
+      return { now, presentation, prepared, selection };
+    } finally {
+      diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
+      prepareSyncMs += performance.now() - started;
+      if (diagnostics) {
+        diagnostics.projection.prepareSyncMs = prepareSyncMs;
       }
-      const list = step.value;
-      const sessions: GatewaySessionRow[] = [];
-      const transcriptScopes = list.entries
-        .slice(0, list.transcriptFieldRows)
-        .flatMap(([key, entry]) => {
-          if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
+      diagnostics?.mark("materialize");
+    }
+  };
+  let page: ReturnType<typeof selectPage>;
+  return withReadySessionRows(
+    projection,
+    () => {
+      page = selectPage();
+      return page.selection.entries.flatMap(([key]) => {
+        const target = page.prepared.getTarget(key);
+        return target
+          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
+          : [];
+      });
+    },
+    () => {
+      const resumed = performance.now();
+      const { now, presentation, prepared, selection } = page;
+      const { cfg, getTarget } = prepared;
+      diagnostics?.mark("sharing");
+      diagnostics?.mark("rows");
+      const rowsStarted = performance.now();
+      let syncCpu = diagnostics?.startSyncCpu();
+      try {
+        let materializedRowCount = 0;
+        projection.setArchivePageSize(selection.entries.length);
+        const sessions = selection.entries.flatMap(([key], index) => {
+          const target = getTarget(key);
+          const record =
+            target &&
+            projection.describe({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
+          if (!record) {
             return [];
           }
-          const target = expectDefined(targetsBySessionKey.get(key), "transcript row target");
-          return [
-            {
-              ...target.storeTarget,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.storeKey ?? key,
-            },
-          ];
+          const includeTranscriptFields = index < 100 + selection.ownerCount;
+          const row = presentation.present(record, {
+            includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+            includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+            includeActivitySummary: opts.includeActivitySummary === true,
+          });
+          if (!row) {
+            return [];
+          }
+          bindSessionListRowRead(row, { projection, record, client });
+          if ((record.materializedSequence ?? 0) > materializedBefore) {
+            materializedRowCount++;
+          }
+          if (opts.activeOnly && sentinel(record.key)) {
+            row.childSessions = undefined;
+            row.hasActiveSubagentRun = undefined;
+          }
+          return [row];
         });
-      const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
-      // Optional transcript reads can spend the remaining budget even for an empty page.
-      const checkpoint = performance.now();
-      if (timing) {
-        timing.prepareSyncMs += checkpoint - syncStartedAt;
-        syncStartedAt = checkpoint;
-        syncPhase = "rowSyncMs";
-      }
-      const preparationPause = yieldIfNeeded();
-      if (preparationPause) {
-        await preparationPause;
-      }
-      let transcriptFieldIndex = 0;
-      for (let i = 0; i < list.entries.length; i++) {
-        const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
-        const target = expectDefined(targetsBySessionKey.get(key), "session row owner");
-        const includeTranscriptFields = i < list.transcriptFieldRows;
-        const row = buildGatewaySessionRow({
-          cfg,
-          storePath: target.storeTarget.storePath, // Aggregate paths are display-only.
-          store,
-          modelSource: target.modelSource,
-          key: target.storeKey ?? key,
-          entry,
-          agentId: target.agentId,
-          modelCatalog: params.modelCatalog,
-          now: list.now,
-          includeDerivedTitles: false,
-          includeLastMessage: false,
-          storeChildSessionsByKey: list.storeChildSessionsByKey,
-          rowContext: list.rowContext,
-          configuredAgentIds: list.configuredAgentIds,
-          skipTranscriptUsageFallback: true,
-          lightweightListRow: true,
-        });
-        row.key = key;
-        if (
-          entry?.sessionId &&
-          includeTranscriptFields &&
-          (list.includeDerivedTitles || list.includeLastMessage)
-        ) {
-          const fields = expectDefined(
-            transcriptFields[transcriptFieldIndex],
-            "batched transcript fields at transcriptFieldIndex",
-          );
-          transcriptFieldIndex += 1;
-          if (list.includeDerivedTitles) {
-            row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
-          }
-          if (list.includeLastMessage && fields.lastMessagePreview) {
-            row.lastMessagePreview = fields.lastMessagePreview;
-          }
+        diagnostics?.mark("decoration");
+        const result = buildSessionsListResult(
+          prepared,
+          { ...selection, now, storePath: prepared.storePath },
+          sessions,
+        );
+        if (client !== undefined) {
+          result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+            callerScopes: client?.connect?.scopes ?? [],
+            cfg,
+          }).target;
         }
-        sessions.push(row);
-        if (i + 1 < list.entries.length) {
-          const pause = yieldIfNeeded();
-          if (pause) {
-            await pause;
-          }
+        diagnostics?.mark("visibilityRepair");
+        if (diagnostics) {
+          Object.assign(diagnostics.projection, {
+            prepareSyncMs,
+            rowSyncMs: performance.now() - rowsStarted,
+            yieldWaitMs: resumed - waitStarted - prepareSyncMs,
+            yieldCount,
+            selectedRowCount: sessions.length,
+            dirtyRowCount,
+            materializedRowCount,
+            reusedRowCount: sessions.length - materializedRowCount,
+          });
         }
+        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+        syncCpu = undefined;
+        params.onResult?.(result);
+        return result;
+      } finally {
+        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
       }
-
-      return buildSessionsListResult(params, list, sessions);
-    } finally {
-      if (timing && syncPhase) {
-        timing[syncPhase] += performance.now() - syncStartedAt;
-      }
-    }
-  });
+    },
+  );
 }

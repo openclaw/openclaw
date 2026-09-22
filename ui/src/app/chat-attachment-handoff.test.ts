@@ -44,6 +44,35 @@ afterEach(() => {
 });
 
 describe("chat attachment route handoff", () => {
+  it("reports only supplied payload IDs still held by staged packages or fallbacks", () => {
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    const staged = storedAttachment("query-staged", "text/plain", false);
+    const fallback = storedAttachment("query-fallback", "text/plain", false);
+    const unreferenced = storedAttachment("query-unreferenced", "text/plain", false);
+    try {
+      handoff.prepare({
+        owner,
+        paneId: "dock",
+        scopeKey: "home",
+        attachments: [staged],
+        fallbacks: {
+          home: { message: "Fallback", attachments: [fallback], storageFailed: false, sequence: 1 },
+        },
+      });
+      expect(handoff.retainedAttachmentIds([staged, fallback, unreferenced])).toEqual(
+        new Set([staged.id, fallback.id]),
+      );
+      expect(handoff.retainedAttachmentIds([fallback])).toEqual(new Set([fallback.id]));
+      expect(handoff.consume({ owner, paneId: "dock", scopeKey: "home" })?.attachments).toEqual([
+        staged,
+      ]);
+      expect(handoff.retainedAttachmentIds([staged, fallback])).toEqual(new Set());
+    } finally {
+      handoff.dispose();
+    }
+  });
+
   it("retires deleted-session packages across panes without erasing newer packages or siblings", () => {
     vi.useFakeTimers();
     const handoff = createChatAttachmentHandoff();

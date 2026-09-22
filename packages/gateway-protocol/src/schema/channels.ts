@@ -195,6 +195,7 @@ const VoiceIdString = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
 export const TalkClientCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   voiceSessionId: Type.Optional(VoiceIdString),
+  voiceChangeId: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
@@ -211,6 +212,7 @@ export const TalkClientCreateParamsSchema = closedObject({
         Type.Literal("camera-frame"),
         Type.Literal("voice-transcript"),
         Type.Literal("gateway-control-v1"),
+        Type.Literal("voice-selection"),
       ]),
       { uniqueItems: true },
     ),
@@ -291,6 +293,8 @@ export const TalkAgentControlResultSchema = closedObject({
 /** Creates a gateway-managed Talk session for realtime, transcription, or relay use. */
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
+  voiceChangeId: Type.Optional(NonEmptyString),
+  capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
   spawnedBy: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),

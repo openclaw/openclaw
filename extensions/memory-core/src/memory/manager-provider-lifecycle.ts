@@ -10,6 +10,7 @@ import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-
 import {
   createSubsystemLogger,
   resolveAgentDir,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -28,6 +29,7 @@ import {
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
+import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
   createDegradedMemoryProviderLifecycle,
@@ -39,6 +41,7 @@ import {
 } from "./manager-provider-state.js";
 import type { MemoryEmbeddingProbeCacheEntry } from "./manager-registry.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -114,9 +117,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected abstract providerRetirementPromise: Promise<void>;
   protected abstract providersPendingRetirement: Set<EmbeddingProvider>;
-  protected abstract closing: boolean;
-  protected abstract activeManagerOperations: number;
-  protected abstract managerIdleWaiters: Set<() => void>;
   protected abstract activeBackgroundSearchSyncs: Set<Promise<void>>;
   protected abstract indexIdentityDirty: boolean;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
@@ -181,8 +181,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected async ensureEmbeddingProviderForSearch(
+    initialIndexState: MemoryRetrievalIndexState,
     onDebug?: (debug: MemorySearchRuntimeDebug) => void,
   ): Promise<boolean> {
+    let indexState = initialIndexState;
     const failure = this.embeddingBootstrapFailure;
     if (failure) {
       const cached = this.getCachedEmbeddingAvailability();
@@ -215,7 +217,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       return true;
     }
 
-    const currentIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    const currentIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true, indexState });
     let activeFailure = failure;
     if (currentIdentity.status !== "valid") {
       try {
@@ -225,14 +227,18 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         log.warn(`memory sync failed (embedding-bootstrap-recovery): ${message}`);
         activeFailure = this.markEmbeddingBootstrapFailure(err, { retainProvider: true });
       }
+      indexState = await this.readRetrievalIndexState();
     }
     if (
-      this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid" &&
+      this.refreshIndexIdentityDirty({ providerKeyKnown: true, indexState }).status === "valid" &&
       (await this.confirmEmbeddingBootstrapRecovery())
     ) {
       // A valid existing index skips recovery reindex, so explicitly restore the
       // semantic readiness flag cleared when bootstrap degradation began.
-      this.vector.semanticAvailable = await this.probeVectorStoreAvailabilityAdmitted();
+      this.vector.semanticAvailable =
+        this.vector.enabled &&
+        this.vector.available === true &&
+        indexState.vectorState.state === "complete";
       this.clearEmbeddingBootstrapFailureAfterRecovery();
       return false;
     }
@@ -257,7 +263,9 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.embeddingProbeCache.delete(this.cacheKey);
   }
 
-  protected async adoptPublishedFallbackProviderIfMatched(): Promise<boolean> {
+  protected async adoptPublishedFallbackProviderIfMatched(
+    indexState?: MemoryRetrievalIndexState,
+  ): Promise<boolean> {
     if (this.fallbackFrom || !this.provider) {
       return false;
     }
@@ -270,7 +278,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       settings: this.settings,
       currentProviderId,
     });
-    const meta = this.readMeta();
+    const meta = indexState ? indexState.meta : this.readMeta();
     if (
       !fallbackRequest ||
       !meta ||
@@ -284,8 +292,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     );
     return (
       activated &&
-      this.refreshIndexIdentityDirty({ providerKeyKnown: this.providerInitialized }).status ===
-        "valid"
+      this.refreshIndexIdentityDirty({
+        providerKeyKnown: this.providerInitialized,
+        indexState,
+      }).status === "valid"
     );
   }
 
@@ -483,7 +493,17 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+  protected readRetrievalIndexState(signal?: AbortSignal): Promise<MemoryRetrievalIndexState> {
+    return runMemoryIndexState(
+      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+      signal,
+    );
+  }
+
+  protected refreshIndexIdentityDirty(params?: {
+    providerKeyKnown?: boolean;
+    indexState?: MemoryRetrievalIndexState;
+  }) {
     const provider =
       this.settings.provider === "none"
         ? null
@@ -495,46 +515,34 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
+      ...(params?.indexState
+        ? { meta: params.indexState.meta, hasIndexedChunks: params.indexState.hasIndexedChunks }
+        : {}),
     });
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||
-      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+      (state.status === "missing" &&
+        (this.sources.has("memory") ||
+          (params?.indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
     return state;
   }
 
-  protected refreshKeywordFallbackIndexIdentity() {
-    const meta = this.readMeta();
+  protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
+    const meta = indexState ? indexState.meta : this.readMeta();
     const state = this.resolveCurrentIndexIdentityState({
       meta,
       provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
       providerKeyKnown: false,
       vectorReady: false,
+      ...(indexState ? { hasIndexedChunks: indexState.hasIndexedChunks } : {}),
     });
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||
-      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+      (state.status === "missing" &&
+        (this.sources.has("memory") || (indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
     return state;
-  }
-
-  protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.closing || this.closed) {
-      throw new Error("Memory index manager is closed");
-    }
-    this.activeManagerOperations += 1;
-    try {
-      return await this.withPublishedDatabase(run);
-    } finally {
-      this.activeManagerOperations -= 1;
-      if (this.activeManagerOperations === 0) {
-        const waiters = Array.from(this.managerIdleWaiters);
-        this.managerIdleWaiters.clear();
-        for (const resolve of waiters) {
-          resolve();
-        }
-      }
-    }
   }
 
   protected async awaitManagerIdle(): Promise<void> {

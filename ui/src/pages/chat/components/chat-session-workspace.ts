@@ -1,5 +1,6 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
+import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
@@ -7,13 +8,14 @@ import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts"
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
+import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
   clearWorkspaceTimer,
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
   openSessionCheckoutSidebar,
-  openSessionWorkspacePreview,
   refreshSessionWorkspaceState,
   requestWorkspaceUpdate,
   trackSessionCheckoutSidebar,
@@ -115,42 +117,80 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
 }
 
-function artifactSidebarContent(params: {
-  data?: string;
-  encoding?: string;
-  mimeType: string;
-  title: string;
-  url?: string;
-}): SidebarContent {
-  const { data, encoding, mimeType, title, url } = params;
-  if (encoding === "base64" && data && mimeType.startsWith("image/")) {
+async function loadArtifactSidebarContent(
+  result: ArtifactDownloadResult & { blob?: Blob },
+  download: (signal: AbortSignal) => Promise<Blob | null>,
+  resourceBasePath?: string,
+): Promise<SidebarContent> {
+  const { data, encoding, url, blob } = result;
+  const { title } = result.artifact;
+  const mimeType = result.artifact.mimeType ?? "";
+  let imageSource: string | undefined;
+  let text: string | undefined;
+  if (blob) {
+    if (mimeType.startsWith("image/")) {
+      // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
+      imageSource = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener(
+          "load",
+          () => {
+            if (typeof reader.result === "string") {
+              resolve(reader.result);
+            } else {
+              reject(new Error("Artifact image could not be decoded"));
+            }
+          },
+          { once: true },
+        );
+        reader.addEventListener(
+          "error",
+          () => reject(reader.error ?? new Error("Artifact image could not be decoded")),
+          { once: true },
+        );
+        reader.readAsDataURL(blob);
+      });
+    } else {
+      text = await blob.text();
+    }
+  } else if (encoding === "base64" && data) {
+    if (mimeType.startsWith("image/")) {
+      imageSource = `data:${mimeType};base64,${data}`;
+    } else if (mimeType === "application/json" || mimeType.startsWith("text/")) {
+      text = new TextDecoder().decode(
+        Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0)),
+      );
+    }
+  }
+  if (imageSource) {
     return {
       kind: "image",
       title,
-      src: `data:${mimeType};base64,${data}`,
+      src: imageSource,
       mimeType,
       rawText: url ?? null,
     };
   }
-  if (
-    encoding === "base64" &&
-    data &&
-    (mimeType === "application/json" || mimeType.startsWith("text/"))
-  ) {
-    const bytes = Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0));
-    const decoded = new TextDecoder().decode(bytes);
+  if (text !== undefined) {
     const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n${formatFencedCodeBlock(decoded, language)}`,
-      rawText: decoded,
+      content: `# ${title}\n\n${formatFencedCodeBlock(text, language)}`,
+      rawText: text,
     };
   }
-  if (url) {
-    const content = `# ${title}\n\n[Open artifact](${url})`;
-    return { kind: "markdown", content, rawText: content };
+  if (encoding === "base64" || (url && isHttpArtifactDownloadUrl(url, resourceBasePath))) {
+    return {
+      kind: "attachment",
+      attachmentKind: "document",
+      title,
+      mimeType,
+      download,
+    };
   }
-  const content = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
+  const content = url
+    ? `# ${title}\n\n[Open artifact](${url})`
+    : `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
   return { kind: "markdown", content, rawText: content };
 }
 
@@ -158,122 +198,6 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.handleOpenSidebar(resolveSessionDiffSidebarContent(state));
   }
-}
-
-function openWorkspaceItem<T>(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  itemId: string,
-  load: () => Promise<T | null | undefined>,
-  render: (result: T) => SidebarContent | null,
-  missingMessage: string,
-  options: {
-    line?: number | null;
-    label?: string;
-    resolveLabel?: (result: T) => string | undefined;
-    resolveKey?: (result: T) => string | undefined;
-  } = {},
-) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const request = {
-    kind: "loading",
-    fileTab: {
-      id: itemId,
-      label: options.label ?? basenameForPath(itemId.slice(itemId.indexOf(":") + 1)),
-    },
-  } as const;
-  const preview = openSessionWorkspacePreview(state, itemId, request.fileTab.label, request);
-  workspace.activeId = itemId;
-  if (options.line != null) {
-    preview.navigation = { line: options.line };
-    workspace.navigationOrder = (workspace.navigationOrder ?? 0) + 1;
-    preview.navigationOrder = workspace.navigationOrder;
-    if (preview.content.kind === "file") {
-      preview.content.navigation = preview.navigation;
-    }
-    workspace.previews = [...workspace.previews];
-  }
-  // Reopening an unavailable file retries its read without creating another tab.
-  if (preview.content.kind === "unavailable") {
-    preview.content = request;
-    workspace.previews = [...workspace.previews];
-  }
-  state.handleOpenSidebar(request);
-  if (preview.content !== request) {
-    return;
-  }
-  const isCurrent = () =>
-    workspace.previews.includes(preview) &&
-    preview.content === request &&
-    isCurrentSessionWorkspace(state, workspace);
-  const fail = (message: string) => {
-    if (!isCurrent()) {
-      return;
-    }
-    workspace.error = message;
-    const unavailable = { kind: "unavailable" as const, message };
-    preview.content = unavailable;
-    workspace.previews = [...workspace.previews];
-  };
-  void (async () => {
-    workspace.error = null;
-    try {
-      const result = await load();
-      const content = result == null ? null : render(result);
-      const label = result == null ? undefined : options.resolveLabel?.(result);
-      const canonicalKey = result == null ? undefined : options.resolveKey?.(result);
-      if (!content) {
-        fail(missingMessage);
-        return;
-      }
-      if (isCurrent()) {
-        const canonical = canonicalKey
-          ? workspace.previews.find(
-              (entry) => entry !== preview && entry.canonicalKey === canonicalKey,
-            )
-          : undefined;
-        if (canonical) {
-          canonical.requestIds = [
-            ...new Set([
-              ...(canonical.requestIds ?? []),
-              preview.id,
-              ...(preview.requestIds ?? []),
-            ]),
-          ];
-          if (
-            preview.navigation &&
-            (preview.navigationOrder ?? 0) > (canonical.navigationOrder ?? 0)
-          ) {
-            canonical.navigation = preview.navigation;
-            canonical.navigationOrder = preview.navigationOrder;
-            if (canonical.content.kind === "file") {
-              canonical.content.navigation = canonical.navigation;
-            }
-          }
-          // Keep the existing editor and draft; the alias read only resolves identity.
-          workspace.previews = workspace.previews.filter((entry) => entry !== preview);
-          if (workspace.activePreviewId === preview.id) {
-            workspace.activePreviewId = canonical.id;
-          }
-          return;
-        }
-        preview.canonicalKey = canonicalKey;
-        if (content.kind === "file" && preview.navigation) {
-          content.line = preview.navigation.line;
-          content.navigation = preview.navigation;
-        }
-        preview.content = content;
-        preview.label = label || preview.label;
-        workspace.previews = [...workspace.previews];
-      }
-    } catch (error) {
-      fail(formatUiError(error));
-    } finally {
-      requestWorkspaceUpdate(state);
-    }
-  })();
 }
 
 function openFile(
@@ -423,12 +347,12 @@ function openFile(
     `Failed to load ${path}`,
     {
       line: opts.line,
+      label: basenameForPath(path),
+      revalidate: true,
       resolveLabel: (result) => result.file?.name,
       resolveKey: (result) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
-        return canonicalPath
-          ? JSON.stringify(["file", result.root ?? "", canonicalPath])
-          : undefined;
+        return canonicalPath ? sessionWorkspaceFileKey(result.root, canonicalPath) : undefined;
       },
     },
   );
@@ -481,26 +405,57 @@ function openArtifact(
   workspace: SessionWorkspaceState,
   artifactId: string,
 ) {
+  const query = {
+    sessionKey: workspace.sessionKey,
+    artifactId,
+    ...(workspace.agentId ? { agentId: workspace.agentId } : {}),
+  };
+  const readDownload = async (signal: AbortSignal): Promise<Blob | null> => {
+    const currentWorkspace = getSessionWorkspace(state);
+    if (
+      currentWorkspace.sessionKey !== query.sessionKey ||
+      currentWorkspace.agentId !== workspace.agentId
+    ) {
+      return null;
+    }
+    // Cached preview actions bind a fresh connection on click; an in-flight
+    // transfer must never follow a reconnect to a replacement Gateway.
+    const client = state.client;
+    const connectionEpoch = state.connectionEpoch;
+    const result = await downloadArtifact(state, query, signal, { readBinary: true });
+    if (
+      signal.aborted ||
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !isCurrentSessionWorkspace(state, currentWorkspace)
+    ) {
+      return null;
+    }
+    if (result?.blob) {
+      return result.blob;
+    }
+    if (result?.encoding !== "base64" || result.data === undefined) {
+      return null;
+    }
+    return new Blob([Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0))], {
+      type: result.artifact.mimeType ?? "application/octet-stream",
+    });
+  };
   openWorkspaceItem(
     state,
     workspace,
     `artifact:${artifactId}`,
-    () =>
-      state.client!.request<ArtifactDownloadResult | null>("artifacts.download", {
-        sessionKey: workspace.sessionKey,
-        artifactId,
-        ...(workspace.agentId ? { agentId: workspace.agentId } : {}),
-      }),
-    (result) =>
-      !result.artifact
-        ? null
-        : artifactSidebarContent({
-            data: result.data,
-            encoding: result.encoding,
-            mimeType: result.artifact.mimeType ?? "",
-            title: result.artifact.title,
-            url: result.url,
-          }),
+    async () => {
+      const result = await downloadArtifact(state, query);
+      return result?.artifact
+        ? {
+            artifact: result.artifact,
+            content: await loadArtifactSidebarContent(result, readDownload, state.resourceBasePath),
+          }
+        : null;
+    },
+    (result) => result.content,
     `Failed to load artifact ${artifactId}`,
     {
       label:
@@ -535,6 +490,7 @@ export function createSessionWorkspaceProps(
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
+    !workspace.browserSearchTimer &&
     (!workspace.error || workspace.pendingReload) &&
     (workspace.pendingReload || workspace.list?.sessionKey !== state.sessionKey)
   ) {
@@ -551,6 +507,7 @@ export function createSessionWorkspaceProps(
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
     filter: workspace.filter,
+    browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
     onSetFilter: (filter) => {
       workspace.filter = filter;

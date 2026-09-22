@@ -41,6 +41,16 @@ describe("Code Mode MCP declarations", () => {
       expected?: Record<string, unknown>;
     }[] = [
       {
+        name: "commentKey",
+        schema: {
+          type: "object",
+          properties: { "path */ segment": { type: "string", description: "Fixture route" } },
+          required: ["path */ segment"],
+          additionalProperties: false,
+        },
+        input: { "path */ segment": "synthetic" },
+      },
+      {
         name: "defaulted",
         schema: defaultedSchema,
         input: {},

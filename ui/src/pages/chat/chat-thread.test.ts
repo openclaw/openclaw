@@ -2,12 +2,11 @@
 // Control UI tests cover build chat items behavior.
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
@@ -914,7 +913,7 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
     const work = requireWorkGroup(items[1]);
     expect(work.groups).toHaveLength(2);
-    expect(work.durationMs).toBe(9_000);
+    expect(work.durationMs).toBeNull();
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
@@ -923,33 +922,29 @@ describe("collapseCompletedTurnWork", () => {
       name: "independent sends",
       identities: ["first", "second"],
       steerTargetRunId: undefined,
-      durationMs: 13_000,
       sizes: [1, 1],
     },
     {
       name: "consecutive same-run steers",
       identities: ["first", "steer-1", "steer-2"],
       steerTargetRunId: "first",
-      durationMs: 994_000,
       sizes: [3],
     },
     {
       name: "same-submit projections",
       identities: ["first", "first"],
       steerTargetRunId: undefined,
-      durationMs: 994_000,
       sizes: [2],
     },
     {
       name: "unkeyed historical prompts",
       identities: [null, null],
       steerTargetRunId: undefined,
-      durationMs: 994_000,
       sizes: [2],
     },
   ])(
-    "preserves elapsed ownership for $name before any assistant output",
-    ({ identities, steerTargetRunId, durationMs, sizes }) => {
+    "preserves user boundaries without estimating duration for $name",
+    ({ identities, steerTargetRunId, sizes }) => {
       const prompts = identities.map((identity, index) =>
         userMessage(`Prompt ${index + 1}`, index === 0 ? 1_000 : 982_000 + index - 1, {
           __openclaw: {
@@ -968,7 +963,7 @@ describe("collapseCompletedTurnWork", () => {
       });
       const work = items.find((item) => item.kind === "work-group");
 
-      expect(work?.durationMs).toBe(durationMs);
+      expect(work?.durationMs).toBeNull();
       const users = items.filter(
         (item): item is MessageGroup => item.kind === "group" && item.role === "user",
       );
@@ -1121,7 +1116,7 @@ describe("collapseCompletedTurnWork", () => {
         "group",
         "group",
       ]);
-      expect(requireWorkGroup(completed[1]).durationMs).toBe(4_000);
+      expect(requireWorkGroup(completed[1]).durationMs).toBeNull();
     },
   );
 
@@ -1198,7 +1193,7 @@ describe("collapseCompletedTurnWork", () => {
     if (isError) {
       expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
     } else {
-      expect(work.durationMs).toBe(3_000);
+      expect(work.durationMs).toBeNull();
     }
   });
 
@@ -1367,8 +1362,8 @@ describe("collapseCompletedTurnWork", () => {
     });
 
     expect(items.map((item) => item.kind)).toEqual(["work-group", "group", "work-group", "group"]);
-    expect(requireWorkGroup(items[0]).durationMs).toBe(2_000);
-    expect(requireWorkGroup(items[2]).durationMs).toBe(5_000);
+    expect(requireWorkGroup(items[0]).durationMs).toBeNull();
+    expect(requireWorkGroup(items[2]).durationMs).toBeNull();
   });
 
   it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
@@ -1393,7 +1388,8 @@ describe("collapseCompletedTurnWork", () => {
     const prependedWork = requireWorkGroup(prepended[0]);
 
     expect(prependedWork.key).toBe(initialWork.key);
-    expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+    expect(initialWork.durationMs).toBeNull();
+    expect(prependedWork.durationMs).toBeNull();
   });
 });
 
@@ -2743,7 +2739,6 @@ describe("buildCachedChatItems", () => {
       const cards = cardsFor(messages, live);
       expect(cards).toHaveLength(1);
       expect(cards[0]).toMatchObject({ callId: "exec-1", outputText: "ready", completed: true });
-      expect(summarizeToolGroup(cards)).toBe("Ran a command");
     });
 
     it.each([false, true])(
@@ -4800,7 +4795,6 @@ describe("buildCachedChatItems", () => {
     ).toContainEqual({ type: "text", text: "\n\nReady." });
     expect(assistant).toEqual(original);
   });
-
   it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
     const viewId = "cv_url_match";
     const result = toolResultMessage(
@@ -4968,7 +4962,7 @@ describe("buildCachedChatItems", () => {
     expect(preview.title).toBe("Streamed demo");
   });
 
-  it("explains compaction boundaries and exposes the checkpoint action", () => {
+  it("explains compaction boundaries without a recovery action", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: [compactionMessage("checkpoint-1")],
@@ -4980,10 +4974,10 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Context compacted");
     expect(divider.compaction).toBe("complete");
-    expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
-    const action = requireRecord(divider.action);
-    expect(action.kind).toBe("session-checkpoints");
-    expect(action.label).toBe("Open checkpoints");
+    expect(divider.description).toBe(
+      "Earlier messages were summarized to make room in the context window.",
+    );
+    expect(divider).not.toHaveProperty("action");
   });
 
   it("shows the token savings recorded on a compaction boundary", () => {
@@ -5599,11 +5593,7 @@ describe("thread item cache", () => {
     expect(updated).toBe(first);
     expect(reads.count).toBe(0);
     expect(updated).toContainEqual(
-      expect.objectContaining({
-        kind: "stream",
-        text: "complete reply",
-        isStreaming: true,
-      }),
+      expect.objectContaining({ kind: "stream", text: "complete reply", isStreaming: true }),
     );
   });
 

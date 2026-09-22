@@ -48,7 +48,7 @@ afterEach(() => {
 it("loads a bounded current-work query independently of chat, people, and recency", async () => {
   const { client, request, controller } = setup();
   try {
-    controller.load(client, "current");
+    void controller.load(client, "current");
     await vi.waitFor(() => expect(controller.result?.sessions).toEqual([active]));
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.list",
@@ -75,14 +75,14 @@ it.each([false, true])(
     try {
       if (refresh) {
         request.mockResolvedValueOnce(listing([]));
-        controller.load(client, "current");
+        void controller.load(client, "current");
         await vi.advanceTimersByTimeAsync(0);
       }
       const responses = Array.from({ length: 4 }, () => createDeferred<SessionsListResult>());
       for (const response of responses) {
         request.mockReturnValueOnce(response.promise);
       }
-      controller.load(client, "current", refresh ? "refresh" : "query");
+      void controller.load(client, "current", refresh ? "refresh" : "query");
       const observed: Array<GatewaySessionRow[] | undefined> = [];
       for (let round = 0; round < 3; round += 1) {
         const transient = {
@@ -109,7 +109,11 @@ it.each([false, true])(
           activeRunIds: [],
           status: "done",
         });
-        await vi.advanceTimersByTimeAsync(200);
+        const catchUpDelay = 5_000;
+        await vi.advanceTimersByTimeAsync(catchUpDelay - 1);
+        expect(request).toHaveBeenCalledTimes((refresh ? 2 : 1) + round);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes((refresh ? 3 : 2) + round);
       }
       expect(controller.incomplete).toBe(true);
       responses[3]!.resolve(listing([active]));
@@ -130,17 +134,17 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
   try {
     const pending = createDeferred<SessionsListResult>();
     request.mockReturnValueOnce(pending.promise).mockRejectedValueOnce(new Error("Unavailable"));
-    controller.load(client, "current");
+    void controller.load(client, "current");
     controller.invalidate({ ...active, updatedAt: 200 });
     pending.resolve(listing([]));
     await vi.advanceTimersByTimeAsync(0);
     expect(controller.result?.sessions).toEqual([]);
     expect(controller.incomplete).toBe(true);
     expect(controller.loading).toBe(true);
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(controller.error).toBe("Unavailable");
     expect(controller.loading).toBe(false);
-    controller.load(client, "current", "retry");
+    void controller.load(client, "current", "retry");
     await vi.advanceTimersByTimeAsync(0);
     expect(controller.error).toBeUndefined();
     expect(controller.result?.sessions).toEqual([active]);
@@ -156,11 +160,11 @@ it.each([false, true])(
     vi.useFakeTimers();
     const { client, request, controller, publications } = setup();
     try {
-      controller.load(client, "current");
+      void controller.load(client, "current");
       await vi.advanceTimersByTimeAsync(0);
       const stale = createDeferred<SessionsListResult>();
       request.mockReturnValueOnce(stale.promise).mockResolvedValue(listing([]));
-      controller.load(client, "current", "refresh");
+      void controller.load(client, "current", "refresh");
       controller.invalidate({
         ...active,
         updatedAt: 200,
@@ -188,7 +192,7 @@ it.each([false, true])(
       }
       const terminalPublication = publications.length;
       stale.resolve(listing([active]));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(controller.result?.sessions).toEqual([]);
       expect(
         publications
@@ -206,16 +210,16 @@ it("retires current work on disconnect and only accepts the replacement query", 
   vi.useFakeTimers();
   const { client, request, controller } = setup();
   try {
-    controller.load(client, "current");
+    void controller.load(client, "current");
     await vi.advanceTimersByTimeAsync(0);
     const stale = createDeferred<SessionsListResult>();
     request.mockReturnValueOnce(stale.promise);
-    controller.load(client, "current", "refresh");
-    controller.load(null, null);
+    void controller.load(client, "current", "refresh");
+    void controller.load(null, null);
     expect(controller.result).toBeUndefined();
     expect(controller.incomplete).toBe(false);
     request.mockResolvedValue(listing([]));
-    controller.load(client, "current");
+    void controller.load(client, "current");
     stale.resolve(listing([active]));
     await vi.advanceTimersByTimeAsync(0);
     expect(controller.result?.sessions).toEqual([]);
@@ -232,14 +236,14 @@ it.each([false, true])(
     const overlap = { ...active, activeRunIds: ["release-run", "overlap-run"] };
     try {
       request.mockResolvedValue(listing([overlap]));
-      controller.load(client, "current");
+      void controller.load(client, "current");
       await vi.advanceTimersByTimeAsync(0);
       const stale = createDeferred<SessionsListResult>();
       const remaining = { ...active, activeRunIds: ["overlap-run"] };
       request
         .mockReturnValueOnce(stale.promise)
         .mockResolvedValue(listing(bothFinish ? [] : [remaining]));
-      controller.load(client, "current", "refresh");
+      void controller.load(client, "current", "refresh");
       const terminal = {
         key: active.key,
         agentId: active.agentId,
@@ -263,7 +267,7 @@ it.each([false, true])(
           .slice(terminalPublication)
           .some((rows) => rows?.some((row) => row.activeRunIds?.includes("release-run"))),
       ).toBe(false);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
       controller.hostDisconnected();
@@ -283,11 +287,11 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
       activeRunIds: activeRunIds ?? undefined,
     };
     try {
-      controller.load(client, "current");
+      void controller.load(client, "current");
       await vi.advanceTimersByTimeAsync(0);
       const stale = createDeferred<SessionsListResult>();
       request.mockReturnValueOnce(stale.promise).mockResolvedValue(listing([replacement]));
-      controller.load(client, "current", "refresh");
+      void controller.load(client, "current", "refresh");
       controller.invalidate({ ...replacement, runId: "next-run", activeRunIds });
       expect(controller.result?.sessions).toEqual([replacement]);
       controller.invalidate({
@@ -310,7 +314,7 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
       stale.resolve(listing([active]));
       await vi.advanceTimersByTimeAsync(0);
       expect(controller.result?.sessions).toEqual([replacement]);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(controller.result?.sessions).toEqual([replacement]);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
@@ -325,7 +329,7 @@ it.each([false, undefined])(
     vi.useFakeTimers();
     const { client, controller } = setup();
     try {
-      controller.load(client, "current");
+      void controller.load(client, "current");
       await vi.advanceTimersByTimeAsync(0);
       controller.invalidate({
         key: active.key,
@@ -351,7 +355,7 @@ it("keeps globals owned by other agents, literal global keys and replacement ses
   try {
     const pending = createDeferred<SessionsListResult>();
     request.mockReturnValueOnce(pending.promise).mockResolvedValue(listing([work, literal]));
-    controller.load(client, "current");
+    void controller.load(client, "current");
     controller.invalidate({
       ...main,
       updatedAt: 200,

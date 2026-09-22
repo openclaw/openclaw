@@ -6,7 +6,7 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,6 +34,7 @@ import {
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
+  SessionLifecycleWorkspaceRecoveryError,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
 import {
@@ -123,7 +124,7 @@ export async function prepareSessionPatchArchive(params: {
   commitGuard: () => ErrorShape | undefined;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: () => Promise<ModelCatalogSnapshot>;
   personalModelSelection?: UserModelAccountSelection;
   pluginOwnerId?: string;
   target: SessionPatchArchiveTarget;
@@ -226,7 +227,7 @@ export async function prepareSessionPatchArchive(params: {
     agentId: target.requestedAgentId,
     patch: target.fullPatch,
     archivedBy: target.archiveActor,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     personalModelSelection: params.personalModelSelection,
   });
   if (!preview.ok) {
@@ -274,6 +275,9 @@ export async function prepareSessionPatchArchive(params: {
       ...(fresh.entry ? { entry: fresh.entry } : {}),
     });
   } catch (error) {
+    if (error instanceof SessionLifecycleWorkspaceRecoveryError) {
+      return err(error.error);
+    }
     if (error instanceof WorkerInferenceSessionDrainBusyError) {
       return err(
         errorShape(

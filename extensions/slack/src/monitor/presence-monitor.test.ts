@@ -29,9 +29,9 @@ function createCooldownStore() {
       return value;
     },
     delete: async (key) => values.delete(key),
-    deleteIf: async (key, predicate) => {
+    deleteIfEqual: async (key, expected) => {
       const value = values.get(key);
-      return value !== undefined && predicate(value) ? values.delete(key) : false;
+      return value !== undefined && value === expected ? values.delete(key) : false;
     },
     entries: async () => [],
     clear: async () => values.clear(),
@@ -624,11 +624,11 @@ describe("Slack presence monitor", () => {
         await cleanup.promise;
         return await deleteEntry(key);
       };
-      const deleteIf = cooldownStore.deleteIf.bind(cooldownStore);
-      cooldownStore.deleteIf = async (key, predicate) => {
+      const deleteIfEqual = cooldownStore.deleteIfEqual.bind(cooldownStore);
+      cooldownStore.deleteIfEqual = async (key, expected) => {
         cleanupStarted.resolve();
         await cleanup.promise;
-        return await deleteIf(key, predicate);
+        return await deleteIfEqual(key, expected);
       };
       const getPresence = vi
         .fn()
@@ -709,7 +709,7 @@ describe("Slack presence monitor", () => {
 
   it("keeps the cooldown until expiry when an older store lacks conditional deletion", async () => {
     const cooldownStore: PluginStateKeyedStore<number> = createCooldownStore();
-    delete cooldownStore.deleteIf;
+    delete cooldownStore.deleteIfEqual;
     const monitor = createSlackPresenceMonitor({
       accountId: "default",
       accountConfig: { mode: "auto" },

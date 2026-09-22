@@ -13,10 +13,9 @@ import {
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
+  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -24,11 +23,16 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
+import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import {
+  resolveAllAgentSessionStoreCandidateTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -70,47 +74,12 @@ type TranscriptEventCountResult =
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_LEGACY_COMPACTION_TARGETS = 100_000;
 
-export function resolveLegacyTranscriptPaths(
-  target: Pick<SessionStoreTarget, "agentId" | "storePath">,
-  entry: { sessionId: string; sessionFile?: unknown },
-): { transcriptPath?: string; transcriptDependencies: string[] } {
-  const legacySessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile : undefined;
-  if (parseSqliteSessionFileMarker(legacySessionFile)) {
-    return { transcriptDependencies: [] };
-  }
-  const sessionsDir = path.dirname(target.storePath);
-  const relocatedPath = legacySessionFile?.trim()
-    ? path.join(sessionsDir, path.basename(legacySessionFile))
-    : undefined;
-  let defaultPath: string;
-  try {
-    defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
-      agentId: target.agentId,
-      sessionsDir,
-    });
-  } catch (error) {
-    if (!relocatedPath) {
-      throw error;
-    }
-    defaultPath = relocatedPath;
-  }
-  const transcriptPaths = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
-  const transcriptPath =
-    transcriptPaths.find((file) => fs.existsSync(file)) ??
-    (relocatedPath ? defaultPath : undefined);
-  // Reads may retain a foreign root after archival, but recovery artifacts are direct
-  // files in this target's sessions directory. Their dependencies must stay local too.
-  const transcriptDependencies = transcriptPaths.map((file) =>
-    path.join(sessionsDir, path.basename(file)),
-  );
-  return { transcriptPath, transcriptDependencies };
-}
-
 /** Validate an unregistered primary without retaining transcript payloads in memory. */
 export function readLegacyPrimaryTranscriptIdentity(
   filePath: string,
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
+  registered = false,
 ): { sessionId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
@@ -154,13 +123,16 @@ export function readLegacyPrimaryTranscriptIdentity(
       !parseOpaqueLeafEntry(raw) &&
       !parseParentLinkedOpaqueEntry(raw)
     ) {
+      if (registered) {
+        return undefined;
+      }
       throw new Error("Unrecognized primary transcript record");
     }
     if (classified.recognized && classified.entry.type === "message") {
       messages += 1;
     }
   }
-  return sessionId && messages > 0
+  return sessionId && (messages > 0 || registered)
     ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }
@@ -184,7 +156,10 @@ export function countTranscriptEventsForPath(
     }
     return { status: "ok", events };
   } catch (err) {
-    return { status: "malformed", message: String(err) };
+    return {
+      status: "malformed",
+      message: `${transcriptPath}: ${String(err)}. Only the readable prefix can be imported; the original remains protected for recovery.`,
+    };
   }
 }
 
@@ -534,13 +509,17 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         },
       };
     }
+    // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
+    const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
+      : "octet_length(event_json)";
     const totalRow = database
-      .prepare("SELECT COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes FROM transcript_events")
+      .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
       .get() as { row_bytes?: unknown } | undefined;
     const largestRows = database
       .prepare(
         `
-          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes
+          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(${eventBytes}), 0) AS row_bytes
           FROM transcript_events
           GROUP BY session_id
           ORDER BY row_bytes DESC, events DESC, session_id ASC
@@ -602,14 +581,25 @@ export function resolveTargetSqlitePath(
 export function projectExistingAgentDatabaseTargets(
   targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
+  cfg: OpenClawConfig,
 ): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
   return targets.flatMap((target) => {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
       return [];
     }
     const sqlitePath = resolveTargetSqlitePath(target, env);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
+    if (
+      isRetained(sqlitePath, target.agentId) ||
+      seenPaths.has(sqlitePath) ||
+      !fs.existsSync(sqlitePath)
+    ) {
       return [];
     }
     seenPaths.add(sqlitePath);
@@ -624,6 +614,7 @@ export function listExistingAgentDatabaseTargets(
   return projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
     env,
+    cfg,
   );
 }
 

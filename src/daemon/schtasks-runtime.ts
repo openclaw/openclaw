@@ -19,6 +19,7 @@ import {
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import {
+  findInstalledGatewayChildPid,
   findInstalledProcessPid,
   isNodeHostArgv,
   probeProcessState,
@@ -258,7 +259,7 @@ export async function resolveFallbackRuntime(
   const snapshot = shouldInspectProcess ? readWindowsProcessSnapshot() : null;
   const processPid =
     snapshot && installedArguments
-      ? findInstalledProcessPid(snapshot, port, installedArguments, () => true)
+      ? findInstalledGatewayChildPid(snapshot, port, installedArguments)
       : null;
   if (processPid) {
     return {

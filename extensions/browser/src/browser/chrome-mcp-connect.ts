@@ -10,6 +10,8 @@ import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
   type ChromeMcpSession,
+  type ChromeMcpSessionFactory,
+  type ChromeMcpSessionOwner,
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import {
@@ -18,14 +20,15 @@ import {
   redactChromeMcpLocalPathForDiagnostic,
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
-import {
-  closeTrackedChromeMcpSession,
-  refreshChromeMcpCleanupProcess,
-} from "./chrome-mcp-process.js";
-import { getChromeMcpSessionFactory } from "./chrome-mcp-state.js";
+import { refreshChromeMcpCleanupProcess } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
+let sessionFactory: ChromeMcpSessionFactory | null = null;
+
+export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
+  sessionFactory = factory;
+}
 
 async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -47,7 +50,7 @@ async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
 }
 
 async function createRealSession(
-  cacheKey: string,
+  owner: ChromeMcpSessionOwner,
   profileName: string,
   options: NormalizedChromeMcpProfileOptions,
 ): Promise<ChromeMcpSession> {
@@ -82,7 +85,7 @@ async function createRealSession(
   };
   // SDK initialization and read-buffer failures can close before connect settles.
   // Funnel both SDK entry points through the same owner before it clears the PID.
-  client.close = transport.close = () => closeTrackedChromeMcpSession(cacheKey, session);
+  client.close = transport.close = () => owner.close(session);
   const ready = (async () => {
     try {
       await withChromeMcpHandshakeTimeout(
@@ -213,19 +216,18 @@ export async function waitForChromeMcpPendingSession(
 }
 
 export function createChromeMcpSession(
-  cacheKey: string,
+  owner: ChromeMcpSessionOwner,
   profileName: string,
   options: NormalizedChromeMcpProfileOptions,
   signal?: AbortSignal,
 ): { promise: Promise<ChromeMcpSession>; cleanup: Promise<void> } {
-  const factory = getChromeMcpSessionFactory();
-  const created = factory
-    ? factory(profileName, options)
-    : createRealSession(cacheKey, profileName, options);
+  const created = sessionFactory
+    ? sessionFactory(profileName, options)
+    : createRealSession(owner, profileName, options);
   let adopted = false;
   let closePromise: Promise<void> | undefined;
   const closeCreated = async (session: ChromeMcpSession) => {
-    closePromise ??= closeTrackedChromeMcpSession(cacheKey, session);
+    closePromise ??= owner.close(session);
     await closePromise;
   };
   const promise = (async () => {

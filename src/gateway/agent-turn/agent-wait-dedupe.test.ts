@@ -1,12 +1,20 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { registerQueuedChatTurn, type QueuedChatTurnMap } from "../chat-queued-turns.js";
 import { agentHandlers } from "../server-methods/agent.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
+import { createAgentTurnService } from "./agent-turn-service.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
@@ -148,6 +156,146 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
+  it("keeps visible queued waits available after the terminal observation expires", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const owner = roleClient("none", "queued-owner");
+      const other = roleClient("none", "queued-other");
+      const session = {
+        sessionKey: "agent:main:queued-visible",
+        sessionId: "queued-visible-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      await upsertSessionEntryCore(
+        { agentId: session.agentId, sessionKey: session.sessionKey },
+        {
+          sessionId: session.sessionId,
+          updatedAt: Date.now(),
+          visibility: "draft",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: expectDefined(owner.authenticatedUserProfile, "queued owner profile").profileId,
+          },
+        },
+      );
+      const runId = "queued-visible-wait";
+      const chatQueuedTurns: QueuedChatTurnMap = new Map();
+      const controller = new AbortController();
+      const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
+      const context = createGatewayRequestContext(makeContextParams({ chatQueuedTurns }));
+      context.getRuntimeConfig = () => cfg;
+      const invoke = async (client: typeof owner) => {
+        const respond = vi.fn();
+        await handler({
+          req: { type: "req", id: runId, method: "agent.wait" },
+          params: { runId, timeoutMs: 0 },
+          respond,
+          client,
+          isWebchatConnect: () => true,
+          context,
+        });
+        return respond;
+      };
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(2_000_000);
+        expect(registerQueuedChatTurn({ chatQueuedTurns, runId, controller, ...session })).toBe(
+          true,
+        );
+        setGatewayDedupeEntry({
+          dedupe: new Map(),
+          key: `chat:${runId}`,
+          session,
+          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
+        });
+        const expected = {
+          runId,
+          status: "pending",
+          timeoutPhase: "queue",
+          providerStarted: false,
+        };
+        expect(await invoke(owner)).toHaveBeenCalledWith(true, expected);
+        vi.setSystemTime(2_600_001);
+        expect(await invoke(owner)).toHaveBeenCalledWith(true, expected);
+        expect(await invoke(other)).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: "agent run was not found" }),
+        );
+      } finally {
+        controller.abort();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it.each(["compaction", "replacement"] as const)(
+    "keeps a pending wait bound to its original registration after %s",
+    async (transition) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const owner = roleClient("none", "timeout-owner");
+        const session = {
+          sessionKey: "agent:main:timeout-rotation",
+          sessionId: "original-session",
+          agentId: "main",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        };
+        const target = { agentId: session.agentId, sessionKey: session.sessionKey };
+        await upsertSessionEntryCore(target, {
+          sessionId: session.sessionId,
+          updatedAt: Date.now(),
+          visibility: "draft",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: expectDefined(owner.authenticatedUserProfile, "wait owner profile").profileId,
+          },
+        });
+        const runId = `wait-timeout-${transition}`;
+        registerAgentRunContext(runId, session);
+        const context = createGatewayRequestContext(makeContextParams());
+        context.getRuntimeConfig = rolePolicyConfig;
+        const respond = vi.fn();
+        const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const waiting = handler({
+          req: { type: "req", id: runId, method: "agent.wait" },
+          params: { runId, timeoutMs: 10 },
+          respond,
+          client: owner,
+          isWebchatConnect: () => true,
+          context,
+        });
+        try {
+          expect(respond).not.toHaveBeenCalled();
+          await upsertSessionEntryCore(target, { sessionId: "successor-session" });
+          if (transition === "replacement") {
+            clearAgentRunContext(runId);
+          }
+          registerAgentRunContext(runId, { ...session, sessionId: "successor-session" });
+          await vi.advanceTimersByTimeAsync(10);
+          await waiting;
+          if (transition === "compaction") {
+            expect(respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
+          } else {
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ message: "agent run was not found" }),
+            );
+          }
+        } finally {
+          await vi.advanceTimersByTimeAsync(10);
+          await waiting;
+          clearAgentRunContext(runId);
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it("retains chat input identity when terminal writers replace admission metadata", async () => {
     const runId = "run-chat-request-identity";
     const key = `chat:${runId}`;
@@ -210,6 +358,48 @@ describe("agent.wait gateway dedupe observations", () => {
     const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, kind);
     await waiter.promise;
     expect(waiter.respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId, status }));
+  });
+
+  it("binds queued observation to the queue entry selected after waiting", async () => {
+    const runId = "queued-observation-session";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const original = {
+      sessionKey: "agent:main:original",
+      sessionId: "original-session",
+      agentId: "main",
+      lifecycleGeneration,
+    };
+    setGatewayDedupeEntry({
+      dedupe: new Map(),
+      key: `agent:${runId}`,
+      session: original,
+      entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
+    });
+    const chatQueuedTurns: QueuedChatTurnMap = new Map();
+    const service = createAgentTurnService({
+      context: {
+        chatAbortControllers: new Map(),
+        chatQueuedTurns,
+      } as Parameters<typeof createAgentTurnService>[0]["context"],
+      isWebchatConnect: () => false,
+    });
+    const selected = service.waitForTurn({ runId, timeoutMs: 0 });
+    const controller = new AbortController();
+    const queued = {
+      sessionKey: "agent:main:queued",
+      sessionId: "queued-session",
+      agentId: "main",
+    };
+    try {
+      expect(registerQueuedChatTurn({ chatQueuedTurns, runId, controller, ...queued })).toBe(true);
+      await expect(selected).resolves.toEqual({
+        session: { ...queued, lifecycleGeneration },
+        result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+      });
+    } finally {
+      controller.abort();
+      await selected;
+    }
   });
 
   it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {

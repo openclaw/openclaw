@@ -524,7 +524,7 @@ export async function refreshProviderLoginAuthState(params: {
   readConfig();
   const { refreshModelAuthStateAfterMutation } = await import("../gateway/model-auth-refresh.js");
   readConfig();
-  await refreshModelAuthStateAfterMutation(readConfig, "login", params.agentId);
+  await refreshModelAuthStateAfterMutation(readConfig, params.agentId);
   readConfig();
 }
 

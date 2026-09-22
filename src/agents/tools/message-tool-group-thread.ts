@@ -99,7 +99,8 @@ export function prepareMessageToolGroupThread(
     : undefined;
   const silent = Boolean(text && isSilentReplyPayloadText(text));
   if (sourceAction && !silent) {
-    if (!text && hasSanitizedSendPayloadContent(args)) {
+    // Native locations cannot carry the attribution caption used by other payloads.
+    if (!text && hasSanitizedSendPayloadContent({ ...args, location: undefined })) {
       args.message = formatGroupThreadReply("");
     }
     for (const field of ["message", "text", "content", "caption"]) {

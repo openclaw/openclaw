@@ -2,7 +2,11 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -97,8 +101,6 @@ describe("telegram poll registry", () => {
   });
 
   it("reclaims a closed poll after the durable replay grace", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-05T00:00:00.000Z"));
     await recordTelegramPollRegistryEntry({
       pollId: "poll-closed",
       chat: { id: 123, type: "private", first_name: "Ada" },
@@ -109,9 +111,31 @@ describe("telegram poll registry", () => {
     });
 
     await retireTelegramPollRegistryEntry({ pollId: "poll-closed" });
-    vi.setSystemTime(new Date("2026-08-06T23:59:59.999Z"));
+    const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    const entries = await store.entries();
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    if (!entry || entry.expiresAt === undefined) {
+      throw new Error("expected the retired poll's durable expiry");
+    }
+    expect(entry.expiresAt - entry.createdAt).toBe(48 * 60 * 60 * 1000);
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.not.toBeNull();
-    vi.setSystemTime(new Date("2026-08-07T00:00:00.001Z"));
+
+    // The database worker owns expiry; changing the parent clock cannot expire its rows.
+    const { db } = openOpenClawStateDatabase();
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: 1 })
+        .where("plugin_id", "=", "telegram")
+        .where("namespace", "=", TELEGRAM_POLL_REGISTRY_NAMESPACE)
+        .where("entry_key", "=", entry.key),
+    );
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.toBeNull();
   });
 

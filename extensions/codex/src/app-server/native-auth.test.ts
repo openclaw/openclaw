@@ -10,7 +10,11 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 }));
 
 const config: OpenClawConfig = {
-  plugins: { entries: { codex: { config: { appServer: { command: "native-codex-fixture" } } } } },
+  plugins: {
+    entries: {
+      codex: { config: { appServer: { command: "native-codex-fixture", homeScope: "user" } } },
+    },
+  },
 };
 
 describe("Codex native login discovery", () => {
@@ -74,6 +78,7 @@ describe("Codex native login discovery", () => {
           pluginConfig: {
             appServer: {
               command: "native-codex-fixture",
+              homeScope: "user",
               mode: "yolo",
               clearEnv: ["CODEX_API_KEY"],
               ...(source === "config" ? { args } : {}),
@@ -102,16 +107,19 @@ describe("Codex native login discovery", () => {
     },
   );
 
-  it("does not borrow the user login for an explicitly isolated home", async () => {
-    expect(
-      await probeCodexNativeAuth({
-        config: {
-          plugins: { entries: { codex: { config: { appServer: { homeScope: "agent" } } } } },
-        },
-      }),
-    ).toBeUndefined();
-    expect(run).not.toHaveBeenCalled();
-  });
+  it.each([undefined, "agent"] as const)(
+    "does not borrow the user login for homeScope=%s",
+    async (homeScope) => {
+      expect(
+        await probeCodexNativeAuth({
+          config: {
+            plugins: { entries: { codex: { config: { appServer: { homeScope } } } } },
+          },
+        }),
+      ).toBeUndefined();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves the official Node launcher and native config when probing login", async () => {
     const launcher = createRequire(new URL("../../package.json", import.meta.url)).resolve(
@@ -128,6 +136,7 @@ describe("Codex native login discovery", () => {
         pluginConfig: {
           appServer: {
             command: process.execPath,
+            homeScope: "user",
             args: [
               launcher,
               "-c",
@@ -173,6 +182,7 @@ describe("Codex native login discovery", () => {
           pluginConfig: {
             appServer: {
               command: "native-codex-fixture",
+              homeScope: "user",
               ...(source === "config"
                 ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
                 : {}),

@@ -62,7 +62,7 @@ vi.mock("../agents/agent-create.js", async (importOriginal) => ({
   },
 }));
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
-  migrateLegacyMainSessionKeys: vi.fn(async () => ({ armed: false })),
+  migrateLegacyMainSessionKeys: vi.fn(async () => ({ armed: false, warnings: [] })),
 }));
 vi.mock("./onboard-agent-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-agent-target.js")>()),

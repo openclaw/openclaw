@@ -30,8 +30,11 @@ type PersistenceResult =
 
 // Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
     kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
     validate: () => undefined,
   })),
 }));
@@ -241,7 +244,7 @@ describe("mixed inline directives", () => {
 
     expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
     expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", catalogChanged: true },
     ]);
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
@@ -283,6 +286,9 @@ describe("mixed inline directives", () => {
       } else {
         expect(persistenceMocks.persist).toHaveBeenCalledOnce();
         expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect(lifecycleEvents).toEqual([
+          { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+        ]);
       }
     },
   );
@@ -426,7 +432,7 @@ describe("mixed inline directives", () => {
         ? {
             kind: "reply",
             reply: {
-              text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
+              text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
             },
           }
         : {
@@ -434,7 +440,7 @@ describe("mixed inline directives", () => {
             provider: "openai",
             model: "gpt-5.6-luna",
             directiveAck: {
-              text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
+              text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
             },
           },
     );
@@ -504,7 +510,7 @@ describe("mixed inline directives", () => {
     expect(result).toEqual({
       kind: "reply",
       reply: {
-        text: "Model set to luna (openai/gpt-5.6-luna) for this session only; configured default unchanged.",
+        text: "Model set to luna (openai/gpt-5.6-luna) for this session only; configured default unchanged. Runtime set to codex for this session.",
       },
     });
     expect(sessionEntry).toMatchObject({
@@ -587,7 +593,7 @@ describe("mixed inline directives", () => {
         model: "gpt-5.6-luna",
         directiveAck: {
           text: expect.stringContaining(
-            "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
+            "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
           ),
         },
       });
@@ -613,7 +619,7 @@ describe("mixed inline directives", () => {
     });
 
     const expectedText =
-      "Model set to openai/gpt-5.6-luna for this session. Agent default unchanged because configuration is immutable.";
+      "Model set to openai/gpt-5.6-luna for this session. Agent default unchanged because configuration is immutable. Runtime set to codex for this session.";
     expect(result).toMatchObject(
       body.startsWith("/model")
         ? { kind: "reply", reply: { text: expectedText } }
@@ -634,7 +640,7 @@ describe("mixed inline directives", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
       directiveAck: {
-        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
+        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
       },
     });
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
@@ -650,6 +656,7 @@ describe("mixed inline directives", () => {
       authProfileOverrideCompactionCount: 2,
     });
     const { result } = await applyMixedDirectives({
+      cfg: { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } },
       body: "/model default -s",
       senderIsOwner: true,
       sessionEntry,
@@ -684,6 +691,7 @@ describe("mixed inline directives", () => {
       authProfileOverrideCompactionCount: 2,
     });
     const { result } = await applyMixedDirectives({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
       body: "/model default -s",
       senderIsOwner: true,
       provider: "openai",
@@ -697,7 +705,7 @@ describe("mixed inline directives", () => {
     expect(result).toMatchObject({
       kind: "reply",
       reply: {
-        text: "Session model reset to configured default (openai/gpt-5.6-luna).",
+        text: "Session model reset to configured default (openai/gpt-5.6-luna). Runtime set to codex for this session.",
       },
     });
     expect(sessionEntry.providerOverride).toBeUndefined();
@@ -724,7 +732,7 @@ describe("mixed inline directives", () => {
     expect(result).toMatchObject({
       kind: "reply",
       reply: {
-        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged.",
+        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
       },
     });
     expect(sessionEntry).toMatchObject({

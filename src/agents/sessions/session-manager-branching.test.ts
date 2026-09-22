@@ -18,10 +18,18 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 afterEach(() => vi.restoreAllMocks());
 
 describe("SessionManager branch replacement", () => {
@@ -140,6 +148,8 @@ describe("SessionManager branch replacement", () => {
     });
 
     const sessionManager = SessionManager.open(scope, dir);
+    const sourceTarget = sessionManager.getSessionTarget();
+    expect(sourceTarget).toMatchObject(scope);
     const observedBranches: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.kind !== "replace" || !mutation.current.sessionKeys.includes(sessionKey)) {
@@ -167,7 +177,7 @@ describe("SessionManager branch replacement", () => {
     expect(observedBranches).toEqual([
       {
         sessionId: branchedSessionId,
-        target: { ...scope, sessionId: branchedSessionId },
+        target: { ...sourceTarget, sessionId: branchedSessionId },
         durableEntries: sessionManager.getEntries(),
       },
     ]);
@@ -211,6 +221,8 @@ describe("SessionManager branch replacement", () => {
     const beforeEntry = loadSessionEntry(scope);
     const beforeEvents = await loadTranscriptEvents(scope);
     const beforeEntries = manager.getEntries();
+    const beforeTarget = manager.getSessionTarget();
+    expect(beforeTarget).toMatchObject(scope);
     const database = openOpenClawAgentDatabase({
       agentId: scope.agentId,
       path: resolveSessionTranscriptDatabasePath(scope),
@@ -236,7 +248,7 @@ describe("SessionManager branch replacement", () => {
     expect(loadSessionEntry(scope)).toEqual(beforeEntry);
     expect(await loadTranscriptEvents(scope)).toEqual(beforeEvents);
     expect(manager.getSessionId()).toBe(scope.sessionId);
-    expect(manager.getSessionTarget()).toEqual(scope);
+    expect(manager.getSessionTarget()).toEqual(beforeTarget);
     expect(manager.getEntries()).toEqual(beforeEntries);
     expect(manager.getLeafId()).toBe(leafId);
     expect(replacements).toEqual([]);

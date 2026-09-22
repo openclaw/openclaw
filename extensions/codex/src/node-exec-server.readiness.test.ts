@@ -2,13 +2,17 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import * as tempPaths from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import * as transport from "./app-server/transport-stdio.js";
-import { runCodexNodeExecServer } from "./node-exec-server.runtime.js";
+import * as transportLifecycle from "./app-server/transport.js";
+import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
 
-// Pinned Codex 0.153.4 transport.rs emits this line before entering its stdio loop.
+// Pinned Codex 0.154.0 transport.rs emits this line before entering its stdio loop.
 const READY = " INFO codex_exec_server::server::transport: codex-exec-server listening on stdio\n";
 const fixture = `
 const readline = require('node:readline');
@@ -28,15 +32,16 @@ afterEach(() => {
 
 async function startFixture(readyBeforeRegistrationReturns = false) {
   const controller = new AbortController();
-  const receiver = vi.fn();
+  const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
   const assertExecAuthorized = vi.fn();
-  const activeProcesses = new Set<() => Promise<void>>();
+  const release = vi.fn();
+  const command = createCodexNodeExecServerCommand();
   const io = {
     signal: controller.signal,
     emitChunk: async () => {},
     onInput: () => {},
-    frames: { send, onMessage: () => () => {} },
+    frames: { send, onMessage: receiver },
   } satisfies OpenClawPluginNodeHostCommandIo;
   let resolveChild!: (child: ChildProcessWithoutNullStreams) => void;
   const childCreated = new Promise<ChildProcessWithoutNullStreams>((resolve) => {
@@ -69,13 +74,23 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
       return child;
     },
   );
-  const invocation = runCodexNodeExecServer({
-    workspaceDir: process.cwd(),
+  const placement = {
+    cwd: process.cwd(),
+    environmentId: "readiness-environment",
+    sessionId: "readiness-session",
+    sessionKey: "agent:main:readiness",
+    ownerEpoch: 1,
+  };
+  const invocation = command.handle(
+    JSON.stringify({ placement, authorization: "human-approved" }),
     io,
-    activeProcesses,
-    assertExecAuthorized,
-    onFrameReceiver: receiver,
-  });
+    {
+      sessionKey: placement.sessionKey,
+      sendNodeEvent: async () => {},
+      acquireManagedWorkspace: () => ({ workspaceDir: placement.cwd, release }),
+      prepareExecAuthorization: () => assertExecAuthorized,
+    },
+  );
   const outcome = invocation.catch((error: unknown) => error);
   const child = await Promise.race([
     childCreated,
@@ -94,14 +109,17 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     receiver,
     send,
     assertExecAuthorized,
-    activeProcesses,
+    release,
+    command,
+    privateHome: privateHome!,
     outcome,
     stderr,
     async cleanup() {
       controller.abort(new Error("fixture cleanup"));
       await outcome;
       expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-      expect(activeProcesses.size).toBe(0);
+      await command.onDisconnect?.();
+      expect(release).toHaveBeenCalledOnce();
       expect(privateHome).toBeDefined();
       await expect(access(privateHome!)).rejects.toThrow();
     },
@@ -109,6 +127,95 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
 }
 
 describe("Codex node native readiness", () => {
+  it("retains workspace resources until the in-flight shutdown receipt settles", async () => {
+    const createWorkspace = tempPaths.tempWorkspace;
+    const cleanupStarted = vi.fn();
+    vi.spyOn(tempPaths, "tempWorkspace").mockImplementation(async (options) => {
+      const workspace = await createWorkspace(options);
+      const cleanup = workspace.cleanup.bind(workspace);
+      workspace.cleanup = async () => {
+        cleanupStarted();
+        return await cleanup();
+      };
+      return workspace;
+    });
+    const harness = await startFixture(true);
+    const closed = once(harness.child, "close");
+    const receipt = createDeferred<void>();
+    const receiptHeld = createDeferred<void>();
+    const close = transportLifecycle.closeCodexAppServerTransportAndWait;
+    const heldClose = vi
+      .spyOn(transportLifecycle, "closeCodexAppServerTransportAndWait")
+      .mockImplementation(async (...args) => {
+        const result = await close(...args);
+        await closed;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        receiptHeld.resolve();
+        await receipt.promise;
+        return result;
+      });
+    try {
+      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
+      harness.controller.abort(new Error("node receipt fixture disconnected"));
+      await receiptHeld.promise;
+      expect(cleanupStarted).not.toHaveBeenCalled();
+      expect(harness.release).not.toHaveBeenCalled();
+      expect(harness.command.hasActiveWork?.()).toBe(true);
+      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+
+      receipt.resolve();
+      await harness.outcome;
+      expect(cleanupStarted).toHaveBeenCalledOnce();
+      expect(harness.release).toHaveBeenCalledOnce();
+      expect(harness.command.hasActiveWork?.()).toBe(false);
+      await expect(access(harness.privateHome)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      receipt.resolve();
+      heldClose.mockRestore();
+      await harness.cleanup();
+    }
+  });
+
+  it("retains workspace resources after an unconfirmed stop until the child closes", async () => {
+    const harness = await startFixture(true);
+    const close = transportLifecycle.closeCodexAppServerTransportAndWait;
+    const failedClose = vi
+      .spyOn(transportLifecycle, "closeCodexAppServerTransportAndWait")
+      .mockResolvedValue({ exited: false, cleanup: "uncertain" });
+    const failedTreeKill = vi.spyOn(processRuntime, "killProcessTree").mockReturnValue(undefined);
+    try {
+      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
+      harness.controller.abort(new Error("node cleanup fixture disconnected"));
+      await expect(harness.outcome).resolves.toMatchObject({
+        message: "Codex node exec-server process tree did not terminate.",
+      });
+      expect(harness.child.exitCode).toBeNull();
+      expect(harness.child.signalCode).toBeNull();
+      expect(harness.release).not.toHaveBeenCalled();
+      expect(harness.command.hasActiveWork?.()).toBe(true);
+      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+      await expect(harness.command.onDisconnect?.()).rejects.toThrow("did not terminate");
+
+      failedClose.mockRestore();
+      failedTreeKill.mockRestore();
+      await close(harness.child);
+      await vi.waitFor(async () => {
+        expect(harness.release).toHaveBeenCalledOnce();
+        await expect(access(harness.privateHome)).rejects.toThrow();
+      });
+      await harness.command.onDisconnect?.();
+      expect(harness.release).toHaveBeenCalledOnce();
+      expect(harness.command.hasActiveWork?.()).toBe(false);
+    } finally {
+      failedClose.mockRestore();
+      failedTreeKill.mockRestore();
+      await close(harness.child);
+      await harness.outcome;
+    }
+  });
+
   it("retains native readiness emitted before process registration returns", async () => {
     const harness = await startFixture(true);
     try {

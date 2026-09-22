@@ -10,6 +10,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 
 /**
  * Normalizes raw user/channel target input before provider-specific parsing.
@@ -230,6 +231,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
   ) {
     return undefined;
   }
+  captureChannelReadAuthority()?.();
   const resolved = await resolver.resolveTarget({
     cfg: params.cfg,
     accountId: params.accountId,

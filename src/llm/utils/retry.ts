@@ -1,9 +1,11 @@
-import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
+import {
+  resolveResponsesOutputIdentityRetry,
+  WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
+} from "@openclaw/ai/diagnostics";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
-  hasTransientRetryEvidence,
   shouldRetryFailoverSignal,
 } from "../../agents/failover/retry-evidence.js";
 import {
@@ -23,15 +25,20 @@ const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
  * Replay must not duplicate output or override refusals and permanent transport failures.
  */
 export function isTerminalAssistantError(
-  message: Pick<AssistantMessage, "diagnostics" | "errorCode"> | null | undefined,
+  message:
+    | (Pick<AssistantMessage, "diagnostics" | "errorCode"> &
+        Partial<Pick<AssistantMessage, "stopReason" | "errorBody" | "content">>)
+    | null
+    | undefined,
 ): boolean {
   return (
     Boolean(message?.errorCode && TERMINAL_ASSISTANT_ERROR_CODES.has(message.errorCode)) ||
+    (message != null && resolveResponsesOutputIdentityRetry(message) === "stop") ||
     isProviderRefusalAssistantError(message)
   );
 }
 
-/** Classify transient provider/transport failures for outer retry policy. */
+/** Classify transient provider/transport failures for session retries. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (
     message.stopReason !== "error" ||
@@ -39,6 +46,9 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     isTerminalAssistantError(message)
   ) {
     return false;
+  }
+  if (resolveResponsesOutputIdentityRetry(message) === "retry") {
+    return true;
   }
   const errorMessage = message.errorMessage.trim();
   const status = extractFailoverHttpStatus(errorMessage);
@@ -50,6 +60,5 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     ...(status === undefined ? {} : { status }),
   };
   const classification = classifyFailoverSignal(signal);
-  const hasTransientEvidence = hasTransientRetryEvidence(signal);
-  return shouldRetryFailoverSignal({ classification, hasTransientEvidence, signal });
+  return shouldRetryFailoverSignal({ classification, signal });
 }

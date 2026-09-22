@@ -114,7 +114,7 @@ admission rejects an oversized reply rather than substituting a successful
 truncation marker. Declarations have
 independent size, depth, and traversal bounds; use `describe()` for the original
 schema when those bounds require an unknown type. Reading declarations does not
-execute tools or automatically enable typechecking of cells.
+execute tools or typecheck cells; they guide the agent's JavaScript composition.
 
 The contract rules are strict:
 
@@ -144,7 +144,7 @@ globals, `catalog.all()`, and the trusted quick index. TypeScript-style declarat
 files are available through the read-only `API` virtual file surface, so agents
 can inspect MCP signatures without adding MCP schemas to the prompt:
 
-```typescript
+```javascript
 const files = await API.list("mcp");
 const githubApi = await API.read("mcp/github.d.ts");
 
@@ -227,7 +227,7 @@ Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
 `mcp/<server>.d.ts` per visible server, and injects that small read-only table
-into the QuickJS worker. Guest code sees only the `API` object:
+into the selected executor's worker. Guest code sees only the `API` object:
 `API.list(prefix?)` returns file metadata and `API.read(path)` returns the
 selected declaration content. Unknown paths and `.`/`..` segments are
 rejected.
@@ -240,6 +240,11 @@ single-tool schema response inside the program.
 
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
+
+Tool arguments and values passed to `results.save` must serialize to JSON.
+BigInts, cycles, and throwing serialization hooks fail the affected call instead
+of silently replacing its data. Catch the error and convert the value explicitly;
+existing saved results remain unchanged.
 
 ## Input-dependent outputs
 
@@ -321,6 +326,16 @@ plain objects. Error-specific `toJSON` methods are not invoked. This includes
 rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
 the cell; uncaught errors still produce a failed result.
 
+Returned values and `json(...)` output preserve literal JSON keys such as
+`__proto__`. Number-valued typed arrays preserve their numeric elements in
+indexed JSON objects; use `Array.from(...)` when you want a JSON array. Final
+returned values do not invoke custom `toJSON` methods. Convert special values
+explicitly, such as returning `date.toISOString()` for a date string.
+
+Final value conversion runs within the cell. Output and tool calls created by
+property getters follow the ordinary settlement and suspension rules before
+the cell completes.
+
 Nested tool data and model-visible output have separate limits. A successful
 bridge reply reaches the guest as its complete normalized JSON value, or its
 promise rejects with a catchable program-data resource error. The transport
@@ -338,8 +353,8 @@ retaining tool data; these control replies are bounded by pending-call slots.
 Cancellation and expiry close admission and release undelivered replies.
 
 This is an additional logical host-data allowance, not a total RSS limit or a
-guarantee that large data can be suspended. Guest heap and whole-VM snapshot
-limits remain unchanged; worker handoff and JSON conversion can temporarily
+guarantee that large data can be suspended. Executor memory limits and QuickJS
+whole-VM snapshot limits still apply; worker handoff and JSON conversion can temporarily
 retain additional copies. Narrow or paginate requests after an admission error.
 
 Output order matches guest calls. Cumulative guest output and the final value

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessSessionForkParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -40,7 +40,7 @@ type Boundary = Extract<CodexUpstreamForkBoundaryResult, { ok: true }> & {
 
 /** Native history stays native; only the verified local display prefix is copied. */
 export async function forkCanonicalCodexSession(params: {
-  fork: AgentHarnessSessionForkParams;
+  fork: Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
   resolved: Boundary;
   sourceBinding: CodexAppServerThreadBinding;
   control: CodexSessionCatalogControl;
@@ -137,6 +137,7 @@ export async function forkCanonicalCodexSession(params: {
             },
           });
           const assertCurrent = () => {
+            fork.assertCurrent();
             initialization.assertCurrent();
             if (ownership && !subscriptionReleased) {
               ownership.assertCurrent();

@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight pluralkit behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadPluralKitRuntime } from "./message-handler.preflight-runtime.js";
 import type { DiscordMessageEvent } from "./message-handler.preflight.types.js";

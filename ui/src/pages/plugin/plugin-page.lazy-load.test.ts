@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { PluginPage } from "./plugin-page.ts";
@@ -55,9 +54,9 @@ function createPage(loads: Promise<TestBundledView>[], includeExternal = false) 
   page.loads = loads;
   page.pluginId = "logbook";
   page.tabId = "logbook";
-  (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+  (page as unknown as { context: ApplicationContext }).context = {
     gateway: { snapshot, subscribe: () => () => undefined },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   return page;
 }
 

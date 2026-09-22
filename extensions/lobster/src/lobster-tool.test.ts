@@ -1,14 +1,22 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRuntimeMock,
+  createRuntimeTaskFlow,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 // Lobster tests cover lobster tool plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
 import * as lobsterRunner from "./lobster-runner.js";
+import type { BoundTaskFlow } from "./lobster-taskflow.js";
 import { createLobsterTool } from "./lobster-tool.js";
 import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
   return createTestPluginApi({
@@ -154,10 +162,10 @@ describe("lobster plugin tool", () => {
                 }
               : {
                   action,
-                  token: "synthetic-token",
+                  token: "resume-1",
                   approve: true,
                   flowId: "flow-1",
-                  flowExpectedRevision: 1,
+                  flowExpectedRevision: 4,
                 },
           ),
         ).finally(() => {
@@ -430,10 +438,6 @@ describe("lobster plugin tool", () => {
       "flowId required when using managed TaskFlow resume mode",
     ],
     [
-      { action: "resume", approve: true, flowId: "flow-1", flowExpectedRevision: 1 },
-      "token or approvalId required when using managed TaskFlow resume mode",
-    ],
-    [
       { action: "resume", token: "resume-token-1", flowId: "flow-1", flowExpectedRevision: 1 },
       "approve required when using managed TaskFlow resume mode",
     ],
@@ -672,6 +676,71 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/flowStateJson must be valid JSON/);
   });
 
+  it("recovers a saved approval in the owning session without replaying completed work", async () => {
+    function bind(sessionKey: string): BoundTaskFlow {
+      const owner = createRuntimeTaskFlow().bindSession({ sessionKey });
+      return {
+        get: async (id) => owner.get(id),
+        tryCreateManaged: async (input) => owner.tryCreateManaged(input),
+        resume: async (input) => owner.resume(input),
+        setWaiting: async (input) => owner.setWaiting(input),
+        finish: async (input) => owner.finish(input),
+        fail: async (input) => owner.fail(input),
+        cancel: owner.cancel,
+      };
+    }
+    vi.stubEnv("LOBSTER_STATE_DIR", tempDirs.make("openclaw-lobster-checkpoint-"));
+    const runner = lobsterRunner.createEmbeddedLobsterRunner();
+    vi.spyOn(runner, "run");
+    const sessionKey = "agent:main:lobster-checkpoint-recovery";
+    const first = createLobsterTool(fakeApi(), { runner, taskFlow: bind(sessionKey) });
+    const started = await first.execute("start", {
+      action: "run",
+      pipeline: "skills/taskflow/examples/inbox-triage.lobster",
+      flowControllerId: "tests/checkpoint",
+      flowGoal: "Prepare and accept a result",
+    });
+    const details = requireRecord(started.details, "checkpoint start");
+    const mutation = requireRecord(details.mutation, "checkpoint mutation");
+    const saved = requireRecord(mutation.flow, "saved checkpoint");
+    const wait = requireRecord(saved.waitJson, "saved approval");
+    const input = {
+      action: "resume",
+      approve: true,
+      flowId: saved.flowId,
+      flowExpectedRevision: saved.revision,
+    };
+    const stranger = createLobsterTool(fakeApi(), { runner, taskFlow: bind("agent:main:other") });
+    await expect(stranger.execute("wrong-owner", input)).rejects.toThrow(
+      "no resumable Lobster checkpoint",
+    );
+
+    const recovered = createLobsterTool(fakeApi(), { runner, taskFlow: bind(sessionKey) });
+    await expect(
+      recovered.execute("wrong-checkpoint", { ...input, token: "another-checkpoint" }),
+    ).rejects.toThrow("does not match");
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    const resumed = await recovered.execute("recover", input);
+    expect(runner.run).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "resume", token: wait.resumeToken, approve: true }),
+    );
+    expect(requireRecord(resumed.details, "resumed workflow").output).toEqual([
+      {
+        synthetic: true,
+        routes: {
+          business: ["demo-business-1", "demo-business-2"],
+          personal: ["demo-personal-1"],
+          later: ["demo-later-1"],
+        },
+      },
+    ]);
+    expect(runner.run).toHaveBeenCalledTimes(2);
+    await expect(recovered.execute("replay", input)).rejects.toThrow(
+      "no resumable Lobster checkpoint",
+    );
+    expect(runner.run).toHaveBeenCalledTimes(2);
+  });
+
   it("can resume managed TaskFlow revision zero with only approvalId", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -682,6 +751,8 @@ describe("lobster plugin tool", () => {
       }),
     };
     const taskFlow = createFakeTaskFlow();
+    const saved = await taskFlow.get("flow-1");
+    vi.mocked(taskFlow.get).mockResolvedValue(saved && { ...saved, revision: 0 });
     const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
 
     const res = await tool.execute("call-managed-resume-approval-id", {
@@ -725,11 +796,13 @@ describe("lobster plugin tool", () => {
       }),
     };
     const taskFlow = createFakeTaskFlow();
+    const saved = await taskFlow.get("flow-1");
+    vi.mocked(taskFlow.get).mockResolvedValue(saved && { ...saved, revision: 1 });
     const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
 
     await tool.execute("call-managed-resume-string-revision", {
       action: "resume",
-      token: " resume-token-1 ",
+      token: " resume-1 ",
       approve: true,
       flowId: "flow-1",
       flowExpectedRevision: "1",
@@ -744,7 +817,7 @@ describe("lobster plugin tool", () => {
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "resume",
-      token: " resume-token-1 ",
+      token: " resume-1 ",
       approve: true,
       cwd: process.cwd(),
       timeoutMs: 20_000,

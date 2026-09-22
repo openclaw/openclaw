@@ -2,9 +2,7 @@ import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plu
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
-  cloneFirstTemplateModel,
-  DEFAULT_CONTEXT_TOKENS,
-  normalizeModelCompat,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
 import { applyFireworksConfig } from "./onboard.js";
@@ -44,31 +42,28 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const isKimiModel = isFireworksKimiModelId(modelId);
   const input = resolveFireworksDynamicInput(modelId);
 
-  return (
-    cloneFirstTemplateModel({
-      providerId: PROVIDER_ID,
-      modelId,
-      templateIds: [FIREWORKS_DEFAULT_MODEL_ID],
-      ctx,
-      patch: {
-        provider: PROVIDER_ID,
-        reasoning: !isKimiModel,
-        input,
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    modelId,
+    ctx,
+    cases: [
+      {
+        match: () => true,
+        templateIds: [FIREWORKS_DEFAULT_MODEL_ID],
+        patch: ({ template }) =>
+          template
+            ? undefined
+            : {
+                api: "openai-completions",
+                baseUrl: FIREWORKS_BASE_URL,
+                contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+                maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+              },
       },
-    }) ??
-    normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      provider: PROVIDER_ID,
-      api: "openai-completions",
-      baseUrl: FIREWORKS_BASE_URL,
-      reasoning: !isKimiModel,
-      input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS || DEFAULT_CONTEXT_TOKENS,
-    })
-  );
+    ],
+    patch: { provider: PROVIDER_ID, reasoning: !isKimiModel, input },
+    synthesize: true,
+  });
 }
 
 export default defineSingleProviderPluginEntry({

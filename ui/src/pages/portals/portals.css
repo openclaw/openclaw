@@ -199,6 +199,30 @@
   font-size: var(--control-ui-text-sm);
 }
 
+openclaw-portals-page[embedded],
+.portals-embedded {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  height: 100%;
+}
+
+.portals-embedded .portals-preview {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.portals-embedded .portals-preview__frame,
+.portals-embedded .portals-preview__notice,
+.portals-embedded .portals-preview__state,
+.portals-embedded .portals-empty {
+  flex: 1;
+  min-height: 0;
+}
+
 @media (max-width: 768px) {
   .portals-layout {
     grid-template-columns: minmax(0, 1fr);

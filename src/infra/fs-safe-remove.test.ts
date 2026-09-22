@@ -81,6 +81,9 @@ describe("removePathWithinRoot", () => {
     await fs.mkdir(path.join(root, "tree", "a-dir", "nested"), { recursive: true });
     await fs.writeFile(path.join(root, "tree", "b-dir", "b.txt"), "b");
     await fs.writeFile(path.join(root, "tree", "a-dir", "nested", "a.txt"), "a");
+    const deepDirectory = path.join(root, "tree", ...Array.from({ length: 65 }, () => "d"));
+    await fs.mkdir(deepDirectory, { recursive: true });
+    await fs.writeFile(path.join(deepDirectory, "leaf.txt"), "deep");
 
     await removePathWithinRoot({
       rootDir: root,
@@ -90,6 +93,32 @@ describe("removePathWithinRoot", () => {
     });
 
     await expectRejectCode(fs.stat(path.join(root, "tree")), "ENOENT");
+  });
+
+  it("stops sorted recursive removal at a symlink and preserves later entries", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+    const tree = path.join(root, "tree");
+    await fs.mkdir(tree);
+    await fs.writeFile(path.join(outside, "keep.txt"), "outside");
+    await fs.writeFile(path.join(tree, "z-last.txt"), "last");
+    await createRebindableDirectoryAlias({
+      aliasPath: path.join(tree, "m-link"),
+      targetPath: outside,
+    });
+    await fs.writeFile(path.join(tree, "a-first.txt"), "first");
+
+    await expect(
+      removePathWithinRoot({ rootDir: root, relativePath: "tree", recursive: true, force: true }),
+    ).rejects.toMatchObject({
+      code: "symlink",
+      message: `symlink not allowed: ${path.join("tree", "m-link")}`,
+    });
+
+    await expectRejectCode(fs.stat(path.join(tree, "a-first.txt")), "ENOENT");
+    await expect(fs.readFile(path.join(tree, "z-last.txt"), "utf8")).resolves.toBe("last");
+    await expect(fs.readFile(path.join(outside, "keep.txt"), "utf8")).resolves.toBe("outside");
+    expect((await fs.lstat(path.join(tree, "m-link"))).isSymbolicLink()).toBe(true);
   });
 
   it("suppresses only not-found errors when force is enabled", async () => {

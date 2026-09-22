@@ -10,6 +10,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -130,6 +131,12 @@ async function listMainSessionWithThinking(params: {
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const context = {
+    getRuntimeConfig,
+    readPreparedGatewayModelCatalog:
+      params.readPreparedGatewayModelCatalog ?? (async () => ({ entries: [] })),
+  } as GatewayRequestContext;
+  await initializeSessionReadContext(context);
   await expectDefined(
     sessionsHandlers["sessions.list"],
     'sessionsHandlers["sessions.list"] test invariant',
@@ -139,11 +146,7 @@ async function listMainSessionWithThinking(params: {
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig,
-      readPreparedGatewayModelCatalog:
-        params.readPreparedGatewayModelCatalog ?? (async () => ({ entries: [] })),
-    } as never,
+    context,
   });
 
   const result = firstResponseResult(respond) as SessionsListResult | undefined;

@@ -13,6 +13,7 @@ export const enum CommandLane {
   HookDispatch = "hook-dispatch",
   Background = "background",
   Subagent = "subagent",
+  ActiveMemory = "active-memory",
   Nested = "nested",
 }
 
@@ -27,5 +28,6 @@ export const STATIC_COMMAND_LANES = [
   CommandLane.HookDispatch,
   CommandLane.Background,
   CommandLane.Subagent,
+  CommandLane.ActiveMemory,
   CommandLane.Nested,
 ] as const;

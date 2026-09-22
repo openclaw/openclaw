@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import {
   type ChannelInboundTurnPlan,

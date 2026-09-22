@@ -1019,7 +1019,7 @@ class ChatReaderScrollOwnershipLayoutTest {
               } else {
                 emptyList()
               }
-            buildChatTimeline(messages, if (streamingLines == null) 0 else 1, pending, stream)
+            prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main").buildTimeline(if (streamingLines == null) 0 else 1, pending, stream)
           }
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
@@ -1087,9 +1087,9 @@ class ChatReaderScrollOwnershipLayoutTest {
                       Text("Working")
                     }
 
-                    is ChatTimelineItem.PendingTools -> {
+                    is ChatTimelineItem.ToolActivity -> {
                       // Controlled sibling geometry; this test exercises timeline insertion, not tool UI.
-                      Box(Modifier.fillMaxWidth().height(120.dp)) { Text(item.toolCalls.single().name) }
+                      Box(Modifier.fillMaxWidth().height(120.dp)) { Text(item.tools.single().name) }
                     }
 
                     is ChatTimelineItem.Message -> {

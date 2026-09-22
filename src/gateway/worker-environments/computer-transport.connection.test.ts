@@ -31,7 +31,7 @@ import {
   type WorkerConnectionService,
 } from "../server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { createWorkerComputerService } from "./computer-transport.js";
+import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,
   connectionIdentity,

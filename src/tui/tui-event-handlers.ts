@@ -30,6 +30,7 @@ import {
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
+import { renderTuiActivityItem } from "./tui-tool-activity.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -586,6 +587,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (evt.stream === "item") {
+      if (
+        renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })
+      ) {
+        tui.requestRender();
+      }
       return;
     }
     if (evt.stream === "tool") {

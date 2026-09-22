@@ -6,6 +6,15 @@ import { closedObject } from "./closed-object.js";
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const CountSchema = Type.Integer({ minimum: 0 });
 
+/** Recorded lifecycle sections; absence on older residents means unknown custody. */
+const GatewayWriteCustodySchema = Type.Array(
+  closedObject({
+    phase: Type.String({ minLength: 1 }),
+    count: CountSchema,
+  }),
+);
+export type GatewayWriteCustody = Static<typeof GatewayWriteCustodySchema>;
+
 /** Public admission state only; never includes the controller's suspension token. */
 export const GatewaySuspensionSchema = closedObject({
   phase: Type.Union([
@@ -64,6 +73,7 @@ export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
+  writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
 
 export const GatewaySuspendPrepareDrainingResultSchema = closedObject({
@@ -73,6 +83,7 @@ export const GatewaySuspendPrepareDrainingResultSchema = closedObject({
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
+  writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
 
 export const GatewaySuspendPrepareReadyResultSchema = closedObject({
@@ -81,6 +92,7 @@ export const GatewaySuspendPrepareReadyResultSchema = closedObject({
   expiresAtMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
+  writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
 
 export const GatewaySuspendPrepareResultSchema = Type.Union([
@@ -103,11 +115,13 @@ export const GatewaySuspendStatusDrainingResultSchema = closedObject({
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
+  writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
 
 export const GatewaySuspendStatusReadyResultSchema = closedObject({
   status: Type.Literal("ready"),
   expiresAtMs: CountSchema,
+  writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
 
 export const GatewaySuspendStatusResultSchema = Type.Union([

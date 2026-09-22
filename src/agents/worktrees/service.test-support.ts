@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { insertRegistryWorktree } from "./registry.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -74,7 +75,7 @@ async function copyProvisionedFiles(params: {
   }
 }
 
-export async function materializeManagedWorktreeFixture(params: {
+type ManagedWorktreeFixtureParams = {
   env: NodeJS.ProcessEnv;
   name: string;
   now: number;
@@ -83,31 +84,81 @@ export async function materializeManagedWorktreeFixture(params: {
   provisionedPaths?: readonly string[];
   repoRoot: string;
   stateDir: string;
-}): Promise<ManagedWorktreeRecord> {
-  const repoFingerprint = "downstream-fixture";
-  const worktreePath = path.join(params.stateDir, "worktrees", repoFingerprint, params.name);
-  const branch = `openclaw/${params.name}`;
-  await fs.mkdir(path.dirname(worktreePath), { recursive: true });
-  await git(params.repoRoot, "worktree", "add", "-b", branch, "--", worktreePath, "HEAD");
-  const provisionedPaths = params.provisionedPaths ?? [];
-  await copyProvisionedFiles({
+};
+
+export async function materializeManagedWorktreeFixtures(
+  params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
+): Promise<ManagedWorktreeRecord[]> {
+  const records = params.names.map((name): ManagedWorktreeRecord => ({
+    id: `fixture-${name}`,
+    name,
+    repoFingerprint: "downstream-fixture",
     repoRoot: params.repoRoot,
-    worktreePath,
-    provisionedPaths,
-  });
-  const record: ManagedWorktreeRecord = {
-    id: `fixture-${params.name}`,
-    name: params.name,
-    repoFingerprint,
-    repoRoot: params.repoRoot,
-    path: worktreePath,
-    branch,
+    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",
     ...(params.ownerId ? { ownerId: params.ownerId } : {}),
     createdAt: params.now,
     lastActiveAt: params.now,
+  }));
+  for (const record of records) {
+    await fs.mkdir(path.dirname(record.path), { recursive: true });
+  }
+  const commands = records.map((record) => [
+    "-C",
+    record.repoRoot,
+    "worktree",
+    "add",
+    "-b",
+    record.branch,
+    "--",
+    record.path,
+    "HEAD",
+  ]);
+  if (records.length > 1) {
+    // Fork Git from a small process instead of the resident Vitest runtime.
+    // Every fixture still has a real, independently registered Git worktree.
+    const creation = execFileAsync(process.execPath, [
+      "-e",
+      `const { execFileSync } = require("node:child_process");
+       const { readFileSync } = require("node:fs");
+       for (const args of JSON.parse(readFileSync(0, "utf8"))) {
+         execFileSync("git", args);
+       }`,
+    ]);
+    creation.child.stdin?.end(JSON.stringify(commands));
+    await creation;
+  } else {
+    for (const args of commands) {
+      await execFileAsync("git", args);
+    }
+  }
+  const provisionedPaths = params.provisionedPaths ?? [];
+  for (const record of records) {
+    await copyProvisionedFiles({
+      repoRoot: record.repoRoot,
+      worktreePath: record.path,
+      provisionedPaths,
+    });
+  }
+  const register = () => {
+    for (const record of records) {
+      insertRegistryWorktree(params.env, record, { provisionedPaths });
+    }
   };
-  insertRegistryWorktree(params.env, record, { provisionedPaths });
-  return record;
+  if (records.length > 1) {
+    // All asynchronous setup is complete before committing the fixture rows together.
+    runOpenClawStateWriteTransaction(register, { env: params.env });
+  } else {
+    register();
+  }
+  return records;
+}
+
+export async function materializeManagedWorktreeFixture(
+  params: ManagedWorktreeFixtureParams,
+): Promise<ManagedWorktreeRecord> {
+  const { name, ...shared } = params;
+  return (await materializeManagedWorktreeFixtures({ ...shared, names: [name] }))[0]!;
 }

@@ -1,5 +1,5 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
-import { symbol, type SpinnerOptions } from "@clack/prompts";
+import { CANCEL_SYMBOL, symbol, type SpinnerOptions } from "@clack/prompts";
 import {
   afterAll,
   afterEach,
@@ -49,7 +49,6 @@ const clackMocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   confirm: vi.fn(),
   intro: vi.fn(),
-  isCancel: vi.fn(() => false),
   multiselect: vi.fn(),
   outro: vi.fn(),
   password: vi.fn(),
@@ -88,7 +87,6 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   cancel: clackMocks.cancel,
   confirm: clackMocks.confirm,
   intro: clackMocks.intro,
-  isCancel: clackMocks.isCancel,
   multiselect: clackMocks.multiselect,
   outro: clackMocks.outro,
   password: clackMocks.password,
@@ -382,6 +380,27 @@ describe("createClackPrompter", () => {
     );
   });
 
+  it.each([false, true])(
+    "preserves Symbol option values and recognizes only Clack cancellation (searchable: %s)",
+    async (searchable) => {
+      const value = Symbol("clack:cancel");
+      const mock = searchable ? clackMocks.autocomplete : clackMocks.select;
+      const params = {
+        message: "Pick a symbol",
+        options: [{ value, label: "Symbol option" }],
+        searchable,
+      };
+      const prompter = createClackPrompter();
+      mock.mockResolvedValueOnce(value);
+      await expect(prompter.select(params)).resolves.toBe(value);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+
+      mock.mockResolvedValueOnce(CANCEL_SYMBOL);
+      await expect(prompter.select(params)).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses navigation-aware searchable selects when prompt navigation is active", async () => {
     navigationPromptMocks.autocompleteWithNavigationFooter.mockResolvedValue("two");
     const prompter = createClackPrompter();
@@ -583,11 +602,10 @@ describe("createClackPrompter", () => {
       const controller = new AbortController();
       const initialEndListeners = process.stdin.listenerCount("end");
       const initialKeypressListeners = process.stdin.listenerCount("keypress");
-      clackMocks.isCancel.mockReturnValueOnce(true);
       mock.mockImplementation(
         async ({ signal }: { signal?: AbortSignal }) =>
           await new Promise<symbol>((resolve) => {
-            signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), {
+            signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), {
               once: true,
             });
           }),
@@ -608,11 +626,10 @@ describe("createClackPrompter", () => {
     async (cancelOwner) => {
       const owner = new AbortController();
       const text = new AbortController();
-      clackMocks.isCancel.mockReturnValueOnce(true);
       clackMocks.text.mockImplementation(
         async ({ signal }: { signal: AbortSignal }) =>
           await new Promise<symbol>((resolve) => {
-            signal.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+            signal.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
           }),
       );
       const prompt = createClackPrompter(process.stderr, owner.signal).text({
@@ -647,10 +664,9 @@ describe("createClackPrompter", () => {
     mock.mockImplementation(
       async ({ signal }: { signal?: AbortSignal }) =>
         await new Promise<symbol>((resolve) => {
-          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+          signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
         }),
     );
-    clackMocks.isCancel.mockReturnValueOnce(true);
 
     const prompt = run();
     await Promise.resolve();
@@ -676,7 +692,7 @@ describe("createClackPrompter", () => {
             restoreRawMode(false);
             writeNewline("\n");
             process.stdin.off("keypress", onClackKeypress);
-            resolve(Symbol("clack:cancel"));
+            resolve(CANCEL_SYMBOL);
           };
           const onClackKeypress = (input: string | undefined) => {
             if (input === "\x04") {
@@ -687,7 +703,6 @@ describe("createClackPrompter", () => {
           signal?.addEventListener("abort", finish, { once: true });
         }),
     );
-    clackMocks.isCancel.mockReturnValueOnce(true);
 
     const prompt = createClackPrompter().confirm({ message: "Continue?" });
     await Promise.resolve();
@@ -750,8 +765,7 @@ describe("createClackPrompter", () => {
       const mock = navigation
         ? navigationPromptMocks.confirmWithNavigationFooter
         : clackMocks.confirm;
-      mock.mockResolvedValue(Symbol("clack:cancel"));
-      clackMocks.isCancel.mockReturnValueOnce(true);
+      mock.mockResolvedValue(CANCEL_SYMBOL);
       clackMocks.cancel.mockImplementationOnce(() => {
         expect(clackMocks.settings.actions.has("left")).toBe(!navigation);
         expect(clackMocks.settings.actions.has("right")).toBe(!navigation);
@@ -776,7 +790,7 @@ describe("createClackPrompter", () => {
       await new Promise((resolve) => {
         signal.addEventListener("abort", resolve, { once: true });
       });
-      return Symbol("clack:cancel");
+      return CANCEL_SYMBOL;
     });
     const prompter = createClackPrompter();
 

@@ -84,8 +84,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 ) {
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
-    // The chunk this document references was replaced by a newer build;
-    // revalidate cannot fix that, only a reload against the fresh index.html.
+    // Asset failures can mean an interrupted connection or a replaced build.
+    // Reload also resets failed browser imports and Vite stylesheet preloads.
     void scheduleStaleChunkReload();
   }
   const revalidate = () => {
@@ -99,9 +99,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       revalidate();
       return;
     }
-    // The gateway is usually still restarting when this is clicked (that update
-    // is what stranded the chunk), so wait for it to answer and then reload
-    // instead of declining on the first failed probe — a silent no-op here is
+    // The Gateway may still be restarting or unreachable, so wait for it to answer
+    // and then reload instead of declining on the first failed probe — a silent no-op here is
     // what drives people to a manual hard reload. Reloading against an
     // unreachable gateway would replace the recoverable panel error with a
     // fatal navigation error in app webviews, so the wait is still bounded.
@@ -111,12 +110,12 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       if (reloading) {
         return;
       }
+      // Vite marks CSS dependencies seen before loading them. Retrying the
+      // module after a failed or blocked reload can mount it without its styles.
       restoreButton();
-      revalidate();
     });
   };
-  // Stale-chunk failures are routine after a gateway update, so present them
-  // as an update prompt instead of a generic failure.
+  // Resource errors alone cannot establish that a newer build exists.
   return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 

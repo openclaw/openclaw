@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -19,10 +20,12 @@ import {
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -60,8 +63,12 @@ describe("installed plugin index read state", () => {
     const stateDir = makeTempDir();
     const error = Object.assign(new Error("plugin index read denied"), { code: "EACCES" });
     const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
-    for (const read of [readPersistedInstalledPluginIndexSync, readPersistedInstalledPluginIndex]) {
-      readSpy.mockImplementationOnce(() => {
+    const asyncReadSpy = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+    for (const { read, fail } of [
+      { read: readPersistedInstalledPluginIndexSync, fail: readSpy },
+      { read: readPersistedInstalledPluginIndex, fail: asyncReadSpy },
+    ]) {
+      fail.mockImplementationOnce(() => {
         throw error;
       });
       await expect
@@ -71,6 +78,7 @@ describe("installed plugin index read state", () => {
         )
         .rejects.toBe(error);
     }
+    asyncReadSpy.mockRestore();
     readSpy.mockRestore();
   });
 

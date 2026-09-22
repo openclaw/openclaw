@@ -2,11 +2,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { LegacyAcpMigrationSource } from "../../infra/legacy-acp-migration-source.js";
 import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
@@ -15,7 +17,7 @@ import {
   withSqliteSessionImportStage,
   type SqliteSessionImportStage,
 } from "./session-accessor.sqlite-import-stage.js";
-import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   formatSqliteSessionReferenceForScope,
   getSessionKysely,
@@ -25,16 +27,12 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
-  ensureTranscriptGenerationInTransaction,
-  ensureTranscriptSessionRoot,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  appendTranscriptEventsInTransaction,
-  createTranscriptEventInserter,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
@@ -48,11 +46,9 @@ type SqliteSessionImportRowsParams = Pick<
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
   preserveExactStoredKey?: boolean;
-  readExactTranscriptRows?: (
-    append: (row: { createdAt: number; eventJson: string }) => void,
-  ) => void;
   skipIfExists?: boolean;
   entry: SessionEntry;
+  legacyAcpMigrationSource?: LegacyAcpMigrationSource;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
   transcriptMtimeMs?: number;
 };
@@ -67,9 +63,6 @@ type SqliteSessionImportRowsResult = {
 };
 
 function resolveSqliteSessionImport(params: SqliteSessionImportRowsParams) {
-  if (params.readExactTranscriptRows && params.readTranscriptEvents) {
-    throw new Error("SQLite session import accepts only one transcript row source");
-  }
   const resolvedScope = resolveSqliteScope(params);
   // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
   const resolved = params.preserveExactStoredKey
@@ -144,45 +137,18 @@ function importSqliteSessionRowsInTransaction(
   }
   // Historical generations append under their existing node without changing its current pointer.
   if (!preserveHistoricalNode) {
+    invalidateSessionEntryMaintenanceAgeFact(database.db);
     writeSessionEntry(database, resolved.sessionKey, importedEntry, {
       allowStoredAliases: true,
       previousEntry: currentEntry ?? null,
     });
-  }
-  // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
-  // parsing, deduping, or trusting JSON ownership would break the migration boundary.
-  if (params.readExactTranscriptRows) {
-    replaceSessionOwnerInTransaction(database, resolved.sessionKey, params.entry.owner);
-    const transcriptScope = {
-      ...resolved,
-      sessionId: params.entry.sessionId,
-    };
-    const db = getSessionKysely(database.db);
-    const existing = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select("seq")
-        .where("session_id", "=", params.entry.sessionId)
-        .limit(1),
-    );
-    if (!existing) {
-      const insertEvent = createTranscriptEventInserter(database, params.entry.sessionId);
-      for (const row of stage.rows(source)) {
-        if (row.seq === 0) {
-          ensureTranscriptSessionRoot(database, transcriptScope, row.createdAt!, {
-            allowStoredAlias: true,
-          });
-          ensureTranscriptGenerationInTransaction(database, params.entry.sessionId);
-        }
-        insertEvent({ seq: row.seq, eventJson: row.eventJson, createdAt: row.createdAt! });
-        transcriptEvents += 1;
-      }
-      // Doctor imports run outside gateway requests and must finish with a complete projection.
-      reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-      publishSessionEntryCacheInvalidation(database);
+    if (params.legacyAcpMigrationSource) {
+      recordLegacyAcpMigrationSources(database.db, resolved.sessionKey, [
+        params.legacyAcpMigrationSource,
+      ]);
     }
-  } else if (params.readTranscriptEvents) {
+  }
+  if (params.readTranscriptEvents) {
     const transcriptScope = {
       ...resolved,
       sessionId: params.entry.sessionId,
@@ -192,7 +158,7 @@ function importSqliteSessionRowsInTransaction(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", params.entry.sessionId),
     )) {
       stage.addSeen(row.event_json);
@@ -205,7 +171,7 @@ function importSqliteSessionRowsInTransaction(
     );
     // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey: resolved.sessionKey });
   }
   if (params.transcriptMtimeMs !== undefined) {
     advanceTranscriptMutationAtInTransaction(
@@ -260,11 +226,8 @@ export async function importSqliteSessionRowsBatch(
         >();
         for (const [source, { params: importParams }] of prepared.entries()) {
           let seq = 0;
-          importParams.readExactTranscriptRows?.((row) =>
-            stage.append(source, seq++, row.eventJson, row.createdAt),
-          );
           const validate = importParams.readTranscriptEvents?.((event) =>
-            stage.append(source, seq++, JSON.stringify(event), null),
+            stage.append(source, seq++, JSON.stringify(event)),
           );
           if (validate) {
             validators.push(validate);
@@ -297,11 +260,4 @@ export async function importSqliteSessionRowsBatch(
       }),
     "session.import.batch",
   );
-}
-
-/** Imports one legacy session entry and its transcript rows for doctor migration. */
-export async function importSqliteSessionRows(
-  params: SqliteSessionImportRowsParams,
-): Promise<SqliteSessionImportRowsResult> {
-  return (await importSqliteSessionRowsBatch([params]))[0]!;
 }

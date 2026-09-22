@@ -13,10 +13,16 @@ type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
 
+export type SqliteIntegrityCheckTiming = {
+  syncElapsedMs?: number;
+  workerCheckElapsedMs?: number;
+  workerLifetimeElapsedMs?: number;
+};
+
 export type SqliteIntegrityCheck = {
   database: DatabaseSync;
   databaseLabel: string;
-  timing?: { syncElapsedMs?: number };
+  timing?: SqliteIntegrityCheckTiming;
 };
 
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
@@ -26,6 +32,9 @@ export type SqliteIntegrityDiagnostics = {
   integrityGateOutcome?: "healthy" | "failed" | "cached";
   integrityCheckSyncMs?: number;
   integrityOutsideCheckMs?: number;
+  integrityWorkerCheckMs?: number;
+  integrityWorkerLifetimeMs?: number;
+  integrityOutsideWorkerMs?: number;
   canonicalIndexMs?: number;
   repairedIndexCount?: number;
 };
@@ -43,6 +52,9 @@ export function* sqliteIntegrityCheckSteps(
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
+    delete diagnostics.integrityWorkerCheckMs;
+    delete diagnostics.integrityWorkerLifetimeMs;
+    delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
     yield check;
@@ -61,6 +73,14 @@ export function* sqliteIntegrityCheckSteps(
         diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
         diagnostics.integrityOutsideCheckMs =
           diagnostics.integrityGateMs - diagnostics.integrityCheckSyncMs;
+      }
+      if (check.timing?.workerCheckElapsedMs !== undefined) {
+        diagnostics.integrityWorkerCheckMs = Math.floor(check.timing.workerCheckElapsedMs);
+      }
+      if (check.timing?.workerLifetimeElapsedMs !== undefined) {
+        diagnostics.integrityWorkerLifetimeMs = Math.floor(check.timing.workerLifetimeElapsedMs);
+        diagnostics.integrityOutsideWorkerMs =
+          diagnostics.integrityGateMs - diagnostics.integrityWorkerLifetimeMs;
       }
     }
   }
@@ -103,7 +123,7 @@ export type SqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; generation: SqliteFileGeneration; terminal: true }
   | { status: "healthy"; generation: SqliteFileGeneration };
 
-type SqliteCheckPragma = "integrity_check";
+type SqliteCheckPragma = "integrity_check" | "quick_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
@@ -152,8 +172,9 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
+  check: SqliteCheckPragma = "integrity_check",
 ): SqliteIntegrityChecks {
-  const integrityCheck = runSqliteCheck(database, databaseLabel, "integrity_check");
+  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
   return { integrityCheck };
 }

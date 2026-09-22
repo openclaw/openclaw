@@ -335,6 +335,7 @@ describe("FileSettingsStorage", () => {
         const firstEntered = join(root, "first-entered");
         const contenderReady = join(root, "contender-ready");
         const releaseFirst = join(root, "release-first");
+        const releaseContender = join(root, "release-contender");
         const abort = new AbortController();
         const writerSignal = AbortSignal.any([signal, abort.signal]);
         const writers: ReturnType<typeof runNodeScript>[] = [];
@@ -348,7 +349,7 @@ describe("FileSettingsStorage", () => {
                 "--eval",
                 String.raw`
                   import fs, { existsSync, writeFileSync } from "node:fs";
-                  const [moduleUrl, root, agentDir, scope, settingsPath, firstEntered, contenderReady, releaseFirst, field] = process.argv.slice(1);
+                  const [moduleUrl, root, agentDir, scope, settingsPath, firstEntered, contenderReady, releaseFirst, releaseContender, field] = process.argv.slice(1);
                   const { FileSettingsStorage } = await import(moduleUrl);
                   if (field === "theme") {
                     const openSync = fs.openSync;
@@ -364,6 +365,11 @@ describe("FileSettingsStorage", () => {
                         ) {
                           signaledContention = true;
                           writeFileSync(contenderReady, "contended");
+                          // Keep parent scheduling outside the real lock's bounded retry loop.
+                          const pause = new Int32Array(new SharedArrayBuffer(4));
+                          while (!existsSync(releaseContender)) {
+                            Atomics.wait(pause, 0, 0, 2);
+                          }
                         }
                         throw error;
                       }
@@ -393,6 +399,7 @@ describe("FileSettingsStorage", () => {
                 firstEntered,
                 contenderReady,
                 releaseFirst,
+                releaseContender,
                 field,
               ],
               process.env,
@@ -424,6 +431,9 @@ describe("FileSettingsStorage", () => {
           expect(existsSync(`${settingsPath}.lock`)).toBe(true);
           expect(existsSync(settingsPath)).toBe(false);
           fs.writeFileSync(releaseFirst, "continue");
+          const firstResult = await first;
+          expect(firstResult, firstResult.stderr).toMatchObject({ error: undefined, status: 0 });
+          fs.writeFileSync(releaseContender, "continue");
           for (const result of await Promise.all(writers)) {
             expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
           }

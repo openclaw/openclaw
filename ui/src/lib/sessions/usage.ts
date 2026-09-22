@@ -12,6 +12,7 @@ export type SessionUsageQuery = {
   scope: "instance" | "family";
   timeZone: "local" | "utc";
   agentId?: string;
+  creatorKey?: string;
 };
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
@@ -25,7 +26,7 @@ function formatUtcOffset(timezoneOffsetMinutes: number): string {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 }
 
-export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
+function buildSessionUsageDateParams(timeZone: "local" | "utc") {
   return timeZone === "utc"
     ? { mode: "utc" }
     : {
@@ -41,6 +42,7 @@ function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record
     endDate: query.endDate,
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
+    ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
     groupBy: query.scope,
     ...(key ? { key, limit: 1 } : { limit: 1000 }),
     includeContextWeight: false,

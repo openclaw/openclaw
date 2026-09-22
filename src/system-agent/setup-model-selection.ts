@@ -6,11 +6,15 @@ import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { materializeUtilityModelSeparation } from "../config/utility-model-separation-migration.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
 type SystemAgentModelSelectionParams = {
   config: OpenClawConfig;
+  /** Source before provider setup added its catalog or credential metadata. */
+  previousConfig?: OpenClawConfig | null;
   model: string;
+  modelTarget?: "utility";
   /** Write the model onto this configured agent instead of the default route. */
   targetAgentId?: string;
   agentRuntimeId?: string;
@@ -31,7 +35,14 @@ function applySystemAgentModelSelectionWithModules(
   modules: SystemAgentModelSelectionModules,
 ): OpenClawConfig {
   const { agentScope, modelConfig, runtimePolicy } = modules;
-  let nextConfig = structuredClone(params.config);
+  let nextConfig = structuredClone(
+    params.modelTarget === "utility"
+      ? materializeUtilityModelSeparation(
+          params.config,
+          params.previousConfig === undefined ? params.config : params.previousConfig,
+        ).config
+      : params.config,
+  );
   const normalizedTarget =
     params.targetAgentId === undefined ? null : normalizeAgentIdStrict(params.targetAgentId);
   if (normalizedTarget && !normalizedTarget.ok) {
@@ -43,10 +54,14 @@ function applySystemAgentModelSelectionWithModules(
   if (targetAgentId && !roster.some((entry) => normalizeAgentId(entry.id) === targetAgentId)) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
   }
-  // A targeted selection always lands on the agent entry; the default-route
-  // selection only writes the agent when it already carries an explicit model.
+  // Explicit fleets keep utility selections on their agent; legacy default-route
+  // selections stay global until that agent authors its own override.
   const writesAgent = Boolean(
-    targetAgentId || agentScope.resolveAgentExplicitModelPrimary(nextConfig, agentId),
+    targetAgentId ||
+    (params.modelTarget === "utility"
+      ? nextConfig.agents?.ownership === "explicit" ||
+        agentScope.resolveAgentConfig(nextConfig, agentId)?.utilityModel !== undefined
+      : agentScope.resolveAgentExplicitModelPrimary(nextConfig, agentId)),
   );
   const target = modelConfig.resolveModelTarget({ raw: params.model, cfg: nextConfig });
   const key = modelConfig.upsertCanonicalModelConfigEntry({}, target);
@@ -91,7 +106,7 @@ function applySystemAgentModelSelectionWithModules(
       agentRuntime: { id: params.agentRuntimeId },
     };
     runtimeTarget.models = agentModels;
-  } else {
+  } else if (params.modelTarget !== "utility") {
     const clearRuntimePin = (
       models: Record<string, AgentModelEntryConfig>,
     ): Record<string, AgentModelEntryConfig> => {
@@ -111,9 +126,17 @@ function applySystemAgentModelSelectionWithModules(
     }
   }
   const selectedModel = params.authProfileId ? `${key}@${params.authProfileId}` : key;
-  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
-    forceAgent: Boolean(targetAgentId),
-  });
+  if (params.modelTarget === "utility") {
+    if (writesAgent && agent) {
+      agent.utilityModel = selectedModel;
+    } else {
+      agentDefaults.utilityModel = selectedModel;
+    }
+  } else {
+    agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
+      forceAgent: Boolean(targetAgentId),
+    });
+  }
   if (params.agentRuntimeId) {
     const effectiveRuntime = runtimePolicy.resolveModelRuntimePolicy({
       config: nextConfig,
@@ -129,22 +152,23 @@ function applySystemAgentModelSelectionWithModules(
 }
 
 export async function createSystemAgentModelSelectionUpdater(
-  params: Omit<SystemAgentModelSelectionParams, "config">,
-): Promise<(config: OpenClawConfig) => OpenClawConfig> {
+  params: Omit<SystemAgentModelSelectionParams, "config" | "previousConfig">,
+): Promise<(config: OpenClawConfig, previousConfig?: OpenClawConfig | null) => OpenClawConfig> {
   const [agentScope, modelConfig, runtimePolicy] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../commands/models/shared.js"),
     import("../agents/model-runtime-policy.js"),
   ]);
   const modules = { agentScope, modelConfig, runtimePolicy };
-  return (config) => applySystemAgentModelSelectionWithModules({ ...params, config }, modules);
+  return (config, previousConfig = config) =>
+    applySystemAgentModelSelectionWithModules({ ...params, config, previousConfig }, modules);
 }
 
 export async function applySystemAgentModelSelection(
   params: SystemAgentModelSelectionParams,
 ): Promise<OpenClawConfig> {
   const update = await createSystemAgentModelSelectionUpdater(params);
-  return update(params.config);
+  return update(params.config, params.previousConfig);
 }
 
 export function projectSetupInferenceConfig(params: {

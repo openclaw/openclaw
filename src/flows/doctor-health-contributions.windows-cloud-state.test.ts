@@ -154,6 +154,7 @@ describe.skipIf(process.platform !== "win32")("Doctor native Windows OneDrive fl
       const contribution = resolveInitialDoctorHealthContributions({
         runStructuredHealthRepairs: unrelatedRunner,
         runGatewayConfigHealth: unrelatedRunner,
+        runAuthProfileMigration: unrelatedRunner,
         runAuthProfileHealth: unrelatedRunner,
         runGatewayAuthHealth: unrelatedRunner,
         runLegacyStateHealth: unrelatedRunner,
@@ -186,7 +187,7 @@ describe.skipIf(process.platform !== "win32")("Doctor native Windows OneDrive fl
         expect(text).toContain("for the Gateway service (not just");
       }
 
-      expect(contribution.updatePolicy).not.toBe("standalone");
+      expect(contribution.updateWork?.kind).not.toBe("standalone");
       const checks = contribution.healthChecks;
       expect(checks).toHaveLength(1);
       expect(checks[0]).toMatchObject({ id: checkId, defaultEnabled: false });

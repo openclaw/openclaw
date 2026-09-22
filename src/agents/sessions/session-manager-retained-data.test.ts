@@ -14,10 +14,18 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of dirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 async function fixture(data: unknown, prefixEntries = 0) {
   const dir = dirs.make("retained-transcript-data-");
   const scope = {

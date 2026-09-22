@@ -49,7 +49,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
-import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -788,27 +788,6 @@ describe("runCliAgent spawn path", () => {
     const allArgs = (input.argv ?? []).join("\n");
     expect(allArgs).not.toContain("Tools are disabled in this session");
     expect(allArgs).toContain("You are a helpful assistant.");
-  });
-
-  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp",
-      modelDisplay: "claude-cli/sonnet",
-      tools: [],
-      skillsPrompt: [
-        "<available_skills>",
-        "  <skill>",
-        "    <name>weather</name>",
-        "    <description>Use weather tools.</description>",
-        "    <location>/tmp/skills/weather/SKILL.md</location>",
-        "  </skill>",
-        "</available_skills>",
-      ].join("\n"),
-    });
-
-    expect(systemPrompt).toContain("## Skills");
-    expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
   });
 
   it("pipes Claude prompts over stdin instead of argv", async () => {

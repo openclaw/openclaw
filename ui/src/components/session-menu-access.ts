@@ -21,11 +21,15 @@ export function sessionMenuReasons(params: {
   const reason = (request: {
     method: string;
     params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
+    requiredScope?: "operator.read" | "operator.write" | "operator.admin";
   }) => {
     const access = readSessionMethodAccess(snapshot, request);
     return access.allowed ? undefined : access.reason;
   };
+  const involvementReason = reason({
+    method: "sessions.setInvolvement",
+    requiredScope: "operator.read",
+  });
   const patchReason = reason({
     method: "sessions.patch",
     params: { key: session.key, label: null },
@@ -44,10 +48,7 @@ export function sessionMenuReasons(params: {
         patch,
       },
     });
-    if (access.allowed) {
-      return undefined;
-    }
-    return access.cause === "method-unavailable" ? patchReason : access.reason;
+    return access.allowed ? undefined : access.reason;
   };
   const unreadReason = batchPatchReason({ unread: true });
   const categoryReason = batchPatchReason({ category: null });
@@ -89,6 +90,7 @@ export function sessionMenuReasons(params: {
       : {}),
     ...(session.pinnable === false ? { "toggle-pin": t("sessionsView.pinRootSessionsOnly") } : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
+    ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
     ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),

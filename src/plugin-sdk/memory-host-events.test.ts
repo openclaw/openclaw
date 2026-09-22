@@ -13,6 +13,7 @@ import {
 } from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateStore from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   appendMemoryHostEvent,
@@ -39,10 +40,11 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   setMaxMemoryHostEventsForTests(undefined);
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
@@ -243,6 +245,7 @@ describe("memory host event journal helpers", () => {
         { env },
       );
     await Promise.all(Array.from({ length: 24 }, (_, index) => append(index + 1)));
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const stored = await listStoredMemoryHostEvents({ workspaceDir, env });
     expect(stored.map((entry) => entry.value.sequence)).toEqual(
@@ -274,7 +277,7 @@ describe("memory host event journal helpers", () => {
     await append("retained");
     const before = await listStoredMemoryHostEvents({ workspaceDir, env });
     const { db } = openOpenClawStateDatabase({ env });
-    db.exec(`CREATE TEMP TRIGGER fail_memory_journal BEFORE INSERT ON plugin_state_entries
+    db.exec(`CREATE TRIGGER fail_memory_journal BEFORE INSERT ON plugin_state_entries
       WHEN NEW.namespace = 'memory-host.events'
       BEGIN SELECT RAISE(ABORT, 'injected journal write failure'); END`);
     try {
@@ -343,9 +346,7 @@ describe("memory host event journal helpers", () => {
   it("keeps journal retention timestamps in the current wall-clock domain", async () => {
     const workspaceDir = await createTempDir("memory-host-events-created-at-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const now = Date.parse("2026-07-16T12:00:00.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
+    const before = Date.now();
 
     for (const query of ["first", "second"]) {
       await appendMemoryHostEvent(
@@ -361,9 +362,12 @@ describe("memory host event journal helpers", () => {
       );
     }
 
-    expect(
-      (await listStoredMemoryHostEvents({ workspaceDir, env })).map((entry) => entry.createdAt),
-    ).toEqual([now, now + 1]);
+    const created = (await listStoredMemoryHostEvents({ workspaceDir, env })).map(
+      (entry) => entry.createdAt,
+    );
+    expect(created[0]).toBeGreaterThanOrEqual(before);
+    expect(created[1]).toBeGreaterThan(created[0]!);
+    expect(created[1]).toBeLessThanOrEqual(Date.now() + 1);
   });
 
   it("keeps legacy event readers stable when diagnostic records are present", async () => {
@@ -523,8 +527,6 @@ describe("memory host event journal helpers", () => {
     const workspaceDir = await createTempDir("memory-host-events-rotation-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
     setMaxMemoryHostEventsForTests(3);
-    let clock = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => clock--);
 
     for (let index = 1; index <= 5; index += 1) {
       await appendMemoryHostEvent(
@@ -538,6 +540,14 @@ describe("memory host event journal helpers", () => {
         },
         { env },
       );
+      if (index === 1) {
+        // A persisted future timestamp exercises clock rollback on the worker connection.
+        openOpenClawStateDatabase({ env })
+          .db.prepare(
+            "UPDATE plugin_state_entries SET created_at = ? WHERE plugin_id = ? AND namespace = ?",
+          )
+          .run(Date.now() + 60_000, "memory-core", "memory-host.events");
+      }
     }
 
     const events = await readMemoryHostEventRecords({ workspaceDir, env });

@@ -36,21 +36,22 @@ export function readHotSessionTranscriptSnapshot<T>(
 export async function readRestoredSessionTranscript<T>(
   scope: SessionTranscriptReadScope,
   read: () => T | Promise<T>,
-  options?: { readOnly?: boolean },
+  options?: { readOnly?: boolean; assertCurrent?: () => void },
 ): Promise<T> {
+  options?.assertCurrent?.();
   // Read workers report cold storage to their host; only the host restores it.
   if (options?.readOnly) {
     return read();
   }
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript(scope);
+  await restoreSessionColdTranscript(scope, options?.assertCurrent);
   try {
     return await read();
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== scope.sessionId) {
       throw error;
     }
-    await restoreSessionColdTranscript(scope);
+    await restoreSessionColdTranscript(scope, options?.assertCurrent);
     return await read();
   }
 }

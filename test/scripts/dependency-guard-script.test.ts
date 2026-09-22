@@ -1,4 +1,7 @@
-// Dependency Guard Script tests cover dependency guard script script behavior.
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
@@ -6,40 +9,415 @@ import {
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
-  dependencyGuardTrustedActorCandidates,
   dependencyFieldChanges,
-  dependencyOverrideExpectedSha,
-  findDependencyOverrideCommand,
-  findDependencyOverrideCommandAsync,
-  findTrustedDependencyGuardActor,
   githubApi,
   isAutoscrubbedDependencyComment,
-  isDependencyGuardAuthorizedForHead,
-  isDependencyFile,
   isDependencyGuardMarkerComment,
-  isDependencyManifest,
-  isDependencyGuardTrustedForHead,
-  isPackageLockfile,
   isRemovalOnlyDependencyGraphChange,
   readBoundedGitHubErrorText,
-  renderAuthorizedDependencyComment,
   renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
   renderRemovalOnlyDependencyComment,
-  renderTrustedDependencyComment,
-  securityApproverSet,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
-import { createGuardApproverChecks } from "../../scripts/github/guard-shared.mjs";
+import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
+const rolloutSha = "c".repeat(40);
+const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pullPath = "/repos/openclaw/openclaw/pulls/7";
+const issuePath = "/repos/openclaw/openclaw/issues/7";
+const pullRequest = {
+  number: 7,
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  changed_files: 1,
+  user: { id: 1, login: "contributor", type: "User" },
+  base: { ref: "main", sha: staleSha, repo: { id: 1, full_name: "openclaw/openclaw" } },
+  head: { ref: "change", sha: headSha, repo: { id: 1, full_name: "openclaw/openclaw" } },
+};
+const approval = {
+  id: 11,
+  body: "/allow-dependencies-change",
+  created_at: "2026-01-01T00:00:01Z",
+  updated_at: "2026-01-01T00:00:01Z",
+  html_url: "https://github.com/openclaw/openclaw/pull/7#issuecomment-11",
+  user: { id: 2, login: "maintainer", type: "User" },
+};
+const approvalNotice = {
+  id: 4,
+  user: { login: "github-actions[bot]", type: "Bot" },
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  body: `<!-- openclaw:dependency-graph-guard -->\n<!-- openclaw:approval-request ${JSON.stringify({ head: headSha, base: "main", requestedAt: "2026-01-01T00:00:00Z" })} -->\n`,
+};
+
+function runDependencyGuard(
+  routes: Record<string, unknown> = {},
+  mode = "enforce",
+  autoscrubToken: string | null = "fixture-autoscrub-token",
+) {
+  const dir = tempDirs.make("openclaw-dependency-guard-");
+  const eventPath = path.join(dir, "event.json");
+  const fixturePath = path.join(dir, "fixture.json");
+  const logPath = path.join(dir, "requests.jsonl");
+  const outputPath = path.join(dir, "output.txt");
+  writeFileSync(outputPath, "");
+  writeFileSync(eventPath, JSON.stringify({ pull_request: pullRequest }));
+  writeFileSync(logPath, "");
+  writeFileSync(
+    fixturePath,
+    JSON.stringify({
+      logPath,
+      routes: {
+        [`GET ${pullPath}`]: pullRequest,
+        [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [],
+        "GET /repos/openclaw/openclaw/pulls/152415": {
+          number: 152415,
+          state: "closed",
+          merged: true,
+          merged_at: "2025-12-01T00:00:00Z",
+          merge_commit_sha: rolloutSha,
+          base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-workspace.yaml" }],
+        [`GET ${issuePath}/comments`]: [],
+        [`GET ${issuePath}/labels`]: [],
+        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: "write" },
+        "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
+          role_name: "maintain",
+        },
+        ...routes,
+      },
+    }),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      fileURLToPath(new URL("../fixtures/github-guard-fetch.mjs", import.meta.url)),
+      fileURLToPath(new URL("../../scripts/github/dependency-guard.mjs", import.meta.url)),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        GITHUB_TOKEN: "fixture-token",
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_RUN_ID: "1",
+        GITHUB_OUTPUT: outputPath,
+        OPENCLAW_GUARD_TEST_FIXTURE: fixturePath,
+        OPENCLAW_DEPENDENCY_GUARD_MODE: mode,
+        ...(autoscrubToken ? { OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: autoscrubToken } : {}),
+      },
+    },
+  );
+  const calls: Array<{
+    method: string;
+    path: string;
+    body?: { state?: string; body?: string; variables?: { input?: unknown } };
+  }> = readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  return {
+    ...result,
+    calls,
+    output: readFileSync(outputPath, "utf8"),
+    statuses: calls.filter((call) => call.path.includes("/statuses/")),
+  };
+}
 
 describe("dependency guard script", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["maintain", "admin"])("allows %s authors without organization membership", (role) => {
+    const result = runDependencyGuard({
+      "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: role },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure", "success"]);
+    expect(result.stdout).toContain("informational");
+    expect(result.stdout).toContain("- `pnpm-workspace.yaml`\n");
+  });
+
+  it("does not transfer command approval to a duplicate PR with the same head", () => {
+    const result = runDependencyGuard({
+      [`GET ${issuePath}/comments`]: [approvalNotice, approval],
+      [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [
+        {
+          context: "openclaw/ci-gate",
+          description: "PR #8: Security review has not completed",
+          creator: { login: "github-actions[bot]", type: "Bot" },
+        },
+      ],
+      "GET /repos/openclaw/openclaw/pulls/8": { ...pullRequest, number: 8 },
+    });
+    expect(result.status).toBe(1);
+    expect(result.statuses.map((call) => call.body?.state)).not.toContain("success");
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+  });
+
+  it.each([
+    { name: "current maintainer command", comment: approval, role: "maintain", allowed: true },
+    { name: "current admin command", comment: approval, role: "admin", allowed: true },
+    { name: "write-only commenter", comment: approval, role: "write", allowed: false },
+    {
+      name: "command before the current request",
+      comment: {
+        ...approval,
+        created_at: "2025-12-31T00:00:00Z",
+        updated_at: "2025-12-31T00:00:00Z",
+      },
+      role: "maintain",
+      allowed: false,
+    },
+    {
+      name: "edited comment",
+      comment: { ...approval, updated_at: "2026-01-01T00:00:02Z" },
+      role: "maintain",
+      allowed: false,
+    },
+    {
+      name: "bot command",
+      comment: { ...approval, user: { ...approval.user, type: "Bot" } },
+      role: "maintain",
+      allowed: false,
+    },
+    {
+      name: "security-only command",
+      comment: { ...approval, body: "/allow-security-sensitive-change" },
+      role: "maintain",
+      allowed: false,
+    },
+    {
+      name: "both commands on separate lines",
+      comment: {
+        ...approval,
+        body: "/allow-security-sensitive-change\n/allow-dependencies-change",
+      },
+      role: "maintain",
+      allowed: true,
+    },
+  ])("uses $name for an external dependency PR", ({ comment, role, allowed }) => {
+    const result = runDependencyGuard({
+      "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": { role_name: role },
+      [`GET ${issuePath}/comments`]: [approvalNotice, comment],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.map((call) => call.body?.state)).toEqual([
+      "failure",
+      allowed ? "success" : "failure",
+    ]);
+    expect(result.stdout).toContain(
+      allowed ? "Dependency graph changes approved" : "Maintainer dependency review required",
+    );
+    expect(result.stdout).toContain("<!-- openclaw:approval-request ");
+  });
+
+  it("rechecks a command comment before publishing dependency success", () => {
+    const result = runDependencyGuard({
+      [`GET ${issuePath}/comments`]: {
+        responses: [[approvalNotice, approval], [approvalNotice, approval], [approvalNotice]],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.stdout).toContain("Maintainer dependency review required");
+  });
+
+  it("requires review when a patch is renamed out of its protected directory", () => {
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [
+        { filename: "archived.patch", previous_filename: "patches/package.patch" },
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.stdout).toContain("patches/package.patch");
+  });
+
+  it("requires review when unchanged manifest contents move to a new package", () => {
+    const manifest = {
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(JSON.stringify({ dependencies: { example: "1" } })).toString("base64"),
+    };
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [
+        {
+          filename: "extensions/new/package.json",
+          previous_filename: "extensions/old/package.json",
+        },
+      ],
+      "GET /repos/openclaw/openclaw/contents/extensions/old/package.json": manifest,
+      "GET /repos/openclaw/openclaw/contents/extensions/new/package.json": manifest,
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [
+        { change_type: "removed", name: "example", manifest: "extensions/old/package.json" },
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.stdout).toContain(
+      "- `extensions/old/package.json`\n- `extensions/new/package.json`\n",
+    );
+  });
+
+  it("requires review for a renamed lockfile without scrubbing the contributor artifact", () => {
+    const routes = {
+      [`GET ${pullPath}/files`]: [
+        { filename: "fixtures/old-lockfile.txt", previous_filename: "pnpm-lock.yaml" },
+      ],
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [
+        { change_type: "removed", name: "example", manifest: "pnpm-lock.yaml" },
+      ],
+    };
+    const detection = runDependencyGuard(routes, "detect");
+    expect(detection.status, detection.stderr).toBe(0);
+    expect(detection.output).toBe("autoscrub=false\n");
+    expect(detection.calls.some((call) => call.path === "/graphql")).toBe(false);
+    const enforcement = runDependencyGuard(routes);
+    expect(enforcement.status, enforcement.stderr).toBe(0);
+    expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
+  });
+
+  it("publishes success when a manifest changes only scripts", () => {
+    const content = (scripts: unknown) => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(JSON.stringify({ scripts })).toString("base64"),
+    });
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
+      "GET /repos/openclaw/openclaw/contents/package.json": {
+        responses: [content({ test: "old" }), content({ test: "new" })],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("success");
+  });
+
+  it.each([
+    { lateApproval: false, writeError: false, headChanged: false },
+    { lateApproval: true, writeError: false, headChanged: false },
+    { lateApproval: false, writeError: true, headChanged: false },
+    { lateApproval: false, writeError: false, headChanged: true },
+  ])(
+    "preserves autoscrub with late approval=$lateApproval, write error=$writeError, head changed=$headChanged",
+    ({ lateApproval, writeError, headChanged }) => {
+      const result = runDependencyGuard(
+        {
+          [`GET ${pullPath}`]: {
+            responses: [
+              pullRequest,
+              pullRequest,
+              headChanged
+                ? { ...pullRequest, head: { ...pullRequest.head, sha: staleSha } }
+                : pullRequest,
+            ],
+          },
+          [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+          [`GET ${issuePath}/comments`]: {
+            responses: [
+              [approvalNotice],
+              [approvalNotice],
+              lateApproval ? [approvalNotice, approval] : [approvalNotice],
+            ],
+          },
+          [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+          "GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml": {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from("base lockfile").toString("base64"),
+          },
+          "POST /graphql": writeError
+            ? { httpError: 403 }
+            : { data: { createCommitOnBranch: { commit: { oid: staleSha } } } },
+        },
+        "autoscrub",
+      );
+      expect(result.status, result.stderr).toBe(writeError ? 1 : 0);
+      if (writeError) {
+        expect(result.stderr).toContain("Fixture API failure");
+        expect(result.stdout).toContain(
+          "Auto-scrub was attempted, but GitHub rejected the cleanup commit",
+        );
+      }
+      const writes = result.calls.filter((call) => call.path === "/graphql");
+      expect(writes).toHaveLength(lateApproval || headChanged ? 0 : 1);
+      if (headChanged) {
+        expect(result.stdout).toContain("Superseded");
+        expect(result.calls.some((call) => call.body?.body)).toBe(false);
+        expect(result.stderr).not.toContain("Autoscrub failed");
+      }
+      if (!lateApproval && !headChanged) {
+        expect(writes[0]?.body?.variables?.input).toMatchObject({
+          expectedHeadOid: headSha,
+          fileChanges: {
+            additions: [
+              { path: "pnpm-lock.yaml", contents: Buffer.from("base lockfile").toString("base64") },
+            ],
+          },
+        });
+      }
+      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    },
+  );
+
+  it("keeps dependency approval required when an editable fork has no autoscrub token", () => {
+    const routes = {
+      [`GET ${pullPath}`]: {
+        ...pullRequest,
+        maintainer_can_modify: true,
+        head: { ...pullRequest.head, repo: { id: 2, full_name: "contributor/openclaw" } },
+      },
+      [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+    };
+    const autoscrub = runDependencyGuard(routes, "autoscrub", null);
+    expect(autoscrub.status, autoscrub.stderr).toBe(0);
+    expect(autoscrub.calls.some((call) => call.path === "/graphql")).toBe(false);
+    expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    expect(autoscrub.stdout).toContain("unavailable");
+    expect(autoscrub.stdout).toContain("approval");
+    expect(autoscrub.stdout).toContain("manually");
+
+    const enforcement = runDependencyGuard(routes, "enforce", null);
+    expect(enforcement.status, enforcement.stderr).toBe(0);
+    expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(enforcement.stdout).toContain("/allow-dependencies-change");
+  });
+
+  it.each(["detect", "autoscrub", "enforce"])(
+    "does not approve or autoscrub a grandfathered lockfile PR in %s mode",
+    (mode) => {
+      const result = runDependencyGuard(
+        {
+          [`GET ${pullPath}`]: { ...pullRequest, created_at: "2025-11-01T00:00:00Z" },
+          [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+          [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
+            base_commit: { sha: rolloutSha },
+            merge_base_commit: { sha: staleSha },
+            status: "diverged",
+          },
+        },
+        mode,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("grandfathered");
+      expect(result.statuses).toEqual([]);
+      expect(result.calls.every((call) => call.method === "GET")).toBe(true);
+    },
+  );
 
   it("detects dependency guard file surfaces", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
@@ -124,310 +502,11 @@ describe("dependency guard script", () => {
     });
 
     expect(body).toContain("Dependency removals noted");
-    expect(body).toContain("does not require `/allow-dependencies-change`");
+    expect(body).toContain("does not require additional maintainer approval");
     expect(body).toContain("Removed `example-dependency`");
     expect(body).toContain("`extensions/example/package.json`");
     expect(body).toContain(headSha);
     expect(body).not.toContain("changes are blocked");
-  });
-
-  it("accepts only security-member override commands for the current head sha", () => {
-    const comments = [
-      {
-        body: "/allow-dependencies-change not enough",
-        created_at: "2026-05-28T20:00:00Z",
-        user: { login: "not-security" },
-      },
-      {
-        body: "/allow-dependencies-change stale approval",
-        created_at: "2026-05-28T20:01:00Z",
-        user: { login: "security-user" },
-      },
-      {
-        body: "/allow-dependencies-change reviewed dependency graph",
-        created_at: "2026-05-28T20:03:00Z",
-        html_url: "https://example.test/comment",
-        user: { login: "security-user" },
-      },
-    ];
-
-    const override = findDependencyOverrideCommand({
-      comments,
-      expectedSha: headSha,
-      isSecurityMember: (login) => login === "security-user",
-      newerThan: "2026-05-28T20:02:00Z",
-    });
-
-    expect(override).toEqual({
-      login: "security-user",
-      reason: "reviewed dependency graph",
-      sha: headSha,
-      url: "https://example.test/comment",
-    });
-  });
-
-  it("rejects stale or non-security override commands", async () => {
-    const comments = [
-      {
-        body: "/allow-dependencies-change stale approval",
-        created_at: "2026-05-28T20:00:00Z",
-        user: { login: "security-user" },
-      },
-      {
-        body: "/allow-dependencies-change not enough",
-        created_at: "2026-05-28T20:02:00Z",
-        user: { login: "not-security" },
-      },
-    ];
-
-    await expect(
-      findDependencyOverrideCommandAsync({
-        comments,
-        expectedSha: headSha,
-        isSecurityMember: async (login) => login === "security-user",
-        newerThan: "2026-05-28T20:01:00Z",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("accepts repository admins through the same sha-bound override command", async () => {
-    const comments = [
-      {
-        body: "/allow-dependencies-change admin reviewed",
-        created_at: "2026-05-28T20:03:00Z",
-        html_url: "https://example.test/comment",
-        user: { login: "repo-admin" },
-      },
-    ];
-
-    await expect(
-      findDependencyOverrideCommandAsync({
-        comments,
-        expectedSha: headSha,
-        isSecurityMember: async (login) => login === "repo-admin",
-        newerThan: "2026-05-28T20:02:00Z",
-      }),
-    ).resolves.toEqual({
-      login: "repo-admin",
-      reason: "admin reviewed",
-      sha: headSha,
-      url: "https://example.test/comment",
-    });
-  });
-
-  it("recognizes trusted dependency guard actors automatically", async () => {
-    const sameActorCandidates = dependencyGuardTrustedActorCandidates({
-      pullRequest: { user: { login: "repo-admin" } },
-      event: { pull_request: { head: { sha: headSha } }, sender: { login: "repo-admin" } },
-      currentHeadSha: headSha,
-    });
-    const untrustedAuthorCandidate = dependencyGuardTrustedActorCandidates({
-      pullRequest: { user: { login: "contributor" } },
-      event: { after: headSha, sender: { login: "security-user" } },
-      currentHeadSha: headSha,
-    });
-    const staleAuthorCandidate = dependencyGuardTrustedActorCandidates({
-      pullRequest: { user: { login: "repo-admin" } },
-      event: { pull_request: { head: { sha: staleSha } }, sender: { login: "repo-admin" } },
-      currentHeadSha: headSha,
-    });
-
-    expect(sameActorCandidates).toEqual([{ login: "repo-admin", source: "pull request author" }]);
-    expect(untrustedAuthorCandidate).toEqual([
-      { login: "contributor", source: "pull request author" },
-    ]);
-    expect(staleAuthorCandidate).toEqual([]);
-
-    await expect(
-      findTrustedDependencyGuardActor({
-        candidates: untrustedAuthorCandidate,
-        pullRequest: { author_association: "COLLABORATOR" },
-        isDependencyApprover: async (login) =>
-          login === "security-user" || login === "repo-admin" ? "openclaw-secops" : null,
-        getRepositoryRoleName: async () => "maintain",
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      findTrustedDependencyGuardActor({
-        candidates: sameActorCandidates,
-        pullRequest: { author_association: "MEMBER" },
-        isDependencyApprover: async (login) => (login === "repo-admin" ? "repository admin" : null),
-        getRepositoryRoleName: async () => null,
-      }),
-    ).resolves.toEqual({
-      login: "repo-admin",
-      reason: "pull request author; repository admin",
-    });
-
-    await expect(
-      findTrustedDependencyGuardActor({
-        candidates: [{ login: "maintainer", source: "pull request author" }],
-        pullRequest: { author_association: "MEMBER" },
-        isDependencyApprover: async () => null,
-        getRepositoryRoleName: async () => "maintain",
-      }),
-    ).resolves.toEqual({
-      login: "maintainer",
-      reason: "pull request author; OpenClaw organization member with repository maintain role",
-    });
-
-    const rejectedAuthorRoles: Array<[string, string]> = [
-      ["COLLABORATOR", "maintain"],
-      ["MEMBER", "write"],
-    ];
-    for (const [authorAssociation, repositoryRole] of rejectedAuthorRoles) {
-      await expect(
-        findTrustedDependencyGuardActor({
-          candidates: [{ login: "contributor", source: "pull request author" }],
-          pullRequest: { author_association: authorAssociation },
-          isDependencyApprover: async () => null,
-          getRepositoryRoleName: async () => repositoryRole,
-        }),
-      ).resolves.toBeNull();
-    }
-  });
-
-  it("uses GitHub role_name without granting Maintain users comment authority", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ permission: "write", role_name: "maintain" })
-      .mockResolvedValueOnce({ permission: "admin", role_name: "admin" });
-    const checks = createGuardApproverChecks({
-      api: { request },
-      owner: "openclaw",
-      repo: "openclaw",
-      securityTeamSlug: "openclaw-secops",
-      explicitSecurityApprovers: new Set(),
-    });
-
-    await expect(checks.getRepositoryRoleName("maintainer")).resolves.toBe("maintain");
-    await expect(checks.isRepositoryAdmin("maintainer")).resolves.toBe(false);
-    await expect(checks.isRepositoryAdmin("admin")).resolves.toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("renders trusted dependency graph comments without blocker language", () => {
-    const body = renderTrustedDependencyComment({
-      actor: {
-        login: "maintainer",
-        reason: "pull request author; OpenClaw organization member with repository maintain role",
-      },
-      headSha,
-    });
-
-    expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
-    expect(body).toContain("Dependency graph changes noted");
-    expect(body).toContain("informational");
-    expect(body).toContain("OpenClaw organization member with Maintain or Admin repository access");
-    expect(body).toContain("@maintainer");
-    expect(body).toContain(headSha);
-    expect(body).not.toContain("are blocked");
-    expect(body).not.toContain("/allow-dependencies-change");
-    expect(isDependencyGuardTrustedForHead({ body }, headSha)).toBe(true);
-    expect(isDependencyGuardTrustedForHead({ body }, staleSha)).toBe(false);
-  });
-
-  it("rejects override commands without a freshness barrier", () => {
-    const override = findDependencyOverrideCommand({
-      comments: [
-        {
-          body: "/allow-dependencies-change",
-          created_at: "2026-05-28T20:03:00Z",
-          user: { login: "security-user" },
-        },
-      ],
-      expectedSha: headSha,
-      isSecurityMember: (login) => login === "security-user",
-    });
-
-    expect(override).toBeNull();
-  });
-
-  it("accepts override commands without a reason", () => {
-    const override = findDependencyOverrideCommand({
-      comments: [
-        {
-          body: "/allow-dependencies-change",
-          created_at: "2026-05-28T20:03:00Z",
-          user: { login: "security-user" },
-        },
-      ],
-      expectedSha: headSha,
-      isSecurityMember: (login) => login === "security-user",
-      newerThan: "2026-05-28T20:02:00Z",
-    });
-
-    expect(override).toEqual({
-      login: "security-user",
-      reason: null,
-      sha: headSha,
-      url: undefined,
-    });
-  });
-
-  it("binds override commands to the head sha in the blocked guard comment", () => {
-    const blockedComment = {
-      body: renderBlockedDependencyComment({
-        baseBranch: "main",
-        headSha,
-        lockfileChanges: ["pnpm-lock.yaml"],
-        dependencyManifestChanges: [],
-      }),
-    };
-    const staleBlockedComment = {
-      body: renderBlockedDependencyComment({
-        baseBranch: "main",
-        headSha: staleSha,
-        lockfileChanges: ["pnpm-lock.yaml"],
-        dependencyManifestChanges: [],
-      }),
-    };
-
-    expect(dependencyOverrideExpectedSha(blockedComment, headSha)).toBe(headSha);
-    expect(dependencyOverrideExpectedSha(staleBlockedComment, headSha)).toBeNull();
-  });
-
-  it("preserves same-head authorization across reruns", () => {
-    const authorizedComment = {
-      body: renderAuthorizedDependencyComment({
-        login: "security-user",
-        reason: null,
-        sha: headSha,
-      }),
-    };
-
-    expect(isDependencyGuardAuthorizedForHead(authorizedComment, headSha)).toBe(true);
-    expect(isDependencyGuardAuthorizedForHead(authorizedComment, staleSha)).toBe(false);
-    expect(dependencyOverrideExpectedSha(authorizedComment, headSha)).toBeNull();
-  });
-
-  it("does not infer guard state from rendered dependency paths", () => {
-    const blockedBody = (path: string) =>
-      renderBlockedDependencyComment({
-        baseBranch: "main",
-        headSha,
-        lockfileChanges: [path],
-        dependencyManifestChanges: [],
-      });
-
-    expect(
-      dependencyOverrideExpectedSha(
-        { body: blockedBody(`xApproved SHA: \`${staleSha}\`pnpm-lock.yaml`) },
-        headSha,
-      ),
-    ).toBe(headSha);
-    expect(
-      isDependencyGuardAuthorizedForHead(
-        { body: blockedBody("x### Dependency graph change authorizedpnpm-lock.yaml") },
-        headSha,
-      ),
-    ).toBe(false);
-    expect(
-      isDependencyGuardTrustedForHead(
-        { body: blockedBody("x### Dependency graph changes notedpnpm-lock.yaml") },
-        headSha,
-      ),
-    ).toBe(false);
   });
 
   it("trusts only configured dependency guard marker comment authors", () => {
@@ -482,16 +561,16 @@ describe("dependency guard script", () => {
     });
 
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
-    expect(body).toContain("Dependency graph changes are blocked");
-    expect(body).toContain("`pnpm-lock.yaml` changed.");
-    expect(body).toContain("`tools/nested/pnpm-lock.yaml` changed.");
-    expect(body).toContain("`package.json` changed `dependencies`.");
+    expect(body).toContain("Maintainer dependency review required");
+    expect(body).toContain("- `pnpm-lock.yaml`\n");
+    expect(body).toContain("- `tools/nested/pnpm-lock.yaml`\n");
+    expect(body).toContain("- `package.json`\n");
     expect(body).toContain(
       "git checkout 'origin/main' -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
     );
-    expect(body).toContain("/allow-dependencies-change");
-    expect(body).toContain(`current head SHA (\`${headSha}\`)`);
-    expect(body).toContain("A later push requires a fresh approval.");
+    expect(body).toContain("```text\n/allow-dependencies-change\n```");
+    expect(body).toContain(`Current SHA: \`${headSha}\``);
+    expect(body).toContain("A later push requires a fresh approval comment.");
   });
 
   it("shell-quotes PR-controlled paths in removal guidance", () => {
@@ -651,8 +730,8 @@ describe("dependency guard script", () => {
       "only push deterministic cleanup commits to PR branches that maintainers can modify",
     );
     expect(unsafeBody).toContain("changes package manifest dependency graph fields");
-    expect(unsafeBody).toContain("`package.json` changed `dependencies`");
-    expect(unsafeBody).toContain("Dependency graph changes must be reviewed by security");
+    expect(unsafeBody).toContain("- `package.json`\n");
+    expect(unsafeBody).toContain("Dependency graph changes require maintainer review");
     expect(mixedBody).toContain("also changes dependency-related files");
     expect(mixedBody).toContain("`patches/example.patch`");
     expect(mixedBody).toContain("`pnpm-workspace.yaml`");
@@ -661,9 +740,9 @@ describe("dependency guard script", () => {
   it("reads base lockfiles with the base API before writing autoscrub commits", async () => {
     const calls: Array<{ api: string; path: string; variables?: unknown }> = [];
     const baseApi = {
-      request: async (path: string) => {
-        calls.push({ api: "base", path });
-        if (path.includes("/contents/pnpm-lock.yaml?")) {
+      request: async (requestPath: string) => {
+        calls.push({ api: "base", path: requestPath });
+        if (requestPath.includes("/contents/pnpm-lock.yaml?")) {
           return {
             content: Buffer.from("base lockfile").toString("base64"),
             encoding: "base64",
@@ -671,7 +750,7 @@ describe("dependency guard script", () => {
             type: "file",
           };
         }
-        throw new Error(`unexpected base request: ${path}`);
+        throw new Error(`unexpected base request: ${requestPath}`);
       },
     };
     const writeApi = {
@@ -681,15 +760,36 @@ describe("dependency guard script", () => {
       },
     };
 
+    const autoscrubPullRequest = {
+      user: { id: 1, login: "contributor", type: "User" },
+      base: { ref: "main", sha: "base-sha" },
+      head: { ref: "contributor/change", sha: headSha },
+    };
+    const guard = {
+      owner: "openclaw",
+      repo: "openclaw",
+      pullRequest: autoscrubPullRequest,
+      pullPath: "/repos/openclaw/openclaw/pulls/1",
+      issuePath: "/repos/openclaw/openclaw/issues/1",
+      commentMarker: "<!-- openclaw:dependency-graph-guard -->",
+      approvalCommand: "/allow-dependencies-change",
+      api: {
+        request: async (requestPath: string) =>
+          requestPath.endsWith("/permission") ? { role_name: "read" } : autoscrubPullRequest,
+        paginate: async (requestPath: string) => {
+          if (requestPath === "/repos/openclaw/openclaw/issues/1/comments") {
+            return [];
+          }
+          throw new Error(`unexpected guard request: ${requestPath}`);
+        },
+      },
+    };
     const commit = await createAutoscrubCommit(
-      { baseApi, writeApi },
+      { baseApi, writeApi, guard },
       {
         owner: "openclaw",
         repo: "openclaw",
-        pullRequest: {
-          base: { sha: "base-sha" },
-          head: { ref: "contributor/change", sha: headSha },
-        },
+        pullRequest: autoscrubPullRequest,
         lockfileChanges: ["pnpm-lock.yaml"],
         targetRepository: { owner: "contributor", repo: "openclaw" },
       },
@@ -726,13 +826,7 @@ describe("dependency guard script", () => {
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
     expect(body).toContain("Dependency graph guard cleared");
     expect(body).toContain(headSha);
-    expect(body).toContain("requires a fresh `/allow-dependencies-change` comment");
-  });
-
-  it("parses explicit security approver allowlists", () => {
-    expect(securityApproverSet("vincentkoc, steipete\njoshavant")).toEqual(
-      new Set(["vincentkoc", "steipete", "joshavant"]),
-    );
+    expect(body).toContain("requires a maintainer's `/allow-dependencies-change` comment");
   });
 
   it("bounds GitHub error bodies by content-length", async () => {
@@ -777,7 +871,7 @@ describe("dependency guard script", () => {
 
     try {
       await expect(githubApi("token").request("/repos/openclaw/openclaw")).rejects.toMatchObject({
-        message: `403 Forbidden: GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
+        message: `GitHub API GET /repos/openclaw/openclaw failed: 403 Forbidden: GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
         status: 403,
       });
     } finally {
@@ -785,33 +879,138 @@ describe("dependency guard script", () => {
     }
   });
 
-  it("retries transient GitHub API failures within the request timeout", async () => {
+  it.each([
+    { method: "GET", status: 500 },
+    { method: "HEAD", status: 500 },
+    { method: "GET", status: 503 },
+  ])("recovers from HTTP $status on $method requests", async ({ method, status }) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("unicorn", { status: 503, statusText: "Unavailable" }))
-      .mockResolvedValueOnce(Response.json({ ok: true }));
+      .mockResolvedValueOnce(new Response("unicorn", { status, statusText: "Server Error" }))
+      .mockResolvedValueOnce(
+        method === "HEAD" ? new Response(null, { status: 204 }) : Response.json({ ok: true }),
+      );
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
         "/repos/openclaw/openclaw/pulls/1/files",
+        { method },
       ),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual(method === "HEAD" ? null : { ok: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry non-idempotent GitHub API requests", async () => {
+  it.each([
+    { method: "POST", status: 500 },
+    { method: "PATCH", status: 500 },
+    { method: "DELETE", status: 500 },
+    { method: "POST", status: 503 },
+  ])("does not retry HTTP $status on $method writes", async ({ method, status }) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response("unicorn", { status: 503, statusText: "Unavailable" }));
+      .mockResolvedValue(new Response("unicorn", { status, statusText: "Server Error" }));
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
         "/repos/openclaw/openclaw/issues/1/comments",
-        { method: "POST", body: "{}" },
+        { method, body: "{}" },
       ),
-    ).rejects.toMatchObject({ status: 503 });
+    ).rejects.toMatchObject({
+      status,
+      message: `GitHub API ${method} /repos/openclaw/openclaw/issues/1/comments failed: ${status} Server Error: unicorn`,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { method: "GET", code: "ECONNRESET" },
+    { method: "GET", code: "EAI_AGAIN" },
+    { method: "GET", code: "ENOTFOUND" },
+    { method: "HEAD", code: "UND_ERR_SOCKET" },
+  ])("recovers from $code on $method requests", async ({ method, code }) => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(
+        new TypeError("fetch failed", { cause: Object.assign(new Error(), { code }) }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(pullPath, { method }),
+    ).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares the bounded retry budget between connection and HTTP failures", async () => {
+    const error = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockRejectedValue(error);
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0, 0, 0] }).request(pullPath),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(`GitHub API GET ${pullPath} failed: ECONNRESET`),
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(["POST", "PATCH", "DELETE"])(
+    "does not retry connection failures on %s writes",
+    async (method) => {
+      const error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+      });
+      const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(error);
+      await expect(
+        githubApi("token", { fetchImpl }).request(issuePath, { method, body: "{}" }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining(`GitHub API ${method} ${issuePath} failed: ECONNRESET`),
+        cause: error,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    new DOMException("aborted", "AbortError"),
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error("certificate expired"), { code: "CERT_HAS_EXPIRED" }),
+    }),
+    new TypeError("invalid request"),
+  ])("does not retry non-transient fetch rejection %s", async (error) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(error);
+    await expect(githubApi("token", { fetchImpl }).request(pullPath)).rejects.toMatchObject({
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["GET", "POST"])(
+    "does not retry or mark an aborted %s connection error for recovery",
+    async (method) => {
+      const controller = new AbortController();
+      const error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+      });
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+        controller.abort();
+        throw error;
+      });
+      const request = githubApi("token", { fetchImpl }).request(pullPath, {
+        method,
+        signal: controller.signal,
+      });
+      await expect(request).rejects.toMatchObject({ cause: error });
+      await expect(request).rejects.not.toHaveProperty("code");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds successful GitHub API response bodies", async () => {
     const request = githubApi("token", {
@@ -826,6 +1025,30 @@ describe("dependency guard script", () => {
 
     await expect(request).rejects.toThrow("GitHub response body exceeded 64 bytes");
     expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
+  });
+
+  it("keeps the original request timeout active during connection retry backoff", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      signal = init?.signal ?? undefined;
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+      });
+    });
+    const request = githubApi("token", {
+      fetchImpl,
+      timeoutMs: 5,
+      retryDelaysMs: [10_000],
+    }).request(pullPath);
+    const rejection = expect(request).rejects.toThrow(
+      `GitHub API GET ${pullPath} exceeded timeout 5ms`,
+    );
+
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {

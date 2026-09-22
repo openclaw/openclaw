@@ -43,6 +43,7 @@ const TEST_PROVIDERS: ProviderPlugin[] = [
           groupId: "alpha",
           groupLabel: "Alpha",
           onboardingScopes: ["text-inference"],
+          modelTarget: "utility",
         },
       }),
       createAuthMethod({
@@ -154,7 +155,14 @@ export function describeProviderWizardChoiceResolutionContract() {
         choice: "provider-plugin:alpha:api-key",
         providerId: "alpha",
         methodId: "api-key",
-        wizardSource: undefined,
+        wizardSource: "method",
+      },
+      {
+        name: "a bare provider choice",
+        choice: "alpha",
+        providerId: "alpha",
+        methodId: "api-key",
+        wizardSource: "method",
       },
       {
         name: "a method-level wizard choice",

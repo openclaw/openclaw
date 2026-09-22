@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { sqliteMessageEventWithSeq } from "../session-transcript-message.js";
+import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -35,6 +35,7 @@ import {
 } from "./open-path.js";
 import { getRepositoryArtifact, listRepositoryArtifacts } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -307,6 +308,26 @@ async function loadSessionFiles(params: {
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
+  if (entry.worktree?.id && loaded.root) {
+    const { withSettledLocalWorkspacePath } =
+      await import("../worker-environments/local-workspace-projection.js");
+    await withSettledLocalWorkspacePath(
+      {
+        cwd: loaded.root,
+        assertCurrent: () => {
+          const current = loadGatewaySessionEntryReadOnly(canonicalKey, { agentId }).entry;
+          if (
+            current?.sessionId !== entry.sessionId ||
+            current.lifecycleRevision !== entry.lifecycleRevision ||
+            current.worktree?.id !== entry.worktree?.id
+          ) {
+            throw new Error("Session workspace changed during file read");
+          }
+        },
+      },
+      async () => {},
+    );
+  }
   const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {
     agentId,
@@ -386,7 +407,8 @@ function requireSessionFilesAgentId(params: {
 
 /** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
-  "sessions.files.list": async ({ params, respond, context }) => {
+  "sessions.files.list": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)
     ) {
@@ -401,21 +423,29 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const loaded = await loadSessionFiles({ ...params, agentId, context });
-    const request = { files: loaded.files, path: params.path, search: params.search };
-    const result =
-      loaded.repository?.kind === "stored"
-        ? await listRepositoryArtifacts(loaded.repository, request)
-        : loaded.repository
-          ? await loaded.repository.inspect("list", request)
-          : await listSessionWorkspaceFiles({ ...loaded, ...request });
-    respond(true, {
-      sessionKey: params.sessionKey,
-      ...result,
-      ...(loaded.repository ? { root: undefined } : {}),
-    });
+    const read = retainSessionScopedRead(options, params.sessionKey, agentId, true);
+    try {
+      const loaded = await loadSessionFiles({ ...params, agentId, context });
+      read?.assertCurrent();
+      const request = { files: loaded.files, path: params.path, search: params.search };
+      const result =
+        loaded.repository?.kind === "stored"
+          ? await listRepositoryArtifacts(loaded.repository, request)
+          : loaded.repository
+            ? await loaded.repository.inspect("list", request)
+            : await listSessionWorkspaceFiles({ ...loaded, ...request });
+      read?.assertCurrent();
+      respond(true, {
+        sessionKey: params.sessionKey,
+        ...result,
+        ...(loaded.repository ? { root: undefined } : {}),
+      });
+    } finally {
+      read?.release();
+    }
   },
-  "sessions.files.get": async ({ params, respond, context }) => {
+  "sessions.files.get": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateSessionsFilesGetParams, "sessions.files.get", respond)) {
       return;
     }
@@ -428,27 +458,34 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const loaded = await loadSessionFiles({ ...params, agentId, context });
-    const request = { files: loaded.files, path: params.path };
-    const result =
-      loaded.repository?.kind === "stored"
-        ? await getRepositoryArtifact(loaded.repository, params.path)
-        : loaded.repository
-          ? await loaded.repository.inspect("get", request)
-          : await getSessionWorkspaceFile({ ...loaded, ...request });
-    if (!result.file || result.file.missing) {
-      respondSessionFileNotFound(respond, params.path);
-      return;
+    const read = retainSessionScopedRead(options, params.sessionKey, agentId, true);
+    try {
+      const loaded = await loadSessionFiles({ ...params, agentId, context });
+      read?.assertCurrent();
+      const request = { files: loaded.files, path: params.path };
+      const result =
+        loaded.repository?.kind === "stored"
+          ? await getRepositoryArtifact(loaded.repository, params.path)
+          : loaded.repository
+            ? await loaded.repository.inspect("get", request)
+            : await getSessionWorkspaceFile({ ...loaded, ...request });
+      read?.assertCurrent();
+      if (!result.file || result.file.missing) {
+        respondSessionFileNotFound(respond, params.path);
+        return;
+      }
+      if (typeof result.file.content !== "string" && result.file.previewKind !== "unsupported") {
+        respondSessionFileTooLarge(respond, result.file, params.path);
+        return;
+      }
+      respond(true, {
+        sessionKey: params.sessionKey,
+        ...result,
+        ...(loaded.repository ? { root: undefined } : {}),
+      });
+    } finally {
+      read?.release();
     }
-    if (typeof result.file.content !== "string" && result.file.previewKind !== "unsupported") {
-      respondSessionFileTooLarge(respond, result.file, params.path);
-      return;
-    }
-    respond(true, {
-      sessionKey: params.sessionKey,
-      ...result,
-      ...(loaded.repository ? { root: undefined } : {}),
-    });
   },
   "sessions.files.set": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {

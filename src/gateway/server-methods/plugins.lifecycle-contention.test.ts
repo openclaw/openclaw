@@ -12,7 +12,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createCoreGatewayMethodDescriptors } from "../methods/core-descriptors.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";

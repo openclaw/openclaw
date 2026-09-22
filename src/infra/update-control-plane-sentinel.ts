@@ -1,5 +1,5 @@
-// Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -13,10 +13,11 @@ import {
 } from "./update-restart-notice.js";
 import {
   buildUpdateRestartSentinelPayload,
+  type ForegroundUpdateOrigin,
   type UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
 import { getUpdateRun } from "./update-run-ledger.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 // Control-plane update sentinel helpers preserve update metadata while a
 // managed service handoff waits for restart health to complete.
@@ -88,6 +89,42 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
   const root = readNonBlankString(value.root);
   const target = readNonBlankString(value.target);
   const triageContextPath = readNonBlankString(value.triageContextPath);
+  let foregroundOrigin: ForegroundUpdateOrigin | undefined;
+  if (value.foregroundOrigin !== undefined) {
+    const origin = value.foregroundOrigin;
+    if (!isRecord(origin)) {
+      return null;
+    }
+    const owner = readNonBlankString(origin.owner);
+    const pid = asPositiveSafeInteger(origin.pid);
+    const host = readNonBlankString(origin.host);
+    const port = asPositiveSafeInteger(origin.port);
+    const stateDatabasePath = readNonBlankString(origin.stateDatabasePath);
+    const configPath = readNonBlankString(origin.configPath);
+    if (
+      !owner ||
+      !pid ||
+      !host ||
+      !port ||
+      port > 65535 ||
+      typeof origin.startedAt !== "number" ||
+      !Number.isSafeInteger(origin.startedAt) ||
+      origin.startedAt < 0 ||
+      !stateDatabasePath ||
+      !configPath
+    ) {
+      return null;
+    }
+    foregroundOrigin = {
+      owner,
+      pid,
+      host,
+      startedAt: origin.startedAt,
+      port,
+      stateDatabasePath,
+      configPath,
+    };
+  }
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
     : undefined;
@@ -107,6 +144,10 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
       : undefined;
   return {
     ...(runId ? { runId } : {}),
+    ...(foregroundOrigin ? { foregroundOrigin } : {}),
+    ...(value.completionOwner === "gateway-restart"
+      ? { completionOwner: "gateway-restart" as const }
+      : {}),
     ...(typeof value.serviceStoppedAtMs === "number" &&
     Number.isSafeInteger(value.serviceStoppedAtMs) &&
     value.serviceStoppedAtMs >= 0
@@ -156,22 +197,25 @@ export async function writeControlPlaneUpdateRestartSentinel(
   if (!shouldPublishUpdateRestartNotice(run, meta)) {
     return;
   }
-  await writeRestartSentinel(
-    buildUpdateRestartSentinelPayload({
-      result: params.result,
-      meta,
-    }),
-    env,
-  );
+  const payload = buildUpdateRestartSentinelPayload({ result: params.result, meta });
+  if (
+    meta.completionOwner === "gateway-restart" &&
+    !isPendingControlPlaneUpdateRestartSentinel(payload) &&
+    payload.stats
+  ) {
+    delete payload.stats.handoffId;
+  }
+  await writeRestartSentinel(payload, env);
 }
 
 /** Mark the pending update restart sentinel as failed. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
   meta?: UpdateRestartSentinelMeta,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinelPayload | null> {
-  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId), meta)) {
+  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId, { env }), meta)) {
     return null;
   }
-  return (await markUpdateRestartSentinelFailure(reason, process.env, meta))?.payload ?? null;
+  return (await markUpdateRestartSentinelFailure(reason, env, meta))?.payload ?? null;
 }

@@ -1,5 +1,5 @@
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -9,10 +9,8 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
-import {
-  markSubagentRunPausedAfterYield,
-  preserveSubagentRunForRestart,
-} from "./subagent-registry-run-manager.js";
+import { preserveSubagentRunForRestart } from "./subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryListener(config: {
@@ -55,8 +53,9 @@ export function createSubagentRegistryListener(config: {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
             // A replacement generation can finish after its predecessor row is
-            // terminal. Keep capture + persistence inside the suspension fence.
-            await runWithGatewayIndependentRootWorkAdmission(async () => {
+            // terminal. Retain its admitted work through capture + persistence,
+            // even if restart or suspension has since closed admission.
+            await runWithGatewayIndependentRootWorkContinuation(async () => {
               await refreshFrozenResultFromSession(sessionKey);
             }, "subagents:result-refresh");
           }

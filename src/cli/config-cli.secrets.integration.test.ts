@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   createTestRuntime,
@@ -12,8 +13,12 @@ import {
 // Register the harness metadata mock before loading the real config and command modules.
 const configRuntime = await import("../config/config.js");
 const { runConfigPatch, runConfigSet, runConfigUnset } = await import("./config-cli.js");
-const { registeredRuntimeErrors, runRegisteredConfigCommand, withConfigFileHarness } =
-  useConfigCliIntegrationHarness();
+const {
+  registeredRuntimeErrors,
+  registeredRuntimeLogs,
+  runRegisteredConfigCommand,
+  withConfigFileHarness,
+} = useConfigCliIntegrationHarness();
 
 function createExecDryRunBatch(params: { markerPath: string }) {
   const response = JSON.stringify({
@@ -25,7 +30,7 @@ function createExecDryRunBatch(params: { markerPath: string }) {
   const script = [
     `#!${process.execPath}`,
     'const fs = require("node:fs");',
-    `fs.writeFileSync(${JSON.stringify(params.markerPath)}, "dryrun\\n", "utf8");`,
+    `fs.writeFileSync(${JSON.stringify(params.markerPath)}, JSON.stringify(process.argv.slice(2)), "utf8");`,
     `process.stdout.write(${JSON.stringify(response)});`,
   ].join("\n");
   const scriptPath = path.join(path.dirname(params.markerPath), "exec-provider.cjs");
@@ -78,6 +83,154 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli secrets integration", () => {
+  it.each([
+    { name: "literal", token: "existing-gateway-token", redactedToken: "__OPENCLAW_REDACTED__" },
+    {
+      name: "store SecretRef",
+      token: { source: "store", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } as const,
+      redactedToken: { source: "store", provider: "default", id: "__OPENCLAW_REDACTED__" },
+    },
+  ])(
+    "preserves a $name credential in a redacted get/set round-trip",
+    async ({ token, redactedToken }) => {
+      const gateway = { mode: "local", port: 18789, auth: { mode: "token", token } };
+      await withConfigFileHarness(
+        "openclaw-config-cli-redacted-roundtrip-",
+        JSON.stringify({ gateway }),
+        async ({ configPath }) => {
+          await runRegisteredConfigCommand(["config", "get", "gateway", "--json"]);
+          const displayed = JSON.parse(registeredRuntimeLogs.at(-1)!) as NonNullable<
+            OpenClawConfig["gateway"]
+          >;
+          expect(displayed.auth?.token).toEqual(redactedToken);
+
+          await runRegisteredConfigCommand([
+            "config",
+            "set",
+            "gateway",
+            JSON.stringify({ ...displayed, port: 19002 }),
+            "--strict-json",
+          ]);
+
+          expect(JSON5.parse(fs.readFileSync(configPath, "utf8")).gateway).toEqual({
+            ...gateway,
+            port: 19002,
+          });
+          const before = fs.readFileSync(configPath, "utf8");
+          await runRegisteredConfigCommand([
+            "config",
+            "set",
+            "gateway.auth.token",
+            "__OPENCLAW_REDACTED__",
+          ]);
+          expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+        },
+      );
+    },
+  );
+
+  it("rejects a redacted credential without an original value to preserve", async () => {
+    const raw = '{"gateway":{"mode":"local","port":18789}}';
+    await withConfigFileHarness(
+      "openclaw-config-cli-redacted-new-",
+      raw,
+      async ({ configPath }) => {
+        await expect(
+          runRegisteredConfigCommand([
+            "config",
+            "set",
+            "gateway.auth.token",
+            "__OPENCLAW_REDACTED__",
+          ]),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(registeredRuntimeErrors.join("\n")).toContain("gateway.auth.token");
+      },
+    );
+  });
+
+  it.skipIf(process.platform === "win32").each(["builder", "json", "batch"] as const)(
+    "preserves literal exec args from %s config input through provider invocation",
+    async (mode) => {
+      await withConfigFileHarness(
+        "openclaw-config-cli-literal-exec-args-",
+        "{}\n",
+        async ({ configPath, tempDir }) => {
+          const markerPath = path.join(tempDir, "argv.json");
+          const batch = createExecDryRunBatch({ markerPath });
+          const command = path.join(tempDir, "exec-provider.cjs");
+          const args = [
+            "",
+            "   ",
+            "  label  ",
+            "\t\r\n\v\f",
+            "\u00a0\ufefflabel\ufeff\u00a0",
+            "inside \t space",
+            "\x01control\x7f",
+            "--literal-option",
+            "x".repeat(1024),
+          ];
+          while (args.length < 128) {
+            args.push(`arg-${args.length}`);
+          }
+          const provider = {
+            source: "exec",
+            command,
+            args,
+            trustedDirs: [tempDir],
+            timeoutMs: 60_000,
+            noOutputTimeoutMs: 60_000,
+          };
+          await runRegisteredConfigCommand([
+            "config",
+            "set",
+            ...(mode === "builder"
+              ? [
+                  "secrets.providers.runner",
+                  "--provider-source",
+                  "exec",
+                  "--provider-command",
+                  command,
+                  "--provider-trusted-dir",
+                  tempDir,
+                  "--provider-timeout-ms",
+                  "60000",
+                  "--provider-no-output-timeout-ms",
+                  "60000",
+                  ...args.flatMap((arg) => ["--provider-arg", arg]),
+                ]
+              : mode === "json"
+                ? ["secrets.providers.runner", JSON.stringify(provider), "--strict-json"]
+                : [
+                    "--batch-json",
+                    JSON.stringify([{ path: "secrets.providers.runner", provider }]),
+                  ]),
+          ]);
+          const persisted = fs.readFileSync(configPath, "utf8");
+          expect(fs.existsSync(markerPath)).toBe(false);
+          const output = createTestRuntime();
+
+          await runConfigSet({
+            cliOptions: {
+              batchJson: JSON.stringify(batch.slice(1)),
+              dryRun: true,
+              allowExec: true,
+              json: true,
+            },
+            runtime: output.runtime,
+          });
+
+          expect(registeredRuntimeErrors).toEqual([]);
+          expect(output.errors).toEqual([]);
+          expect(JSON.parse(output.logs.join("\n"))).toMatchObject({ ok: true, refsChecked: 1 });
+          expect(fs.readFileSync(configPath, "utf8")).toBe(persisted);
+          expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toEqual(args);
+          expect(JSON5.parse(persisted).secrets.providers.runner.args).toEqual(args);
+        },
+      );
+    },
+  );
   it.each(["agents.defaults", "agents.entries.ops"])(
     "validates SecretRefs after normalizing model keys in %s",
     async (agentPath) => {

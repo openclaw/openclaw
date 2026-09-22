@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { StatementSync } from "node:sqlite";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordBroker, type StandingGrant } from "./broker.js";
@@ -54,14 +54,15 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
 describe("onepassword list with SQLite grants", () => {
   let env: NodeJS.ProcessEnv;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
-    vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 
@@ -79,6 +80,7 @@ describe("onepassword list with SQLite grants", () => {
       throw new Error("list must not retrieve a secret");
     });
     const broker = new OnePasswordBroker({
+      now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
       stores: { grants, audit: new MemoryKeyedStore(), pending: new MemorySyncKeyedStore() },
@@ -88,7 +90,7 @@ describe("onepassword list with SQLite grants", () => {
     return { list, getItem };
   }
 
-  it("does not fetch other agents' grants to list the configured items", async () => {
+  it("requests only the configured agent's grant keys when listing items", async () => {
     const grants = openGrants();
     const slugs = ["second", "first"];
     for (const agentId of [
@@ -100,36 +102,19 @@ describe("onepassword list with SQLite grants", () => {
       }
     }
     const { list, getItem } = setup(slugs, grants);
-    let queries = 0;
-    let fetchedRows = 0;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Preserve the native receiver when recording actual fetched rows.
-    const iterate = StatementSync.prototype.iterate;
-    const spy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
-      this: StatementSync,
-      ...params: Parameters<typeof iterate>
-    ) {
-      const rows = Array.from(iterate.apply(this, params));
-      if (this.sourceSQL.includes('"plugin_state_entries"') && params.includes("grants")) {
-        queries += 1;
-        fetchedRows += rows.length;
-      }
-      return rows.values();
+    const lookupMany = vi.spyOn(grants, "lookupMany");
+    expect((await list()).details).toEqual({
+      ok: true,
+      items: ["first", "second"].map((slug) => ({
+        slug,
+        description: "",
+        policy: "approve",
+        standingGrantActive: true,
+      })),
     });
-    try {
-      expect((await list()).details).toEqual({
-        ok: true,
-        items: ["first", "second"].map((slug) => ({
-          slug,
-          description: "",
-          policy: "approve",
-          standingGrantActive: true,
-        })),
-      });
-    } finally {
-      spy.mockRestore();
-    }
-    expect(queries).toBeLessThanOrEqual(1);
-    expect(fetchedRows).toBeLessThanOrEqual(slugs.length);
+    expect(lookupMany).toHaveBeenCalledExactlyOnceWith(
+      ["first", "second"].map((slug) => grantKey(invocation.agentId, slug)),
+    );
     expect(getItem).not.toHaveBeenCalled();
   });
 

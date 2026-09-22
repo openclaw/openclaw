@@ -201,6 +201,16 @@ Use the example below only when running the **standalone Lobster CLI** in an
 environment where `openclaw.invoke` is already configured with the correct
 gateway/auth context.
 
+For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
+`CLAWD_TOKEN` credentials are accepted only for `localhost`, `127.0.0.1`, or
+`[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
+`--token` explicitly. This rule also applies to embedded workflows that
+explicitly configure a remote connection. This command argument is the remote
+Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+If an invocation times out or fails after dispatch,
+Lobster does not retry it automatically, because the Gateway may already have
+performed the action.
+
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
@@ -340,8 +350,11 @@ inspect the persisted flow rather than assuming the failure write succeeded.
 This mode requires a non-sandboxed tool context with a bound session. It records
 a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
 persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
-also remain available for resume. After a restart, the controller must inspect
-the latest flow and explicitly resume it with the matching approval token or ID.
+also remain available for resume. After a restart, inspect the latest flow and
+explicitly resume it with `flowId`, its current `flowExpectedRevision`, and the
+user's `approve` decision. Omit `token` and `approvalId` to recover the saved
+checkpoint from that flow; explicit credentials must match it. Finished or
+cancelled flows and stale revisions are rejected before workflow execution.
 Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
 [Task Flow](/automation/taskflow) for the runnable examples and child-linking
 contract.

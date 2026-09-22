@@ -1,4 +1,8 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
+import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -18,6 +22,12 @@ import {
 const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
 const stale = { models: [{ id: "stale", provider: "test", name: "Stale" }] };
 const fresh = { models: [{ id: "fresh", provider: "test", name: "Fresh" }] };
+const superseded: ErrorShape = {
+  code: "UNAVAILABLE",
+  message: "Session changed while preparing its model catalog.",
+  retryable: true,
+  retryAfterMs: 0,
+};
 
 afterEach(() => vi.useRealTimers());
 
@@ -31,15 +41,24 @@ function protocolFixture(requestTimeoutMs?: number) {
   const client = createTestGatewayClient((method, params, options) =>
     protocol.request({ send: (frame) => sent.push(JSON.parse(frame)) }, method, params, options),
   );
+  const reply = (index: number, response: Pick<ResponseFrame, "ok" | "payload" | "error">) => {
+    const request = sent[index];
+    if (!request) {
+      throw new Error(`Missing catalog request ${index}`);
+    }
+    protocol.handleResponse({ type: "res", id: request.id, ...response });
+  };
   return {
     client,
     sent,
     respond(index: number, payload: ModelCatalogResult) {
-      const request = sent[index];
-      if (!request) {
-        throw new Error(`Missing catalog request ${index}`);
-      }
-      protocol.handleResponse({ type: "res", id: request.id, ok: true, payload });
+      reply(index, { ok: true, payload });
+    },
+    fail(index: number, error: ErrorShape) {
+      reply(index, { ok: false, error });
+    },
+    rejectTransport(error: Error) {
+      protocol.flush(error);
     },
     close() {
       clearModelCatalogCache(client);
@@ -47,6 +66,255 @@ function protocolFixture(requestTimeoutMs?: number) {
     },
   };
 }
+
+it.each([0, 25])(
+  "shares one catalog retry and honors a %s ms server delay",
+  async (retryAfterMs) => {
+    vi.useFakeTimers();
+    const fixture = protocolFixture();
+    const first = loadModelCatalog(fixture.client, scope).catch((error: unknown) => error);
+    let joined: Promise<unknown> | undefined;
+    try {
+      fixture.fail(0, { ...superseded, retryAfterMs });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.sent).toHaveLength(retryAfterMs === 0 ? 2 : 1);
+      joined = loadModelCatalog(fixture.client, scope).catch((error: unknown) => error);
+      expect(fixture.sent).toHaveLength(retryAfterMs === 0 ? 2 : 1);
+      if (retryAfterMs > 0) {
+        await vi.advanceTimersByTimeAsync(retryAfterMs - 1);
+        expect(fixture.sent).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(fixture.sent).toHaveLength(2);
+      expect(fixture.sent[1]?.params).toEqual(fixture.sent[0]?.params);
+      fixture.respond(1, fresh);
+      expect(await Promise.all([first, joined])).toEqual([fresh, fresh]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.sent).toHaveLength(2);
+      expect(peekModelCatalog(fixture.client, scope)).toEqual(fresh);
+    } finally {
+      fixture.close();
+      await Promise.all([first, joined]);
+    }
+  },
+);
+
+it("returns the second catalog rejection without starting a third attempt", async () => {
+  vi.useFakeTimers();
+  const fixture = protocolFixture();
+  const result = loadModelCatalog(fixture.client, scope).catch((error: unknown) => error);
+  try {
+    fixture.fail(0, superseded);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.sent).toHaveLength(2);
+    fixture.fail(1, { ...superseded, message: "The replacement catalog was superseded too." });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.sent).toHaveLength(2);
+    expect(await result).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "The replacement catalog was superseded too.",
+      retryable: true,
+    });
+    expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
+  } finally {
+    fixture.close();
+    await result;
+  }
+});
+
+it.each([
+  { label: "non-retryable response", code: "UNAVAILABLE", retryable: false, correlated: true },
+  { label: "forbidden response", code: "FORBIDDEN", retryable: true, correlated: true },
+  { label: "local gateway-shaped error", code: "UNAVAILABLE", retryable: true, correlated: false },
+])("does not retry a $label", async ({ code, retryable, correlated }) => {
+  vi.useFakeTimers();
+  const fixture = protocolFixture();
+  const result = loadModelCatalog(fixture.client, scope).catch((error: unknown) => error);
+  const error = { ...superseded, code, retryable };
+  try {
+    if (correlated) {
+      fixture.fail(0, error);
+    } else {
+      fixture.rejectTransport(new GatewayProtocolRequestError(error));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.sent).toHaveLength(1);
+    expect(await result).toMatchObject({ code, retryable, message: superseded.message });
+    expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
+  } finally {
+    fixture.close();
+    await result;
+  }
+});
+
+it.each([
+  { retryAfterMs: 25, expectedRequests: 2 },
+  { retryAfterMs: 100, expectedRequests: 1 },
+])(
+  "retains the numeric deadline through a $retryAfterMs ms retry wait",
+  async ({ retryAfterMs, expectedRequests }) => {
+    vi.useFakeTimers();
+    const fixture = protocolFixture();
+    let settled = false;
+    const result = loadModelCatalog(fixture.client, { ...scope, timeoutMs: 100 })
+      .catch((error: unknown) => error)
+      .finally(() => (settled = true));
+    try {
+      await vi.advanceTimersByTimeAsync(40);
+      fixture.fail(0, { ...superseded, retryAfterMs });
+      await vi.advanceTimersByTimeAsync(59);
+      expect(settled).toBe(false);
+      expect(fixture.sent).toHaveLength(expectedRequests);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await result).toMatchObject({
+        name: GatewayProtocolRequestTimeoutError.name,
+        timeoutMs: 100,
+        requestSent: true,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.sent).toHaveLength(expectedRequests);
+    } finally {
+      fixture.close();
+      await result;
+    }
+  },
+);
+
+it("releases an elapsed deadline before an overdue retry can occupy the lane", async () => {
+  vi.useFakeTimers();
+  const fixture = protocolFixture();
+  let settled = false;
+  const first = loadModelCatalog(fixture.client, { ...scope, timeoutMs: 100 })
+    .catch((error: unknown) => error)
+    .finally(() => (settled = true));
+  let replacement: Promise<unknown> | undefined;
+  try {
+    await vi.advanceTimersByTimeAsync(40);
+    fixture.fail(0, { ...superseded, retryAfterMs: 25 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.sent).toHaveLength(1);
+    vi.setSystemTime(Date.now() + 100);
+    expect(settled).toBe(false);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(fixture.sent).toHaveLength(1);
+    expect(settled).toBe(true);
+    expect(await first).toMatchObject({
+      name: GatewayProtocolRequestTimeoutError.name,
+      code: "CLIENT_TIMEOUT",
+      timeoutMs: 100,
+      requestSent: true,
+    });
+    replacement = loadModelCatalog(fixture.client, { ...scope, timeoutMs: 100 }).catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.sent).toHaveLength(2);
+    fixture.respond(1, fresh);
+    expect(await replacement).toEqual(fresh);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.sent).toHaveLength(2);
+  } finally {
+    fixture.close();
+    await Promise.all([first, replacement]);
+  }
+});
+
+it.each(["abort", "connection clear", "pushed snapshot"] as const)(
+  "releases a retry wait after %s without delaying the next foreground read",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const fixture = protocolFixture();
+    const controller = new AbortController();
+    let settled = false;
+    const first = loadModelCatalog(fixture.client, { ...scope, signal: controller.signal })
+      .catch((error: unknown) => error)
+      .finally(() => (settled = true));
+    let replacement: Promise<unknown> | undefined;
+    try {
+      fixture.fail(0, { ...superseded, retryAfterMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      if (boundary === "abort") {
+        controller.abort();
+      } else if (boundary === "connection clear") {
+        clearModelCatalogCache(fixture.client);
+      } else {
+        expect(
+          publishModelCatalogResult(beginModelCatalogRead(fixture.client, scope), scope, fresh),
+        ).toBe(true);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      if (boundary === "pushed snapshot") {
+        expect(await first).toEqual(fresh);
+      } else {
+        expect(await first).toBeInstanceOf(Error);
+        expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
+      }
+      invalidateModelCatalogCache(fixture.client);
+      replacement = loadModelCatalog(fixture.client, scope).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.sent).toHaveLength(2);
+      fixture.respond(1, fresh);
+      expect(await replacement).toEqual(fresh);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.sent).toHaveLength(2);
+      expect(peekModelCatalog(fixture.client, scope)).toEqual(fresh);
+    } finally {
+      fixture.close();
+      await Promise.all([first, replacement]);
+    }
+  },
+);
+
+it.each(["before rejection", "during retry wait"] as const)(
+  "uses an invalidation replacement queued %s without adding an automatic retry",
+  async (timing) => {
+    vi.useFakeTimers();
+    const fixture = protocolFixture();
+    let firstSettled = false;
+    const first = loadModelCatalog(fixture.client, scope)
+      .catch((error: unknown) => error)
+      .finally(() => (firstSettled = true));
+    let replacement: Promise<unknown> | undefined;
+    let replacementSettled = false;
+    const queueReplacement = () => {
+      invalidateModelCatalogCache(fixture.client);
+      replacement = loadModelCatalog(fixture.client, scope)
+        .catch((error: unknown) => error)
+        .finally(() => (replacementSettled = true));
+    };
+    try {
+      if (timing === "before rejection") {
+        queueReplacement();
+        expect(fixture.sent).toHaveLength(1);
+      }
+      fixture.fail(0, { ...superseded, retryAfterMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      if (timing === "during retry wait") {
+        expect(fixture.sent).toHaveLength(1);
+        expect(firstSettled).toBe(false);
+        queueReplacement();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(fixture.sent).toHaveLength(2);
+      fixture.respond(1, fresh);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.sent).toHaveLength(2);
+      expect(firstSettled).toBe(true);
+      expect(replacementSettled).toBe(true);
+      expect(await replacement).toEqual(fresh);
+      expect(await first).toBeInstanceOf(Error);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.sent).toHaveLength(2);
+      expect(peekModelCatalog(fixture.client, scope)).toEqual(fresh);
+    } finally {
+      fixture.close();
+      await Promise.all([first, replacement]);
+    }
+  },
+);
 
 it("preserves inherited transport deadlines and explicit unbounded requests", async () => {
   vi.useFakeTimers();

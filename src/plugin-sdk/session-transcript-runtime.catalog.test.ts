@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -19,16 +20,21 @@ import {
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   ensureProfileForEmail,
+  getUserProfileDisplay,
+  linkEmail,
   setDisplayName,
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
-  projectSessionCatalogSourceActor,
+  createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
 } from "./session-transcript-runtime.js";
@@ -380,24 +386,23 @@ describe("native transcript catalog SDK", () => {
       expect(nextPageLinker.resolveOwner("github:newly-verified")).toMatchObject({
         id: newlyVerified.id,
       });
+      const projectActor = createSessionCatalogSourceActorProjector({
+        ...source,
+        actors: [{ type: "human", source: "profile", id: github.id }],
+      });
+      expect(projectActor({ type: "human", source: "profile", id: github.id })).toMatchObject({
+        type: "human",
+        identity: sender.identity,
+        label: "Portable User",
+      });
       expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "profile", id: github.id },
-        }),
-      ).toMatchObject({ type: "human", identity: sender.identity, label: "Portable User" });
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "channel", id: github.id },
-        })?.identity,
+        projectActor({ type: "human", source: "channel", id: github.id })?.identity,
       ).toBeUndefined();
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "agent", id: "main", label: "Main" },
-        }),
-      ).toEqual({ type: "agent", id: "main", label: "Main" });
+      expect(projectActor({ type: "agent", id: "main", label: "Main" })).toEqual({
+        type: "agent",
+        id: "main",
+        label: "Main",
+      });
     });
   });
 
@@ -405,6 +410,115 @@ describe("native transcript catalog SDK", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await expect(read(1)).rejects.toThrow("Session not found");
       expect(fs.existsSync(state.agentDir())).toBe(false);
+    });
+  });
+
+  it("bounds repeated sender reads while refreshing merged and missing facts on the next page", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const canonical = syncGitHubIdentity({
+        identity: { accountId: 12345, login: "catalog-user", name: "Canonical User" },
+        authenticationAlias: { kind: "github-login", login: "catalog-user" },
+      });
+      const alias = ensureProfileForEmail("alias@example.test");
+      linkEmail("alias@example.test", canonical.id);
+      const missingId = "missing-profile";
+      await seed(
+        Array.from({ length: 24 }, (_, index) => ({
+          role: "user",
+          content: `Question ${index}`,
+          __openclaw: {
+            senderIdentity: { type: "profile", id: index % 2 === 0 ? alias.id : missingId },
+            senderName: `Fallback ${index}`,
+          },
+        })),
+      );
+      const { db } = openOpenClawStateDatabase();
+      const counter = trackSqliteStatementExecutions(db, ["attribution"], (query) =>
+        /\bfrom\s+"?(?:user_profiles|user_profile_identities)\b/i.test(query)
+          ? "attribution"
+          : null,
+      );
+      let first: Awaited<ReturnType<typeof read>>;
+      try {
+        first = await read(12);
+        expect.soft(counter.counts.attribution).toBeGreaterThan(0);
+        expect.soft(counter.counts.attribution).toBeLessThanOrEqual(5);
+        expect.soft(counter.rowCounts.attribution).toBeGreaterThan(0);
+        expect.soft(counter.rowCounts.attribution).toBeLessThanOrEqual(3);
+        expect.soft(counter.textBytes.attribution).toBeGreaterThan(0);
+        expect.soft(counter.textBytes.attribution).toBeLessThan(512);
+      } finally {
+        counter.restore();
+      }
+      expect(
+        first.items.map((item) => [item.text, item.sender?.identity.id, item.sender?.label]),
+      ).toEqual(
+        Array.from({ length: 12 }, (_, offset) => {
+          const index = 23 - offset;
+          return [
+            `Question ${index}`,
+            index % 2 === 0 ? "12345" : missingId,
+            index % 2 === 0 ? "Canonical User" : `Fallback ${index}`,
+          ];
+        }),
+      );
+      expect(first.nextCursor).toBeDefined();
+      setDisplayName(canonical.id, "Renamed User");
+      db.prepare("DELETE FROM user_profile_identities WHERE provider = ? AND subject = ?").run(
+        "github",
+        "12345",
+      );
+      db.prepare(
+        "INSERT INTO user_profiles (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      ).run(missingId, "New Profile", 1, 1);
+      const second = await read(12, first.nextCursor);
+      expect(
+        second.items.map((item) => [item.text, item.sender?.identity.id, item.sender?.label]),
+      ).toEqual(
+        Array.from({ length: 12 }, (_, offset) => {
+          const index = 11 - offset;
+          return [
+            `Question ${index}`,
+            index % 2 === 0 ? canonical.id : missingId,
+            index % 2 === 0 ? "Renamed User" : "New Profile",
+          ];
+        }),
+      );
+      expect(second.nextCursor).toBeUndefined();
+    });
+  });
+
+  it("preserves native sender errors even when its content would be hidden", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("unsafe@example.test");
+      await seed([
+        {
+          role: "user",
+          content: [{ type: "tool_result", content: "Hidden" }],
+          __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
+        },
+      ]);
+      const { db } = openOpenClawStateDatabase();
+      db.prepare("UPDATE user_profiles SET updated_at = ? WHERE id = ?").run(
+        9223372036854775807n,
+        profile.id,
+      );
+      let nativeError: unknown;
+      try {
+        getUserProfileDisplay(profile.id);
+      } catch (error) {
+        nativeError = error;
+      }
+      expect(nativeError).toBeInstanceOf(Error);
+      expect(nativeError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+      if (!(nativeError instanceof Error)) {
+        throw new Error("Expected native integer decoding to fail");
+      }
+      await expect(read(1)).rejects.toMatchObject({
+        name: nativeError.name,
+        message: nativeError.message,
+        code: "ERR_OUT_OF_RANGE",
+      });
     });
   });
 });

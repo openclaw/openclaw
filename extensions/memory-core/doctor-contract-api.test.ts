@@ -6,22 +6,16 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
-import {
-  createPluginStateKeyedStoreForTests,
-  getPluginStateCapacityForTests,
-  importPluginStateEntriesForDoctorForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
   configureMemoryCoreDreamingState,
@@ -29,33 +23,12 @@ import {
 } from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
-import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
+import { searchKeyword } from "./src/memory/manager-search.js";
 import {
   dreamingTestState as dreamingTesting,
   resetMemoryCoreDreamingStateForTests,
   shortTermTestState as shortTermTesting,
 } from "./src/test-helpers.js";
-
-function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
-  return {
-    getPluginStateCapacity() {
-      return getPluginStateCapacityForTests("memory-core", env);
-    },
-    importPluginStateEntries(options, entries) {
-      importPluginStateEntriesForDoctorForTests(
-        "memory-core",
-        { ...options, env: options.env ?? env },
-        entries,
-      );
-    },
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("memory-core", {
-        ...options,
-        env: options.env ?? env,
-      });
-    },
-  };
-}
 
 function legacyMemoryIndexMigration() {
   const migration = stateMigrations.find(
@@ -132,6 +105,7 @@ async function writeLegacyMemorySidecar(
     fileHash?: string;
     filePath?: string;
     text?: string;
+    chunkEmbedding?: string;
     cacheEmbedding?: string;
     cacheDims?: number | null;
   } = {},
@@ -178,9 +152,13 @@ async function writeLegacyMemorySidecar(
       INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
     `);
     db.prepare("INSERT INTO files VALUES (?, 'memory', ?, 10, 20)").run(filePath, fileHash);
-    db.prepare(
-      "INSERT INTO chunks VALUES (?, ?, 'memory', 1, 2, ?, 'embed-model', ?, '[1,0,0]', 30)",
-    ).run(chunkId, filePath, chunkHash, text);
+    db.prepare("INSERT INTO chunks VALUES (?, ?, 'memory', 1, 2, ?, 'embed-model', ?, ?, 30)").run(
+      chunkId,
+      filePath,
+      chunkHash,
+      text,
+      params.chunkEmbedding ?? "[1,0,0]",
+    );
     db.prepare(
       "INSERT INTO embedding_cache VALUES ('openai', 'embed-model', 'key', ?, ?, ?, 40)",
     ).run(
@@ -240,12 +218,9 @@ async function createCanonicalMemoryIndex(agentPath: string, text: string): Prom
       "canonical-hash",
       "embed-model",
       text,
-      "[0,1,0]",
+      encodeMemoryEmbedding([0, 1, 0]),
       31,
     );
-    db.prepare(
-      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(text, "canonical-chunk", "MEMORY.md", "memory", "embed-model", 1, 1);
     insertCanonicalChunkProvenance(db, "canonical-chunk", 31);
   } finally {
     db.close();
@@ -282,19 +257,8 @@ async function createUnrelatedCanonicalMemoryIndex(
       "canonical-other-hash",
       "embed-model",
       "canonical unrelated memory",
-      "[0,1,0]",
+      encodeMemoryEmbedding([0, 1, 0]),
       31,
-    );
-    db.prepare(
-      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      "canonical unrelated memory",
-      "canonical-other-chunk",
-      "OTHER.md",
-      "memory",
-      "embed-model",
-      1,
-      1,
     );
     insertCanonicalChunkProvenance(db, "canonical-other-chunk", 31);
   } finally {
@@ -329,12 +293,10 @@ async function createCanonicalLegacyMemoryRowsWithFts(agentPath: string, ftsText
       "chunk-hash",
       "embed-model",
       "remember this",
-      "[1,0,0]",
+      encodeMemoryEmbedding([1, 0, 0]),
       30,
     );
-    db.prepare(
-      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(ftsText, "chunk-1", "MEMORY.md", "memory", "embed-model", 1, 2);
+    db.prepare("UPDATE memory_index_chunks_fts SET text = ? WHERE id = ?").run(ftsText, "chunk-1");
     insertCanonicalChunkProvenance(db, "chunk-1", 30);
   } finally {
     db.close();
@@ -440,18 +402,14 @@ async function searchMigratedVectorRows(agentPath: string) {
   try {
     const loaded = await loadSqliteVecExtension({ db });
     expect(loaded.ok, loaded.error).toBe(true);
-    return await searchVector({
-      db,
+    return runVectorKnnQuery(db, {
       vectorTable: "memory_index_chunks_vec",
-      providerModel: "embed-model",
+      providerModels: ["embed-model"],
       queryVec: [1, 0, 0],
       limit: 1,
       snippetMaxChars: 200,
-      ensureVectorReady: async () => true,
-      runVectorKnn: async (request) => runVectorKnnQuery(db, request),
-      sourceFilterVec: { sql: "", params: [] },
-      sourceFilterChunks: { sql: "", params: [] },
-    });
+      sourceFilter: { sql: "", params: [] },
+    }).rows;
   } finally {
     db.close();
   }
@@ -482,7 +440,7 @@ describe("memory-core doctor dreaming migration", () => {
   let env: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
-    resetPluginStateStoreForTests();
+    await resetDoctorPluginState();
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-doctor-"));
     workspaceDir = path.join(rootDir, "workspace");
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
@@ -490,8 +448,8 @@ describe("memory-core doctor dreaming migration", () => {
   });
 
   afterEach(async () => {
+    await resetDoctorPluginState();
     resetMemoryCoreDreamingStateForTests();
-    resetPluginStateStoreForTests();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
@@ -1124,6 +1082,8 @@ describe("memory-core doctor dreaming migration", () => {
     await context()
       .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
       .clear();
+    // The age-preserving importer owns a native connection distinct from the async store.
+    openOpenClawStateDatabase({ env });
     const db = new DatabaseSync(path.join(rootDir, "state", "state", "openclaw.sqlite"));
     try {
       db.exec(`CREATE TRIGGER fail_host_import BEFORE INSERT ON plugin_state_entries
@@ -1150,7 +1110,7 @@ describe("memory-core doctor dreaming migration", () => {
       db.exec("DROP TRIGGER IF EXISTS fail_host_import");
       db.close();
     }
-    resetPluginStateStoreForTests();
+    await resetDoctorPluginState();
     const result = await hostEventsMigration().migrateLegacyState(migrationParams());
     expect(result.warnings).toEqual([]);
     const recovered = await readMemoryHostEventRecords({ workspaceDir, env });
@@ -1478,21 +1438,28 @@ describe("memory-core doctor dreaming migration", () => {
     });
   });
 
-  it("leaves invalid legacy JSON in place", async () => {
-    const recallPath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.writeFile(recallPath, "{", "utf8");
+  it.each([
+    { fileName: "short-term-recall.json", label: "short-term recall" },
+    { fileName: "phase-signals.json", label: "phase signals" },
+  ])("leaves invalid legacy $label JSON in place", async ({ fileName, label }) => {
+    const sourcePath = path.join(workspaceDir, "memory", ".dreams", fileName);
+    await fs.writeFile(sourcePath, "{", "utf8");
 
     const result = await dreamingStateMigration().migrateLegacyState(migrationParams());
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining("Skipped Memory Core short-term recall import"),
+      expect.stringContaining(`Skipped Memory Core ${label} import`),
     ]);
-    await fs.access(recallPath);
-    await expect(fs.access(`${recallPath}.migrated`)).rejects.toThrow();
+    await fs.access(sourcePath);
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
     configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
-    const recall = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(recall.entries).toEqual({});
+    const nowIso = new Date().toISOString();
+    const store =
+      fileName === "short-term-recall.json"
+        ? await shortTermTesting.readRecallStore(workspaceDir, nowIso)
+        : await shortTermTesting.readPhaseSignalStore(workspaceDir, nowIso);
+    expect(store.entries).toEqual({});
   });
 
   it("uses migration env when resolving default workspaces", async () => {
@@ -1543,7 +1510,11 @@ describe("memory-core doctor dreaming migration", () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await writeLegacyMemorySidecar(legacyPath);
+    const embedding = [0.1234567890123456, 1 / 3, Number.MIN_VALUE];
+    await writeLegacyMemorySidecar(legacyPath, {
+      chunkEmbedding: JSON.stringify(embedding),
+      cacheEmbedding: JSON.stringify(embedding),
+    });
 
     const migration = legacyMemoryIndexMigration();
     const preview = await migration.detectLegacyState(migrationParams());
@@ -1563,6 +1534,17 @@ describe("memory-core doctor dreaming migration", () => {
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
+    const migrated = new DatabaseSync(agentPath);
+    try {
+      expect(migrated.prepare("SELECT embedding FROM memory_index_chunks").get()).toEqual({
+        embedding: encodeMemoryEmbedding(embedding),
+      });
+      expect(migrated.prepare("SELECT embedding FROM memory_embedding_cache").get()).toEqual({
+        embedding: encodeMemoryEmbedding(embedding),
+      });
+    } finally {
+      migrated.close();
+    }
     await fs.access(`${legacyPath}.migrated`);
   });
 
@@ -2503,7 +2485,7 @@ describe("memory-core doctor dreaming migration", () => {
         .prepare(
           "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .run("openai", "embed-model", "key", "chunk-hash", "[0,1,0]", 3, 99);
+        .run("openai", "embed-model", "key", "chunk-hash", encodeMemoryEmbedding([0, 1, 0]), 3, 99);
     } finally {
       canonicalDb.close();
     }
@@ -2535,7 +2517,7 @@ describe("memory-core doctor dreaming migration", () => {
         model: "embed-model",
         provider_key: "key",
         hash: "other-hash",
-        embedding: "[1,1,0]",
+        embedding: encodeMemoryEmbedding([1, 1, 0]),
         dims: 3,
         updated_at: 41,
       },
@@ -2544,7 +2526,7 @@ describe("memory-core doctor dreaming migration", () => {
         model: "embed-model",
         provider_key: "key",
         hash: "chunk-hash",
-        embedding: "[0,1,0]",
+        embedding: encodeMemoryEmbedding([0, 1, 0]),
         dims: 3,
         updated_at: 99,
       },
@@ -2559,34 +2541,34 @@ describe("memory-core doctor dreaming migration", () => {
   it.each([
     {
       reason: "declared dimensions differ",
-      canonicalEmbedding: "[0,1,0]",
+      canonicalEmbedding: encodeMemoryEmbedding([0, 1, 0]),
       canonicalDims: 4,
     },
     {
       reason: "embedding lengths differ",
-      canonicalEmbedding: "[0,1,0,0]",
+      canonicalEmbedding: encodeMemoryEmbedding([0, 1, 0, 0]),
       canonicalDims: 3,
     },
     {
       reason: "both embeddings mismatch their shared dimensions",
-      canonicalEmbedding: "[0,1,0,0]",
+      canonicalEmbedding: encodeMemoryEmbedding([0, 1, 0, 0]),
       canonicalDims: 3,
       legacyEmbedding: "[1,0,0,0]",
     },
     {
       reason: "the canonical embedding is malformed",
-      canonicalEmbedding: "not-json",
+      canonicalEmbedding: new Uint8Array([1, 2, 3]),
       canonicalDims: 3,
     },
     {
       reason: "the legacy embedding is malformed",
-      canonicalEmbedding: "[0,1,0]",
+      canonicalEmbedding: encodeMemoryEmbedding([0, 1, 0]),
       canonicalDims: 3,
       legacyEmbedding: "not-json",
     },
     {
       reason: "both declared dimensions are missing",
-      canonicalEmbedding: "[0,1,0]",
+      canonicalEmbedding: encodeMemoryEmbedding([0, 1, 0]),
       canonicalDims: null,
       legacyDims: null,
     },
@@ -2700,7 +2682,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
-  it("keeps canonical FTS rows and archives a conflicting derived legacy index", async () => {
+  it("rebuilds stale FTS from canonical chunks while importing legacy rows", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -2723,15 +2705,26 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (2 source(s), 2 chunk(s), 1 cache row(s))",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    const keywordRows = await searchMigratedKeywordRows(agentPath, "stale");
-    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    expect(await searchMigratedKeywordRows(agentPath, "stale")).toEqual([]);
+    expect((await searchMigratedKeywordRows(agentPath, "remember")).map((row) => row.id)).toEqual([
+      "chunk-1",
+    ]);
+    expect((await searchMigratedKeywordRows(agentPath, "second")).map((row) => row.id)).toEqual([
+      "chunk-2",
+    ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
-      chunks: [{ id: "chunk-1", text: "remember this" }],
-      cache: [],
+      sources: [
+        { path: "MEMORY.md", source: "memory", hash: "file-hash" },
+        { path: "SECOND.md", source: "memory", hash: "" },
+      ],
+      chunks: [
+        { id: "chunk-1", text: "remember this" },
+        { id: "chunk-2", text: "second legacy memory" },
+      ],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await fs.access(`${legacyPath}.migrated`);

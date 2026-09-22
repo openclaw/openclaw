@@ -139,11 +139,8 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (payload.kind === "preamble") {
-        if (shouldYieldDraftCommentary()) {
-          return undefined;
-        }
-        return await draftPreview.pushPreambleItemEvent(payload);
+      if (payload.kind === "preamble" && shouldYieldDraftCommentary()) {
+        return undefined;
       }
       return await draftPreview.pushItemEvent(payload);
     },
@@ -158,12 +155,6 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     onApprovalEvent: async (payload) => {
       return await draftPreview.pushApprovalEvent(payload);
-    },
-    onCommandOutput: async (payload) => {
-      return await draftPreview.pushCommandOutputEvent(payload);
-    },
-    onPatchSummary: async (payload) => {
-      return await draftPreview.pushPatchEvent(payload);
     },
     onCompactionStart: async () => {
       if (!abortSignal?.aborted) {

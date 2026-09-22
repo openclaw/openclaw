@@ -32,6 +32,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) surface: ControlUiSurface = "workspace";
   @property({ attribute: false }) props: unknown = {};
   @property({ attribute: false }) defaultView: unknown = nothing;
+  @property({ attribute: false }) replacementCompanion: unknown = nothing;
   @property({ attribute: false }) defaultHost?: LitElement;
   @property({ type: Boolean }) presented = true;
   @state() private error = "";
@@ -141,11 +142,20 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
             if (abort.signal.aborted) {
               throw new Error("This plugin UI view has ended.");
             }
+            const firstDefault = this.defaultContainers.size === 0;
             this.defaultContainers.add(target);
             render(this.defaultView, target, { host: this.defaultHost ?? this });
+            if (firstDefault) {
+              this.requestUpdate();
+            }
             return () => {
-              this.defaultContainers.delete(target);
+              if (!this.defaultContainers.delete(target)) {
+                return;
+              }
               render(nothing, target);
+              if (this.defaultContainers.size === 0) {
+                this.requestUpdate();
+              }
             };
           },
         };
@@ -272,10 +282,11 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     }
     // The host owns the mount root. A new lifetime gets new DOM even when the
     // plugin has no disposer or its framework caches render state on the root.
-    return keyed(
+    // A delegated built-in already owns these controls, as does failure fallback above.
+    return html`${this.defaultContainers.size === 0 ? this.replacementCompanion : nothing}${keyed(
       this.mountGeneration,
       html`<div data-plugin-view-root style="display: contents"></div>`,
-    );
+    )}`;
   }
 }
 

@@ -1,17 +1,13 @@
 // The singleton resolves the current request registry or process root on every dispatch,
 // so registry replacement and hooks added after initialization take effect immediately.
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-gateway.types.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import {
   createLiveHookRegistryFacade,
   hookRunnerGlobalState as state,
 } from "./hook-runner-global-state.js";
-import type {
-  PluginHookGatewayContext,
-  PluginHookGatewayStopEvent,
-  PluginHookHandlerMap,
-  PluginHookName,
-} from "./hook-types.js";
+import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 
 const getLog = () => createSubsystemLogger("plugins");

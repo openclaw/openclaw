@@ -9,6 +9,7 @@ import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support
 import type { AgentHarness } from "./harness/types.js";
 import {
   hasResolvedThinkingCatalogEntry,
+  needsThinkHydration,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "./thinking-runtime.js";
@@ -35,6 +36,31 @@ describe("hasResolvedThinkingCatalogEntry", () => {
       }),
     ).toBe(true);
   });
+
+  it.each([
+    { nativeRuntime: undefined, agentRuntime: undefined, resolved: true, hydrate: undefined },
+    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true, hydrate: undefined },
+    { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true, hydrate: false },
+    { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true, hydrate: false },
+    { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false, hydrate: true },
+    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true, hydrate: true },
+  ])(
+    "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
+    ({ nativeRuntime, agentRuntime, resolved, hydrate }) => {
+      const catalog = [{ provider: "fixture", id: "model", reasoning: true, nativeRuntime }];
+      expect(
+        hasResolvedThinkingCatalogEntry({
+          catalog,
+          provider: "fixture",
+          model: "model",
+          agentRuntime,
+        }),
+      ).toBe(resolved);
+      if (agentRuntime !== undefined) {
+        expect(needsThinkHydration(catalog, "fixture", "model", agentRuntime)).toBe(hydrate);
+      }
+    },
+  );
 });
 
 function openAIConfig(runtime: string): OpenClawConfig {

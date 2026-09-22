@@ -5,6 +5,11 @@ import { en } from "./en.ts";
 // diagnostic inspector does not tax every Control UI startup.
 const enActivity = {
   activity: {
+    images: {
+      failed: "Image previews are unavailable. Open the session or retry.",
+      older: "Search older images",
+      incomplete: "Some images are too large to preview here. Open the session to see them.",
+    },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",
       branchDiff: "{branch}: changes against the default branch, including uncommitted work",

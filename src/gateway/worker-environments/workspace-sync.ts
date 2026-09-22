@@ -27,14 +27,16 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { parseWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
 } from "./workspace-reconcile.js";
@@ -584,7 +586,7 @@ export function createWorkerWorkspaceActions(
               `${stagingRoot}/`,
             ],
             destinationRoot: stagingRoot,
-            entryLimit: MAX_RECONCILIATION_ENTRIES * 2,
+            entryLimit: MAX_WORKSPACE_INVENTORY_ENTRIES,
             totalByteLimit: MAX_RECONCILIATION_TOTAL_BYTES,
           });
           if (!success(resultTransfer)) {

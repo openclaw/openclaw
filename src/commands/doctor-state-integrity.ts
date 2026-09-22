@@ -9,6 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveDefaultAgentDir,
@@ -41,7 +42,11 @@ import {
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreTargets, type SessionStoreTarget } from "../config/sessions/targets.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -56,6 +61,7 @@ import {
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
@@ -69,7 +75,7 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
-import { countLabel } from "./doctor-state-integrity-format.js";
+import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
@@ -98,11 +104,6 @@ function existsFile(filePath: string): boolean {
     return false;
   }
 }
-
-type OrphanAgentDir = {
-  dirName: string;
-  agentId: string;
-};
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -185,22 +186,7 @@ function isReachableConfiguredAgentDir(params: {
   }
   const rawDir = path.join(params.agentsRoot, params.dirName, "agent");
   const normalizedDir = path.join(params.agentsRoot, params.agentId, "agent");
-  const rawRealPath = tryResolveNativeRealPath(rawDir);
-  const normalizedRealPath = tryResolveNativeRealPath(normalizedDir);
-  return rawRealPath !== null && rawRealPath === normalizedRealPath;
-}
-
-function formatOrphanAgentDirLabel(entry: OrphanAgentDir): string {
-  return entry.dirName === entry.agentId ? entry.agentId : `${entry.dirName} (id ${entry.agentId})`;
-}
-
-function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): string {
-  const labels = entries.slice(0, limit).map(formatOrphanAgentDirLabel);
-  const remaining = entries.length - labels.length;
-  if (remaining > 0) {
-    return `${labels.join(", ")}, and ${remaining} more`;
-  }
-  return labels.join(", ");
+  return areComparablePathsEqual(rawDir, normalizedDir);
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
@@ -339,8 +325,6 @@ function countJsonlLines(filePath: string): number {
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   return isPathUnderRootWithPathOps(targetPath, rootPath, path);
 }
-
-const tryResolveRealPath = safeRealpathSync;
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
@@ -497,7 +481,7 @@ function resolveLinuxStateMount(
   },
 ): LinuxSdBackedStateDir | null {
   const linuxPath = path.posix;
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   const resolvedStatePath =
     resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
     linuxPath.resolve(stateDir);
@@ -537,9 +521,7 @@ export function detectLinuxSdBackedStateDir(
 
   const sourceCandidates = [stateMount.source];
   if (stateMount.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      stateMount.source,
-    );
+    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? safeRealpathSync)(stateMount.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
@@ -643,7 +625,7 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
   const resolvedStatePath =
     resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
@@ -691,7 +673,7 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // A state dir that does not exist yet cannot be resolved directly, and
   // falling back to the lexical path misreads a not-yet-created leaf beneath a
   // OneDrive-named junction that actually resolves to local storage. Resolve
@@ -782,9 +764,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
+  // channel id with no effective plugin owner can never pair and must not require the dir.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
-    if (channelId === "defaults" || channelId === "modelByChannel") {
+    const scopedChannelId = normalizeOptionalLowercaseString(channelId);
+    if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
       continue;
     }
     if (hasPairingPolicy(channelCfg)) {
@@ -1326,12 +1310,20 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
   if (orphanAgentDirs.length > 0) {
+    const labels = orphanAgentDirs
+      .slice(0, 3)
+      .map(({ dirName, agentId }) =>
+        dirName === agentId ? agentId : `${dirName} (id ${agentId})`,
+      );
+    const remaining = orphanAgentDirs.length - labels.length;
+    const authoredAgentRosterPath =
+      readAgentRosterProperty(cfg)?.kind === "list" ? "agents.list" : "agents.entries";
     warnings.push(
       [
-        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
-        `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
-        `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Examples: ${labels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
   }
@@ -1340,6 +1332,9 @@ export async function noteStateIntegrity(
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
   const sessionTargets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env }).toSorted(
     (left, right) =>
       left.agentId === compatibilityAgentId ? -1 : right.agentId === compatibilityAgentId ? 1 : 0,
@@ -1357,6 +1352,9 @@ export async function noteStateIntegrity(
       defaultAgentId: compatibilityAgentId,
       env,
     }).path;
+    if (isRetained(sqliteStorePath, agentId)) {
+      return;
+    }
     // A successful SQLite import archives sessions.json. Its continued presence
     // is therefore the explicit signal that pre-import rows still need inspection.
     const legacyStore =
@@ -1556,7 +1554,10 @@ export async function noteStateIntegrity(
   // Scan that file once under the compatibility owner so full-store work is not repeated.
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
       continue;
     }
     const legacyStorePath = path.resolve(target.storePath);

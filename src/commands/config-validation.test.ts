@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
@@ -44,28 +45,39 @@ describe("requireValidConfig", () => {
     ]);
   }
 
-  it("retains native write ownership and the read-time environment after an await", async () => {
-    const writeSnapshot = {
-      snapshot: {
-        exists: true,
-        valid: true,
-        config: {},
-        sourceConfig: {},
-        path: "/tmp/owned.json",
-      },
-      writeOptions: {
-        expectedConfigPath: "/tmp/owned.json",
-        envSnapshotForRestore: { CONFIG_READ_TOKEN: "at-read" },
-        includeFileHashesForWrite: { "/tmp/include.json": "read-hash" },
-      },
-    };
-    readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
-    const result = await requireValidConfigForWrite(createTestRuntime());
-    await Promise.resolve();
-    expect(result).toBe(writeSnapshot);
-    expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "retains native write ownership after an await (json=%s)",
+    async (json) => {
+      const writeSnapshot = {
+        snapshot: {
+          exists: true,
+          valid: true,
+          config: {},
+          sourceConfig: {},
+          path: "/tmp/owned.json",
+        },
+        writeOptions: {
+          expectedConfigPath: "/tmp/owned.json",
+          envSnapshotForRestore: { CONFIG_READ_TOKEN: "at-read" },
+          includeFileHashesForWrite: { "/tmp/include.json": "read-hash" },
+        },
+      };
+      readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
+      const runtime = createTestRuntime();
+      const result = await withConsoleLogsRoutedToStderrForJson(
+        ["node", "openclaw", "agents", "add", ...(json ? ["--json"] : [])],
+        () => requireValidConfigForWrite(runtime),
+        { restoreChanges: true },
+      );
+      await Promise.resolve();
+      expect(result).toBe(writeSnapshot);
+      expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
+      expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports invalid native write reads without returning a writable snapshot", async () => {
     readConfigFileSnapshotForWrite.mockResolvedValue({

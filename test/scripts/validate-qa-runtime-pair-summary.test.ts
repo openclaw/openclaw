@@ -652,3 +652,61 @@ describe("frozen QA runtime-pair summary validation", () => {
     );
   });
 });
+
+describe("preserved cell skips in frozen runtime-pair reports", () => {
+  // Since #129616 the parity report keeps an approved scenario-level skip on
+  // the cell (`codexStatus: "skip"`) while the scenario itself still passes.
+  function passingScenarioWithCodexGap() {
+    return summary([
+      scenario({ name: "passing", status: "pass" }),
+      scenario({
+        name: "compaction retry",
+        status: "pass",
+        drift: "structural",
+        codexStatus: "skip",
+        codexDetails: "known-harness-gap compaction-retry-mutating-tool: tracked",
+      }),
+    ]);
+  }
+
+  function reportWithCodexCell(fixture: ReturnType<typeof summary>, codexStatus: string) {
+    const reportSummary = reportFor(fixture.scenarios);
+    reportSummary.scenarios[1]!.codexStatus = codexStatus;
+    const base = markdownFor(fixture.scenarios);
+    const line = "- codex: pass (0 tool calls)";
+    const last = base.lastIndexOf(line);
+    const markdown = `${base.slice(0, last)}- codex: ${codexStatus} (0 tool calls)${base.slice(last + line.length)}`;
+    return { reportSummary, markdown };
+  }
+
+  it("accepts a report that preserves the approved codex skip on a passing scenario", () => {
+    const fixture = passingScenarioWithCodexGap();
+    const { reportSummary, markdown } = reportWithCodexCell(fixture, "skip");
+
+    expect(validateQaRuntimePairReport(fixture, reportSummary, markdown)).toEqual({
+      total: 2,
+      passed: 2,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("still accepts older reports that projected the skipped cell as healthy", () => {
+    const fixture = passingScenarioWithCodexGap();
+    const { reportSummary, markdown } = reportWithCodexCell(fixture, "pass");
+
+    expect(validateQaRuntimePairReport(fixture, reportSummary, markdown)).toMatchObject({
+      total: 2,
+      passed: 2,
+    });
+  });
+
+  it("rejects a skipped cell reported as failed", () => {
+    const fixture = passingScenarioWithCodexGap();
+    const { reportSummary, markdown } = reportWithCodexCell(fixture, "fail");
+
+    expect(() => validateQaRuntimePairReport(fixture, reportSummary, markdown)).toThrow(
+      "runtime-pair report scenarios do not match validated suite evidence",
+    );
+  });
+});

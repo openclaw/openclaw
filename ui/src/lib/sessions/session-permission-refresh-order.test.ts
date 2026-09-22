@@ -95,7 +95,7 @@ it.each(["workspace", "full", "failure"] as const)(
   },
 );
 
-it.each(["ordinary", "permission"])(
+it.each(["ordinary", "permission", "borrowed"] as const)(
   "keeps the latest queued %s refresh's error owner",
   async (lastOwner) => {
     const key = "agent:main:queued-permission";
@@ -132,7 +132,9 @@ it.each(["ordinary", "permission"])(
     const pending: Array<Promise<unknown>> = [];
     try {
       await sessions.refresh({ force: true });
-      pending.push(sessions.refresh({ force: true }));
+      if (lastOwner !== "borrowed") {
+        pending.push(sessions.refresh({ force: true }));
+      }
       if (lastOwner === "permission") {
         pending.push(sessions.refresh({ force: true }));
       }
@@ -141,7 +143,7 @@ it.each(["ordinary", "permission"])(
       await vi.waitFor(() =>
         expect(sessions.state.result?.sessions[0]?.permissionMode).toBe("workspace"),
       );
-      if (lastOwner === "ordinary") {
+      if (lastOwner !== "permission") {
         pending.push(sessions.refresh({ force: true }));
       }
       emitEvent({
@@ -168,7 +170,7 @@ it.each(["ordinary", "permission"])(
       expect(sessions.state.loading).toBe(false);
       expect(sessions.state.result?.sessions[0]?.permissionMode).toBe("full");
       expect(sessions.state.error).toBe(
-        lastOwner === "ordinary" ? "Selected refresh unavailable" : null,
+        lastOwner !== "permission" ? "Selected refresh unavailable" : null,
       );
       await expect(patch).resolves.not.toHaveProperty("listRefreshError");
       expect(listCalls).toBe(3);

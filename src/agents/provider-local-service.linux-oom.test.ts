@@ -3,16 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
-import { getFreePort } from "../test-utils/ports.js";
-import {
-  ensureProviderLocalService,
-  stopManagedProviderLocalServices,
-} from "./provider-local-service.js";
+import { ensureProviderLocalService } from "./provider-local-service.js";
+import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
 
 describe("provider local service Linux OOM scoring", () => {
-  afterEach(async () => {
-    await stopManagedProviderLocalServices();
-  });
+  const fixture = createProviderLocalServiceTestFixture();
+  afterEach(fixture.cleanup);
 
   it.runIf(process.platform === "linux")(
     "raises OOM score without changing configured service environment",
@@ -40,7 +36,7 @@ describe("provider local service Linux OOM scoring", () => {
         return;
       }
 
-      const port = await getFreePort();
+      const port = await fixture.claimPort();
       const healthUrl = `http://127.0.0.1:${port}/v1/models`;
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-oom-"));
       const bashEnvPath = path.join(tempDir, "bash-env.sh");

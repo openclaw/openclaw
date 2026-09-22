@@ -8,7 +8,6 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -20,6 +19,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { captureSourceWitness } from "./crabbox-staging-witness.mts";
+import { createStaging, type StagingHandle } from "./crabbox-staging.mts";
 
 const bundleFile = ".openclaw-crabbox-changed-gate.bundle";
 const capsuleRef = "refs/openclaw/source-capsule";
@@ -37,6 +38,7 @@ export type CrabboxSourceCapsule = {
   bundlePath: string;
   directory: string;
   cleanup: () => void;
+  staging: StagingHandle;
   configPath?: string;
 };
 
@@ -101,6 +103,86 @@ function sourceStat(root: string, path: string) {
   return stat ? { kind: "present" as const, stat } : { kind: "missing" as const };
 }
 
+function hasUnverifiedGitPreparation(
+  directory: string,
+  env: NodeJS.ProcessEnv,
+  sourcePaths: Iterable<string>,
+) {
+  if (env.GIT_CONFIG || env.GIT_EXTERNAL_DIFF) {
+    return true;
+  }
+  const probe = (args: string[]) =>
+    spawnSync("git", ["-C", directory, "config", ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024,
+    });
+  // Configuration reads do not invoke these callbacks. Their successful parent
+  // command would not prove that any callback descendants had stopped.
+  const callbacks = probe([
+    "--null",
+    "--name-only",
+    "--get-regexp",
+    "^(core\\.(fsmonitor|hookspath)|filter\\..*\\.(clean|smudge|process)|diff\\.(external|.*\\.(command|textconv)))$",
+  ]);
+  if (!callbacks.error && callbacks.status === 1) {
+    return false;
+  }
+  if (callbacks.error || callbacks.status !== 0 || !isUtf8(callbacks.stdout)) {
+    return true;
+  }
+  const names = callbacks.stdout.toString("utf8").toLowerCase().split("\0").filter(Boolean);
+  if (
+    !names.length ||
+    names.some((name) => name !== "core.fsmonitor" && !name.startsWith("filter."))
+  ) {
+    return true;
+  }
+  // Git renders these driver names identically to inactive attribute states.
+  if (names.some((name) => /^filter\.(unset|unspecified)\./u.test(name))) {
+    return true;
+  }
+  if (names.includes("core.fsmonitor")) {
+    const monitor = probe(["--type=bool", "--get", "core.fsmonitor"]);
+    if (
+      monitor.error ||
+      monitor.status !== 0 ||
+      monitor.stdout.toString("utf8").trim() !== "false"
+    ) {
+      return true;
+    }
+  }
+  if (!names.some((name) => name.startsWith("filter."))) {
+    return false;
+  }
+  // Installed drivers such as Git LFS cannot run without an active path
+  // attribute. Ask Git in this context, including its global attributes.
+  const paths = [...sourcePaths];
+  const attributes = spawnSync("git", ["-C", directory, "check-attr", "-z", "--stdin", "filter"], {
+    env,
+    input: paths.length ? paths.join("\0") + "\0" : "",
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 5_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (attributes.error || attributes.status !== 0 || !isUtf8(attributes.stdout)) {
+    return true;
+  }
+  const values = attributes.stdout.toString("utf8").split("\0");
+  if (values.pop() !== "" || values.length !== paths.length * 3) {
+    return true;
+  }
+  return paths.some(
+    (path, index) =>
+      values[index * 3] !== path ||
+      values[index * 3 + 1] !== "filter" ||
+      !["unspecified", "unset"].includes(values[index * 3 + 2]!),
+  );
+}
+
 export function prepareCrabboxSourceCapsule(options: {
   repoRoot: string;
   syncRoot: string;
@@ -153,16 +235,21 @@ export function prepareCrabboxSourceCapsule(options: {
   }
   // Freeze invoking Git's eligibility before moving to a different Git/config
   // context. This includes staged ignored additions and excludes untracked secrets.
-  const eligible = new Set(
-    git(repoRoot, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
-      .split("\0")
-      .filter(Boolean)
-      .map(capsulePath),
-  );
+  const eligiblePaths = git(repoRoot, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ])
+    .split("\0")
+    .filter(Boolean);
+  const eligible = new Set(eligiblePaths.map(capsulePath));
   mkdirSync(options.syncRoot, { recursive: true });
-  const temporary = mkdtempSync(resolve(options.syncRoot, "openclaw-crabbox-sync-"));
+  const staging = createStaging(options.syncRoot, repoRoot);
+  const temporary = staging.payload;
   const directory = join(temporary, "source");
-  const cleanup = () => rmSync(temporary, { recursive: true, force: true });
+  const cleanup = () => staging.dispose();
   try {
     mkdirSync(directory);
     const privateEnv: NodeJS.ProcessEnv = {
@@ -185,6 +272,9 @@ export function prepareCrabboxSourceCapsule(options: {
     ]).trim();
     writeFileSync(join(directory, ".git", "objects", "info", "alternates"), `${objectDir}\n`);
     git(directory, ["update-ref", "--no-deref", "HEAD", sourceSha], privateEnv);
+    // Native Blacksmith sync compares against literal main. Use the captured
+    // base so committed source changes remain part of that transport delta.
+    git(directory, ["update-ref", "refs/heads/main", baseSha], privateEnv);
     // Git expands ~/ paths; relative excludesFile paths are relative to the source
     // checkout. Keep this policy reference local, including an explicit empty override.
     const excludesFile = spawnSync(
@@ -242,15 +332,34 @@ export function prepareCrabboxSourceCapsule(options: {
     mkdirSync(linkBlobs);
     function writeFrozen(path: string, bytes: Buffer, mode: string) {
       const destination = join(directory, path);
-      mkdirSync(dirname(destination), { recursive: true });
       let blobPath = destination;
-      if (mode === "120000") {
-        symlinkSync(bytes, destination);
-        blobPath = join(linkBlobs, String(frozen.size));
-        writeFileSync(blobPath, bytes);
-      } else {
-        writeFileSync(destination, bytes);
-        chmodSync(destination, mode === "100755" ? 0o755 : 0o644);
+      let operation = "mkdir";
+      try {
+        mkdirSync(dirname(destination), { recursive: true });
+        if (mode === "120000") {
+          operation = "symlink";
+          symlinkSync(bytes, destination);
+          blobPath = join(linkBlobs, String(frozen.size));
+          operation = "write symlink blob";
+          writeFileSync(blobPath, bytes);
+        } else {
+          operation = "write file";
+          writeFileSync(destination, bytes);
+          operation = "chmod";
+          chmodSync(destination, mode === "100755" ? 0o755 : 0o644);
+        }
+      } catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        const details = [
+          failure?.code === undefined ? undefined : `code=${JSON.stringify(failure.code)}`,
+          failure?.errno === undefined ? undefined : `errno=${JSON.stringify(failure.errno)}`,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        throw new Error(
+          `source capsule: ${operation} failed for ${JSON.stringify(path)}${details ? ` (${details})` : ""}; source was not uploaded`,
+          { cause: error },
+        );
       }
       frozen.set(path, { mode, blobPath });
     }
@@ -376,6 +485,32 @@ export function prepareCrabboxSourceCapsule(options: {
       }
     }
     const selectionEnv = { ...sourceEnv };
+    const nativeGitEnv = Object.fromEntries(
+      Object.entries(sourceEnv).filter(([key]) => {
+        const name = key.toUpperCase();
+        return (
+          !name.startsWith("GIT_") ||
+          name === "GIT_CEILING_DIRECTORIES" ||
+          name === "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+        );
+      }),
+    );
+    let preparationUnverified = false;
+    const holdPreparation = () => {
+      if (staging.recorded && !preparationUnverified) {
+        staging.hold("writers");
+        preparationUnverified = true;
+      }
+    };
+    const checkPreparation = (env: NodeJS.ProcessEnv) => {
+      if (
+        staging.recorded &&
+        !preparationUnverified &&
+        hasUnverifiedGitPreparation(directory, env, new Set([...owned, ...frozen.keys()]))
+      ) {
+        holdPreparation();
+      }
+    };
     const runtimePolicies: string[] = [];
     let configPath: string | undefined;
     const explicitConfig = sourceEnv.CRABBOX_CONFIG;
@@ -418,6 +553,7 @@ export function prepareCrabboxSourceCapsule(options: {
         );
       }
     }
+    checkPreparation(sourceEnv);
     const snapshotEligible = new Set(
       git(directory, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
         .split("\0")
@@ -429,6 +565,10 @@ export function prepareCrabboxSourceCapsule(options: {
       }
     }
     function selectSource() {
+      checkPreparation(selectionEnv);
+      // Current native Git discovery strips command-scoped Git configuration;
+      // older supported CLIs retain it. Both preparation contexts must be safe.
+      checkPreparation(nativeGitEnv);
       let planValue: unknown;
       try {
         const result = spawnSync(options.syncPlan.command, options.syncPlan.args, {
@@ -451,6 +591,15 @@ export function prepareCrabboxSourceCapsule(options: {
       const parsed = syncPlanSchema.safeParse(planValue);
       if (!parsed.success) {
         throw new Error("source capsule received an invalid Crabbox sync-plan");
+      }
+      if (
+        typeof planValue === "object" &&
+        planValue !== null &&
+        "localGitSeed" in planValue &&
+        planValue.localGitSeed != null
+      ) {
+        // Its additional Git workspaces are outside this constructor's closure proof.
+        holdPreparation();
       }
       const selected = new Set(parsed.data.topFiles.map((entry) => capsulePath(entry.path)));
       if (
@@ -617,6 +766,26 @@ export function prepareCrabboxSourceCapsule(options: {
     ) {
       throw new Error("source revision or index changed while freezing; retry after edits finish");
     }
+    // Preparation-only copies are no longer needed after the transport bundle
+    // is sealed. Keep recovery metadata outside the recursively removed payload.
+    rmSync(linkBlobs, { recursive: true, force: true });
+    rmSync(join(temporary, "sparse-blobs"), { force: true });
+    rmSync(shallow, { force: true });
+    if (staging.recorded) {
+      checkPreparation(sourceEnv);
+      checkPreparation(nativeGitEnv);
+      staging.prepared(
+        {
+          files: paths.map((path, index) => ({
+            path,
+            mode: frozen.get(path)!.mode as "100644" | "100755" | "120000",
+            blob: hashes[index]!,
+          })),
+          deleted,
+        },
+        captureSourceWitness(repoRoot, sourceSha),
+      );
+    }
     return {
       sourceSha,
       baseSha,
@@ -626,10 +795,19 @@ export function prepareCrabboxSourceCapsule(options: {
       bundlePath,
       directory,
       cleanup,
+      staging,
       configPath,
     };
   } catch (error) {
-    cleanup();
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `source capsule cleanup failed; temporary checkout retained at ${temporary}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: cleanupError },
+      );
+    }
     throw error;
   }
 }

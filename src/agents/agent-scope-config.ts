@@ -15,25 +15,34 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
+import {
+  hasAgentRosterProperty,
+  listAgentEntriesWithSource,
+  listAgentIds,
+  readAgentRosterProperty,
+  tryResolveLegacyDataOwner,
+  tryResolveRawLegacyDefaultAgentId,
+  tryResolveSoleAgentId,
+} from "./agent-roster.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
+
+export {
+  hasAgentRosterProperty,
+  listAgentEntries,
+  listAgentEntriesWithSource,
+  listAgentIds,
+  readAgentRosterProperty,
+  tryResolveDefaultAgentId,
+  tryResolveSoleAgentId,
+  type ListedAgentEntry,
+} from "./agent-roster.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
-type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
-type AgentRosterConfig = {
-  readonly agents?: {
-    readonly entries?: Readonly<Record<string, unknown>>;
-    readonly list?: readonly unknown[];
-  };
-};
-export type ListedAgentEntry = {
-  entry: AgentEntry;
-  source: { kind: "entries"; key: string } | { kind: "list"; index: number };
-};
-
 export type AgentSelectionContext = {
   surface: string;
   hint: string;
@@ -70,6 +79,7 @@ export type ResolvedAgentConfig = {
   modelPolicy?: AgentEntry["modelPolicy"];
   agentRuntime?: AgentEntry["agentRuntime"];
   utilityModel?: AgentEntry["utilityModel"];
+  decisionModel?: AgentEntry["decisionModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
@@ -111,17 +121,22 @@ type AgentRosterFactsBatch = {
 };
 
 let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
+const immutableAgentRosterFacts = new WeakMap<
+  OpenClawConfig,
+  { legacyOwner: string | undefined; facts: AgentRosterFacts }
+>();
 
 /**
  * Runs a read-only callback with batch-scoped roster memoization.
  *
  * Runtime discovery calls the owner helpers for every configured model. Keep
- * their derived facts on this exact config and discard them before returning,
- * so later config mutations cannot observe a stale process cache.
+ * their derived facts on this exact config. Mutable callers discard the batch
+ * before returning; immutable captures retain facts for their own lifetime.
  */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
   const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch = parent?.config === config ? parent : { config, facts: {} };
+  activeAgentRosterFactsBatch =
+    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
   try {
     return callback();
   } finally {
@@ -130,39 +145,20 @@ export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: (
 }
 
 function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
-  return activeAgentRosterFactsBatch?.config === cfg
-    ? activeAgentRosterFactsBatch.facts
-    : undefined;
-}
-
-/** Lists valid configured agent entries from config. */
-export function listAgentEntriesWithSource(cfg: AgentRosterConfig): ListedAgentEntry[] {
-  const roster = readAgentRosterProperty(cfg);
-  if (roster?.kind === "entries" && isRecord(roster.value)) {
-    return Object.entries(roster.value).flatMap(([id, entry]) =>
-      isRecord(entry)
-        ? [
-            {
-              entry: { ...entry, id },
-              source: { kind: "entries" as const, key: id },
-            },
-          ]
-        : [],
-    );
+  if (activeAgentRosterFactsBatch?.config === cfg) {
+    return activeAgentRosterFactsBatch.facts;
   }
-  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
-    return [];
+  if (!isDeeplyFrozenPlainData(cfg)) {
+    return undefined;
   }
-  return roster.value.flatMap((entry, index) =>
-    entry !== null && typeof entry === "object"
-      ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }]
-      : [],
-  );
-}
-
-/** Lists valid configured agent entries from either supported representation. */
-export function listAgentEntries(cfg: AgentRosterConfig): AgentEntry[] {
-  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
+  // Migration provenance lives outside the immutable config and can still change.
+  const legacyOwner = getRetainedLegacyDefaultAgentId(cfg);
+  let cached = immutableAgentRosterFacts.get(cfg);
+  if (!cached || cached.legacyOwner !== legacyOwner) {
+    cached = { legacyOwner, facts: {} };
+    immutableAgentRosterFacts.set(cfg, cached);
+  }
+  return cached.facts;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */
@@ -173,51 +169,6 @@ export function toAgentEntriesRecord(entries: readonly AgentEntry[]): AgentEntri
       return [id, config];
     }),
   );
-}
-
-/** Reads the explicitly owned raw roster without normalizing malformed values. */
-export function readAgentRosterProperty(raw: unknown): AgentRosterProperty | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const agents = (raw as { agents?: unknown }).agents;
-  if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
-    return undefined;
-  }
-  const entries = (agents as Record<string, unknown>)["entries"];
-  if (Object.hasOwn(agents, "entries") && entries !== undefined) {
-    return { kind: "entries", value: entries };
-  }
-  const list = (agents as Record<string, unknown>)["list"];
-  if (Object.hasOwn(agents, "list") && list !== undefined) {
-    return { kind: "list", value: list };
-  }
-  return undefined;
-}
-
-/** True when raw config explicitly owns either supported roster representation. */
-export function hasAgentRosterProperty(raw: unknown): boolean {
-  return readAgentRosterProperty(raw) !== undefined;
-}
-
-/** Lists unique configured agent ids. */
-export function listAgentIds(cfg: AgentRosterConfig): string[] {
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
-    // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
-    return [LEGACY_IMPLICIT_AGENT_ID];
-  }
-  const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const entry of agents) {
-    const id = normalizeAgentId(entry?.id);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    ids.push(id);
-  }
-  return ids;
 }
 
 /** Returns a configured agent id or throws the canonical CLI selection error. */
@@ -232,17 +183,6 @@ export function resolveConfiguredAgentId(cfg: OpenClawConfig, agentId: string): 
   return agentId;
 }
 
-export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    if (!hasAgentRosterProperty(cfg)) {
-      return LEGACY_IMPLICIT_AGENT_ID;
-    }
-    return undefined;
-  }
-  return agents.length === 1 ? normalizeAgentId(agents[0]!.id) : undefined;
-}
-
 export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelectionContext): string {
   const sole = tryResolveSoleAgentId(cfg);
   if (sole) {
@@ -255,25 +195,13 @@ export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelection
   throw new AgentSelectionRequiredError(agentIds, context);
 }
 
-function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  if (cfg.agents?.ownership === "explicit") {
-    return undefined;
-  }
-  const marked = listAgentEntries(cfg).filter((entry) => entry.default === true);
-  return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
-}
-
 /** Preserves legacy data locators independently of the configured runtime owner. */
 export function tryResolveLegacyDataOwnerAgentId(cfg: OpenClawConfig): string | undefined {
   const facts = readAgentRosterFacts(cfg);
   if (facts?.legacyDataOwnerAgentId) {
     return facts.legacyDataOwnerAgentId.value;
   }
-  const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
-  const value =
-    retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
-      ? retainedAgentId
-      : tryResolveDefaultAgentId(cfg);
+  const value = tryResolveLegacyDataOwner(cfg);
   if (facts) {
     facts.legacyDataOwnerAgentId = { value };
   }
@@ -354,11 +282,6 @@ export function resolveDefaultAgentId(
   context?: AgentSelectionContext,
 ): string {
   return tryResolveRawLegacyDefaultAgentId(cfg) ?? resolveSoleAgentId(cfg, context);
-}
-
-/** @deprecated Use tryResolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
-export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  return tryResolveRawLegacyDefaultAgentId(cfg) ?? tryResolveSoleAgentId(cfg);
 }
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -460,6 +383,7 @@ export function resolveAgentConfig(
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
     ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
+    decisionModel: readStringValue(entry.decisionModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,

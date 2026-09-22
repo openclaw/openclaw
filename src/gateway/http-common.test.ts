@@ -422,6 +422,21 @@ describe("watchClientDisconnect", () => {
     expect(res.listenerCount("error")).toBe(0);
   });
 
+  it("aborts when the response closes before the socket close is observable", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    watchClientDisconnect(req, res, controller, onDisconnect);
+
+    res.emit("close");
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
   it("keeps real response errors handled after cleanup until the response closes", async () => {
     const socket = new EventEmitter();
     const req = { socket } as IncomingMessage;

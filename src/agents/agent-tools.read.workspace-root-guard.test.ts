@@ -7,6 +7,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 type AssertSandboxPath = typeof import("./sandbox-paths.js").assertSandboxPath;
 
@@ -17,9 +18,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./sandbox-paths.js", () => ({
-  assertSandboxPath: mocks.assertSandboxPath,
-}));
+vi.mock("./sandbox-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sandbox-paths.js")>();
+  return { ...actual, assertSandboxPath: mocks.assertSandboxPath };
+});
 
 function createToolHarness() {
   const execute = vi.fn(async () => ({
@@ -199,7 +201,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",
     });
 
@@ -216,7 +218,10 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const skillRoot = path.resolve("/tmp/skill-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/workspace/skills", hostRoot: skillRoot }],
+      containerMounts: [
+        { containerRoot: "/workspace/skills", hostRoot: skillRoot },
+        { containerRoot: "/workspace", hostRoot: root },
+      ],
       containerWorkdir: "/workspace",
     });
 
@@ -233,7 +238,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     const { tool } = createToolHarness();
     const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
-      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",
     });
 
@@ -245,6 +250,52 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root: agentRoot,
     });
   });
+
+  it.each(["legacy", "empty", "miss", "mapped"] as const)(
+    "honors %s bridge admission without inferring a namespace",
+    async (mode) => {
+      const { execute, tool } = createToolHarness();
+      const mapping = { hostRoot: root, containerRoot: "C:\\NativeWorkspace" };
+      const pathMappings = mode === "legacy" ? undefined : mode === "empty" ? [] : [mapping];
+      const containerPath =
+        mode === "miss" ? "C:\\Other\\note.txt" : "C:\\NativeWorkspace\\note.txt";
+      const bridge = createSandboxFsBridgeFromResolver(
+        () => ({
+          hostPath: path.join(root, "note.txt"),
+          relativePath: "note.txt",
+          containerPath,
+        }),
+        pathMappings,
+      );
+      const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+        bridge,
+        containerWorkdir: "C:\\NativeWorkspace",
+        normalizeGuardedPathParams: true,
+      });
+      if (mode === "empty" || mode === "miss") {
+        await expect(wrapped.execute("admission", { path: "note.txt" })).rejects.toThrow(
+          "Path escapes sandbox root",
+        );
+        expect(execute).not.toHaveBeenCalled();
+        expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+        return;
+      }
+      await wrapped.execute("admission", { path: "note.txt" });
+      expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+        filePath: mode === "legacy" ? "note.txt" : path.join(root, "note.txt"),
+        cwd: root,
+        root,
+      });
+      expect(execute).toHaveBeenCalledWith(
+        "admission",
+        {
+          path: mode === "legacy" ? path.join(root, "note.txt") : containerPath,
+        },
+        undefined,
+        undefined,
+      );
+    },
+  );
 
   it("does not guard outPath by default", async () => {
     const { tool } = createToolHarness();

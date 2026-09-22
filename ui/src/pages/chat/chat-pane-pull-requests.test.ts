@@ -6,8 +6,10 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -20,6 +22,7 @@ import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createRenderTestChatPane,
+  createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -88,8 +91,12 @@ function createPublicationPane(scope?: "global" | "per-sender") {
     shared,
     personal: { state: "connected", generation, account },
     pendingPersonal: null,
+    latestShared: null,
   };
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
+    if (method === "projects.list") {
+      return { projects: [] };
+    }
     if (method === "sessions.github.options") {
       return options;
     }
@@ -105,7 +112,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   const initial = createInitializationContext();
   const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
-    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "projects.list"],
     ["operator.read", "operator.write"],
   );
   if (scope) {
@@ -180,7 +187,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   const settled = async () => {
     await vi.waitFor(() => {
       pane.render();
-      expect(pane.chatProps?.githubPublication?.busy).toBe(false);
+      expect(pane.chatProps?.githubPublication?.activity).toBeNull();
     });
     return pane.chatProps!.githubPublication!;
   };
@@ -204,6 +211,61 @@ function createPublicationPane(scope?: "global" | "per-sender") {
 }
 
 describe("chat pane pushed pull request state", () => {
+  it("keeps the pane quiet for unrelated PR snapshots while publishing its own changes", () => {
+    const { pane, state, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => ({})),
+      setPullRequestSummary: vi.fn(),
+    } as unknown as SessionCapability);
+    const store = sessionPullRequestsForGateway(pane.context.gateway);
+    const otherOwner = {};
+    const otherKey = "agent:main:other-pull-request";
+    store.watch(otherOwner, [otherKey]);
+    pane.refreshSessionPullRequests();
+    const notified = vi.fn(() => pane.refreshSessionPullRequests());
+    const stop = store.subscribe(notified);
+    onTestFinished(() => {
+      stop();
+      store.unwatch(otherOwner);
+    });
+    const snapshot = {
+      pullRequests: [pullRequest(1, "open")],
+      rateLimited: false,
+      status: "ready" as const,
+    };
+    emitSnapshot(emitGatewayEvent, state.sessionKey, snapshot);
+    const redraw = vi.spyOn(pane, "requestUpdate");
+    notified.mockClear();
+
+    emitSnapshot(emitGatewayEvent, "agent:main:unwatched", snapshot);
+    expect.soft(notified).not.toHaveBeenCalled();
+    expect.soft(redraw).not.toHaveBeenCalled();
+    notified.mockClear();
+    redraw.mockClear();
+
+    emitSnapshot(emitGatewayEvent, otherKey, {
+      ...snapshot,
+      pullRequests: [pullRequest(2, "merged")],
+    });
+    expect(notified).toHaveBeenCalledOnce();
+    expect.soft(redraw).not.toHaveBeenCalled();
+    expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
+    redraw.mockClear();
+
+    emitSnapshot(emitGatewayEvent, state.sessionKey, {
+      pullRequests: [],
+      rateLimited: false,
+      status: "unavailable",
+    });
+    expect(redraw).toHaveBeenCalledOnce();
+    expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
+    redraw.mockClear();
+
+    state.sessionKey = otherKey;
+    pane.refreshSessionPullRequests();
+    expect(redraw).toHaveBeenCalledOnce();
+    expect(pane.sessionPullRequests).toEqual([pullRequest(2, "merged")]);
+  });
+
   it.each(["unavailable", "rate-limited"] as const)(
     "applies retained and replaced repository snapshots during %s",
     async (status) => {
@@ -241,8 +303,8 @@ describe("chat pane pushed pull request state", () => {
     },
   );
 
-  it("passes repository-only session context to chat rendering and clears it on a session switch", async () => {
-    const { pane, state, emitGatewayEvent } = createPublicationPane();
+  it("withholds checkout fallback while the project catalog is pending or failed", async () => {
+    const { pane, request, context, state, emitGatewayEvent } = createPublicationPane();
     pane.refreshSessionPullRequests();
     await Promise.resolve();
     emitSnapshot(emitGatewayEvent, state.sessionKey, {
@@ -252,14 +314,50 @@ describe("chat pane pushed pull request state", () => {
       status: "ready",
     });
     pane.refreshSessionPullRequests();
-    pane.render();
-    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
-
-    state.sessionKey = "agent:main:another-checkout";
-    pane.refreshSessionPullRequests();
+    const pending = createDeferred<{ projects: [] }>();
+    request.mockReturnValueOnce(pending.promise);
+    const catalog = projectsForGateway(context.gateway);
+    const read = catalog.refresh();
     pane.render();
     expect(pane.chatProps?.githubRepo).toBeNull();
+    pending.reject(new Error("Project catalog unavailable"));
+    await read;
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toBeNull();
+    request.mockResolvedValueOnce({
+      projects: [{ id: "clawsweeper", displayName: "ClawSweeper", source: "cloned" }],
+    });
+    await catalog.refresh();
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+    expect(pane.chatProps?.githubRepositories).toEqual([{ aliases: ["ClawSweeper"] }]);
   });
+
+  it.each(["ready", "unavailable", "rate-limited"] as const)(
+    "passes repository context and %s status to chat rendering and clears both on a session switch",
+    async (status) => {
+      const { pane, state, context, emitGatewayEvent } = createPublicationPane();
+      pane.refreshSessionPullRequests();
+      await Promise.resolve();
+      emitSnapshot(emitGatewayEvent, state.sessionKey, {
+        repository: { owner: "openclaw", repo: "openclaw" },
+        pullRequests: [],
+        rateLimited: status === "rate-limited",
+        status,
+      });
+      pane.refreshSessionPullRequests();
+      await projectsForGateway(context.gateway).refresh();
+      pane.render();
+      expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+      expect(pane.chatProps?.pullRequestsStatus).toBe(status);
+
+      state.sessionKey = "agent:main:another-checkout";
+      pane.refreshSessionPullRequests();
+      pane.render();
+      expect(pane.chatProps?.githubRepo).toBeNull();
+      expect(pane.chatProps?.pullRequestsStatus).toBe("ready");
+    },
+  );
 
   it.each(["global", "per-sender"] as const)(
     "preserves the selected raw-global owner through publication RPCs in %s scope",
@@ -468,7 +566,7 @@ describe("chat pane pushed pull request state", () => {
   });
 
   it("clears the pane snapshot when the Gateway source disconnects", () => {
-    const { pane } = createPullRequestPane({} as SessionCapability);
+    const { pane } = createPullRequestPane(createSessionCapabilityFixture());
     pane.sessionPullRequests = [pullRequest(111532, "open")];
     pane.githubRepo = { owner: "openclaw", repo: "openclaw" };
 
@@ -595,7 +693,13 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
 describe("PR refresh wire ownership", () => {
   it.each([
     { name: "identical finals on separate frames", texts: ["Opened", "Opened"], expected: 1 },
-    { name: "distinct finals in the same run", texts: ["Opened", "Merged"], expected: 2 },
+    { name: "distinct finals in the same burst", texts: ["Opened", "Merged"], expected: 1 },
+    {
+      name: "distinct finals after the debounce interval",
+      texts: ["Opened", "Merged"],
+      spaced: true,
+      expected: 2,
+    },
     { name: "the first live final after history", texts: ["Opened"], history: true, expected: 1 },
     {
       name: "the first presented final after hidden delivery",
@@ -607,7 +711,7 @@ describe("PR refresh wire ownership", () => {
       name: "a stream announcement followed by its final",
       texts: ["Opened"],
       stream: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "a final whose queued refresh lost its last watch before sync",
@@ -620,13 +724,13 @@ describe("PR refresh wire ownership", () => {
       name: "reconnect between final deliveries",
       texts: ["Opened", "Opened"],
       reconnect: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "explicit history reset between finals",
       texts: ["Opened", "Opened"],
       reset: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "ordinary history between final replays",
@@ -638,7 +742,7 @@ describe("PR refresh wire ownership", () => {
       name: "a genuine branch switch before the next final",
       texts: ["Opened", "Opened"],
       branchSwitch: true,
-      expected: 3,
+      expected: 1,
     },
   ])(
     "keeps subscription force scoped for $name",
@@ -654,7 +758,12 @@ describe("PR refresh wire ownership", () => {
       historyBetween,
       branchSwitch,
       loseWatchBeforeSync,
+      spaced,
     }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const sessions = makeChatHost().sessions;
       onTestFinished(() => sessions.dispose());
       const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
@@ -753,10 +862,14 @@ describe("PR refresh wire ownership", () => {
         if (index === 0 && loseWatchBeforeSync) {
           pane.presented = false;
         }
-        // Separate WebSocket frame deliveries let the store's microtask and
-        // subscribe acknowledgement finish before the next announcement arrives.
+        // Preserve separate WebSocket deliveries within the debounce window.
         await nextFrame();
+        if (spaced) {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
       }
+      await vi.advanceTimersByTimeAsync(5_000);
+      await nextFrame();
       const forces = request.mock.calls.filter(
         ([method, params]) =>
           method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&

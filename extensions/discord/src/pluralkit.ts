@@ -1,4 +1,3 @@
-// Discord plugin module implements pluralkit behavior.
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {

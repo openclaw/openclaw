@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWikiCli } from "./cli.js";
 import type { MemoryWikiPluginConfig, ResolvedMemoryWikiConfig } from "./config.js";
+import type { RootMoveHooks } from "./guarded-root.test-support.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import {
   renderMemoryWikiStatus,
@@ -23,9 +24,23 @@ const afterCompileHook = vi.hoisted(
     },
 );
 
+const afterMoveHook = vi.hoisted(() => ({ run: undefined as RootMoveHooks["afterMove"] }));
+
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: callGatewayFromCliMock,
 }));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  const { observeRootMoves } = await import("./guarded-root.test-support.js");
+  return {
+    ...actual,
+    root: async (...args: Parameters<typeof actual.root>) =>
+      observeRootMoves(await actual.root(...args), {
+        afterMove: (from, to) => afterMoveHook.run?.(from, to),
+      }),
+  };
+});
 
 vi.mock("./compile.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./compile.js")>();
@@ -72,6 +87,7 @@ describe("memory-wiki cli", () => {
 
   afterEach(() => {
     afterCompileHook.run = undefined;
+    afterMoveHook.run = undefined;
     vi.restoreAllMocks();
     process.exitCode = undefined;
   });
@@ -1008,23 +1024,32 @@ cli note
     const concurrentSave = "Concurrent editor save during rollback.\n";
     let recreated = false;
     const recoveryDestinations: string[] = [];
-    const realRename = fs.rename;
-    const renameSpy = vi
-      .spyOn(fs, "rename")
-      .mockImplementation(async (from: Parameters<typeof fs.rename>[0], to) => {
-        await realRename(from, to);
-        if (!recreated && String(to).includes("recovered")) {
-          recreated = true;
-          await fs.writeFile(from, concurrentSave, "utf8");
-        }
-        if (path.basename(String(to)) === "content") {
-          recoveryDestinations.push(String(to));
-        }
-      });
+    const canonicalPagePath = await fs.realpath(pagePath);
+    const recoveryRoot = path.join(
+      await fs.realpath(rootDir),
+      ".openclaw-wiki",
+      "import-runs",
+      secondRunId,
+      "recovered",
+    );
+    afterMoveHook.run = async (from, to) => {
+      if (
+        from !== canonicalPagePath ||
+        path.dirname(path.dirname(to)) !== recoveryRoot ||
+        path.basename(to) !== "content"
+      ) {
+        return;
+      }
+      if (!recreated) {
+        recreated = true;
+        await fs.writeFile(from, concurrentSave, "utf8");
+      }
+      recoveryDestinations.push(to);
+    };
     const rollback = JSON.parse(
       await runRegisteredWikiCommand(config, ["chatgpt", "rollback", secondRunId, "--json"]),
     ) as { restoredCount: number; preservedPaths: Array<{ path: string; recoveryPath: string }> };
-    renameSpy.mockRestore();
+    afterMoveHook.run = undefined;
 
     expect(recreated).toBe(true);
     expect(recoveryDestinations).toHaveLength(2);

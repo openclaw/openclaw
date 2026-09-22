@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** Explicit reset retires child work without erasing its durable conversations. */
 import { expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
@@ -23,11 +29,8 @@ import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-a
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
@@ -43,7 +46,7 @@ it.each(
 )(
   "$boundary reset accounts for requester/controller-owned children (failed=$failed)",
   async ({ boundary, failed }) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",

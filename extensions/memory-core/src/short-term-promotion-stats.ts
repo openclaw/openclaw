@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isSameMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "./dreaming-shared.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
@@ -120,6 +120,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
   let remPhaseHitCount = 0;
   let promotedTotal = 0;
   let promotedToday = 0;
+  let currentDay: string | undefined;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let latestPromotedAt: string | undefined;
   const activeKeys = new Set<string>();
@@ -166,11 +167,12 @@ export async function loadShortTermPromotionDreamingStats(params: {
     promotedTotal += 1;
     promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
     const promotedAtMs = Date.parse(entry.promotedAt);
-    if (
-      Number.isFinite(promotedAtMs) &&
-      isSameMemoryDreamingDay(promotedAtMs, params.nowMs, params.timezone)
-    ) {
-      promotedToday += 1;
+    if (Number.isFinite(promotedAtMs)) {
+      const promotedDay = formatMemoryDreamingDay(promotedAtMs, params.timezone);
+      currentDay ??= formatMemoryDreamingDay(params.nowMs, params.timezone);
+      if (promotedDay === currentDay) {
+        promotedToday += 1;
+      }
     }
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;

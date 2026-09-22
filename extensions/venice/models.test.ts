@@ -8,33 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-function makeModelsResponse(id: string): Response {
-  return new Response(
-    JSON.stringify({
-      data: [
-        {
-          id,
-          model_spec: {
-            name: id,
-            privacy: "private",
-            availableContextTokens: 131072,
-            maxCompletionTokens: 4096,
-            capabilities: {
-              supportsReasoning: false,
-              supportsVision: false,
-              supportsFunctionCalling: true,
-            },
-          },
-        },
-      ],
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    },
-  );
-}
-
 type ModelSpecOverride = {
   id: string;
   availableContextTokens?: number;
@@ -389,24 +362,6 @@ describe("venice-models", () => {
       }
     },
   );
-
-  it("uses the shared fallback after a transient fetch failure", async () => {
-    let attempts = 0;
-    const fetchMock = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw Object.assign(new TypeError("fetch failed"), {
-          cause: { code: "ECONNRESET", message: "socket hang up" },
-        });
-      }
-      return makeModelsResponse("zai-org-glm-4.7");
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const models = await discoverVeniceModels();
-    expect(attempts).toBe(1);
-    expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));
-  });
 
   it("uses API maxCompletionTokens for catalog models when present", async () => {
     const fetchMock = stubVeniceModelsFetch([

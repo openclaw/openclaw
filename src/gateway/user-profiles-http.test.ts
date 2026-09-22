@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
@@ -53,14 +55,24 @@ function response() {
   const writeHead = vi.fn();
   return {
     end,
-    response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    response: Object.assign(new EventEmitter(), {
+      end,
+      setHeader,
+      writeHead,
+      socket: null,
+    }) as unknown as ServerResponse,
     setHeader,
     writeHead,
   };
 }
 
 function request(path: string, headers: Record<string, string> = {}) {
-  return { method: "GET", url: path, headers } as unknown as IncomingMessage;
+  return {
+    method: "GET",
+    url: path,
+    headers,
+    socket: new EventEmitter(),
+  } as unknown as IncomingMessage;
 }
 
 describe("profile avatar HTTP endpoint", () => {
@@ -70,7 +82,9 @@ describe("profile avatar HTTP endpoint", () => {
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeControlUiReadRequestOrReply.mockResolvedValue({});
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority({}, res, () => true),
+    );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });

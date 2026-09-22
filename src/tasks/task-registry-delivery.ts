@@ -1,206 +1,55 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
-import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import {
-  isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkContinuation,
-} from "../process/gateway-work-admission.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { readTaskBackingInstance } from "./task-backing-records.js";
 import {
-  formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
+  shouldUseParentReviewTaskTerminalMessage,
+} from "./task-executor-policy.js";
+import type { TaskFlowRegistryRead } from "./task-flow-registry.read.js";
+import {
+  captureTaskNotificationMutationOwner,
+  settleNotificationMutationAfterPreparationFailure,
+} from "./task-notification-mutation.async.js";
+import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
-  shouldUseParentReviewTaskTerminalMessage,
-} from "./task-executor-policy.js";
-import { getTaskFlowById } from "./task-flow-runtime-internal.js";
+} from "./task-notification-policy.js";
 import {
-  getTaskDeliveryState,
-  updateTask,
-  upsertTaskDeliveryState,
-} from "./task-registry-mutation.js";
+  canDeliverParentReviewTaskToThreadOrigin,
+  canDeliverTaskToRequesterOrigin,
+  getPeerTasksForDelivery,
+  queueBlockedTaskFollowup,
+  queueTaskSystemEvent,
+  resolveTaskDeliveryOwner,
+  resolveTaskStateChangeIdempotencyKey,
+  resolveTaskTerminalIdempotencyKey,
+  type TaskDeliveryOwner,
+} from "./task-notification-routing.js";
+import {
+  captureTaskNotificationTarget,
+  matchesTaskNotificationTarget,
+  type TaskNotificationTarget,
+} from "./task-notification.operation.js";
+import { runTaskDeliveryWithDetachedAdmission } from "./task-registry-delivery-admission.js";
+import { getTaskDeliveryState } from "./task-registry-mutation.js";
 import { cloneTaskRecord, pickPreferredRunIdTask } from "./task-registry-records.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
-import {
-  ensureTaskRegistryReady,
-  getTasksByRunId,
-  withTaskRegistryMutation,
-  taskRegistryLog,
-  taskDeliveryStates,
-  tasks,
-  tasksWithPendingDelivery,
-} from "./task-registry-state.js";
-import type {
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskEventRecord,
-  TaskRecord,
-} from "./task-registry.types.js";
-import { resolveTaskSessionAgentId } from "./task-session-identity.js";
+import { taskRegistryLog, tasks, tasksWithPendingDelivery } from "./task-registry-state.js";
+import type { TaskDeliveryStatus, TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
-type TaskDeliveryOwner = {
-  sessionKey?: string;
-  agentId?: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  flowId?: string;
-};
+type NotificationMutationOwner = ReturnType<typeof captureTaskNotificationMutationOwner>;
+type PendingNotificationMutation = { pending: Promise<TaskRecord | null> };
 
-function resolveTaskStateChangeIdempotencyKey(params: {
-  task: TaskRecord;
-  latestEvent: TaskEventRecord;
-  owner: TaskDeliveryOwner;
-}): string {
-  if (params.owner.flowId) {
-    return `flow-event:${params.owner.flowId}:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
-  }
-  return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
-}
-
-function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDeliveryOwner): string {
-  const prefix = owner.flowId ? `flow-terminal:${owner.flowId}` : "task-terminal";
-  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-  return `${prefix}:${task.taskId}:${task.status}:${outcome}`;
-}
-
-function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
-  if (task.scopeKind !== "session") {
-    return {};
-  }
-  const flowId = task.parentFlowId?.trim();
-  const candidate = flowId ? getTaskFlowById(flowId) : undefined;
-  const flow =
-    candidate &&
-    normalizeOptionalString(candidate.ownerKey) === normalizeOptionalString(task.ownerKey)
-      ? candidate
-      : undefined;
-  return {
-    sessionKey: task.ownerKey.trim(),
-    // Bare session keys are shared across agents; the executor is not the requester.
-    agentId: resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId),
-    requesterOrigin: normalizeDeliveryContext(
-      flow?.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
-    ),
-    ...(flow ? { flowId: flow.flowId } : {}),
-  };
-}
-
-function canDeliverTaskToRequesterOrigin(owner: TaskDeliveryOwner): boolean {
-  if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
-    return false;
-  }
-  return canDeliverToRequesterOrigin(owner.requesterOrigin);
-}
-
-function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
-  const channel = origin?.channel?.trim();
-  const to = origin?.to?.trim();
-  return Boolean(channel && to && isDeliverableMessageChannel(channel));
-}
-
-function canDeliverParentReviewTaskToThreadOrigin(
-  task: TaskRecord,
-  owner: TaskDeliveryOwner,
-): boolean {
-  if (!shouldUseParentReviewTaskTerminalMessage(task)) {
-    return false;
-  }
-  const origin = owner.requesterOrigin;
-  const threadId = String(origin?.threadId ?? "").trim();
-  // Parent-review terminal messages may deliver directly only when the requester origin
-  // already names a concrete thread on a transport that declares thread-addressed
-  // delivery; root-level origins keep routing through the parent session.
-  // Deliberately no target-shape parsing here: threadId provenance is the channel's own
-  // route/binding projection, so core trusts the tuple. A stray threadId on a non-thread
-  // target degrades to delivery at that origin's root, and send failures fall back to the
-  // parent-session queue below — the handoff cannot be lost.
-  return Boolean(
-    threadId &&
-    channelSupportsThreadDelivery(origin?.channel) &&
-    canDeliverToRequesterOrigin(origin),
-  );
-}
-
-function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
+function resolveMissingOwnerDeliveryStatus(task: TaskRecord): "parent_missing" | "not_applicable" {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
 
-function queueTaskSystemEvent(
-  task: TaskRecord,
-  text: string,
-  owner: TaskDeliveryOwner,
-  source: "background-task" | "background-task-blocked" = "background-task",
-) {
-  const ownerKey = owner.sessionKey?.trim();
-  if (!ownerKey) {
-    return false;
-  }
-  const options = {
-    sessionKey: ownerKey,
-    contextKey: `task:${task.taskId}${source === "background-task-blocked" ? ":blocked-followup" : ""}`,
-    deliveryContext: owner.requesterOrigin,
-  };
-  enqueueSystemEvent(text, owner.agentId ? withSystemEventOwner(options, owner.agentId) : options);
-  requestHeartbeat({
-    source,
-    intent: "immediate",
-    reason: source,
-    sessionKey: ownerKey,
-    agentId: owner.agentId,
-  });
-  return true;
-}
-
-function queueBlockedTaskFollowup(task: TaskRecord, owner: TaskDeliveryOwner) {
-  const followupText = formatTaskBlockedFollowupMessage(task);
-  if (!followupText) {
-    return false;
-  }
-  return queueTaskSystemEvent(task, followupText, owner, "background-task-blocked");
-}
-
-export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
-  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
-    maybeDeliverTaskTerminalUpdateUnderAdmission(taskId),
+export function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
+  return runTaskDeliveryWithDetachedAdmission(taskId, async (assertCurrent) =>
+    maybeDeliverTaskTerminalUpdateUnderAdmission(taskId, assertCurrent),
   );
-}
-
-async function runTaskDeliveryWithIndependentAdmission(
-  taskId: string,
-  deliver: () => Promise<TaskRecord | null>,
-): Promise<TaskRecord | null> {
-  ensureTaskRegistryReady({ refreshProjection: false });
-  let admitted = false;
-  try {
-    return await runWithGatewayIndependentRootWorkContinuation(async () => {
-      admitted = true;
-      return await deliver();
-    }, "tasks:delivery");
-  } catch (error) {
-    // Late lifecycle callbacks must not leak a rejected detached promise after
-    // restart closes admission. An already-admitted delivery still reports its
-    // own failures instead of hiding them behind a concurrent restart.
-    if (!admitted && isGatewayRestartDraining()) {
-      return withTaskRegistryMutation(
-        () => {
-          ensureTaskRegistryReady();
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-        () => {
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-      );
-    }
-    throw error;
-  }
 }
 
 type TaskTerminalDelivery = {
@@ -210,26 +59,41 @@ type TaskTerminalDelivery = {
   shouldDeliverParentReviewDirect: boolean;
   sessionEventText: string;
 };
-function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
-  if (!task.runId?.trim()) {
-    return [];
+
+type PreparedTaskTerminalDelivery =
+  | { result: TaskRecord | null }
+  | PendingNotificationMutation
+  | TaskTerminalDelivery;
+
+type ReadSubagentRun = () => SubagentRunRecord | null;
+
+function isSubagentSettlementPending(task: TaskRecord, readSubagentRun?: ReadSubagentRun): boolean {
+  if (task.runtime !== "subagent" || !task.runId || !task.childSessionKey || !readSubagentRun) {
+    return false;
   }
-  return getTasksByRunId(task.runId).filter(
-    (candidate) =>
-      candidate.runtime === task.runtime &&
-      candidate.scopeKind === task.scopeKind &&
-      (normalizeOptionalString(candidate.ownerKey) ?? "") ===
-        (normalizeOptionalString(task.ownerKey) ?? "") &&
-      (normalizeOptionalString(candidate.childSessionKey) ?? "") ===
-        (normalizeOptionalString(task.childSessionKey) ?? ""),
+  const entry = readSubagentRun();
+  const backing = readTaskBackingInstance(task.detail);
+  return Boolean(
+    entry?.requesterSettleWake &&
+    (entry.taskRunId ?? entry.runId) === task.runId &&
+    entry.requesterSessionKey === task.ownerKey &&
+    (backing?.runtime !== "subagent" || entry.generation === backing.generation),
   );
 }
 
-type PreparedTaskTerminalDelivery = { result: TaskRecord | null } | TaskTerminalDelivery;
-
-function prepareTaskTerminalDelivery(taskId: string): PreparedTaskTerminalDelivery {
+function prepareTaskTerminalDelivery(
+  taskId: string,
+  expectedTask: TaskNotificationTarget,
+  mutation: NotificationMutationOwner,
+  flows: TaskFlowRegistryRead,
+  readSubagentRun?: ReadSubagentRun,
+): PreparedTaskTerminalDelivery {
   const latest = tasks.get(taskId);
-  if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
+  if (
+    !matchesTaskNotificationTarget(latest, expectedTask) ||
+    !shouldAutoDeliverTaskTerminalUpdate(latest) ||
+    isSubagentSettlementPending(latest, readSubagentRun)
+  ) {
     return { result: latest ? cloneTaskRecord(latest) : null };
   }
   const peers = latest.runId ? getPeerTasksForDelivery(latest) : [];
@@ -254,16 +118,19 @@ function prepareTaskTerminalDelivery(taskId: string): PreparedTaskTerminalDelive
     })
   ) {
     return {
-      result: updateTask(taskId, { deliveryStatus: "not_applicable", lastEventAt: Date.now() }),
+      pending: mutation.updateDelivery(latest, {
+        kind: "terminal",
+        deliveryStatus: "not_applicable",
+      }),
     };
   }
-  const owner = resolveTaskDeliveryOwner(latest);
+  const owner = resolveTaskDeliveryOwner(latest, flows.getTaskFlowById);
   const ownerSessionKey = owner.sessionKey?.trim();
   if (!ownerSessionKey) {
     return {
-      result: updateTask(taskId, {
+      pending: mutation.updateDelivery(latest, {
+        kind: "terminal",
         deliveryStatus: resolveMissingOwnerDeliveryStatus(latest),
-        lastEventAt: Date.now(),
       }),
     };
   }
@@ -276,127 +143,188 @@ function prepareTaskTerminalDelivery(taskId: string): PreparedTaskTerminalDelive
     shouldRouteParentReview ? { surface: "parent_session" } : undefined,
   );
   if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
+    let deliveryStatus: TaskDeliveryStatus =
+      shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued";
     try {
       queueTaskSystemEvent(latest, sessionEventText, owner);
       if (latest.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(latest, owner);
       }
-      return {
-        result: updateTask(taskId, {
-          deliveryStatus:
-            shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued",
-          lastEventAt: Date.now(),
-        }),
-      };
     } catch (error) {
       taskRegistryLog.warn("Failed to queue background task session delivery", {
         taskId,
         ownerKey: latest.ownerKey,
         error,
       });
-      return { result: updateTask(taskId, { deliveryStatus: "failed", lastEventAt: Date.now() }) };
+      deliveryStatus = "failed";
     }
+    return { pending: mutation.updateDelivery(latest, { kind: "terminal", deliveryStatus }) };
   }
   return { latest, owner, ownerSessionKey, shouldDeliverParentReviewDirect, sessionEventText };
 }
 
+async function finishTerminalNotificationMutation(
+  taskId: string,
+  pending: Promise<TaskRecord | null>,
+): Promise<TaskRecord | null> {
+  try {
+    return await pending;
+  } catch (error) {
+    // A sent or queued notification must not be replayed because its storage outcome failed.
+    taskRegistryLog.warn("Failed to persist background task delivery", { taskId, error });
+    return null;
+  }
+}
+
 async function maybeDeliverTaskTerminalUpdateUnderAdmission(
   taskId: string,
+  assertDeliveryCurrent: () => void,
 ): Promise<TaskRecord | null> {
-  let claimed = false;
+  let claim: symbol | undefined;
+  let expectedTask: TaskNotificationTarget | undefined;
+  let retiredClaimError: Error | undefined;
+  const assertCurrent = () => {
+    assertDeliveryCurrent();
+    if (claim && tasksWithPendingDelivery.get(taskId) !== claim) {
+      retiredClaimError ??= new Error("Task terminal delivery no longer owns its pending claim");
+      throw retiredClaimError;
+    }
+  };
+  const mutation = captureTaskNotificationMutationOwner(assertCurrent);
   try {
-    const early = withTaskRegistryMutation(
-      () => {
-        ensureTaskRegistryReady();
-        const current = tasks.get(taskId);
-        if (
-          !current ||
-          !shouldAutoDeliverTaskTerminalUpdate(current) ||
-          tasksWithPendingDelivery.has(taskId)
-        ) {
-          return current ? cloneTaskRecord(current) : null;
-        }
-        tasksWithPendingDelivery.add(taskId);
-        claimed = true;
-        return undefined;
-      },
-      () => null,
-    );
-    if (!claimed) {
+    const early = await mutation.prepare(() => {
+      const current = tasks.get(taskId);
+      if (
+        !current ||
+        !shouldAutoDeliverTaskTerminalUpdate(current) ||
+        tasksWithPendingDelivery.has(taskId)
+      ) {
+        return current ? cloneTaskRecord(current) : null;
+      }
+      claim = Symbol("task terminal delivery");
+      tasksWithPendingDelivery.set(taskId, claim);
+      expectedTask = captureTaskNotificationTarget(current);
+      return undefined;
+    });
+    if (!claim || !expectedTask) {
       return early ?? null;
     }
-    let prepared = withTaskRegistryMutation(
-      () => prepareTaskTerminalDelivery(taskId),
-      () => ({ result: null }),
-    );
+    const target = expectedTask;
+    const subagentChildSessionKey =
+      target.runtime === "subagent" ? target.childSessionKey : undefined;
+    let initialMutation: Promise<TaskRecord | null> | undefined;
+    let prepared: PreparedTaskTerminalDelivery;
+    try {
+      prepared = await mutation.prepare((flows, readSubagentRun) => {
+        const result = prepareTaskTerminalDelivery(
+          taskId,
+          target,
+          mutation,
+          flows,
+          readSubagentRun,
+        );
+        if ("pending" in result) {
+          initialMutation = result.pending;
+        }
+        return result;
+      }, subagentChildSessionKey);
+    } catch (error) {
+      await settleNotificationMutationAfterPreparationFailure(initialMutation, error);
+      throw error;
+    }
     if ("result" in prepared) {
       return prepared.result;
     }
+    if ("pending" in prepared) {
+      return await finishTerminalNotificationMutation(taskId, prepared.pending);
+    }
+    let startedMutation: Promise<TaskRecord | null> | undefined;
+    let deliverySettled = false;
     try {
-      const { sendMessage, resolveTaskControlUiSessionUrl } =
+      const { sendMessage, prepareTaskControlUiSessionUrl } =
         await loadTaskRegistryDeliveryRuntime();
+      const resolveTaskControlUiSessionUrl = target.childSessionKey
+        ? await prepareTaskControlUiSessionUrl(assertCurrent)
+        : undefined;
+      assertCurrent();
       const invocation: {
         send?: { facts: TaskTerminalDelivery; pending: ReturnType<typeof sendMessage> };
         cleanupFailure?: { error: unknown };
       } = {};
       let immediate: TaskRecord | null | undefined;
       try {
-        immediate = withTaskRegistryMutation(
-          () => {
-            // Runtime loading may admit another task with the preferred delivery claim.
-            const fresh = prepareTaskTerminalDelivery(taskId);
-            prepared = fresh;
-            if ("result" in fresh) {
-              return fresh.result;
-            }
-            const {
-              latest,
-              owner,
-              ownerSessionKey,
-              shouldDeliverParentReviewDirect,
-              sessionEventText,
-            } = fresh;
-            const requesterAgentId = owner.agentId;
-            const inspectUrl = latest.childSessionKey
-              ? resolveTaskControlUiSessionUrl?.({
-                  sessionKey: latest.childSessionKey,
-                  fallbackAgentId:
-                    parseAgentSessionKey(latest.childSessionKey)?.agentId ?? requesterAgentId,
-                })
-              : undefined;
-            const directEventText = shouldDeliverParentReviewDirect
-              ? sessionEventText
-              : formatTaskTerminalMessage(latest);
-            const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
-            invocation.send = {
-              facts: fresh,
-              pending: sendMessage({
-                channel: owner.requesterOrigin?.channel,
-                to: owner.requesterOrigin?.to ?? "",
-                accountId: owner.requesterOrigin?.accountId,
-                threadId: owner.requesterOrigin?.threadId,
-                content: inspectUrl
-                  ? `${directEventText}\nInspect: ${inspectUrl}`
-                  : directEventText,
+        immediate = await mutation.prepare((flows, readSubagentRun) => {
+          const fresh = prepareTaskTerminalDelivery(
+            taskId,
+            target,
+            mutation,
+            flows,
+            readSubagentRun,
+          );
+          prepared = fresh;
+          if ("result" in fresh) {
+            return fresh.result;
+          }
+          if ("pending" in fresh) {
+            startedMutation = fresh.pending;
+            return undefined;
+          }
+          const {
+            latest,
+            owner,
+            ownerSessionKey,
+            shouldDeliverParentReviewDirect,
+            sessionEventText,
+          } = fresh;
+          const requesterAgentId = owner.agentId;
+          const inspectUrl = latest.childSessionKey
+            ? resolveTaskControlUiSessionUrl?.({
+                sessionKey: latest.childSessionKey,
+                fallbackAgentId:
+                  parseAgentSessionKey(latest.childSessionKey)?.agentId ?? requesterAgentId,
+              })
+            : undefined;
+          const directEventText = shouldDeliverParentReviewDirect
+            ? sessionEventText
+            : formatTaskTerminalMessage(latest);
+          const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
+          assertCurrent();
+          const current = tasks.get(taskId);
+          if (!matchesTaskNotificationTarget(current, target)) {
+            return current ? cloneTaskRecord(current) : null;
+          }
+          invocation.send = {
+            facts: fresh,
+            pending: sendMessage({
+              channel: owner.requesterOrigin?.channel,
+              to: owner.requesterOrigin?.to ?? "",
+              accountId: owner.requesterOrigin?.accountId,
+              threadId: owner.requesterOrigin?.threadId,
+              content: inspectUrl ? `${directEventText}\nInspect: ${inspectUrl}` : directEventText,
+              agentId: requesterAgentId,
+              idempotencyKey,
+              mirror: {
+                sessionKey: ownerSessionKey,
                 agentId: requesterAgentId,
                 idempotencyKey,
-                mirror: { sessionKey: ownerSessionKey, agentId: requesterAgentId, idempotencyKey },
-              }),
-            };
-            return undefined;
-          },
-          () => null,
-        );
+              },
+            }),
+          };
+          return undefined;
+        }, subagentChildSessionKey);
       } catch (error) {
         if (!invocation.send) {
+          await settleNotificationMutationAfterPreparationFailure(startedMutation, error);
           throw error;
         }
         invocation.cleanupFailure = { error };
       }
       if (!invocation.send) {
-        return immediate ?? null;
+        return startedMutation
+          ? await finishTerminalNotificationMutation(taskId, startedMutation)
+          : (immediate ?? null);
       }
-      const { owner, ownerSessionKey } = invocation.send.facts;
+      const { latest: sentTask, owner, ownerSessionKey } = invocation.send.facts;
       const sendResult = await invocation.send.pending.catch((error: unknown) => {
         if (invocation.cleanupFailure) {
           throw new AggregateError(
@@ -407,59 +335,88 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         }
         throw error;
       });
+      deliverySettled =
+        sendResult.deliveryStatus !== "suppressed" ||
+        sendResult.suppressionReason === "adapter_returned_no_identity";
       if (invocation.cleanupFailure) {
         taskRegistryLog.warn("Background task delivery settled after coordinator cleanup failed", {
           taskId,
           error: invocation.cleanupFailure.error,
         });
       }
-      return withTaskRegistryMutation(
-        () => {
+      let afterDelivery: TaskRecord | null | undefined;
+      try {
+        afterDelivery = await mutation.prepare((flows) => {
           const afterSend = tasks.get(taskId);
-          if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
+          if (
+            !matchesTaskNotificationTarget(afterSend, target) ||
+            !shouldAutoDeliverTaskTerminalUpdate(afterSend)
+          ) {
             return afterSend ? cloneTaskRecord(afterSend) : null;
           }
+          let deliveryStatus: TaskDeliveryStatus = "delivered";
           if (sendResult.deliveryStatus === "suppressed") {
-            if (sendResult.suppressionReason === "adapter_returned_no_identity") {
-              taskRegistryLog.warn("Background task update delivery was not confirmed", {
-                taskId,
-                ownerKey: ownerSessionKey,
-                requesterOrigin: owner.requesterOrigin,
-                suppressionReason: sendResult.suppressionReason,
-              });
-              return updateTask(taskId, { deliveryStatus: "failed", lastEventAt: Date.now() });
+            if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
+              throw new Error(
+                `background task update suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+              );
             }
-            throw new Error(
-              `background task update suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+            taskRegistryLog.warn("Background task update delivery was not confirmed", {
+              taskId,
+              ownerKey: ownerSessionKey,
+              requesterOrigin: owner.requesterOrigin,
+              suppressionReason: sendResult.suppressionReason,
+            });
+            deliveryStatus = "failed";
+          } else if (afterSend.terminalOutcome === "blocked") {
+            queueBlockedTaskFollowup(
+              afterSend,
+              resolveTaskDeliveryOwner(afterSend, flows.getTaskFlowById),
             );
           }
-          if (afterSend.terminalOutcome === "blocked") {
-            queueBlockedTaskFollowup(afterSend, resolveTaskDeliveryOwner(afterSend));
-          }
-          return updateTask(taskId, { deliveryStatus: "delivered", lastEventAt: Date.now() });
-        },
-        () => null,
-      );
+          startedMutation = mutation.updateDelivery(sentTask, {
+            kind: "terminal",
+            deliveryStatus,
+          });
+          return undefined;
+        });
+      } catch (error) {
+        await settleNotificationMutationAfterPreparationFailure(startedMutation, error);
+        throw error;
+      }
+      return startedMutation
+        ? await finishTerminalNotificationMutation(taskId, startedMutation)
+        : (afterDelivery ?? null);
     } catch (error) {
       const previous = prepared;
-      return withTaskRegistryMutation(
-        () => {
-          taskRegistryLog.warn("Failed to deliver background task update", {
-            taskId,
-            ...("result" in previous
-              ? {}
-              : {
-                  ownerKey: previous.ownerSessionKey,
-                  requesterOrigin: previous.owner.requesterOrigin,
-                }),
-            error,
-          });
+      taskRegistryLog.warn("Failed to deliver background task update", {
+        taskId,
+        ...("owner" in previous
+          ? { ownerKey: previous.ownerSessionKey, requesterOrigin: previous.owner.requesterOrigin }
+          : {}),
+        error,
+      });
+      if (startedMutation) {
+        return await finishTerminalNotificationMutation(taskId, startedMutation);
+      }
+      if (deliverySettled) {
+        // Keep authority checks, but never requeue an accepted or ambiguous transport result.
+        return await mutation.prepare(() => null);
+      }
+      let fallbackMutation: Promise<TaskRecord | null> | undefined;
+      let fallback: TaskRecord | null | undefined;
+      try {
+        fallback = await mutation.prepare((flows, readSubagentRun) => {
           const beforeFallback = tasks.get(taskId);
-          if (!beforeFallback || !shouldAutoDeliverTaskTerminalUpdate(beforeFallback)) {
+          if (
+            !matchesTaskNotificationTarget(beforeFallback, target) ||
+            !shouldAutoDeliverTaskTerminalUpdate(beforeFallback) ||
+            isSubagentSettlementPending(beforeFallback, readSubagentRun)
+          ) {
             return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
           }
           try {
-            const fallbackOwner = resolveTaskDeliveryOwner(beforeFallback);
+            const fallbackOwner = resolveTaskDeliveryOwner(beforeFallback, flows.getTaskFlowById);
             const sessionEventText = formatTaskTerminalMessage(
               beforeFallback,
               shouldUseParentReviewTaskTerminalMessage(beforeFallback)
@@ -477,24 +434,40 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
               error: fallbackError,
             });
           }
-          return updateTask(taskId, { deliveryStatus: "failed", lastEventAt: Date.now() });
-        },
-        () => null,
-      );
+          fallbackMutation = mutation.updateDelivery(beforeFallback, {
+            kind: "terminal",
+            deliveryStatus: "failed",
+          });
+          return undefined;
+        }, subagentChildSessionKey);
+      } catch (fallbackError) {
+        await settleNotificationMutationAfterPreparationFailure(fallbackMutation, fallbackError);
+        throw fallbackError;
+      }
+      return fallbackMutation
+        ? await finishTerminalNotificationMutation(taskId, fallbackMutation)
+        : (fallback ?? null);
     }
+  } catch (error) {
+    if (!retiredClaimError || error !== retiredClaimError) {
+      throw error;
+    }
+    return null;
   } finally {
-    if (claimed) {
+    if (claim && tasksWithPendingDelivery.get(taskId) === claim) {
       tasksWithPendingDelivery.delete(taskId);
     }
   }
 }
 
-export async function maybeDeliverTaskStateChangeUpdate(
-  taskId: string,
+export function maybeDeliverTaskStateChangeUpdate(
+  task: TaskRecord,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
-  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
-    maybeDeliverTaskStateChangeUpdateUnderAdmission(taskId, latestEvent),
+  const expectedTask = captureTaskNotificationTarget(task);
+  const requestedEvent = latestEvent ? Object.freeze({ ...latestEvent }) : undefined;
+  return runTaskDeliveryWithDetachedAdmission(expectedTask.taskId, async (assertCurrent) =>
+    maybeDeliverTaskStateChangeUpdateUnderAdmission(expectedTask, requestedEvent, assertCurrent),
   );
 }
 
@@ -504,58 +477,63 @@ type TaskStateChangeDelivery = {
   owner: TaskDeliveryOwner;
   ownerSessionKey: string;
   eventText: string;
+  queued: false | Promise<TaskRecord | null>;
+  acknowledge: () => Promise<TaskRecord | null>;
 };
-type PreparedTaskStateChangeDelivery = { result: TaskRecord | null } | TaskStateChangeDelivery;
-
-function recordTaskStateChangeDelivery(
-  taskId: string,
-  latestEvent: TaskEventRecord,
-): TaskRecord | null {
-  const current = tasks.get(taskId);
-  if (!current) {
-    return null;
-  }
-  const deliveryState = getTaskDeliveryState(taskId);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: deliveryState?.requesterOrigin,
-    lastNotifiedEventAt: Math.max(deliveryState?.lastNotifiedEventAt ?? 0, latestEvent.at),
-  });
-  return updateTask(taskId, { lastEventAt: Date.now() });
-}
+type PreparedTaskStateChangeDelivery =
+  | { result: TaskRecord | null }
+  | (PendingNotificationMutation & { current: TaskRecord })
+  | TaskStateChangeDelivery;
 
 function prepareTaskStateChangeDelivery(
-  taskId: string,
-  latestEvent?: TaskEventRecord,
+  expectedTask: TaskNotificationTarget,
+  latestEvent: TaskEventRecord | undefined,
+  mutation: NotificationMutationOwner,
+  flows: TaskFlowRegistryRead,
 ): PreparedTaskStateChangeDelivery {
+  const { taskId } = expectedTask;
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskStateChange(current)) {
+  if (
+    !matchesTaskNotificationTarget(current, expectedTask) ||
+    !shouldAutoDeliverTaskStateChange(current)
+  ) {
     return { result: current ? cloneTaskRecord(current) : null };
   }
   const deliveryState = getTaskDeliveryState(taskId);
   if (!latestEvent || (deliveryState?.lastNotifiedEventAt ?? 0) >= latestEvent.at) {
     return { result: cloneTaskRecord(current) };
   }
-  const eventText = formatTaskStateChangeMessage(current, latestEvent);
+  const event = latestEvent;
+  const eventText = formatTaskStateChangeMessage(current, event);
   if (!eventText) {
     return { result: cloneTaskRecord(current) };
   }
   try {
-    const owner = resolveTaskDeliveryOwner(current);
+    const owner = resolveTaskDeliveryOwner(current, flows.getTaskFlowById);
     const ownerSessionKey = owner.sessionKey?.trim();
     if (!ownerSessionKey) {
       return {
-        result: updateTask(taskId, {
+        current,
+        pending: mutation.updateDelivery(current, {
+          kind: "missingStateOwner",
           deliveryStatus: resolveMissingOwnerDeliveryStatus(current),
-          lastEventAt: Date.now(),
         }),
       };
     }
+    const acknowledge = mutation.bindStateChange(current, event.at);
+    const prepared = {
+      current,
+      latestEvent: event,
+      owner,
+      ownerSessionKey,
+      eventText,
+      acknowledge,
+    };
     if (!canDeliverTaskToRequesterOrigin(owner)) {
       queueTaskSystemEvent(current, eventText, owner);
-      return { result: recordTaskStateChangeDelivery(taskId, latestEvent) };
+      return { ...prepared, queued: acknowledge() };
     }
-    return { current, latestEvent, owner, ownerSessionKey, eventText };
+    return { ...prepared, queued: false };
   } catch (error) {
     taskRegistryLog.warn("Failed to deliver background task state change", {
       taskId,
@@ -567,20 +545,38 @@ function prepareTaskStateChangeDelivery(
 }
 
 async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
-  taskId: string,
-  latestEvent?: TaskEventRecord,
+  expectedTask: TaskNotificationTarget,
+  latestEvent: TaskEventRecord | undefined,
+  assertCurrent: () => void,
 ): Promise<TaskRecord | null> {
-  const initial = withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      return prepareTaskStateChangeDelivery(taskId, latestEvent);
-    },
-    () => ({ result: null }),
-  );
+  const { taskId } = expectedTask;
+  const mutation = captureTaskNotificationMutationOwner(assertCurrent);
+  let pendingMutation: Promise<TaskRecord | null> | undefined;
+  let initial: PreparedTaskStateChangeDelivery;
+  try {
+    initial = await mutation.prepare((flows) => {
+      const prepared = prepareTaskStateChangeDelivery(expectedTask, latestEvent, mutation, flows);
+      if ("pending" in prepared) {
+        pendingMutation = prepared.pending;
+      } else if (!("result" in prepared) && prepared.queued) {
+        pendingMutation = prepared.queued;
+      }
+      return prepared;
+    });
+  } catch (error) {
+    await settleNotificationMutationAfterPreparationFailure(pendingMutation, error);
+    throw error;
+  }
   if ("result" in initial) {
     return initial.result;
   }
   try {
+    if ("pending" in initial) {
+      return await initial.pending;
+    }
+    if (initial.queued) {
+      return await initial.queued;
+    }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
     const invocation: {
       send?: { facts: TaskStateChangeDelivery; pending: ReturnType<typeof sendMessage> };
@@ -588,46 +584,53 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
     } = {};
     let immediate: TaskRecord | null | undefined;
     try {
-      immediate = withTaskRegistryMutation(
-        () => {
-          const fresh = prepareTaskStateChangeDelivery(taskId, latestEvent);
-          if ("result" in fresh) {
-            return fresh.result;
-          }
-          const { current, latestEvent: event, owner, ownerSessionKey, eventText } = fresh;
-          const requesterAgentId = owner.agentId;
-          const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
-            task: current,
-            latestEvent: event,
-            owner,
-          });
-          invocation.send = {
-            facts: fresh,
-            pending: sendMessage({
-              channel: owner.requesterOrigin?.channel,
-              to: owner.requesterOrigin?.to ?? "",
-              accountId: owner.requesterOrigin?.accountId,
-              threadId: owner.requesterOrigin?.threadId,
-              content: eventText,
-              agentId: requesterAgentId,
-              idempotencyKey,
-              mirror: { sessionKey: ownerSessionKey, agentId: requesterAgentId, idempotencyKey },
-            }),
-          };
+      immediate = await mutation.prepare((flows) => {
+        assertCurrent();
+        const fresh = prepareTaskStateChangeDelivery(expectedTask, latestEvent, mutation, flows);
+        if ("result" in fresh) {
+          return fresh.result;
+        }
+        if ("pending" in fresh) {
+          pendingMutation = fresh.pending;
           return undefined;
-        },
-        () => null,
-      );
+        }
+        if (fresh.queued) {
+          pendingMutation = fresh.queued;
+          return undefined;
+        }
+        const { current, latestEvent: event, owner, ownerSessionKey, eventText } = fresh;
+        const requesterAgentId = owner.agentId;
+        const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
+          task: current,
+          latestEvent: event,
+          owner,
+        });
+        invocation.send = {
+          facts: fresh,
+          pending: sendMessage({
+            channel: owner.requesterOrigin?.channel,
+            to: owner.requesterOrigin?.to ?? "",
+            accountId: owner.requesterOrigin?.accountId,
+            threadId: owner.requesterOrigin?.threadId,
+            content: eventText,
+            agentId: requesterAgentId,
+            idempotencyKey,
+            mirror: { sessionKey: ownerSessionKey, agentId: requesterAgentId, idempotencyKey },
+          }),
+        };
+        return undefined;
+      });
     } catch (error) {
       if (!invocation.send) {
+        await settleNotificationMutationAfterPreparationFailure(pendingMutation, error);
         throw error;
       }
       invocation.cleanupFailure = { error };
     }
     if (!invocation.send) {
-      return immediate ?? null;
+      return pendingMutation ? await pendingMutation : (immediate ?? null);
     }
-    const { current, latestEvent: event, owner } = invocation.send.facts;
+    const { current, owner, acknowledge } = invocation.send.facts;
     const sendResult = await invocation.send.pending.catch((error: unknown) => {
       if (invocation.cleanupFailure) {
         throw new AggregateError(
@@ -647,40 +650,34 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         },
       );
     }
-    return withTaskRegistryMutation(
-      () => {
-        if (sendResult.deliveryStatus === "suppressed") {
-          if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
-            throw new Error(
-              `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
-            );
-          }
-          taskRegistryLog.warn("Background task state change delivery was not confirmed", {
-            taskId,
-            ownerKey: current.ownerKey,
-            requesterOrigin: owner.requesterOrigin,
-            suppressionReason: sendResult.suppressionReason,
-          });
-        }
-        return recordTaskStateChangeDelivery(taskId, event);
-      },
-      () => null,
-    );
+    if (sendResult.deliveryStatus === "suppressed") {
+      if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
+        throw new Error(
+          `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
+      }
+      taskRegistryLog.warn("Background task state change delivery was not confirmed", {
+        taskId,
+        ownerKey: current.ownerKey,
+        requesterOrigin: owner.requesterOrigin,
+        suppressionReason: sendResult.suppressionReason,
+      });
+    }
+    return await acknowledge();
   } catch (error) {
-    return withTaskRegistryMutation(
-      () => {
-        const current = tasks.get(taskId);
-        taskRegistryLog.warn("Failed to deliver background task state change", {
-          taskId,
-          ownerKey: initial.current.ownerKey,
-          error,
-        });
-        return current ? cloneTaskRecord(current) : null;
-      },
-      () => {
-        const current = tasks.get(taskId);
-        return current ? cloneTaskRecord(current) : null;
-      },
-    );
+    taskRegistryLog.warn("Failed to deliver background task state change", {
+      taskId,
+      ownerKey: initial.current.ownerKey,
+      error,
+    });
+    const readCurrent = () => {
+      const current = tasks.get(taskId);
+      return current ? cloneTaskRecord(current) : null;
+    };
+    try {
+      return await mutation.prepare(readCurrent);
+    } catch {
+      return readCurrent();
+    }
   }
 }

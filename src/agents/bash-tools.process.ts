@@ -166,9 +166,20 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+function isConfirmedRequestedStop(session: ProcessSession): boolean {
+  return (
+    session.cancellationRequested === true &&
+    session.exitReason === "manual-cancel" &&
+    session.finalizationFailed !== true
+  );
+}
+
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
   return {
-    status: finished.terminalStatus === "completed" ? "completed" : "failed",
+    status:
+      finished.terminalStatus === "completed" || isConfirmedRequestedStop(finished)
+        ? "completed"
+        : "failed",
     sessionId,
     exitCode: finished.exitCode ?? undefined,
     ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
@@ -207,7 +218,9 @@ function finishedPollResult(
     retentionCapNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
-      `\n\nProcess exited with ${renderExecExitLabel(finished)}.`,
+      (isConfirmedRequestedStop(finished)
+        ? `\n\nProcess stopped by request (${renderExecExitLabel(finished)}).`
+        : `\n\nProcess exited with ${renderExecExitLabel(finished)}.`),
     finished.exitReason,
   );
   return attachInternalToolResultAcknowledgement(
@@ -506,7 +519,10 @@ export function createProcessTool(
           const text =
             retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
-            defaultTailNote(totalLines, window.usingDefaultTail);
+            defaultTailNote(totalLines, window.usingDefaultTail) +
+            (isConfirmedRequestedStop(record)
+              ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
+              : "");
           const output = runtime
             ? text + buildInputWaitHint(runtime)
             : appendExecTimeoutRetryGuidance(text, record.exitReason);

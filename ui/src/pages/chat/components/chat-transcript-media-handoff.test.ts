@@ -120,7 +120,7 @@ async function createCanonicalImageTranscript(
     owner.chatSubmissions.retain(
       buildInitialChatSubmission(owner.sessionKey, input, owner.client, input.runId),
     );
-    admitChatSubmission(owner);
+    admitChatSubmission(owner, undefined);
   } else if (origin === "submitted") {
     reduceChatSessionProjection(owner, { type: "sendPending", runId: input.runId, message: local });
   }

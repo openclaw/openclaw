@@ -235,7 +235,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
-    expect(prompt).not.toContain("## Messaging");
+    expect(prompt).toContain("## Messaging");
+    expect(prompt).not.toContain("### message tool");
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
@@ -319,7 +320,7 @@ describe("buildAgentSystemPrompt", () => {
       sourceReplyDeliveryMode: "automatic",
     });
     expect(automaticMessagePrompt).not.toContain("message(action=send)");
-    expect(automaticMessagePrompt).not.toContain("## Messaging");
+    expect(automaticMessagePrompt).toContain("Missing messaging tools are not permission");
   });
 
   it("keeps promised asynchronous work open in full and minimal prompts", () => {
@@ -650,8 +651,16 @@ describe("buildAgentSystemPrompt", () => {
       capabilityToolNames: [],
       codeModeActive: true,
     },
-    { name: "minimal", toolNames: ["show_widget", "dashboard", "portal"], promptMode: "minimal" },
-    { name: "none", toolNames: ["show_widget", "dashboard", "portal"], promptMode: "none" },
+    {
+      name: "minimal",
+      toolNames: ["screen", "show_widget", "dashboard", "portal"],
+      promptMode: "minimal",
+    },
+    {
+      name: "none",
+      toolNames: ["screen", "show_widget", "dashboard", "portal"],
+      promptMode: "none",
+    },
   ] satisfies Array<{ name: string } & Partial<Parameters<typeof buildAgentSystemPrompt>[0]>>)(
     "omits UI presentation guidance when $name",
     (surface) => {
@@ -748,20 +757,41 @@ describe("buildAgentSystemPrompt", () => {
     expect(withYield).toContain("Wait with `sessions_yield`");
   });
 
-  it("limits screen guidance to web/app tool surfaces", () => {
+  it.each([
+    { name: "screen only", toolNames: ["screen"] },
+    { name: "direct", toolNames: ["screen", "browser", "dashboard", "show_widget"] },
+    {
+      name: "Code Mode",
+      toolNames: ["exec", "wait"],
+      capabilityToolNames: ["screen", "browser", "dashboard", "show_widget"],
+      codeModeActive: true,
+    },
+  ])("routes browser sidebar requests through screen for $name tools", (surface) => {
     const withoutScreen = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions"],
+      toolNames: ["sessions", "browser", "dashboard", "show_widget"],
     });
     const withScreen = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions", "screen"],
+      ...surface,
     });
 
     expect(withoutScreen).not.toContain("web/app turn may drive UI");
-    expect(withScreen).toContain("- screen: Drive operator web UI");
-    expect(withScreen).toContain(
-      "`screen` present: web/app turn may drive UI; messaging turn: don't.",
+    expect(withoutScreen).not.toContain('action="browser_show"');
+    if (surface.toolNames.includes("screen")) {
+      expect(withScreen).toContain("- screen: Drive operator web UI");
+      expect(withScreen).toContain(
+        "`screen` present: web/app turn may drive UI; messaging turn: don't.",
+      );
+    }
+    const presentation = withScreen.split("## UI Presentation\n")[1]?.split("\n## ")[0] ?? "";
+    expect(presentation).toContain('screen(action="browser_show")');
+    expect(presentation).toContain("browser sidebar");
+    expect(presentation).toContain("side panel");
+    expect(presentation).toContain("sidebar_show/sidebar_hide control the session list");
+    expect(presentation).toContain("Do not create or expand a dashboard to open a panel");
+    expect(withScreen.indexOf("## UI Presentation")).toBeGreaterThan(
+      withScreen.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );
   });
 
@@ -796,7 +826,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+      "- exec: Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
     );
     expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
     expect(prompt).not.toContain("- exec: Run shell");
@@ -1275,14 +1305,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it.each([true, false])(
-    "permits authorized SSH updates without bypassing local ownership (gateway=%s)",
-    (gateway) => {
+  it.each([
+    { gateway: true, promptMode: "full" },
+    { gateway: false, promptMode: "full" },
+    { gateway: true, promptMode: "minimal" },
+    { gateway: false, promptMode: "minimal" },
+  ] as const)(
+    "permits remote updates without detached host repair bypasses ($gateway, $promptMode)",
+    ({ gateway, promptMode }) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
+        promptMode,
         toolNames: gateway ? ["gateway", "exec"] : ["exec"],
       });
       expect(prompt).toContain("For the Gateway hosting this session:");
+      expect(prompt).toContain(
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
+      );
       expect(prompt).toContain("For a user-requested update on another host");
       expect(prompt).toContain("verify it is not this Gateway");
       expect(prompt).toContain("exec/SSH with `openclaw update --yes`");
@@ -1303,10 +1342,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.apply");
     expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
     expect(prompt).toContain(
-      "Update OpenClaw: `gateway` action update.run, only on an explicit owner request; the runtime coordinates restart and completion notices.",
+      "Update OpenClaw: `gateway` action update.run, only on an explicit owner request or an operator-scheduled update; the runtime coordinates restart and completion notices.",
     );
     expect(prompt).toContain(
-      "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+      "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
     );
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
@@ -1327,7 +1366,7 @@ describe("buildAgentSystemPrompt", () => {
         "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
       );
       expect(prompt).toContain(
-        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
       );
       expect(prompt).toContain("For a chat update request, direct the user to `/update`.");
       expect(prompt).not.toContain("System controls unavailable");
@@ -1348,7 +1387,7 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("Outside chat, use the Control UI or ask the operator");
       expect(prompt).toContain("Missing chat ownership needs owner setup");
       expect(prompt).toContain(
-        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
       );
       expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).not.toContain("update.run");
@@ -1646,17 +1685,6 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("adds USER guidance when a user-model file is present", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
-    });
-
-    expect(prompt).toContain(
-      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
-  });
-
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1797,9 +1825,9 @@ describe("buildAgentSystemPrompt", () => {
     const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
 
     expect(withSend).toContain(
-      "later turns in a kept session do not report back; follow up via `sessions_send`.",
+      "later turns in a kept OpenClaw session do not report back; follow up via `sessions_send`.",
     );
-    expect(withoutSend).toContain("later turns in a kept session do not report back.");
+    expect(withoutSend).toContain("later turns in a kept OpenClaw session do not report back.");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
   });

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type QaProviderMode,
   validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,

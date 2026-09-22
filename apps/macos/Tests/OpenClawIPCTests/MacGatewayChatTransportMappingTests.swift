@@ -210,6 +210,7 @@ struct MacGatewayChatTransportMappingTests {
         #expect(GatewayConnection.operatorClientCaps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.modelSelectionPolicy,
             OpenClawGatewayClientCapability.usageRefreshing,
         ])
     }

@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 let instance: OpenClawTestInstance;
 const tempDirs = createTempDirTracker();
@@ -116,6 +122,36 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          let currentSocket: WebSocket | undefined;
+          let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
+          page.on("websocket", (socket) => {
+            currentSocket = socket;
+            socket.on("framesent", ({ payload }) => {
+              const frame = requireRecord(JSON.parse(payload.toString()));
+              if (
+                frame.type !== "req" ||
+                frame.method !== "sessions.catalog.list" ||
+                typeof frame.id !== "string"
+              ) {
+                return;
+              }
+              const params = requireRecord(frame.params);
+              if (params.agentId === "main" && params.metadataOnly === true && !params.catalogId) {
+                latestDiscovery = { socket, id: frame.id, complete: false };
+              }
+            });
+            socket.on("framereceived", ({ payload }) => {
+              const frame = requireRecord(JSON.parse(payload.toString()));
+              if (
+                frame.type === "res" &&
+                latestDiscovery !== undefined &&
+                frame.id === latestDiscovery.id &&
+                latestDiscovery.socket === socket
+              ) {
+                latestDiscovery.complete = frame.ok === true;
+              }
+            });
+          });
           await page.addInitScript(() => {
             localStorage.setItem(
               "openclaw:control-ui:community-invite",
@@ -135,8 +171,43 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
-          await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
-          // CLI discovery starts with agent hydration and can outlive model loading.
+          await revealChatModelOption(
+            composer.locator('[data-chat-model-option="openai/gpt-5.4"]'),
+          );
+          if (route === "new") {
+            // An absent CLI group can mean discovery has not started, or a completed empty result.
+            await expect
+              .poll(async () => {
+                const discovery = latestDiscovery;
+                if (!discovery?.complete || discovery.socket !== currentSocket) {
+                  return false;
+                }
+                const settled = await page.evaluate(async () => {
+                  const app = document.querySelector<
+                    HTMLElement & { runtime?: { context: ApplicationContext } }
+                  >("openclaw-app");
+                  const context = app?.runtime?.context;
+                  const agents = context?.agents.state;
+                  if (
+                    context?.config.current.cliAgentsEnabled !== true ||
+                    !agents?.connected ||
+                    agents.client !== context.gateway.snapshot.client ||
+                    !agents.agentsList?.agents.some((agent) => agent.id === "main")
+                  ) {
+                    return false;
+                  }
+                  const view = document.querySelector<
+                    HTMLElement & { updateComplete: Promise<boolean> }
+                  >("openclaw-new-session-page");
+                  return (await view?.updateComplete) === true;
+                });
+                // updated() can reset discovery; require the same completed request after rendering.
+                return (
+                  settled && latestDiscovery === discovery && currentSocket === discovery.socket
+                );
+              })
+              .toBe(true);
+          }
           await composer
             .locator(
               '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="loading"]',

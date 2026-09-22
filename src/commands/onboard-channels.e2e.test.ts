@@ -482,14 +482,6 @@ async function runQuickstartTelegramSetupWithInteractive(params: {
   }
 }
 
-vi.mock("node:fs/promises", () => ({
-  default: {
-    access: vi.fn(async () => {
-      throw new Error("ENOENT");
-    }),
-  },
-}));
-
 vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",

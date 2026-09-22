@@ -251,89 +251,103 @@ describe("GPT-Live browser session lifecycle", () => {
     }
   });
 
-  it("binds negotiated session control after attachment and fences every callback on close", async () => {
-    const socket = new FakeSocket("manual");
-    const { realtime, runAgentConsult } = createBroker({ socketFactory: () => socket });
-    const bindBridge = vi.fn();
-    const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
-    const onReady = vi.fn();
-    const onTranscript = vi.fn();
-    const onEvent = vi.fn();
-    const onClose = vi.fn();
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: OPAQUE_REALTIME_MODEL,
-          runAgentConsult,
-          ownerConnId: "native-control-owner",
-          clientControl: { owner: "gateway" },
-          gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
-        },
-        { type: "oauth", token: "synthetic-oauth", accountId: "synthetic-account" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
+  it.each([false, true])(
+    "reports readiness and fences callbacks with negotiated control=%s",
+    async (negotiated) => {
+      const socket = new FakeSocket("manual");
+      const { realtime, runAgentConsult } = createBroker({ socketFactory: () => socket });
+      const bindBridge = vi.fn();
+      const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
+      const onReady = vi.fn();
+      const onTranscript = vi.fn();
+      const onEvent = vi.fn();
+      const onClose = vi.fn();
+      const request = {
+        providerConfig: {},
+        model: OPAQUE_REALTIME_MODEL,
+        runAgentConsult,
+        ownerConnId: "native-control-owner",
+        gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
+      };
+      try {
+        const reservation = await realtime.broker.createBrowserSession(
+          negotiated ? { ...request, clientControl: { owner: "gateway" } } : request,
+          { type: "oauth", token: "synthetic-oauth", accountId: "synthetic-account" },
+        );
+        if (reservation.transport !== "webrtc") {
+          throw new Error("Expected WebRTC reservation");
+        }
+        const response = createResponseHarness();
+        const handling = realtime.handler(
+          createRequest({
+            token: reservation.clientSecret,
+            body: AUDIO_ONLY_SDP,
+          }),
+          response.res,
+        );
+        await vi.waitFor(() => expect(socket.listenerCount("open")).toBeGreaterThan(0));
+        expect(response.end).not.toHaveBeenCalled();
+        expect(bindControl).not.toHaveBeenCalled();
+        expect(onReady).not.toHaveBeenCalled();
+        socket.readyState = 1;
+        socket.emit("open");
+        await handling;
+        expect(response.res.statusCode).toBe(200);
+        expect(onReady).toHaveBeenCalledOnce();
+        expect(bindBridge).not.toHaveBeenCalled();
+        const control = bindControl.mock.calls[0]?.[0];
+        if (negotiated) {
+          if (!control?.sendUserMessage) {
+            throw new Error("Expected native session text control");
+          }
+          control.sendUserMessage("Ready for the next task");
+          expect(parseSent(socket)).toEqual([
+            {
+              type: "session.context.append",
+              channel: "speakable",
+              content: [{ type: "input_text", text: "Ready for the next task" }],
+            },
+          ]);
+        } else {
+          expect(bindControl).not.toHaveBeenCalled();
+          expect(parseSent(socket)).toEqual([]);
+        }
+        emitSideband(socket, { type: "session.started", session: {} });
+        emitSideband(socket, { type: "input_transcript.added", item: { text: "hel" } });
+        emitSideband(socket, { type: "turn.done", turn: { role: "user", transcript: "hello" } });
+        expect(onReady).toHaveBeenCalledOnce();
+        if (negotiated) {
+          expect(onTranscript.mock.calls).toEqual([
+            ["user", "hel", false],
+            ["user", "hello", true],
+          ]);
+          expect(onEvent).toHaveBeenCalledWith({ direction: "server", type: "turn.done" });
+        } else {
+          expect(onTranscript).not.toHaveBeenCalled();
+          expect(onEvent).not.toHaveBeenCalled();
+        }
+        await realtime.broker.cancelBrowserSession(reservation);
+        const sentAtClose = socket.sent.length;
+        const eventsAtClose = onEvent.mock.calls.length;
+        control?.sendUserMessage?.("Late speech");
+        emitSideband(socket, { type: "turn.done", turn: { role: "user", transcript: "late" } });
+        emitSideband(socket, { type: "session.started", session: {} });
+        expect(socket.sent).toHaveLength(sentAtClose);
+        expect(onEvent).toHaveBeenCalledTimes(eventsAtClose);
+        expect(onTranscript).toHaveBeenCalledTimes(negotiated ? 2 : 0);
+        expect(onReady).toHaveBeenCalledOnce();
+        expect(onClose).toHaveBeenCalledOnce();
+        expect(realtime.getSessionCounts()).toEqual({
+          pending: 0,
+          inFlight: 0,
+          active: 0,
+          reservations: 0,
+        });
+      } finally {
+        await realtime.cleanup();
       }
-      const response = createResponseHarness();
-      const handling = realtime.handler(
-        createRequest({
-          token: reservation.clientSecret,
-          body: AUDIO_ONLY_SDP,
-        }),
-        response.res,
-      );
-      await vi.waitFor(() => expect(socket.listenerCount("open")).toBeGreaterThan(0));
-      expect(response.end).not.toHaveBeenCalled();
-      expect(bindControl).not.toHaveBeenCalled();
-      socket.readyState = 1;
-      socket.emit("open");
-      await handling;
-      expect(response.res.statusCode).toBe(200);
-      expect(onReady).toHaveBeenCalledOnce();
-      expect(bindBridge).not.toHaveBeenCalled();
-      const control = bindControl.mock.calls[0]?.[0];
-      if (!control?.sendUserMessage) {
-        throw new Error("Expected native session text control");
-      }
-      control.sendUserMessage("Ready for the next task");
-      expect(parseSent(socket)).toEqual([
-        {
-          type: "session.context.append",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "Ready for the next task" }],
-        },
-      ]);
-      emitSideband(socket, { type: "session.started", session: {} });
-      emitSideband(socket, { type: "input_transcript.added", item: { text: "hel" } });
-      emitSideband(socket, { type: "turn.done", turn: { role: "user", transcript: "hello" } });
-      expect(onReady).toHaveBeenCalledOnce();
-      expect(onTranscript.mock.calls).toEqual([
-        ["user", "hel", false],
-        ["user", "hello", true],
-      ]);
-      expect(onEvent).toHaveBeenCalledWith({ direction: "server", type: "turn.done" });
-      await realtime.broker.cancelBrowserSession(reservation);
-      const sentAtClose = socket.sent.length;
-      const eventsAtClose = onEvent.mock.calls.length;
-      control.sendUserMessage("Late speech");
-      emitSideband(socket, { type: "turn.done", turn: { role: "user", transcript: "late" } });
-      emitSideband(socket, { type: "session.started", session: {} });
-      expect(socket.sent).toHaveLength(sentAtClose);
-      expect(onEvent).toHaveBeenCalledTimes(eventsAtClose);
-      expect(onTranscript).toHaveBeenCalledTimes(2);
-      expect(onReady).toHaveBeenCalledOnce();
-      expect(onClose).toHaveBeenCalledOnce();
-      expect(realtime.getSessionCounts()).toEqual({
-        pending: 0,
-        inFlight: 0,
-        active: 0,
-        reservations: 0,
-      });
-    } finally {
-      await realtime.cleanup();
-    }
-  });
+    },
+  );
 
   it.each([
     {

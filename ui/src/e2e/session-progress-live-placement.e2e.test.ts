@@ -133,7 +133,7 @@ suite.define(() => {
         .locator(".settings-row")
         .filter({
           has: page.locator(".settings-row__title", {
-            hasText: "Collapse task progress by default",
+            hasText: "Collapse task progress by default on desktop",
           }),
         })
         .first();
@@ -195,14 +195,14 @@ suite.define(() => {
       await captureLifecycleState("07-run-one-manual-reopen-before-next-run.png");
 
       await send("Run the second progress cycle");
-      await expect.poll(() => card.getAttribute("open")).toBeNull();
-      await captureLifecycleState("08-run-two-active-collapsed.png");
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("08-run-two-manual-open.png");
       await setProgressCard(4, "Run two started", [
         { status: "in_progress", step: "Inspect second run" },
         { status: "pending", step: "Verify second run" },
       ]);
-      await expect.poll(() => card.getAttribute("open")).toBeNull();
-      await captureLifecycleState("09-run-two-progress-collapsed.png");
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("09-run-two-progress-manual-open.png");
     } finally {
       await page.close();
       if (proofDir && video) {

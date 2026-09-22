@@ -54,6 +54,7 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         searchable: true,
+        showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
         className: `model-picker__select ${params.className ?? ""}`,
         onOpen: params.onOpen,

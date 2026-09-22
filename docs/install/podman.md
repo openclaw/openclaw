@@ -16,7 +16,7 @@ The model:
 
 ## Prerequisites
 
-- **Podman** in rootless mode
+- **Podman** in rootless mode, with its host init executable (normally `catatonit`) available for the launcher's `--init` flag. On minimal Debian/Ubuntu hosts, install both explicitly: `sudo apt-get install podman catatonit`. For Podman Machine, the helper must be available inside the machine.
 - **OpenClaw CLI** installed on the host
 - **Optional:** `systemd --user` if you want Quadlet-managed auto-start
 - **Optional:** `sudo` only if you want `loginctl enable-linger "$(whoami)"` for boot persistence on a headless host
@@ -206,6 +206,7 @@ openclaw doctor --json
 
 ## Troubleshooting
 
+- **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
 - **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Ensure the host config/workspace paths are owned by your current user.
 - **Gateway start blocked (missing `gateway.mode=local`):** Ensure `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
 - **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.

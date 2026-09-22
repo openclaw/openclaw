@@ -3,13 +3,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
-
-export type AgentRunTerminalReplySnapshot =
-  | { disposition: "visible"; text: string; modelRouteChange?: string }
-  | { disposition: "silent" }
-  | { disposition: "empty"; code?: "message-tool-not-called" };
 
 function isMessageToolNotCalledTerminalReply(
   reply: AgentRunTerminalReplySnapshot | undefined,

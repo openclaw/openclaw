@@ -104,12 +104,7 @@ describe("ACP routed delivery custody", () => {
       await coordinator.deliver("block", { text: "A" }, { skipTts: true });
       await coordinator.deliver("block", { text: "B" }, { skipTts: true });
       await coordinator.settleVisibleText();
-      expect(coordinator.getBlockTextForFallback()).toBe("B");
-      await coordinator.deliver(
-        "final",
-        { text: "B" },
-        { skipTts: true, transcriptSource: { kind: "fallback" } },
-      );
+      await coordinator.recoverBlockText();
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
 
@@ -151,7 +146,7 @@ describe("ACP routed delivery custody", () => {
       await expect(
         coordinator.deliver("block", { text: generated }, { skipTts: true }),
       ).resolves.toBe(false);
-      expect(coordinator.getBlockTextForFallback()).toBe("");
+      await expect(coordinator.recoverBlockText()).resolves.toBe(false);
       const fallback = audio
         ? markReplyPayloadAsTtsSupplement(
             { mediaUrl: "https://example.test/spoken.ogg" },
@@ -389,8 +384,10 @@ describe.each(["held", "identityless"] as const)("ACP direct %s delivery", (pend
     "retains only the uncovered block for fallback (uncoveredFirst=%s)",
     async (uncoveredFirst) => {
       const texts = uncoveredFirst ? ["uncovered", "pending"] : ["pending", "uncovered"];
+      const attempts: Array<{ kind: string; text?: string }> = [];
       const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
+        deliver: async (payload, { kind }) => {
+          attempts.push({ kind, text: payload.text });
           if (payload.text === "pending") {
             return pendingResult();
           }
@@ -406,7 +403,10 @@ describe.each(["held", "identityless"] as const)("ACP direct %s delivery", (pend
       dispatcher.markComplete();
       await coordinator.settleVisibleText();
 
-      expect(coordinator.getBlockTextForFallback()).toBe("uncovered");
+      await coordinator.recoverBlockText();
+      expect(attempts.filter((attempt) => attempt.kind === "final")).toEqual([
+        { kind: "final", text: "uncovered" },
+      ]);
       expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
       expect(coordinator.hasDeliveredVisibleText()).toBe(false);
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
@@ -455,7 +455,7 @@ describe.each(["held", "identityless"] as const)("ACP direct %s delivery", (pend
       await coordinator.settleVisibleText();
       expect(coordinator.hasPendingAnswerDelivery()).toBe(false);
       expect(coordinator.hasPendingFinalTtsMedia()).toBe(false);
-      expect(coordinator.getBlockTextForFallback()).toBe("");
+      await expect(coordinator.recoverBlockText()).resolves.toBe(false);
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
     },
   );
@@ -503,7 +503,7 @@ describe.each([undefined, "released"] as const)(
         dispatcher.markComplete();
         await coordinator.settleVisibleText();
         expect(attempted).toHaveLength(1);
-        expect(coordinator.getBlockTextForFallback()).toBe("");
+        await expect(coordinator.recoverBlockText()).resolves.toBe(false);
         expect(coordinator.hasPendingAnswerDelivery()).toBe(true);
         expect(coordinator.hasPendingFinalTtsMedia()).toBe(kind === "caption");
         expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);

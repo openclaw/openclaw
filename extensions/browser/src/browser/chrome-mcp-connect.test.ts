@@ -5,8 +5,11 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 import { withChromeMcpLease } from "./chrome-mcp-routing.js";
-import { closeChromeMcpSession, resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
-import { getChromeMcpPid } from "./chrome-mcp-tabs.js";
+import {
+  closeChromeMcpSession,
+  getChromeMcpPid,
+  resetChromeMcpSessionsForTest,
+} from "./chrome-mcp-session.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn<(message: string) => void>() }));
 

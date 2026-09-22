@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
-  getBrowserManageCallBrowserRequestMock,
+  getBrowserManageGatewayMock,
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
 
@@ -27,7 +27,7 @@ describe("browser manage output", () => {
   beforeEach(() => {
     previousExitCode = process.exitCode;
     process.exitCode = 0;
-    getBrowserManageCallBrowserRequestMock().mockClear();
+    getBrowserManageGatewayMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockClear();
     getBrowserCliRuntime().writeJson.mockClear();
@@ -38,7 +38,7 @@ describe("browser manage output", () => {
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -76,7 +76,7 @@ describe("browser manage output", () => {
   });
 
   it("shows configured userDataDir for existing-session status", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -112,7 +112,7 @@ describe("browser manage output", () => {
   });
 
   it("shows configured cdpUrl for existing-session status", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -152,7 +152,7 @@ describe("browser manage output", () => {
   });
 
   it("shows chrome-mcp transport in browser profiles output", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/profiles"
         ? {
             profiles: [
@@ -183,7 +183,7 @@ describe("browser manage output", () => {
   });
 
   it("redacts remote cdpUrl details in browser profiles output", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/profiles"
         ? {
             profiles: [
@@ -216,7 +216,7 @@ describe("browser manage output", () => {
   });
 
   it("shows chrome-mcp transport after creating an existing-session profile", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/profiles/create"
         ? {
             ok: true,
@@ -244,7 +244,7 @@ describe("browser manage output", () => {
   });
 
   it("shows cdpUrl after creating an existing-session endpoint profile", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/profiles/create"
         ? {
             ok: true,
@@ -285,7 +285,7 @@ describe("browser manage output", () => {
   });
 
   it("redacts remote cdpUrl details after creating a remote profile", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/profiles/create"
         ? {
             ok: true,
@@ -322,7 +322,7 @@ describe("browser manage output", () => {
   });
 
   it("redacts sensitive remote cdpUrl details in status output", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -360,7 +360,7 @@ describe("browser manage output", () => {
   });
 
   it("prints managed graphics facts in status output", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -408,7 +408,7 @@ describe("browser manage output", () => {
   });
 
   it("prints suggested tab references while keeping raw target ids visible", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) =>
       req.path === "/tabs"
         ? {
             running: true,
@@ -453,7 +453,8 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
       "index must be a positive integer",
     );
-    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalledWith(
+    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalledWith(
+      "browser.request",
       expect.anything(),
       expect.objectContaining({ path: "/tabs/action" }),
       expect.anything(),
@@ -465,7 +466,8 @@ describe("browser manage output", () => {
 
     await program.parseAsync(["browser", "tab", "select", "+2"], { from: "user" });
 
-    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+    expect(getBrowserManageGatewayMock()).toHaveBeenCalledWith(
+      "browser.request",
       expect.anything(),
       expect.objectContaining({
         path: "/tabs/action",
@@ -487,11 +489,11 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
       "--driver must be openclaw or existing-session",
     );
-    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalled();
+    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalled();
   });
 
   it("prints authenticated extension drift from the canonical browser doctor report", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           ok: true,
@@ -532,14 +534,14 @@ describe("browser manage output", () => {
       "WARN extension-version: running 2.0.0; bundled 2.2.0 (mismatch); Reload the OpenClaw extension.",
     );
     expect(process.exitCode).toBe(0);
-    expect(getBrowserManageCallBrowserRequestMock().mock.calls[0]?.[1]).toMatchObject({
+    expect(getBrowserManageGatewayMock().mock.calls[0]?.[2]).toMatchObject({
       path: "/doctor",
       query: { profile: "chrome" },
     });
   });
 
   it("keeps unavailable extension version evidence informational and nonfatal", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [
@@ -574,7 +576,7 @@ describe("browser manage output", () => {
   });
 
   it("preserves one nonfatal JSON report for confirmed extension version drift", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [
@@ -613,7 +615,7 @@ describe("browser manage output", () => {
   });
 
   it("runs exactly one deep snapshot after consuming the canonical doctor report", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [],
@@ -643,14 +645,14 @@ describe("browser manage output", () => {
     });
 
     expect(lastRuntimeLog()).toContain("OK live-snapshot: 1 nodes/lines");
-    const snapshotCalls = getBrowserManageCallBrowserRequestMock().mock.calls.filter(
-      ([, request]) => request.path === "/snapshot",
+    const snapshotCalls = getBrowserManageGatewayMock().mock.calls.filter(
+      (call) => call[2].path === "/snapshot",
     );
     expect(snapshotCalls).toHaveLength(1);
   });
 
   it("prints a readable browser doctor report", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [],
@@ -723,7 +725,7 @@ describe("browser manage output", () => {
   });
 
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [],
@@ -760,7 +762,7 @@ describe("browser manage output", () => {
   });
 
   it("prints one JSON browser doctor report and succeeds when every check passes", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+    getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
       if (req.path === "/doctor") {
         return {
           checks: [],
@@ -796,7 +798,7 @@ describe("browser manage output", () => {
       code: "GATEWAY_SECRET_REF_UNAVAILABLE",
       name: "GatewaySecretRefUnavailableError",
     });
-    getBrowserManageCallBrowserRequestMock().mockRejectedValueOnce(error);
+    getBrowserManageGatewayMock().mockRejectedValueOnce(error);
 
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "doctor"], { from: "user" });
@@ -819,7 +821,7 @@ describe("browser manage output", () => {
     { deleted: true, json: true },
   ])("reports profile deletion with deleted=$deleted and json=$json", async ({ deleted, json }) => {
     const result = { ok: true, profile: "proof-retained", deleted };
-    getBrowserManageCallBrowserRequestMock().mockResolvedValueOnce(result);
+    getBrowserManageGatewayMock().mockResolvedValueOnce(result);
 
     const program = createBrowserManageProgram();
     await program.parseAsync(
@@ -827,10 +829,12 @@ describe("browser manage output", () => {
       { from: "user" },
     );
 
-    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(expect.anything(), {
-      method: "DELETE",
-      path: "/profiles/proof-retained",
-    });
+    expect(getBrowserManageGatewayMock()).toHaveBeenCalledWith(
+      "browser.request",
+      expect.anything(),
+      expect.objectContaining({ method: "DELETE", path: "/profiles/proof-retained" }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
+    );
     if (json) {
       expect(parseSingleRuntimeJson()).toEqual(result);
       expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);

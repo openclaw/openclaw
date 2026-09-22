@@ -23,6 +23,7 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateCampaignStatusHydrated: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
+  updateStatusCheckBanner: (ApplicationStatusBanner & { mode: "manual" | "completion" }) | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
   reportableUpdateFailureId: string | null;
   updateFailureReportBusy: boolean;

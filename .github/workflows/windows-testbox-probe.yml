@@ -42,6 +42,31 @@ on:
         required: false
         default: false
         type: boolean
+      windows_ci_replay:
+        description: "Exact diagnostic JSON: nodeVersion, packageManager, vitestVersion, maxWorkers, files, projects"
+        required: false
+        default: ""
+        type: string
+      run_private_node_provisioning:
+        description: "Prove private Node installation and portable updater authorization on native Windows"
+        required: false
+        default: false
+        type: boolean
+      installed_startup_package:
+        description: "Optional Package Acceptance binding, or {baseline, candidate} bindings for a matched comparison"
+        required: false
+        default: ""
+        type: string
+      startup_node_version:
+        description: "Exact Node version for installed startup only"
+        required: false
+        default: "26.8.2"
+        type: string
+      installed_startup_cpu_diagnostic:
+        description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -54,6 +79,9 @@ jobs:
     name: Windows probe
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
     defaults:
       run:
         shell: pwsh
@@ -65,6 +93,167 @@ jobs:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
           submodules: false
+
+      - name: Validate exact Windows replay
+        id: replay_input
+        if: ${{ inputs.windows_ci_replay != '' }}
+        env:
+          REPLAY_JSON: ${{ inputs.windows_ci_replay }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.run_private_node_provisioning || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
+            throw "Exact replay requires keepalive 0 and no broad CI, private Node, startup, or WSL proof."
+          }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Exact replay requires an immutable target_ref." }
+          $sourceSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -cne $env:TARGET_REF) { throw "Replay checkout differs from target_ref." }
+          $replay = $env:REPLAY_JSON | ConvertFrom-Json -AsHashtable
+          $fields = @("files", "maxWorkers", "nodeVersion", "packageManager", "projects", "vitestVersion")
+          if ($replay -isnot [System.Collections.IDictionary] -or (($replay.Keys | Sort-Object) -join ",") -cne ($fields -join ",")) {
+            throw "Replay requires only the documented binding fields."
+          }
+          foreach ($field in @("nodeVersion", "packageManager", "vitestVersion")) {
+            if ($replay[$field] -isnot [string]) { throw "Replay toolchain pins must be strings." }
+          }
+          if ($replay.nodeVersion -cnotmatch '^24\.[0-9]+\.[0-9]+$' -or $replay.vitestVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "Replay requires exact supported Node 24 and Vitest versions."
+          }
+          if (($replay.maxWorkers -isnot [long] -and $replay.maxWorkers -isnot [int]) -or $replay.maxWorkers -notin 1..4) {
+            throw "Replay requires an integer worker count from 1 through 4."
+          }
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          if ($replay.packageManager -cnotmatch '^pnpm@[0-9]+\.[0-9]+\.[0-9]+\+sha512\.[0-9a-f]{128}$' -or $replay.packageManager -cne $package.packageManager -or $replay.vitestVersion -cne $package.devDependencies.vitest) {
+            throw "Replay toolchain differs from the frozen repository pins."
+          }
+          if ($replay.files -isnot [array] -or $replay.files.Count -lt 1 -or $replay.files.Count -gt 256 -or @($replay.files | Sort-Object -Unique).Count -ne $replay.files.Count) {
+            throw "Replay requires 1 through 256 unique literal test files, in their original order."
+          }
+          foreach ($file in $replay.files) {
+            if ($file -isnot [string] -or $file -cnotmatch '^(src|test|extensions)/[a-zA-Z0-9_./-]+\.test\.tsx?$' -or @($file.Split('/') | Where-Object { $_ -in @('', '.', '..') }).Count -gt 0) {
+              throw "Replay file must be a literal repository test path."
+            }
+            $entry = git ls-files --stage --error-unmatch -- $file
+            if ($LASTEXITCODE -ne 0 -or $entry -notmatch '^100(644|755) ' -or -not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Replay test file is not a tracked regular file: $file"
+            }
+          }
+          if ($replay.projects -isnot [array] -or $replay.projects.Count -lt 1 -or $replay.projects.Count -gt $replay.files.Count -or @($replay.projects | Sort-Object -Unique).Count -ne $replay.projects.Count) {
+            throw "Replay requires the original unique ordered project config paths."
+          }
+          foreach ($project in $replay.projects) {
+            if ($project -isnot [string] -or $project -cnotmatch '^test/vitest/vitest\.[a-z0-9-]+\.config\.ts$' -or -not (Test-Path -LiteralPath $project -PathType Leaf)) {
+              throw "Replay project must name an existing repository config."
+            }
+          }
+          $evidence = Join-Path $env:RUNNER_TEMP "windows-ci-replay"
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          $replay | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "binding.json")
+          $dependencyFiles = @(git ls-files -- package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc pnpm patches)
+          if ($LASTEXITCODE -ne 0) { throw "Cannot enumerate frozen dependency inputs." }
+          $hashes = [ordered]@{}
+          foreach ($file in $dependencyFiles) { $hashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() }
+          @{ sourceSha = $sourceSha; workflowSha = $env:WORKFLOW_SHA; runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT; dependencySha256 = $hashes } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "identity.json")
+          "OPENCLAW_WINDOWS_REPLAY_NODE_VERSION=$($replay.nodeVersion)" >> $env:GITHUB_ENV
+          "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> $env:GITHUB_ENV
+          "max_workers=$($replay.maxWorkers)" >> $env:GITHUB_OUTPUT
+          "evidence=$evidence" >> $env:GITHUB_OUTPUT
+
+      - name: Validate private Node proof inputs
+        if: ${{ inputs.run_private_node_provisioning }}
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
+            throw "Private Node proof requires windows-2025, keepalive 0, and no startup, broad CI, or WSL proof."
+          }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$' -or $env:WORKFLOW_SHA -cne $env:TARGET_REF) {
+            throw "Private Node proof requires the same immutable workflow and target SHA."
+          }
+          $checkoutSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutSha -cne $env:TARGET_REF) { throw "Private Node proof checkout differs from target_ref." }
+
+      - name: Validate installed startup inputs
+        id: startup_input
+        if: ${{ inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic }}
+        env:
+          STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
+          STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrEmpty($env:STARTUP_PACKAGE)) { throw "CPU diagnostics require an installed package binding." }
+          if ($env:RUN_WINDOWS_CI -eq "true") { throw "Installed startup and Windows CI are separate runs." }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Installed startup requires an exact tooling target_ref." }
+          if ($env:STARTUP_NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Installed startup requires an exact Node version." }
+          $toolingSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $toolingSha -cne $env:TARGET_REF) { throw "Tooling checkout differs from target_ref." }
+          $selection = $env:STARTUP_PACKAGE | ConvertFrom-Json
+          $paired = $selection.PSObject.Properties.Name -contains "baseline" -or $selection.PSObject.Properties.Name -contains "candidate"
+          if ($paired -and $env:CPU_DIAGNOSTIC -eq "true") { throw "CPU diagnostics require one package, not a comparison." }
+          $packages = [ordered]@{ baseline = $selection }
+          if ($paired) {
+            if (-not $selection.baseline -or -not $selection.candidate) { throw "Comparison requires both baseline and candidate bindings." }
+            $packages = [ordered]@{ baseline = $selection.baseline; candidate = $selection.candidate }
+          }
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-installed-startup"
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          foreach ($arm in $packages.Keys) {
+            $binding = $packages[$arm]
+            foreach ($field in @("runId", "runAttempt", "artifactId")) {
+              if ([string]$binding.$field -notmatch '^[1-9][0-9]*$') { throw "Invalid package identity field: $field" }
+            }
+            foreach ($field in @("sourceSha", "workflowSha")) {
+              if ([string]$binding.$field -cnotmatch '^[0-9a-f]{40}$') { throw "Invalid package identity field: $field" }
+            }
+            if ($binding.packageSha256 -cnotmatch '^[0-9a-f]{64}$' -or $binding.artifactDigest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid package digest." }
+            $producerRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($binding.runId)"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect package producer." }
+            $producer = ($producerRaw -join "`n") | ConvertFrom-Json
+            if ($producer.run_attempt -ne $binding.runAttempt -or $producer.head_sha -cne $binding.workflowSha -or $producer.conclusion -ne "success" -or $producer.path -ne ".github/workflows/package-acceptance.yml") { throw "Package Acceptance producer does not match the binding." }
+            $artifactRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($binding.artifactId)"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect package artifact." }
+            $artifact = ($artifactRaw -join "`n") | ConvertFrom-Json
+            if ($artifact.expired -or $artifact.digest -cne $binding.artifactDigest -or $artifact.workflow_run.id -ne $binding.runId -or $artifact.name -cne "package-under-test-$($binding.runId)-$($binding.runAttempt)") { throw "Package artifact does not match the binding." }
+            $prefix = if ($paired) { "$arm-" } else { "" }
+            $binding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}package-binding.json")
+            $producer | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}producer.json")
+            $artifact | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}artifact.json")
+            $outputPrefix = if ($arm -eq "candidate") { "comparison_" } else { "" }
+            "${outputPrefix}artifact_id=$($binding.artifactId)" >> $env:GITHUB_OUTPUT
+            "${outputPrefix}run_id=$($binding.runId)" >> $env:GITHUB_OUTPUT
+          }
+          $packages | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "packages.json")
+          "tooling_sha=$toolingSha" >> $env:GITHUB_OUTPUT
+
+      - name: Download installed startup package
+        if: ${{ inputs.installed_startup_package != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.startup_input.outputs.artifact_id }}
+          run-id: ${{ steps.startup_input.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/startup-package-input
+
+      - name: Download comparison startup package
+        if: ${{ steps.startup_input.outputs.comparison_artifact_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.startup_input.outputs.comparison_artifact_id }}
+          run-id: ${{ steps.startup_input.outputs.comparison_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/startup-package-comparison-input
 
       - name: Probe native Windows
         env:
@@ -83,6 +272,7 @@ jobs:
 
       - name: Probe WSL2
         id: wsl2
+        if: ${{ !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
@@ -207,7 +397,7 @@ jobs:
 
       - &windows_defender
         name: Try to exclude workspace from Windows Defender (best-effort)
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.windows_ci_replay != '' }}
         shell: pwsh
         run: |
           $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
@@ -226,10 +416,11 @@ jobs:
 
       - &windows_node
         name: Setup Node.js
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
         shell: bash
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
+          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -237,16 +428,21 @@ jobs:
 
       - &windows_pnpm
         name: Setup pnpm
-        if: ${{ inputs.run_windows_ci }}
+        id: setup_pnpm
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
+        env:
+          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: 24.x
+          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
 
       - &windows_versions
         name: Runtime versions
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
         shell: bash
+        env:
+          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
         run: |
           node -v
           npm -v
@@ -254,8 +450,10 @@ jobs:
 
       - &windows_node_path
         name: Capture node path
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
         shell: bash
+        env:
+          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
         run: |
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           if command -v cygpath >/dev/null 2>&1; then
@@ -265,9 +463,10 @@ jobs:
 
       - &windows_install
         name: Install dependencies
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
         shell: bash
         env:
+          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
           CI: true
         run: |
           export PATH="$NODE_BIN:$PATH"
@@ -275,6 +474,207 @@ jobs:
           node -v
           pnpm -v
           pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Prove private Node provisioning and portable authorization
+        if: ${{ inputs.run_private_node_provisioning }}
+        shell: bash
+        timeout-minutes: 40
+        env:
+          CI: true
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          # Match the real installer deadline plus owner cleanup, only for this live proof.
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=1920000 pnpm test:live src/cli/update-cli/update-command-node-runtime.live.test.ts
+          node scripts/run-vitest.mjs src/cli/update-cli/update-command-executor-auxiliary.test.ts -t 'preserves direct preflight release through a healthy installer child and active drain|never starts Node provisioning without released authorization input|refuses Node provisioning after|preserves native-gate environment precedence|preserves absent or empty native payload options'
+
+      - name: Prove installed benchmark lifecycle
+        if: ${{ inputs.installed_startup_package != '' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          node scripts/run-vitest.mjs test/scripts/bench-gateway-installed.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Installed benchmark lifecycle proof failed." }
+
+      - name: Install and bind startup candidate
+        if: ${{ inputs.installed_startup_package != '' }}
+        env:
+          TOOLING_SHA: ${{ steps.startup_input.outputs.tooling_sha }}
+          STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-installed-startup"
+          $packages = Get-Content -LiteralPath (Join-Path $evidence "packages.json") -Raw | ConvertFrom-Json -AsHashtable
+          $paired = $packages.Contains("candidate")
+          $records = [ordered]@{}
+          $nodePath = (node -p 'process.execPath').Trim()
+          $nodeVersion = (node --version).Trim()
+          if ($nodeVersion -cne "v$env:STARTUP_NODE_VERSION") { throw "Installed startup Node version differs." }
+          foreach ($arm in $packages.Keys) {
+            $binding = $packages[$arm]
+            $prefix = if ($paired) { "$arm-" } else { "" }
+            $armRoot = if ($paired) { Join-Path $env:RUNNER_TEMP "startup-comparison/$arm" } else { $env:RUNNER_TEMP }
+            $candidateDir = Join-Path $armRoot "startup-package-resolved"
+            $artifactDir = Join-Path $env:RUNNER_TEMP $(if ($arm -eq "candidate") { "startup-package-comparison-input" } else { "startup-package-input" })
+            node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
+            if ($LASTEXITCODE -ne 0) { throw "Canonical package resolution failed." }
+            $candidate = Get-Content -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Raw | ConvertFrom-Json
+            if ($candidate.packageSourceSha -cne $binding.sourceSha -or $candidate.sha256 -cne $binding.packageSha256) { throw "Resolved source or package bytes differ." }
+            Copy-Item -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Destination (Join-Path $evidence "${prefix}package-candidate.json")
+            $tarball = (Resolve-Path -LiteralPath $candidate.tarball).Path
+            $installRoot = Join-Path $armRoot "startup-package-installed"
+            New-Item -ItemType Directory -Path $installRoot | Out-Null
+            npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false $tarball
+            if ($LASTEXITCODE -ne 0) { throw "Normal npm installation failed." }
+            npm rebuild --prefix $installRoot --ignore-scripts=false
+            if ($LASTEXITCODE -ne 0) { throw "Normal npm rebuild failed." }
+            $packageRoot = Join-Path $installRoot "node_modules/openclaw"
+            foreach ($marker in @(".openclaw-lifecycle-pending", "dist/openclaw-install-guard")) {
+              if (Test-Path -LiteralPath (Join-Path $packageRoot $marker)) { throw "Installed lifecycle has not settled: $marker" }
+            }
+            $packageLock = Join-Path $installRoot "package-lock.json"
+            $packageLockHash = (Get-FileHash -LiteralPath $packageLock -Algorithm SHA256).Hash.ToLowerInvariant()
+            Copy-Item -LiteralPath $packageLock -Destination (Join-Path $evidence "${prefix}installed-package-lock.json")
+            $records[$arm] = [ordered]@{
+              sourceSha = $binding.sourceSha; toolingSha = $env:TOOLING_SHA
+              tarball = $tarball; candidate = $candidate; installRoot = $installRoot
+              stateRoot = (Join-Path $armRoot "startup-cohort-state")
+              runtime = @{ version = $nodeVersion; sha256 = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+              artifact = @{ id = $binding.artifactId; runId = $binding.runId; runAttempt = $binding.runAttempt; workflowSha = $binding.workflowSha; digest = $binding.artifactDigest }
+            }
+            @{ workflowSha = $env:WORKFLOW_SHA; toolingSha = $env:TOOLING_SHA; packageSourceSha = $binding.sourceSha; installedPackageLockSha256 = $packageLockHash; runner = $env:RUNNER_NAME; node = $nodeVersion; nodePath = $nodePath } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "${prefix}execution.json")
+          }
+          $inputRecord = $records.baseline
+          if ($paired) { $inputRecord.comparison = $records.candidate }
+          $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidence "input.json")
+
+      - name: Measure installed startup cohort
+        if: ${{ inputs.installed_startup_package != '' }}
+        env:
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diagnosticArgs = @()
+          if ($env:CPU_DIAGNOSTIC -eq "true") { $diagnosticArgs = @("--installed-cpu-diagnostic") }
+          node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --installed-cohort .artifacts/windows-installed-startup/input.json --output .artifacts/windows-installed-startup/results.json @diagnosticArgs 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/cohort.log
+          if ($LASTEXITCODE -ne 0) { throw "Installed startup cohort failed; retain every sample and cleanup result." }
+
+      - name: Upload installed startup evidence
+        if: ${{ always() && inputs.installed_startup_package != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-installed-startup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-installed-startup/*.json
+            .artifacts/windows-installed-startup/*.log
+            .artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile
+            .artifacts/windows-installed-startup/results.json.profiles/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run exact Windows replay
+        id: replay_run
+        if: ${{ inputs.windows_ci_replay != '' }}
+        shell: bash
+        env:
+          CI: true
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
+          OPENCLAW_TEST_PROJECTS_PARALLEL: 1
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ steps.replay_input.outputs.max_workers }}
+          REPLAY_EVIDENCE: ${{ steps.replay_input.outputs.evidence }}
+          REPLAY_RUNNER_LABEL: ${{ inputs.runner_label }}
+          REPLAY_PACKAGE_MANAGER_VERSION: ${{ steps.setup_pnpm.outputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          evidence_dir="$(cygpath -u "$REPLAY_EVIDENCE")"
+          REPLAY_NPM_VERSION="$(npm -v)"
+          export REPLAY_NPM_VERSION
+          # Preserve the original dispatcher invocation; the input contains data, not shell or CLI options.
+          set +e
+          node --input-type=module <<'WINDOWS_REPLAY' 2>&1 | tee "$evidence_dir/replay.log"
+          import { spawnSync, execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { createRequire } from "node:module";
+          import os from "node:os";
+          import path from "node:path";
+          const evidence = process.env.REPLAY_EVIDENCE;
+          const binding = JSON.parse(readFileSync(path.join(evidence, "binding.json"), "utf8"));
+          const identity = JSON.parse(readFileSync(path.join(evidence, "identity.json"), "utf8"));
+          const hash = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+          const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+          const require = createRequire(path.join(process.cwd(), "package.json"));
+          const vitestVersion = require("vitest/package.json").version;
+          if (process.env.REPLAY_PACKAGE_MANAGER_VERSION !== binding.packageManager.slice(5).split("+")[0]) {
+            throw new Error("Active pnpm differs from the frozen repository pin");
+          }
+          if (process.platform !== "win32" || process.arch !== "x64" || process.versions.node !== binding.nodeVersion || sourceSha !== identity.sourceSha || vitestVersion !== binding.vitestVersion) {
+            throw new Error("Replay source, native platform, Node, or installed Vitest differs from the binding");
+          }
+          for (const [file, expected] of Object.entries(identity.dependencySha256)) {
+            if (hash(file) !== expected) throw new Error(`Frozen dependency input changed: ${file}`);
+          }
+          const args = ["--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...binding.files, "--fileParallelism"];
+          const environment = Object.fromEntries(["CI", "NODE_OPTIONS", "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD", "OPENCLAW_TEST_PROJECTS_PARALLEL", "OPENCLAW_VITEST_MAX_WORKERS"].map((key) => [key, process.env[key]]));
+          writeFileSync(path.join(evidence, "runtime.json"), JSON.stringify({
+            sourceSha, node: process.versions.node, nodeSha256: hash(process.execPath),
+            vitest: vitestVersion, packageManager: require("./package.json").packageManager,
+            npm: process.env.REPLAY_NPM_VERSION, pnpm: process.env.REPLAY_PACKAGE_MANAGER_VERSION,
+            platform: process.platform, arch: process.arch, osRelease: os.release(),
+            runnerLabel: process.env.REPLAY_RUNNER_LABEL,
+            logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(),
+            osTotalMemoryBytes: os.totalmem(), osFreeMemoryBytes: os.freemem(),
+            args, environment,
+          }, null, 2) + "\n");
+          const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+          writeFileSync(path.join(evidence, "process-result.json"), JSON.stringify({
+            status: result.status, signal: result.signal, spawnError: result.error?.code ?? null,
+            descendantSettlement: "not-attested; frozen runner owns test lifetime; Actions owns final runner teardown",
+          }, null, 2) + "\n");
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          WINDOWS_REPLAY
+          result=("${PIPESTATUS[@]}")
+          if [[ "${result[0]}" != 0 ]]; then exit "${result[0]}"; fi
+          exit "${result[1]}"
+
+      - name: Record ordered replay outcome
+        if: ${{ always() && steps.replay_input.outcome == 'success' }}
+        env:
+          REPLAY_EVIDENCE: ${{ steps.replay_input.outputs.evidence }}
+          REPLAY_OUTCOME: ${{ steps.replay_run.outcome }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binding = Get-Content -LiteralPath (Join-Path $env:REPLAY_EVIDENCE "binding.json") -Raw | ConvertFrom-Json
+          $identity = Get-Content -LiteralPath (Join-Path $env:REPLAY_EVIDENCE "identity.json") -Raw | ConvertFrom-Json -AsHashtable
+          $logPath = Join-Path $env:REPLAY_EVIDENCE "replay.log"
+          $log = if (Test-Path -LiteralPath $logPath) { [string](Get-Content -LiteralPath $logPath -Raw) } else { "" }
+          $observed = @([regex]::Matches($log, '(?m)^\[test\] starting (test/vitest/vitest\.[a-z0-9-]+\.config\.ts)\r?$') | ForEach-Object { $_.Groups[1].Value })
+          $orderedPrefix = $observed.Count -le $binding.projects.Count
+          for ($i = 0; $i -lt $observed.Count -and $orderedPrefix; $i++) { $orderedPrefix = $observed[$i] -ceq $binding.projects[$i] }
+          $complete = $orderedPrefix -and $observed.Count -eq $binding.projects.Count
+          $dependencyInputsUnchanged = $true
+          foreach ($file in $identity.dependencySha256.Keys) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $identity.dependencySha256[$file]) { $dependencyInputsUnchanged = $false }
+          }
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $sourceUnchanged = $LASTEXITCODE -eq 0 -and $sourceSha -ceq $identity.sourceSha
+          $retainedNamespaces = @([regex]::Matches($log, '(?m)^\[vitest\] retained temporary namespace .*$') | ForEach-Object { $_.Value })
+          @{ stepOutcome = $env:REPLAY_OUTCOME; expectedProjects = $binding.projects; observedProjects = $observed; orderedPrefix = $orderedPrefix; complete = $complete; dependencyInputsUnchanged = $dependencyInputsUnchanged; sourceUnchanged = $sourceUnchanged; retainedNamespaces = $retainedNamespaces; cleanupOwner = "Actions runner job teardown; no persistent Testbox lease" } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $env:REPLAY_EVIDENCE "outcome.json")
+          if (-not $orderedPrefix -or -not $dependencyInputsUnchanged -or -not $sourceUnchanged -or ($env:REPLAY_OUTCOME -eq "success" -and -not $complete)) {
+            throw "Replay identity or observed project order differs; retained output is diagnostic only."
+          }
+
+      - name: Upload exact Windows replay evidence
+        if: ${{ always() && steps.replay_input.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-ci-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.replay_input.outputs.evidence }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run Windows CI tests
         if: ${{ inputs.run_windows_ci }}
@@ -290,7 +690,7 @@ jobs:
           pnpm test:windows:ci
 
       - name: Keep runner alive for SSH inspection
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}
         env:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
         run: |
@@ -321,7 +721,7 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci }}
+    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}
     runs-on: windows-2025
     timeout-minutes: 75
     steps:

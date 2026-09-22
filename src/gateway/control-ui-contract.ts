@@ -13,39 +13,12 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 /** Maximum session keys retained by one Control UI PR subscription. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
-/** Public GitHub metadata rendered by Control UI link hover cards. */
-/**
- * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
- * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
- * yields both the login and the avatar without a per-person API lookup.
- */
-type ControlUiGitHubPreviewCoAuthor = {
-  login: string;
-  avatarDataUrl?: string;
-};
-
-export type ControlUiGitHubPreview = {
-  additions?: number;
-  avatarDataUrl?: string;
-  /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
-  coAuthors?: ControlUiGitHubPreviewCoAuthor[];
-  coAuthorCount?: number;
-  changedFiles?: number;
-  closedAt?: string;
-  comments?: number;
-  createdAt: string;
-  deletions?: number;
-  draft?: boolean;
-  kind: "issue" | "pull";
-  login: string;
-  mergedAt?: string;
-  number: number;
-  owner: string;
-  repo: string;
-  state: string;
-  stateReason?: string;
-  title: string;
-  updatedAt: string;
+/** Anonymous public-page presentation; remote URLs never cross into the renderer. */
+export type ControlUiLinkPreview = {
+  title?: string;
+  description?: string;
+  imageDataUrl?: string;
+  faviconDataUrl?: string;
 };
 
 /** Bounded session metadata rendered by Control UI session-link hover cards. */
@@ -76,6 +49,43 @@ type ControlUiSessionPullRequestChecks = {
   running: number;
 };
 
+/** Ordered GitHub Actions step facts; timestamps let the client render live duration. */
+export type ControlUiSessionPullRequestCheckStep = {
+  number: number;
+  name: string;
+  status: string;
+  conclusion?: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type ControlUiSessionPullRequestCheck = {
+  id: number;
+  name: string;
+  state: "failed" | "running" | "passed" | "skipped";
+  status: string;
+  conclusion?: string;
+  startedAt?: string;
+  completedAt?: string;
+  detailsUrl?: string;
+  source: "actions" | "check";
+  /** Absent for non-Actions checks or when Actions details could not be loaded. */
+  steps?: ControlUiSessionPullRequestCheckStep[];
+};
+
+/** On-demand details bound to one session PR head, never part of background polling. */
+export type ControlUiSessionPullRequestCheckDetails = {
+  owner: string;
+  repo: string;
+  number: number;
+  headSha: string;
+  checks: ControlUiSessionPullRequestCheck[];
+  status: "ready" | "stale" | "unavailable";
+  rateLimited: boolean;
+  error?: string;
+  retryAfterMs?: number;
+};
+
 /** A working-branch PR or a same-repository PR linked in recent assistant replies. */
 export type ControlUiSessionPullRequest = {
   number: number;
@@ -99,6 +109,8 @@ export type ControlUiSessionPullRequest = {
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
+  /** Head binding for on-demand CI details; not a client-selected repository revision. */
+  headSha?: string;
 };
 
 /**

@@ -132,10 +132,35 @@ export function resolveChannelsAddOptions(
   channelArg: string | undefined,
   opts: Record<string, unknown>,
   command?: Pick<Command, "getOptionValueSource">,
+  params?: {
+    preserveLegacyDefaults?: boolean;
+    /** Attribute names whose empty Commander defaults should be dropped (legacy int options). */
+    dropEmptyLegacyDefaultsForAttributeNames?: ReadonlySet<string>;
+  },
 ): Record<string, unknown> {
   const forwardedOpts = command
     ? Object.fromEntries(
-        Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === "cli"),
+        Object.entries(opts).filter(([key, value]) => {
+          const source = command.getOptionValueSource(key);
+          if (source === "cli") {
+            return true;
+          }
+          // Legacy plugins still install manifest defaults through Commander.
+          // Keep those values. Drop empty-string defaults only for int options so
+          // omitted ints are not treated as explicitly blank user input, while
+          // empty text defaults remain valid plugin metadata.
+          if (
+            params?.preserveLegacyDefaults !== true ||
+            source !== "default" ||
+            value === undefined
+          ) {
+            return false;
+          }
+          if (value === "") {
+            return !params.dropEmptyLegacyDefaultsForAttributeNames?.has(key);
+          }
+          return true;
+        }),
       )
     : opts;
   return {

@@ -474,7 +474,9 @@ monitors, including disabled monitors, as removal actions. Ordinary schedules,
 imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler store
 remain blockers.
 Modified files and resources with another current owner are retained or
-blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
+blocked. The workspace is retained if it contains untracked files or its contents
+cannot be fully checked, including when a child directory disappears during cleanup.
+Cleanup choices are part of the plan digest; `--yes` never broadens
 them. By default, globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a

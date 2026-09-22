@@ -251,13 +251,14 @@ describe("login gate failure recovery", () => {
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
-  it("offers page refresh for a protocol mismatch and reloads when selected", async () => {
+  it("offers page refresh and cache-busts only after the Gateway answers", async () => {
     const element = await mountFailure(
       "protocol mismatch",
       ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
     );
-    const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
+    const replace = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://gateway.example/chat", replace } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
 
     const failure = element.querySelector<HTMLElement>(
       '.login-gate__failure[data-kind="protocol-mismatch"]',
@@ -269,7 +270,10 @@ describe("login gate failure recovery", () => {
     expect(failure?.querySelector(".login-gate__failure-docs")).not.toBeNull();
 
     refresh?.click();
-    expect(reload).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+    expect(replace).toHaveBeenCalledWith(
+      expect.stringMatching(/^https:\/\/gateway\.example\/chat\?openclaw_mount_recovery=\d+$/),
+    );
   });
 
   it("shows an explicit recovery choice when reconnect leaves unsaved starts behind the login gate", async () => {

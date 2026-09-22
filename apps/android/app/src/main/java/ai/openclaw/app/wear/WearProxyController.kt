@@ -7,6 +7,9 @@ import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextPage
+import ai.openclaw.wear.shared.WearReplyTextStatus
 import ai.openclaw.wear.shared.WearRpcError
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.CancellationException
@@ -38,6 +41,7 @@ internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
+  private val gatewayProblemCode: () -> String? = { null },
   private val hasOperatorAdminScope: () -> Boolean = { false },
   private val supportsSessionModelCatalog: () -> Boolean = { false },
   private val activeAgentId: () -> String? = { null },
@@ -53,6 +57,8 @@ internal class WearProxyController(
   },
   private val startRealtimeTalk:
     suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?, attemptScopedAudio: Boolean) -> WearRealtimeTalkSnapshot? = { _, _, _, _, _ -> null },
+  private val readChatReply: suspend (String, String, String, Int, String?) -> WearReplyTextPage = { _, _, _, _, _ -> WearReplyTextPage(WearReplyTextStatus.Unsupported) },
+  private val readTalkReply: (String, String, String, String, Int, String?) -> WearReplyTextPage = { _, _, _, _, _, _ -> WearReplyTextPage(WearReplyTextStatus.Unavailable) },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
 ) {
   suspend fun handle(
@@ -71,6 +77,7 @@ internal class WearProxyController(
           WearRpcMethod.ModelsSelect -> selectModel(request.params)
           WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
           WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
+          WearRpcMethod.ReplyText -> replyText(sourceNodeId, request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
           WearRpcMethod.ChatSend -> sendChat(request.params)
           WearRpcMethod.ChatAbort -> abortChat(request.params)
@@ -87,6 +94,26 @@ internal class WearProxyController(
     } catch (_: Throwable) {
       failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
     }
+
+  private suspend fun replyText(
+    sourceNodeId: String,
+    params: JsonObject,
+  ): JsonElement {
+    if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
+    params.requireOnly("source", "sessionKey", "agentId", "entryId", "attemptId", "offset", "revision")
+    val source = params.stringParam("source", 8)
+    val session = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val entry = params.stringParam("entryId", 512)
+    val offset = params.intParam("offset", 0, 0..WearReplyText.MAX_TEXT_LENGTH)
+    val revision = params.optionalStringParam("revision", 64)
+    val page =
+      when (source) {
+        "chat" -> readChatReply(session, params.stringParam("agentId", MAX_AGENT_ID_CHARS), entry, offset, revision)
+        "talk" -> readTalkReply(sourceNodeId, session, params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS), entry, offset, revision)
+        else -> throw WearProxyInvalidRequest("Invalid reply source")
+      }
+    return WearReplyText.encode(page)
+  }
 
   private suspend fun agentPulse(params: JsonObject): JsonObject {
     params.requireOnly("sessionKey")
@@ -130,9 +157,12 @@ internal class WearProxyController(
 
   private fun proxyStatus(params: JsonObject): JsonObject {
     params.requireOnly()
+    val connected = isGatewayConnected()
+    val status = gatewayStatusText()
     return buildJsonObject {
-      put("connected", isGatewayConnected())
-      put("status", gatewayStatusText().takeCodePoints(MAX_STATUS_CHARS))
+      put("connected", connected)
+      put("status", status.takeCodePoints(MAX_STATUS_CHARS))
+      if (!connected) put("failure", wearConnectionFailure(gatewayProblemCode(), status).wireValue)
       put(
         "capabilities",
         buildJsonArray {
@@ -230,7 +260,7 @@ internal class WearProxyController(
       )
     val availableModels =
       catalog.models
-        .filter { it.available != false }
+        .filter { it.manualSelectionAllowed != false && it.available != false }
         .mapNotNull { model -> canonicalModelRef(model.providerQualifiedRef())?.let { ref -> ref to model } }
         .distinctBy { (ref) -> ref }
     val matchingModels =
@@ -540,7 +570,14 @@ private fun projectMessage(element: JsonElement?): JsonObject? {
     put("role", role.takeCodePoints(32))
     copyLong(source, "timestamp")
     copyString(source, "idempotencyKey", MAX_IDEMPOTENCY_KEY_CHARS)
-    projectContent(source["content"])?.let { put("content", it) }
+    val content = projectContent(source["content"])
+    content?.let { put("content", it) }
+    // Lookup identity is not the display row ID. Never shorten an opaque reference.
+    if (!wearReplyIsSynthetic(source)) {
+      wearReplyEntryId(source)?.takeIf { it.length <= 512 }?.let { put("entryId", it) }
+    }
+    val projectedText = wearReplyText(buildJsonObject { content?.let { put("content", it) } })
+    put("textTruncated", wearReplyIsTruncated(source, 2_000) || projectedText != wearReplyText(source))
   }
 }
 

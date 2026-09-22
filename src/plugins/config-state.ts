@@ -101,7 +101,9 @@ export function normalizePluginTargetConfig(
   if (hasTargetEntry) {
     const { config: pluginConfig, ...entry } = normalized.entries[normalizedId] ?? {};
     entries[normalizedId] = {
-      ...entry,
+      // Auth/setup compares this authored candidate after it is persisted as JSON.
+      // Absent optional runtime fields must not become non-round-trippable own keys.
+      ...Object.fromEntries(Object.entries(entry).filter(([, value]) => value !== undefined)),
       ...(isRecord(pluginConfig) ? { config: pluginConfig } : {}),
     };
   }

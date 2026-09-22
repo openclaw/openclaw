@@ -4,6 +4,13 @@ import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/e
 import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
+import {
+  observeReplyDelivery,
+  type ReplyCompletion,
+  type ReplyDeliveryObserver,
+  type ReplyDeliveryState,
+  type ReplyExpectation,
+} from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -15,13 +22,14 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
-  sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import {
+  getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -35,10 +43,10 @@ import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
+import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
@@ -83,18 +91,10 @@ export function buildSilentFallbackFailurePayload(params: {
   fallbackFailureKnown: boolean;
   fallbackAttempts: readonly RuntimeFallbackAttempt[];
   cfg: OpenClawConfig;
-  isHeartbeat: boolean;
-  hasSuccessfulTerminalDelivery: boolean;
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  silentExpected?: boolean;
-  hasExplicitSilentReply?: boolean;
+  completion: ReplyCompletion;
 }): ReplyPayload | undefined {
   if (
-    params.isHeartbeat ||
-    params.allowEmptyAssistantReplyAsSilent === true ||
-    params.silentExpected === true ||
-    params.hasExplicitSilentReply === true ||
-    params.hasSuccessfulTerminalDelivery ||
+    params.completion.outcome !== "missing" ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
   ) {
@@ -191,35 +191,64 @@ export function resolveReplyRunDeliveryContext(params: {
 
 export function hasSuccessfulSourceReplyDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
-  directlySentBlockKeys?: Set<string>;
+  hasDirectlySentBlockReply?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
     params.blockReplyPipeline?.didStream() ||
-    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    params.hasDirectlySentBlockReply === true ||
     hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
 }
 
-export function hasSuccessfulTerminalSourceReplyDelivery(params: {
-  blockReplyPipeline: {
-    didStreamTerminalReply?: () => boolean;
-    isAborted: () => boolean;
-  } | null;
+export async function resolveTerminalReplyDelivery(params: {
+  blockReplyPipeline?: BlockReplyPipeline | null;
   directBlockDeliveries?: DirectBlockDelivery[];
-}): boolean {
-  const sentTerminalBlock = params.directBlockDeliveries?.some(
-    ({ payload, outcome, pending }) =>
-      outcome === "delivered" &&
-      !pending &&
-      isReplyPayloadTerminalContent(payload) &&
-      normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
+  minimumAssistantMessageIndex?: number;
+  resolveReplyDelivery?: ReplyDeliveryObserver;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
+}): Promise<ReplyDeliveryState> {
+  if (
+    params.sourceReplyDeliveryState === "delivered" ||
+    params.sourceReplyDeliveryState === "pending"
+  ) {
+    return params.sourceReplyDeliveryState;
+  }
+  const { blockReplyPipeline, minimumAssistantMessageIndex = 0 } = params;
+  if (params.sourceReplyDeliveryState === undefined) {
+    await blockReplyPipeline?.flush({ force: true });
+  }
+  const sourceDelivery = await observeReplyDelivery(
+    params.resolveReplyDelivery,
+    minimumAssistantMessageIndex,
+    (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  return (
-    params.blockReplyPipeline?.didStreamTerminalReply?.() === true || sentTerminalBlock === true
-  );
+  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+    return sourceDelivery;
+  }
+  let pending =
+    sourceDelivery === "pending" ||
+    blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
+  for (const delivery of params.directBlockDeliveries ?? []) {
+    if (
+      (getReplyPayloadMetadata(delivery.payload)?.assistantMessageIndex ?? 0) <
+        minimumAssistantMessageIndex ||
+      !isReplyPayloadTerminalContent(delivery.payload)
+    ) {
+      continue;
+    }
+    if (delivery.terminalDeliveryConfirmed) {
+      return "delivered";
+    }
+    pending ||= hasBlockReplyDeliveryCustody(delivery);
+  }
+  return blockReplyPipeline?.didStreamTerminalReply?.(minimumAssistantMessageIndex)
+    ? "delivered"
+    : pending
+      ? "pending"
+      : "missing";
 }
 
 export function resolveFallbackOriginModel(params: {
@@ -328,9 +357,9 @@ export function resolveAdmittedRunSessionFile(params: {
 export async function handleReplyAgentRunError(
   error: unknown,
   context: {
-    cfg: OpenClawConfig;
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
+    replyExpectation: ReplyExpectation;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -339,9 +368,9 @@ export async function handleReplyAgentRunError(
   },
 ): Promise<ReplyPayload | undefined> {
   const {
-    cfg,
     resolveVisibleReplyDelivery,
     isHeartbeat,
+    replyExpectation,
     isRestartRecoveryArmed,
     replyOperation,
     resolvedVerboseLevel,
@@ -391,7 +420,6 @@ export async function handleReplyAgentRunError(
     err: error,
     sessionCtx,
     resolvedVerboseLevel,
-    cfg,
   });
   if (knownFailurePayload) {
     replyOperation.fail("run_failed", error);
@@ -401,11 +429,7 @@ export async function handleReplyAgentRunError(
   if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
-      buildTerminalAgentRunFailureReplyPayload({
-        visibleReplyDelivered: true,
-        sessionCtx,
-        cfg,
-      }),
+      buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
     );
   }
   replyOperation.fail("run_failed", error);

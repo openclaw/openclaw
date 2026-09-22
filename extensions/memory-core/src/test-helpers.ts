@@ -6,7 +6,11 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
@@ -31,6 +35,7 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
+import { recordMemorySessionTombstonesInDatabase } from "./memory-entry-origins.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import {
   normalizeShortTermPhaseSignalStore,
@@ -41,6 +46,39 @@ import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function seedMemoryForgetTombstones(
+  params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],
+): number {
+  const { db } = openOpenClawAgentDatabase({ agentId: params.agentId });
+  return recordMemorySessionTombstonesInDatabase(db, params);
+}
+
+export async function seedMemoryIndexWithOrphanedProvenance(
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  database.db.exec(`
+    PRAGMA foreign_keys = OFF;
+    INSERT INTO memory_index_chunks (
+      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    ) VALUES (
+      'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
+      'hash', 'none', 'orphaned memory', x'', 1
+    );
+    INSERT INTO memory_index_chunk_provenance (
+      chunk_id, origin_class, session_kind, observed_at
+    ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
+    DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
+    PRAGMA foreign_keys = ON;
+  `);
+  closeOpenClawAgentDatabasesForTest();
+  // Replaced files cannot reuse the original connection's clean integrity receipt.
+  const replacementPath = `${database.path}.replacement`;
+  await fs.copyFile(database.path, replacementPath);
+  await fs.rename(replacementPath, database.path);
+  return database.path;
+}
 
 export function consolidateMemoryForTests(
   params: Omit<Parameters<typeof consolidateMemory>[0], "agentId">,
@@ -199,6 +237,7 @@ export function createMemoryCoreTestHarness() {
     // The agent close releases its leases through shared state and reopens it, so the
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     resetMemoryCoreDreamingStateForTests();

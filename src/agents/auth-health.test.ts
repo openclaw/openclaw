@@ -5,6 +5,7 @@
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseLegacyCredentialEntry } from "./auth-profiles/persisted.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
@@ -80,7 +81,14 @@ describe("buildAuthHealthSummary", () => {
     );
   });
 
-  it("classifies OAuth and API key profiles", () => {
+  it.each([
+    { name: "default warning window", warnAfterMs: undefined, shortLivedStatus: "ok" },
+    {
+      name: "explicit warning window",
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      shortLivedStatus: "expiring",
+    },
+  ])("classifies OAuth and API key profiles with $name", ({ warnAfterMs, shortLivedStatus }) => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
       version: 1,
@@ -99,6 +107,20 @@ describe("buildAuthHealthSummary", () => {
           refresh: "refresh",
           expires: now + 10_000,
         },
+        "anthropic:short-lived": {
+          type: "oauth" as const,
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 60 * 60_000,
+        },
+        "anthropic:manual-renewal": parseLegacyCredentialEntry({
+          type: "oauth",
+          provider: "anthropic",
+          access: "access",
+          refresh: "",
+          expires: now + 60 * 60_000,
+        })!,
         "anthropic:expired": {
           type: "oauth" as const,
           provider: "anthropic",
@@ -116,13 +138,15 @@ describe("buildAuthHealthSummary", () => {
 
     const summary = buildAuthHealthSummary({
       store,
-      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      warnAfterMs,
     });
 
     const statuses = profileStatuses(summary);
 
     expect(statuses["anthropic:ok"]).toBe("ok");
     expect(statuses["anthropic:expiring"]).toBe("expiring");
+    expect(statuses["anthropic:short-lived"]).toBe(shortLivedStatus);
+    expect(statuses["anthropic:manual-renewal"]).toBe("expiring");
     expect(statuses["anthropic:expired"]).toBe("expired");
     expect(statuses["anthropic:api"]).toBe("static");
 

@@ -368,25 +368,25 @@ export async function captureBrowserPanelOwnedView(params: {
   if (!params.current()) {
     return null;
   }
-  const dataUrl = await fetchBrowserScreenshotDataUrl({
-    resourceBasePath: params.host.resourceBasePath,
-    authToken: params.host.authToken,
-    path: shot.path,
-  });
+  // Media transfer and page geometry are independent once the screenshot exists.
+  const [dataUrl, observedMetrics] = await Promise.all([
+    fetchBrowserScreenshotDataUrl({
+      resourceBasePath: params.host.resourceBasePath,
+      authToken: params.host.authToken,
+      path: shot.path,
+    }),
+    readBrowserPanelOwnedMetrics(
+      params.client,
+      params.targetId,
+      params.isEvaluateUnavailable(),
+      params.current,
+      params.markEvaluateUnavailable,
+    ),
+  ]);
   if (!params.current()) {
     return null;
   }
   const image = await loadBrowserPanelImage(dataUrl);
-  if (!params.current()) {
-    return null;
-  }
-  const observedMetrics = await readBrowserPanelOwnedMetrics(
-    params.client,
-    params.targetId,
-    params.isEvaluateUnavailable(),
-    params.current,
-    params.markEvaluateUnavailable,
-  );
   if (!params.current()) {
     return null;
   }

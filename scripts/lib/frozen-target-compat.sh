@@ -366,11 +366,12 @@ openclaw_resolve_frozen_onboard_contract() {
 
 openclaw_resolve_frozen_typed_onboarding_contract() {
   local source_root="${1:?missing selected source root}" harness_root="${2:?missing trusted harness root}" authorization_status=0
-  local has_hooks has_setup has_default_hooks scenario assertions mock_config
+  local has_hooks has_setup has_default_hooks scenario assertions assertion_files mock_config
 
   export OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$harness_root/scripts/e2e/lib/release-typed-onboarding/scenario.sh" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$harness_root/scripts/e2e/lib/release-scenarios/assertions.mjs" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH="$harness_root/scripts/e2e/lib/release-assertion-files.mjs" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$harness_root/scripts/e2e/lib/fixtures/mock-openai-config.mjs"
 
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
@@ -398,11 +399,15 @@ openclaw_resolve_frozen_typed_onboarding_contract() {
   assertions="$(openclaw_resolve_frozen_target_file "$source_root" \
     scripts/e2e/lib/release-scenarios/assertions.mjs \
     "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH")" || return 2
+  assertion_files="$(openclaw_resolve_frozen_target_file "$source_root" \
+    scripts/e2e/lib/release-assertion-files.mjs \
+    "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH")" || return 2
   mock_config="$(openclaw_resolve_frozen_target_file "$source_root" \
     scripts/e2e/lib/fixtures/mock-openai-config.mjs \
     "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH")" || return 2
   export OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$scenario" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$assertions" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH="$assertion_files" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$mock_config"
 }
 

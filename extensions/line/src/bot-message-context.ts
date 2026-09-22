@@ -1,4 +1,3 @@
-// Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
@@ -358,9 +357,7 @@ async function finalizeLineInboundContext(params: {
       label: conversationLabel,
     },
     route: {
-      agentId: params.route.agentId,
-      dmScope: params.route.dmScope,
-      accountId: params.route.accountId,
+      ...params.route,
       routeSessionKey: params.route.sessionKey,
     },
     reply: { to: address, originatingTo: address },

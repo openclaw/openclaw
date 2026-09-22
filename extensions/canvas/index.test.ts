@@ -179,8 +179,10 @@ describe("Canvas plugin entry", () => {
     expect(mocks.registerNodesCanvasCommands).toHaveBeenCalledTimes(1);
 
     const registeredTools = tools.map(({ tool: toolFactory }) => {
-      expect(typeof toolFactory).toBe("function");
-      const tool = (toolFactory as Exclude<typeof toolFactory, AnyAgentTool>)({
+      if (typeof toolFactory !== "function") {
+        throw new Error("expected legacy canvas factory");
+      }
+      const tool = toolFactory({
         config: {},
         workspaceDir: "/tmp/workspace",
         sessionKey: "agent:main:canvas",

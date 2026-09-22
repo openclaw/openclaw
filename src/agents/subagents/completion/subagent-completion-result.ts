@@ -1,4 +1,4 @@
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
 
 /** Selects the canonical operator-visible result from captured completion state. */

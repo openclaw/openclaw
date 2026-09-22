@@ -2,7 +2,7 @@
 // trusted proxy IP resolution, container defaults, and interface matching.
 import net from "node:net";
 import os from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -371,6 +371,78 @@ describe("resolveGatewayListenHosts", () => {
   });
 });
 
+describe("gateway bind probe lifecycle", () => {
+  let server: net.Server;
+  let listenSpy: MockInstance<net.Server["listen"]>;
+  let closeSpy: MockInstance<net.Server["close"]>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    server = new net.Server();
+    listenSpy = vi.spyOn(server, "listen").mockReturnValue(server);
+    closeSpy = vi.spyOn(server, "close");
+    vi.spyOn(net, "createServer").mockReturnValue(server);
+  });
+
+  afterEach(() => {
+    server.close();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("bounds a never-emitting probe and closes a listener arriving after timeout", async () => {
+    const results: string[][] = [];
+    const pending = resolveGatewayListenHosts("127.0.0.1").then((hosts) => results.push(hosts));
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(results).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(results).toEqual([["127.0.0.1"]]);
+    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Model a late native bind with a real ephemeral socket, not just a mock event.
+    listenSpy.mockRestore();
+    const closed = new Promise<void>((resolve) => {
+      server.once("close", resolve);
+    });
+    server.listen(0, "127.0.0.1");
+    await closed;
+    await pending;
+    expect(server.listening).toBe(false);
+    expect(results).toEqual([["127.0.0.1"]]);
+    expect(closeSpy).toHaveBeenCalledTimes(2);
+    server.emit("error", new Error("late bind error"));
+    expect(results).toEqual([["127.0.0.1"]]);
+  });
+
+  it.each(["error", "listening"] as const)(
+    "settles once on %s and cancels the deadline",
+    async (event) => {
+      const result = resolveGatewayListenHosts("127.0.0.1");
+      server.emit(event, new Error("bind failed"));
+      const expected = event === "listening" ? ["127.0.0.1", "::1"] : ["127.0.0.1"];
+      expect(await result).toEqual(expected);
+      expect(closeSpy).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(closeSpy).toHaveBeenCalledOnce();
+      // The other terminal event must not change the already published decision.
+      server.emit(event === "error" ? "listening" : "error", new Error("late event"));
+      expect(await result).toEqual(expected);
+    },
+  );
+
+  it("treats a synchronous listen failure as an unavailable probe", async () => {
+    listenSpy.mockImplementation(() => {
+      throw new Error("listen failed synchronously");
+    });
+    await expect(resolveGatewayListenHosts("127.0.0.1")).resolves.toEqual(["127.0.0.1"]);
+    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("resolveGatewayRequiredListenHosts", () => {
   it.each([
     ["127.0.0.1", ["127.0.0.1"]],
@@ -665,6 +737,14 @@ describe("resolveGatewayBindHost", () => {
 
   it("returns 0.0.0.0 for lan mode", async () => {
     expect(await resolveGatewayBindHost("lan")).toBe("0.0.0.0");
+  });
+
+  it("closes a successful real loopback probe for a custom bind", async () => {
+    const probe = new net.Server();
+    vi.spyOn(net, "createServer").mockReturnValue(probe);
+    expect(await resolveGatewayBindHost("custom", "127.0.0.1")).toBe("127.0.0.1");
+    expect(probe.listening).toBe(false);
+    expect(probe.address()).toBeNull();
   });
 
   it("returns 127.0.0.1 for auto mode on non-container host", async () => {

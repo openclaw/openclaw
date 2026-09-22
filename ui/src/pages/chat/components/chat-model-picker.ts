@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -9,6 +10,7 @@ import {
   renderProviderBrandIcon,
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 import {
   type ChatContextWindowControlParams,
@@ -17,9 +19,12 @@ import {
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   type ChatModelCatalogState,
+  renderChatModelCatalogRefresh,
   renderChatModelCatalogState,
 } from "./chat-model-catalog-state.ts";
 import {
+  isModelPickerOptionSelected,
+  modelPickerOptionKey,
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
   renderChatModelProviderIcon,
@@ -33,9 +38,12 @@ import {
   pickerMenu,
   resetModelSearch,
   syncChatModelSearch,
+  toggleModelProviderGroup,
   updateModelSearch,
 } from "./chat-model-picker-search.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerModelControlsEnglish();
 
 export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
@@ -54,6 +62,7 @@ type ChatModelPickerParams = {
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
+  selectedAgentRuntime?: string;
   /** Pin recorded on the session row; only then does an unavailable Default row reset. */
   sessionModelPinned: boolean;
   sessionKey: string;
@@ -61,10 +70,15 @@ type ChatModelPickerParams = {
   triggerModelValue?: string;
   triggerStatusLabel?: string;
   triggerLoading?: boolean;
+  triggerStarting?: boolean;
   onModelSetup?: () => void;
   onOpen?: () => unknown;
   onOpenChange?: (open: boolean) => void;
-  onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
+  onModelSelect: (
+    value: string,
+    sessionKey: string,
+    agentRuntime?: string | null,
+  ) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
@@ -72,13 +86,18 @@ type ChatModelPickerParams = {
 
 export function renderChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
-  const activeModelOption =
-    params.selectedModelValue === ""
-      ? defaultModelOption
-      : params.modelOptions.find((option) => option.value === params.selectedModelValue);
-  const triggerModelOption = params.triggerModelValue
-    ? params.modelOptions.find((option) => option.value === params.triggerModelValue)
-    : activeModelOption;
+  const activeModelOption = params.modelOptions.find((option) =>
+    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+  );
+  const triggerModelValue = params.triggerModelValue;
+  const triggerModelOption =
+    triggerModelValue === undefined
+      ? activeModelOption
+      : triggerModelValue === ""
+        ? undefined
+        : params.modelOptions.find((option) =>
+            isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
+          );
   const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
   const selectedContextWindowOption = params.contextWindow?.options.find(
     (option) => option.id === params.contextWindow?.selected,
@@ -88,6 +107,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
+    params.triggerStarting ? t("chat.modelControls.modelStarting") : "",
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
@@ -131,18 +151,27 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);
-  const optionIndex = new Map(orderedOptions.map((option, index) => [option.value, index]));
+  const optionIndex = new Map(
+    orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
+  );
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
   const hasOptions =
     params.modelOptions.length + targetOptionCount > 0 ||
     targetGroups.some((group) => group.status !== "ready");
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
-  const commitModel = (value: string) => {
+  const commitModel = (entry: ChatModelPickerOption) => {
     if (params.modelSelectionLocked) {
       return;
     }
-    void params.onModelSelect(value, params.sessionKey).finally(() => params.onRequestUpdate?.());
+    void params
+      .onModelSelect(
+        entry.commitValue,
+        params.sessionKey,
+        entry.runtimeOverride ??
+          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+      )
+      .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
@@ -153,9 +182,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       event.preventDefault();
       return;
     }
-    if (entry.commitValue !== params.selectedModelValue) {
-      commitModel(entry.commitValue);
-    }
+    commitModel(entry);
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
@@ -217,7 +244,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
           params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
         }`}
-        aria-busy=${params.triggerLoading ? "true" : "false"}
+        aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
         @click=${(event: MouseEvent) => {
@@ -264,7 +291,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
             : nothing
         }
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
-          >${icons.chevronUp}</span
+          >${
+            params.triggerStarting ? html`<span class="btn__spinner"></span>` : icons.chevronUp
+          }</span
         >
       </summary>
       <wa-popup data-anchored-overlay>
@@ -311,6 +340,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 updateModelSearch(event.currentTarget as HTMLInputElement)}
                               @keydown=${handleModelSearchKeydown}
                             />
+                            ${
+                              params.modelOptions.length > 0
+                                ? renderChatModelCatalogRefresh(params.modelCatalogState)
+                                : nothing
+                            }
                           </div>
                         `
                       : nothing
@@ -344,6 +378,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 const authLabel = showAuth
                                   ? [auth.label, auth.detail].filter(Boolean).join(" · ")
                                   : undefined;
+                                const route = resolveModelRuntimeRoute(provider);
+                                const routeDetail = route
+                                  ? t(`chat.modelControls.routes.${route}.detail`)
+                                  : undefined;
                                 return html`
                                   <section
                                     class="chat-controls__provider-model-group"
@@ -355,12 +393,32 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     <div
                                       class="chat-controls__provider-heading"
                                       data-chat-model-provider=${provider}
-                                      title=${authLabel ?? nothing}
+                                      title=${[routeDetail, authLabel].filter(Boolean).join(" · ") || nothing}
                                     >
-                                      ${renderChatModelProviderIcon(provider)}
-                                      <span class="chat-controls__provider-label"
-                                        >${providerDisplayLabel(provider)}</span
+                                      <button
+                                        class="chat-controls__provider-toggle"
+                                        type="button"
+                                        data-chat-model-group-toggle
+                                        data-chat-model-provider-toggle
+                                        aria-expanded="false"
+                                        aria-label=${`${t("chat.modelControls.providerModels", {
+                                          provider: providerDisplayLabel(provider),
+                                        })} (${options.length})`}
+                                        aria-description=${routeDetail ?? nothing}
+                                        ?disabled=${params.disabled}
+                                        @click=${toggleModelProviderGroup}
                                       >
+                                        ${renderChatModelProviderIcon(provider)}
+                                        <span class="chat-controls__provider-label"
+                                          >${providerDisplayLabel(provider)}</span
+                                        >
+                                        <span>${options.length}</span>
+                                        <span
+                                          class="chat-controls__inline-select-chevron"
+                                          aria-hidden="true"
+                                          >${icons.chevronDown}</span
+                                        >
+                                      </button>
                                       ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
                                       ${
                                         params.onModelSetup
@@ -387,20 +445,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         provider: providerDisplayLabel(provider),
                                       })}
                                     >
-                                      ${repeat(
-                                        options,
-                                        (entry) => entry.value,
-                                        (entry) =>
-                                          renderChatModelPickerOption({
-                                            disabled: params.disabled,
-                                            entry,
-                                            index: optionIndex.get(entry.value) ?? 0,
-                                            selectedModelValue: params.selectedModelValue,
-                                            sessionModelPinned: params.sessionModelPinned,
-                                            onHighlight: highlightOption,
-                                            onSelect: selectModel,
-                                            onModelSetup: params.onModelSetup,
-                                          }),
+                                      ${repeat(options, modelPickerOptionKey, (entry) =>
+                                        renderChatModelPickerOption({
+                                          disabled: params.disabled,
+                                          entry,
+                                          index: optionIndex.get(modelPickerOptionKey(entry)) ?? 0,
+                                          selectedModelValue: params.selectedModelValue,
+                                          selectedAgentRuntime: params.selectedAgentRuntime,
+                                          sessionModelPinned: params.sessionModelPinned,
+                                          onHighlight: highlightOption,
+                                          onSelect: selectModel,
+                                          onModelSetup: params.onModelSetup,
+                                        }),
                                       )}
                                     </div>
                                   </section>

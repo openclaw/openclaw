@@ -15,7 +15,7 @@ Codex app-server harness and native session catalog.
 ## Distribution
 
 - Package: `@openclaw/codex`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/codex`
 
 ## Surface
 

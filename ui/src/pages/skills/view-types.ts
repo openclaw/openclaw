@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import type {
   ClawHubSkillSecurityVerdict,
@@ -24,8 +24,6 @@ export type SkillsProps = {
   connected: boolean;
   loading: boolean;
   report: SkillStatusReport | null;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
   error: string | null;
   filter: string;
   statusFilter: SkillsStatusFilter;
@@ -54,7 +52,6 @@ export type SkillsProps = {
     text: string;
   } | null;
   onFilterChange: (next: string) => void;
-  onAgentChange: (agentId: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;

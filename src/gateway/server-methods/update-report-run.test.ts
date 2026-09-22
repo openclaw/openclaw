@@ -292,7 +292,7 @@ describe("Report action from the authoritative update ledger", () => {
     async ({ text, code, publicCode }) => {
       const onStepComplete = vi.fn();
       const step = await runStep({
-        name: "global install stage",
+        name: "package-stage",
         argv: ["npm", "install"],
         cwd: home.home,
         timeoutMs: 1000,
@@ -318,9 +318,9 @@ describe("Report action from the authoritative update ledger", () => {
       const { body, previewDigest } = await preview();
       expect(body).not.toContain("PRIVATE_CUSTOMER_ID");
       expect(renderUpdateRunReport(recorded!).lines.join("\n")).toContain(
-        `Failing check package-install (${code})`,
+        `Failing check package-stage (${code})`,
       );
-      expect(body).toContain(`Failing check package-install (${publicCode})`);
+      expect(body).toContain(`Failing check package-stage (${publicCode})`);
       for (const privateText of [
         "private-customer-text",
         "private-host.example",
@@ -332,7 +332,7 @@ describe("Report action from the authoritative update ledger", () => {
       }
       await invoke({ action: "submit", attemptId: runId, previewDigest });
       const submission = mocks.runGh.mock.calls.find(([args]) => args[0] === "api");
-      expect(submission?.[1]?.input?.toString()).toContain("package-install");
+      expect(submission?.[1]?.input?.toString()).toContain("package-stage");
       expect(submission?.[1]?.input?.toString()).not.toContain("private-customer-text");
       expect(submission?.[1]?.input?.toString()).not.toContain("PRIVATE_CUSTOMER_ID");
     },

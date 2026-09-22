@@ -3,15 +3,20 @@
 import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
+import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
-await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+await fs.writeFile(
+  path.join(root, "package.json"),
+  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+);
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
+const repairDeadline = scenario === "repair-deadline";
 const blockedChildSource = `
 const fs = require('node:fs');
 process.title = 'node fixture-private-argument';
@@ -31,7 +36,30 @@ if (scenario === "human-recovery-plugin-error") {
   Object.defineProperty(process.stdin, "isTTY", { value: true });
   Object.defineProperty(process.stdout, "isTTY", { value: true });
 }
-const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
+const sourceUrl = (relative: string) =>
+  new URL(
+    import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
+    import.meta.url,
+  ).href;
+const recoveryClockOwners = new Set([
+  sourceUrl("./daemon-cli/restart-health.ts"),
+  sourceUrl("./daemon-cli/restart-health-probe.ts"),
+]);
+// Keep native/HTTP observations and their full budgets; only recovery polling advances time.
+const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+const realMonotonicNow = performance.now.bind(performance);
+const realWallNow = Date.now;
+let elapsed = 0;
+Object.defineProperty(performance, 'now', { value: () => realMonotonicNow() + elapsed });
+Date.now = () => realWallNow() + Math.floor(elapsed);
+export async function sleep(ms, signal) {
+  signal?.throwIfAborted();
+  if (elapsed === 0) process.stderr.write('Fixture advanced recovery clock.\\n');
+  elapsed += ms;
+  await new Promise(resolve => setImmediate(resolve));
+  signal?.throwIfAborted();
+}
+`)}`;
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
 export async function doctorCommand() {
@@ -42,6 +70,7 @@ export async function doctorCommand() {
   if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
     throw new Error('Update Doctor unexpectedly allowed gateway activation');
   }
+  ${repairDeadline ? `if ((await fs.readFile(${JSON.stringify(path.join(process.env.OPENCLAW_STATE_DIR!, "managed-service-state"))}, 'utf8')) !== 'stopped') throw new Error('Doctor ran before the parent parked its service');` : ""}
   intro('OpenClaw doctor');
   note('Doctor panel diagnostic', 'Repair');
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
@@ -61,6 +90,12 @@ export async function doctorCommand() {
   }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
+  ${
+    scenario === "doctor-warning"
+      ? `await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,
+        JSON.stringify({status:'ok', warnings:['Optional probe failed; run openclaw doctor after updating.']}));`
+      : ""
+  }
 }
 `;
 const installedEntry = path.join(root, "installed-cli.mjs");
@@ -128,16 +163,18 @@ export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    scenario === "phase-hang"
-      ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+    // Replace snapshot creation only; keep real readers available to Doctor imports.
+    `export * from ${JSON.stringify(`${sourceUrl("./update-cli/update-command-config-snapshot.ts")}?fixture-original`)};\n` +
+      (scenario === "phase-hang"
+        ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
 export const createUpdateConfigSnapshot = async () => {
   const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
   console.error('fixture configSnapshot entered');
   await child;
 };`
-      : scenario === "borrowed-phase"
-        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
-        : "export const createUpdateConfigSnapshot = async () => {};",
+        : scenario === "borrowed-phase"
+          ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+          : "export const createUpdateConfigSnapshot = async () => {};"),
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -166,8 +203,9 @@ export const preparePostCorePluginConfig = async () => ({
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
-const blockedPhase =
-  scenario === "doctor-hang" || scenario === "doctor-progress"
+const blockedPhase = repairDeadline
+  ? "plugins"
+  : scenario === "doctor-hang" || scenario === "doctor-progress"
     ? "doctor"
     : scenario === "phase-hang"
       ? "configSnapshot"
@@ -179,9 +217,27 @@ if (blockedPhase) {
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
   stubs.set(
     lifecycleUrl,
-    `import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+    `import { once } from 'node:events';
+import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
   budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+  ${
+    scenario === "phase-hang"
+      ? `run(phase, operation, outcome, custody) {
+    if (phase !== 'configSnapshot') return super.run(phase, operation, outcome, custody);
+    return super.run(phase, operation, outcome, {
+      ...custody,
+      enter: async () => {
+        await custody?.enter?.();
+        const released = once(process.stdin, 'end');
+        process.stdin.resume();
+        console.error('fixture configSnapshot recorded');
+        await released;
+      },
+    });
+  }`
+      : ""
+  }
 }`,
   );
 }
@@ -189,17 +245,31 @@ if (scenario === "human-recovery-plugin-error") {
   stubs.set(
     sourceUrl("./update-cli/update-command-report.ts"),
     `
+import { mock } from 'node:test';
 export async function runInteractiveUpdateFailureAction({ runtime }) {
-  await new Promise(resolve => setTimeout(resolve, 11_000));
+  mock.timers.tick(11_000);
+  console.error('Fixture advanced watchdog clock.');
   runtime.log('Interactive recovery completed.');
   return 'handled';
 }`,
   );
 }
+if (repairDeadline) {
+  const { prepareRepairDeadlineFixture } =
+    await import("./update-finalization-repair.test-support.js");
+  await prepareRepairDeadlineFixture(stubs, sourceUrl, root, installedEntry);
+}
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
-      const url = new URL(specifier, context.parentURL).href.replace(/\.js$/, ".ts");
+      const resolved = new URL(specifier, context.parentURL).href;
+      const url = import.meta.url.endsWith(".js") ? resolved : resolved.replace(/\.js$/u, ".ts");
+      if (
+        [sourceUrl("../utils.ts"), sourceUrl("../utils/sleep.ts")].includes(url) &&
+        recoveryClockOwners.has(context.parentURL ?? "")
+      ) {
+        return { url: recoveryClockUrl, shortCircuit: true };
+      }
       const source = stubs.get(url);
       if (source !== undefined) {
         return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
@@ -208,6 +278,11 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
+
+if (repairDeadline) {
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  await withPluginLifecycleLease({}, async () => {});
+}
 
 const { Command } = await import("commander");
 const { registerUpdateCli } = await import("./update-cli.js");
@@ -219,6 +294,9 @@ const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
+if (scenario === "human-recovery-plugin-error" || scenario === "borrowed-output") {
+  mock.timers.enable({ apis: ["setTimeout"] });
+}
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
 const run = () =>
@@ -251,9 +329,8 @@ const run = () =>
       }
       if (borrowed) {
         if (scenario === "borrowed-output") {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 11_000);
-          });
+          mock.timers.tick(11_000);
+          console.error("Fixture advanced watchdog clock.");
         }
         console.error("Borrowed caller completed.");
       }

@@ -7,11 +7,15 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -45,7 +49,9 @@ describe("worker environment service provision replay", () => {
       throw new Error("enrollment must not run");
     };
     const first = support.createService(provider, { prepareNodeEnrollment: enrollment });
-    await expect(first.create("development", "preflight-replay")).rejects.toMatchObject({
+    await expect(
+      first.createWithRequest({ profileId: "development", idempotencyKey: "preflight-replay" }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
     });
     const original = support.testState.store.list()[0]!;
@@ -108,15 +114,12 @@ describe("worker environment service provision replay", () => {
     const first = support.createService(provider());
 
     await expect(
-      first.create(
-        "development",
-        "request-restart-replay",
-        "large",
-        undefined,
-        undefined,
-        undefined,
-        "os-a",
-      ),
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -136,11 +139,12 @@ describe("worker environment service provision replay", () => {
 
     await first.stop();
     support.testState.service = undefined;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     support.testState.stateDb = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: support.testState.root },
     });
-    support.testState.store = createWorkerEnvironmentStore({
+    support.testState.store = await createWorkerEnvironmentStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
@@ -214,7 +218,10 @@ describe("worker environment service provision replay", () => {
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -233,7 +240,10 @@ describe("worker environment service provision replay", () => {
     const first = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       }),
       prepareNodeEnrollment: async () => {
         throw new Error("first provision reply was lost before node enrollment");
@@ -241,7 +251,11 @@ describe("worker environment service provision replay", () => {
     });
 
     await expect(
-      first.create("development", idempotencyKey, undefined, REQUEST.executionMode),
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey,
+        executionMode: REQUEST.executionMode,
+      }),
     ).rejects.toMatchObject({ code: "provider_failure" });
     events.push("first:failed");
     expect(support.testState.store.get(intent.environmentId)).toMatchObject({
@@ -253,11 +267,12 @@ describe("worker environment service provision replay", () => {
     await first.stop();
     events.push("first:stopped");
     support.testState.service = undefined;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     support.testState.stateDb = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: support.testState.root },
     });
-    support.testState.store = createWorkerEnvironmentStore({
+    support.testState.store = await createWorkerEnvironmentStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
@@ -289,10 +304,13 @@ describe("worker environment service provision replay", () => {
     const restarted = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       }),
       prepareNodeEnrollment: async (record) => {
-        const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+        const enrolled = await support.testState.store.ensureNodeEnrollment(record.environmentId);
         return {
           mode: "connect" as const,
           setupCode: "setup-code",
@@ -315,7 +333,11 @@ describe("worker environment service provision replay", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          capturedExecPolicy: true,
+        },
         commands: [],
       },
     }));
@@ -456,7 +478,10 @@ describe("worker environment service provision replay", () => {
       const workerService = support.createService(provider);
 
       const failure = await workerService
-        .create("development", "request-provision-cleanup")
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "request-provision-cleanup",
+        })
         .catch((error: unknown) => error);
       expect(failure).toMatchObject({
         code: "provider_failure",
@@ -495,11 +520,12 @@ describe("worker environment service provision replay", () => {
 
       await workerService.stop();
       support.testState.service = undefined;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       support.testState.stateDb = openOpenClawStateDatabase({
         env: { OPENCLAW_STATE_DIR: support.testState.root },
       });
-      support.testState.store = createWorkerEnvironmentStore({
+      support.testState.store = await createWorkerEnvironmentStore({
         database: support.testState.stateDb,
         now: () => support.testState.nowMs,
       });
@@ -539,7 +565,10 @@ describe("worker environment service provision replay", () => {
     );
 
     await expect(
-      workerService.create("development", "request-provider-timeout-override"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-provider-timeout-override",
+      }),
     ).resolves.toMatchObject({ state: "ready" });
     expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
   });
@@ -563,7 +592,10 @@ describe("worker environment service provision replay", () => {
     );
 
     await expect(
-      workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
       message: expect.stringContaining("Worker provider provision timeout must be an integer"),
@@ -575,7 +607,73 @@ describe("worker environment service provision replay", () => {
     });
   });
 
+  it("does not invoke a late prepared allocation after replay times out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const entered = createDeferredCore();
+    const settled = createDeferredCore();
+    const lateAllocation = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
+    let preparations = 0;
+    const service = support.createService(
+      support.createProvider({
+        prepareProvision: async () => {
+          if (++preparations === 1) {
+            return async () => {
+              throw new Error("synthetic response lost after allocation");
+            };
+          }
+          entered.resolve();
+          await settled.promise;
+          return lateAllocation;
+        },
+      }),
+      { providerCallTimeoutMs: 25 },
+    );
+    await expect(
+      service.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "replayed-preparation",
+      }),
+    ).rejects.toThrow("response lost after allocation");
+    const replay = service
+      .createWithRequest({ profileId: "development", idempotencyKey: "replayed-preparation" })
+      .catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        entered.promise,
+        replay.then((result) => {
+          throw new Error("Replay ended before provider preparation", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await replay).toMatchObject({ code: "provider_failure" });
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "provisioning",
+        leaseId: null,
+      });
+    } finally {
+      settled.resolve();
+      await replay;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(lateAllocation).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+  });
+
   it("serializes allocation resolution and destroy behind a timed-out provider operation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const provisionEntered = createDeferredCore();
+    const intentCommitted = createDeferredCore();
+    const requestDestroy = support.testState.store.requestDestroy.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "requestDestroy").mockImplementation(async (input) => {
+      const record = await requestDestroy(input);
+      intentCommitted.resolve();
+      return record;
+    });
     const events: string[] = [];
     const operationIds: string[] = [];
     let active = 0;
@@ -603,6 +701,7 @@ describe("worker environment service provision replay", () => {
         active += 1;
         maxActive = Math.max(maxActive, active);
         if (call === 1) {
+          provisionEntered.resolve();
           await firstProvisionPending;
         }
         active -= 1;
@@ -613,35 +712,52 @@ describe("worker environment service provision replay", () => {
       resolveProvisionTimeoutMs: () => 20,
     });
     const workerService = support.createService(provider);
-    const creation = workerService.create("development", "request-provider-timeout-race");
-    const creationResult = expect(creation).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const creation = workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-provider-timeout-race",
+    });
+    const creationResult = creation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     let environmentId: string | undefined;
-    let teardownResult: Promise<void> | undefined;
+    let teardownResult: Promise<unknown> | undefined;
     try {
-      await support.waitForFast(() => expect(events).toEqual(["provision:1:start"]));
+      await Promise.race([
+        provisionEntered.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before provider entry", { cause: result });
+        }),
+      ]);
+      expect(events).toEqual(["provision:1:start"]);
       const queuedEnvironmentId = expectDefined(
         support.testState.store.list()[0],
         "timed-out provision row",
       ).environmentId;
       environmentId = queuedEnvironmentId;
-      const teardown = workerService.destroy(queuedEnvironmentId);
-      teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-      await creationResult;
-      await support.waitForFast(() =>
-        expect(
-          support.testState.store.get(queuedEnvironmentId)?.destroyRequestedAtMs,
-        ).not.toBeNull(),
+      teardownResult = workerService.destroy(queuedEnvironmentId).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
       );
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await creationResult).toMatchObject({
+        error: { code: "provider_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+      });
+      await Promise.race([
+        intentCommitted.promise,
+        teardownResult.then((result) => {
+          throw new Error("Teardown ended before destroy intent committed", { cause: result });
+        }),
+      ]);
       expect(originalProvisionCalls).toBe(1);
       expect(destroy).not.toHaveBeenCalled();
       expect(maxActive).toBe(1);
     } finally {
-      finishFirstProvision?.();
+      finishFirstProvision();
+      await Promise.all([creationResult, teardownResult]);
     }
 
-    await teardownResult;
+    expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
     const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
     expect(operationIds).toHaveLength(1);
     expect(new Set(operationIds).size).toBe(1);
@@ -683,7 +799,10 @@ describe("worker environment service provision replay", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.create("development", "request-lost-provision"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-lost-provision",
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -787,7 +906,12 @@ describe("worker environment service provision replay", () => {
       support.createProvider({ provision: async () => result as never }),
     );
 
-    await expect(workerService.create("development", "request-malformed")).rejects.toMatchObject({
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-malformed",
+      }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
       message: expect.stringContaining(error),
     } satisfies Partial<WorkerEnvironmentServiceError>);

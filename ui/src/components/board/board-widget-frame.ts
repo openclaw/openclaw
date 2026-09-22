@@ -197,6 +197,11 @@ export class BoardWidgetFrameLifecycle {
     if (this.host.active()) {
       this.connect();
       this.sandboxHost?.setActive(true);
+      // The inner document may have finished loading while this tab was hidden.
+      const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+      if (frame) {
+        this.postBoardHostState(frame);
+      }
     } else {
       // Hidden dashboard cells retain their iframe and sandbox handshake;
       // terminal disconnect is the only lifecycle edge that disposes them.

@@ -66,8 +66,34 @@ describe("config factory writer boundary", () => {
         config: { sessionCatalog: { enabled: false } },
       });
       expect(saved.plugins?.installs).toBeUndefined();
+      if (enabled !== true) {
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.warnings).not.toContainEqual(
+          expect.objectContaining({ path: "plugins.entries.codex" }),
+        );
+      }
     },
   );
+
+  it("reads existing first-write catalog opt-outs without disabled-plugin warnings", async () => {
+    const { io, configPath } = await fixture();
+    const config = {
+      gateway: { mode: "local" },
+      plugins: {
+        entries: { codex: { config: { sessionCatalog: { enabled: false } } } },
+      },
+    };
+    const raw = JSON.stringify(config);
+    await fs.writeFile(configPath, raw);
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.warnings).not.toContainEqual(
+      expect.objectContaining({ path: "plugins.entries.codex" }),
+    );
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+  });
 
   it("preserves an existing unversioned configuration's omitted catalog preferences", async () => {
     const { io, configPath } = await fixture();

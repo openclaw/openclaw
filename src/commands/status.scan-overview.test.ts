@@ -1,9 +1,14 @@
 // Status scan overview tests cover overview collection and gateway/runtime summary inputs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
 const sqliteWal = createSqliteWalHealth();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
@@ -98,6 +103,7 @@ function firstChannelsTableCall(): ChannelsTableCall {
 describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
 
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
@@ -157,6 +163,7 @@ describe("collectStatusScanOverview", () => {
             degradedSecretOwners: [],
             degradedPlugins: [],
             startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+            installationReplacementWarning: "Installation replaced; draining before handoff.",
             sqliteWal,
           }
         : { channelAccounts: {} },
@@ -168,7 +175,7 @@ describe("collectStatusScanOverview", () => {
   it("uses gateway fallback overrides for channels.status when requested", async () => {
     const result = await collectStatusScanOverview({
       commandName: "status --all",
-      opts: { timeoutMs: 1234 },
+      opts: createStatusGatewayProbeBudget(1234),
       showSecrets: false,
       useGatewayCallOverridesForChannelsStatus: true,
     });
@@ -192,12 +199,15 @@ describe("collectStatusScanOverview", () => {
     expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
       "Retained legacy state; run openclaw doctor --fix.",
     );
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      "Installation replaced; draining before handoff.",
+    );
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: { timeoutMs: 1234 },
+      opts: createStatusGatewayProbeBudget(1234),
       showSecrets: false,
       includeLiveChannelStatus: false,
       includeChannelSetupRuntimeFallback: false,
@@ -243,7 +253,7 @@ describe("collectStatusScanOverview", () => {
     });
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       showSecrets: true,
     });
 
@@ -292,7 +302,7 @@ describe("collectStatusScanOverview", () => {
 
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       showSecrets: false,
       includeChannelsData: false,
     });
@@ -305,13 +315,26 @@ describe("collectStatusScanOverview", () => {
     expect(result.runtimeDegradation).toBeNull();
   });
 
-  it("reuses runtime degradation from a successful fallback probe without another status RPC", async () => {
+  it("reuses runtime status from a successful fallback probe without another status RPC", async () => {
     const bootstrap = await mocks.createStatusScanCoreBootstrap();
     const gatewaySnapshot = await bootstrap.gatewayProbePromise;
     const status = {
+      heartbeat: {
+        defaultAgentId: "main",
+        agents: [
+          {
+            agentId: "main",
+            enabled: true,
+            every: "30m",
+            everyMs: 1_800_000,
+            waitingForRoute: false,
+          },
+        ],
+      },
       degradedSecretOwners: [],
       degradedPlugins: [],
       startupMigrationWarning: "fallback warning",
+      installationReplacementWarning: "Replacement detected by the running Gateway.",
       sqliteWal,
     };
     mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
@@ -323,12 +346,16 @@ describe("collectStatusScanOverview", () => {
     });
     const result = await collectStatusScanOverview({
       commandName: "status",
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       showSecrets: false,
       includeChannelsData: false,
     });
     expect(result.runtimeDegradation?.startupMigrationWarning).toBe("fallback warning");
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      status.installationReplacementWarning,
+    );
     expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
+    expect(result.runtimeDegradation).toMatchObject({ heartbeat: status.heartbeat });
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.cfg).toEqual({ session: {} });
   });

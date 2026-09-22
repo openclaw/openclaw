@@ -20,6 +20,7 @@ export type ModelDirectiveSelection = {
   provider: string;
   model: string;
   isDefault: boolean;
+  resetToDefault?: true;
   alias?: string;
 };
 
@@ -181,7 +182,7 @@ export function resolveModelDirectiveSelection(params: {
       cfg: params.cfg ?? {},
       catalog: [],
       defaultProvider,
-      defaultModel,
+      defaultModel: { provider: defaultProvider, model: defaultModel },
       agentId: params.agentId,
     });
 

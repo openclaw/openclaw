@@ -125,11 +125,21 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 - Messaging tool duplicates are removed from the final payload list.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
-If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors and pre-tool progress do not count as a final answer. This pass does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
+
+If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+
+A confirmed delivery prevents duplicate generation. Pending delivery or continuation work retains completion ownership without being marked delivered; rejected sends, unflushed deferred text, and missing delivery callbacks are not delivery proof. `NO_REPLY` does not retract text already delivered. Pending tools, accepted child runs, and yielded work keep their existing owners, and assistant errors and aborts are not intentional silence.
 
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
 ## Compaction and retries
+
+When an OpenAI Responses request hits its output limit while generating a tool
+call, the built-in harness finishes already admitted tools and retries from their
+recorded results. The unfinished call never executes. Recovery uses the existing
+bounded session retry budget and remains cancellable; refusals and inconsistent
+terminal responses do not qualify for this continuation.
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
 

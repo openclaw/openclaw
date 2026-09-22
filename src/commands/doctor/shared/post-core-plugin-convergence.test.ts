@@ -930,7 +930,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.errored).toBe(false);
   });
 
-  it("keeps an unowned package read error visible for startup to block", async () => {
+  it("keeps an unowned package read error visible as a repair warning", async () => {
     const packageDir = "/tmp/openclaw-state/npm/node_modules/untracked";
     mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
       async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
@@ -946,8 +946,8 @@ describe("runPostCorePluginConvergence", () => {
 
     expect(result.warnings).toStrictEqual([
       {
-        reason: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
-        message: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
+        reason: "Failed to repair installed OpenClaw host peer links: EACCES: permission denied",
+        message: "Failed to repair installed OpenClaw host peer links: EACCES: permission denied",
         guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);

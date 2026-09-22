@@ -115,6 +115,10 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
   </Tab>
 </Tabs>
 
+CLI entries need a nonblank `command` and a nonempty `args` list. Arguments remain literal strings with optional template interpolation; existing literal file paths and custom wrapper arguments are supported. Pass the attachment through a template such as `{{AttachmentPath}}` or your command's existing input contract. Empty argument lists are not supported because OpenClaw does not feed attachments to CLI stdin. `openclaw doctor` reports missing commands or args with the exact config path and a manual fix; it does not invent commands or rewrite these entries. At runtime, an incomplete entry records a failure without launching the binary, and the next configured model is tried. If none succeeds, the attachment gets a failure outcome and a warning is logged. Config validation remains permissive for these fields so an existing config can still start the Gateway after an update.
+
+Remote attachments are staged as temporary files only when a CLI needs a file path. The media-understanding run owns those files and removes them after processing; a failed staging attempt leaves other staged attachments available. Existing local attachments are read in place and retained.
+
 ### Provider credentials
 
 Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
@@ -254,6 +258,8 @@ Per-capability `attachments` controls which attachments are processed:
 </ParamField>
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
+
+Local attachments stay within the session's allowed media roots. Directory aliases such as macOS `/tmp` and `/private/tmp` are accepted when the opened file remains inside those roots; they do not grant access to sibling sandbox workspaces.
 
 ### File-attachment extraction
 
@@ -414,6 +420,11 @@ When media understanding runs, `/status` includes a per-capability summary line:
 ```
 📎 Media: image ok (openai/gpt-6-astra) · audio ok (whisper-cli observed=metal)
 ```
+
+Auto-detected local audio tools report their resolved executable path as the
+result's `model`, so status and verbose summaries can include that path alongside
+the tool family and backend. Explicit CLI entries retain their authored command;
+preflight inventory keeps the logical tool names.
 
 For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
 

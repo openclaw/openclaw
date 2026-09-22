@@ -8,7 +8,7 @@ read_when:
 
 This page covers `openclaw plugins install`: every supported source locator,
 the trust and install-policy rules that gate an install, and the marketplace
-surfaces it accepts.
+surfaces it accepts. It also explains how to enable installed plugins.
 
 ## Install
 
@@ -70,12 +70,23 @@ package name matches an official plugin. This exemption does not grant OAuth,
 operating-system, or runtime tool permissions. See
 [capability consent](/plugins/manage-plugins#capability-consent).
 
+Local copies selected through `plugins.load.paths`, including `--link` installs,
+do not inherit official package trust. `--force` does not change that boundary.
+If a channel requires trusted plugin state, such as its durable ingress queue,
+startup records the refusal and leaves the channel blocked without automatic
+retries. Doctor and `openclaw update status` show the running Gateway's recorded
+failure, including the source and remedy. Install the official npm package or
+ClawHub listing and remove the local override from `plugins.load.paths`, then
+restart the channel.
+
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no
 local state inspection, config mutation, package install, or plugin runtime
 load. Results include the ClawHub package name, family, channel, version,
 summary, and an install hint such as `openclaw plugins install clawhub:<package>`.
+Human output adds `v` only to numeric version labels, preserving existing prefixes
+and build names. JSON output keeps the original version values.
 
 <Note>
 Default official installs follow the catalog's declared source order.
@@ -138,6 +149,13 @@ When the existing host config is valid but the newly installed plugin's own conf
 `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also permits replacing the existing install. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
 
 Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
+
+When a managed npm plugin lacks package metadata or required dependencies, status
+and management report **install incomplete**. The finding and Doctor give
+`openclaw plugins install <package-selector> --force`, using the recorded package
+selector when available. A complete plugin can still require consent for
+capabilities you have not accepted. Add
+`--accept-capabilities` only after reviewing that consent request.
 
 If installation ownership ends during a backup copy, cleanup stops and preserves the complete backup and remaining original files. Failed restoration reports the recovery path. Keep those files until you have checked the current install; an older transaction cannot restore over a newer install or use a substituted backup.
 
@@ -286,6 +304,24 @@ and [Configuration reference](/gateway/config-extensions#plugins).
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in the managed plugin index while keeping the default behavior unpinned.
 </Note>
+
+## Enable installed plugins
+
+Enable one or more installed plugins in the order supplied:
+
+```bash
+openclaw plugins enable codex cua-computer
+openclaw plugins enable <ids...> --accept-capabilities
+```
+
+Each plugin keeps its own policy and capability-consent checks. The command stops
+at the first failure; earlier successful enables remain committed, and later IDs
+are not processed. With a local Gateway running, it applies each change through
+that Gateway. Otherwise, changes are saved for the next Gateway start.
+
+`openclaw plugins disable <ids...>` follows the same input order and stops at
+the first failure, keeping earlier changes. Both commands preserve repeated IDs;
+each operation sees the config committed by the previous one.
 
 `plugins enable` respects global disablement, the denylist, and restrictive
 allowlists whether the Gateway is running or stopped. Policy rejection happens

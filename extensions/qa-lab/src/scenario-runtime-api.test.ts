@@ -1,6 +1,7 @@
 // Qa Lab tests cover scenario runtime api plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 
@@ -103,7 +104,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = api.injectInboundMessage({
+    const inbound = await api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
@@ -126,5 +127,78 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(readSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes scenario injection through a factory-created transport", async () => {
+    const state = createQaBusState();
+    const providerState = createQaBusState();
+    const sendInbound = vi.fn(async (input: Parameters<QaTransportAdapter["sendInbound"]>[0]) =>
+      providerState.addInboundMessage(input),
+    );
+    const created = await createQaTransportAdapter(
+      {
+        channelId: "discord",
+        driver: "crabline",
+        outputDir: ".artifacts/qa-e2e/scenario-runtime-api",
+        state,
+      },
+      [
+        {
+          id: "crabline-test",
+          matches: () => true,
+          async create() {
+            return {
+              id: "discord",
+              label: "Crabline Discord",
+              accountId: "sut",
+              requiredPluginIds: [],
+              supportedActions: [],
+              sendInbound,
+              createGatewayConfig: () => ({}),
+              async waitReady() {},
+              buildAgentDelivery: ({ target }: { target: string }) => ({
+                channel: "discord",
+                to: target,
+                replyChannel: "discord",
+                replyTo: target,
+              }),
+              async handleAction() {},
+              createReportNotes: () => [],
+            };
+          },
+        },
+      ],
+    );
+    const api = createQaScenarioRuntimeApi({
+      env: { lab: { baseUrl: "http://127.0.0.1:1234" }, transport: created.adapter },
+      scenario: {
+        id: "factory-inbound",
+        title: "Factory inbound",
+        surface: "channel",
+        objective: "test provider delivery",
+        successCriteria: ["provider receives inbound"],
+        sourcePath: "qa/scenarios/factory-inbound.yaml",
+        execution: { kind: "flow", flow: { steps: [] } },
+      },
+      deps: {
+        sleep: vi.fn(async () => undefined),
+        waitForTransportReady: vi.fn(),
+      },
+      constants,
+    });
+
+    const inbound = await api.injectInboundMessage({
+      accountId: "sut",
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "qa-operator",
+      text: "provider ingress",
+    });
+
+    expect(sendInbound).toHaveBeenCalledOnce();
+    expect(providerState.readMessage({ accountId: "sut", messageId: inbound.id })).toMatchObject({
+      text: "provider ingress",
+    });
+    expect(state.getSnapshot().messages).toEqual([]);
+    await created.cleanupWithoutGateway();
   });
 });

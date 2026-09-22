@@ -465,6 +465,46 @@ releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   }
 });
 
+releasePolicyIt(
+  "continues hydration when changed shallow boundaries reduce visible history",
+  () => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 8,
+      targetDistance: 1000,
+      related: true,
+    });
+    const marker = join(fixture.root, "count-observed");
+    // Git can replace shallow cuts when it reaches merged history, making fewer
+    // commits visible even though the frontier changed. Replay that observed
+    // count transition while keeping fetches and the final ancestry proof real.
+    const proxy = writeGitProxy(
+      fixture,
+      "non-monotonic-count-git",
+      `if [[ " $* " == *" rev-list --count "* && ! -e "$COUNT_MARKER" ]]; then
+  count=$("$REAL_GIT" "$@") || exit $?
+  : > "$COUNT_MARKER"
+  echo "$((count + 10000))"
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      expectPolicySuccess(
+        runReleaseAncestry(checkout, "merge-base", {
+          COUNT_MARKER: marker,
+          PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+          REAL_GIT: proxy.realGit,
+        }),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
+
 releasePolicyIt("rejects a successful release history deepen that makes no progress", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,
@@ -780,17 +820,22 @@ linuxIt.each([
 );
 
 linuxIt(
-  "keeps the base action's real 30-second timeout and drains before recovery",
+  "keeps the base action's 30-second fetch deadline and drains before recovery",
   async () => {
     const report = await runCiGitStep({
       action: "ensure-base-commit",
       baseAvailableAfter: 1,
       fetchResults: ["hang"],
       realClock: true,
+      readyFetchClockAdvanceSeconds: 30,
     });
     expect(report.code, report.output).toBe(0);
     expect(report.output).toContain("exact fetch failed");
     expect(report.readyAttempts).toEqual([1]);
+    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
+      "fixture fetch timeout: 30",
+    ]);
+    expect(report.fetchClockAdvancedSeconds).toBe(30);
   },
   55_000,
 );
@@ -1040,23 +1085,33 @@ posixIt.each(sanityFetchCases)(
 );
 
 posixIt.each([
-  { label: "real 30-second fetch timeout", fetchResults: ["hang", 0], warnings: 1 },
-  { label: "real five-second backoff", fetchResults: [137, 0], warnings: 1 },
+  { label: "30-second fetch deadline", fetchResults: ["hang", 0], warnings: 1 },
+  { label: "five-second backoff", fetchResults: [137, 0], warnings: 1 },
 ] as const)(
   "workflow sanity retains $label",
   async ({ fetchResults, warnings }) => {
-    const started = performance.now();
+    const readyFetchClockAdvanceSeconds = fetchResults[0] === "hang" ? 30 : undefined;
     const report = await sanity({
       fetchResults: [...fetchResults],
       realClock: true,
+      virtualBackoff: true,
       cooperativeTrees: true,
+      readyFetchClockAdvanceSeconds,
     });
     expect(report.code, report.output).toBe(0);
     expect(report.fetches).toHaveLength(2);
     expect(report.output.match(/; retrying/gu) ?? []).toHaveLength(warnings);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(
-      fetchResults[0] === "hang" ? 35_000 : 5_000,
-    );
+    expect(report.fetchClockAdvancedSeconds).toBe(readyFetchClockAdvanceSeconds);
+    if (readyFetchClockAdvanceSeconds !== undefined) {
+      expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
+        "fixture fetch timeout: 30",
+        "fixture fetch timeout: 30",
+      ]);
+    }
+    expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(["fixture backoff: 5"]);
+    const elapsed =
+      (report.backoffClockAdvancedSeconds + (report.fetchClockAdvancedSeconds ?? 0)) * 1000;
+    expect(elapsed).toBeGreaterThanOrEqual(fetchResults[0] === "hang" ? 35_000 : 5_000);
   },
   55_000,
 );

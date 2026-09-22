@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
+import {
+  getConversationProgressSnapshot,
+  recordConversationProgressReceipt,
+} from "../config/sessions/conversation-delivery-store.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -208,7 +212,7 @@ describe("doctor canonical session-key retention repair", () => {
     });
   });
 
-  it("copies a lone cross-store winner's normalized delivery key", async () => {
+  it("copies a lone cross-store winner's normalized delivery key and retained progress", async () => {
     await withStateDirEnv(
       "openclaw-doctor-canonical-cross-store-delivery-",
       async ({ stateDir }) => {
@@ -237,21 +241,30 @@ describe("doctor canonical session-key retention repair", () => {
             "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)",
           )
           .run();
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('winner-operation', 'turn', 'winner-conversation', 'agent:main:main', 'hash', 'sent', 10, 10)",
-          )
-          .run();
+        const sourceScope = { agentId: "ops", env, storePath: opsStore };
+        const snapshot = { lines: ["Retained progress"], label: "Working" };
+        const progressInput = {
+          conversationRef: "winner-conversation",
+          message: "Progress",
+          platformMessageId: "progress-message",
+          progressSnapshot: snapshot,
+          assertCurrent: () => {},
+        };
+        recordConversationProgressReceipt(sourceScope, {
+          ...progressInput,
+          operationId: "winner-operation",
+          sourceSessionKey: "agent:main:main",
+        });
         sourceDatabase.db
           .prepare(
             "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)",
           )
           .run();
-        sourceDatabase.db
-          .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('unrelated-operation', 'turn', 'winner-conversation', 'agent:ops:other', 'unrelated-hash', 'sent', 10, 10)",
-          )
-          .run();
+        recordConversationProgressReceipt(sourceScope, {
+          ...progressInput,
+          operationId: "unrelated-operation",
+          sourceSessionKey: "agent:ops:other",
+        });
 
         expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
           foundGroups: 1,
@@ -277,6 +290,17 @@ describe("doctor canonical session-key retention repair", () => {
             .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
             .all(),
         ).toEqual([{ operation_id: "unrelated-operation" }]);
+        const destinationScope = { agentId: "main", env, storePath: mainStore };
+        expect(getConversationProgressSnapshot(destinationScope, "winner-operation")).toEqual(
+          snapshot,
+        );
+        expect(
+          getConversationProgressSnapshot(destinationScope, "unrelated-operation"),
+        ).toBeUndefined();
+        expect(getConversationProgressSnapshot(sourceScope, "winner-operation")).toBeUndefined();
+        expect(getConversationProgressSnapshot(sourceScope, "unrelated-operation")).toEqual(
+          snapshot,
+        );
       },
     );
   });

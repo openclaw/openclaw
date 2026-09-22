@@ -272,7 +272,7 @@ export function loadLegacySessionStore(
         profile: "legacy-read",
         maintenance,
         initialUnarchivedCount: beforeCount,
-        preserveKeys: preserveSessionKeys,
+        readPreserveKeys: () => preserveSessionKeys,
         log: false,
         readAgeCandidates: () => sessionStore,
         readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),

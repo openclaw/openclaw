@@ -1,5 +1,8 @@
 import type { ModelAuthStatusProvider } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
+
+registerModelControlsEnglish();
 
 export type ModelProviderAuthLabel = {
   kind: "subscription" | "api" | "missing";

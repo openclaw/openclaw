@@ -120,5 +120,7 @@ export function collectMediaImageRefs(
 // facts that will actually hydrate an image count; described/remote-only facts
 // whose hydration is suppressed must not block text-only prompts.
 export function hasHydratableMediaImages(media?: readonly MediaFact[]): boolean {
-  return collectMediaImageRefs(media).some((ref) => ref?.hydrate === true);
+  return normalizeMediaFacts(media)
+    .map(mediaFactToImageRef)
+    .some((ref) => ref?.hydrate === true);
 }

@@ -56,6 +56,9 @@ it.each([
     const cleanupSettled = createDeferred();
     const nestedStarted = createDeferred();
     const finishNested = createDeferred();
+    const initialWriterStarted = createDeferred();
+    const finishInitialWriter = createDeferred();
+    let initialWriterDisposals = 0;
     const warnings: string[] = [];
     const cleanupScope = createAgentCleanupScope();
     let selected: Registration | undefined;
@@ -148,6 +151,15 @@ it.each([
         }
         selected = record;
         expect(record.read()).toBe(42);
+        input.onInitialWriterPrepared({
+          async [Symbol.asyncDispose]() {
+            initialWriterDisposals += 1;
+            initialWriterStarted.resolve();
+            expect(getPluginRegistryForContext()).toBe(prepared.pluginRegistry);
+            await finishInitialWriter.promise;
+            expect(record.read()).toBe(42);
+          },
+        });
         workSignal = getAsyncWorkSignal();
         if (cliResources) {
           workSignal?.addEventListener(
@@ -284,6 +296,10 @@ it.each([
         throw new Error("Cleanup did not start its nested work");
       }
       await expect(nested).resolves.toBe(42);
+      await initialWriterStarted.promise;
+      expect(selected.disposed).toBe(0);
+      expect(initialWriterDisposals).toBe(1);
+      finishInitialWriter.resolve();
       await selected.close.promise;
       await parentClose;
       if (cliResources) {
@@ -309,6 +325,7 @@ it.each([
     } finally {
       finishCleanup.resolve();
       finishNested.resolve();
+      finishInitialWriter.resolve();
       await Promise.allSettled([logical, actualCleanup, nested]);
       admission?.close();
       await parentClose;

@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
   renderAttachmentFileIcon,
@@ -8,6 +9,8 @@ import {
   type AttachmentFileVisualMode,
 } from "./chat-attachment-file-icon.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
+
+registerChatMessageMetadataEnglish();
 
 type AttachmentCardKind = Extract<
   AttachmentItem["attachment"]["kind"],
@@ -21,6 +24,7 @@ export type AttachmentCardHeaderOptions = {
   sizeBytes?: number;
   downloadHref?: string;
   downloadPending?: boolean;
+  onDownload?: () => void;
   loading?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
@@ -60,11 +64,13 @@ export function openAttachmentCardFromClick(
   if (!onOpen || event.defaultPrevented) {
     return;
   }
-  const target = event.target;
-  const card = event.currentTarget;
-  if (target instanceof Element && card instanceof Element) {
-    const interactive = target.closest(attachmentCardInteractiveSelector);
-    if (interactive && card.contains(interactive)) {
+  // A control can replace its SVG during this event (for example mute/unmute).
+  // The dispatch path retains the original button even after its icon detaches.
+  for (const target of event.composedPath()) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (target instanceof Element && target.matches(attachmentCardInteractiveSelector)) {
       return;
     }
   }
@@ -161,20 +167,31 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadHref || options.downloadPending
-            ? html`<a
+          options.onDownload
+            ? html`<button
+                type="button"
                 class=${`${downloadClass} ${skeleton}`}
-                href=${options.downloadPending ? nothing : options.downloadHref}
-                aria-disabled=${options.downloadPending ? "true" : nothing}
-                role="link"
-                download=${options.label}
-                target="_blank"
-                rel="noreferrer"
+                ?disabled=${options.downloadPending}
                 aria-label=${downloadTitle}
                 title=${downloadTitle}
-                >${icons.download}</a
-              >`
-            : null
+                @click=${options.onDownload}
+              >
+                ${icons.download}
+              </button>`
+            : options.downloadHref || options.downloadPending
+              ? html`<a
+                  class=${`${downloadClass} ${skeleton}`}
+                  href=${options.downloadPending ? nothing : options.downloadHref}
+                  aria-disabled=${options.downloadPending ? "true" : nothing}
+                  role="link"
+                  download=${options.label}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label=${downloadTitle}
+                  title=${downloadTitle}
+                  >${icons.download}</a
+                >`
+              : null
         }
         ${
           hasOpenAction

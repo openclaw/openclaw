@@ -11,6 +11,7 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { listSessionPendingInputs, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -30,7 +31,6 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
@@ -78,7 +78,7 @@ const VISION_AGENT_MODEL: GatewayModelFixture = {
   input: ["text", "image"],
 };
 
-function expectChannels(call: Record<string, unknown>, channel: string) {
+function expectChannels(call: Record<string, unknown>, channel: string | undefined) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
   const runContext = call.runContext as { messageChannel?: string } | undefined;
@@ -382,7 +382,7 @@ describe("gateway server agent", () => {
     const call = await waitForAgentCommandCall("idem-agent-subkey");
     expect(call.sessionKey).toBe("agent:main:subagent:abc");
     expect(call.sessionId).toBe("sess-sub");
-    expectChannels(call, "webchat");
+    expectChannels(call, undefined);
     expect(call.deliver).toBe(false);
     expect(call.to).toBeUndefined();
   });
@@ -760,14 +760,29 @@ describe("gateway server agent", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  test("agent rejects malformed agent-prefixed session keys", async () => {
+  test.each([
+    {
+      name: "malformed-key",
+      sessionKey: "agent:main",
+      agentId: undefined,
+      message: "malformed session key",
+    },
+    {
+      name: "unrepresentable-agent",
+      sessionKey: "agent:main:main",
+      agentId: "!!!",
+      message: 'Unknown agent id "!!!"',
+    },
+  ])("agent rejects invalid selectors: $name", async ({ name, sessionKey, agentId, message }) => {
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
-      sessionKey: "agent:main",
-      idempotencyKey: "idem-agent-malformed-key",
+      sessionKey,
+      agentId,
+      idempotencyKey: `idem-agent-invalid-${name}`,
     });
     expect(res.ok).toBe(false);
-    expect(res.error?.message).toContain("malformed session key");
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toContain(message);
 
     const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
@@ -861,7 +876,7 @@ describe("gateway server agent", () => {
     });
 
     expect(call.sessionKey).toBe("agent:main:main");
-    expectChannels(call, "webchat");
+    expectChannels(call, undefined);
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
     expectBaseImageForwarded(call.images);

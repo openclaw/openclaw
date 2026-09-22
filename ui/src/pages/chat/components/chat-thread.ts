@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { githubLinkPrefetch } from "../../../components/github-link-prefetch.ts";
+import { linkReaderPrefetch } from "../../../components/link-reader-prefetch.ts";
 import { renderLoadingState } from "../../../components/loading-state.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -21,6 +21,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
+import "./chat-comment-pins.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
@@ -31,6 +32,8 @@ import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
+
+const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
 export function renderChatThread(
   props: ChatThreadProps,
@@ -46,6 +49,14 @@ function renderTranscriptShell(
   transcript: ChatTranscriptSession,
 ): TemplateResult {
   const projection = projectChatTranscript(props, transcript);
+  // Empty/loading shells do not commit virtual rows. Record that baseline so
+  // the first submitted turn animates, but initial loaded history stays still.
+  if (projection.isEmpty || projection.showLoadingSkeleton) {
+    transcript.entryAnimations.sync(
+      EMPTY_ENTRY_KEYS,
+      props.announceTranscript !== false && !projection.searchOpen && !props.loading,
+    );
+  }
   // The sentinel is an out-of-flow IntersectionObserver target pinned over the
   // virtualized rows; it stays empty because content here paints on top of real
   // messages. The visible affordance is the in-flow history boundary header.
@@ -95,7 +106,7 @@ function renderTranscriptShell(
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
       ${markdownBlocks(props.transcriptVisible ?? true)}
-      ${githubLinkPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
+      ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);
@@ -160,6 +171,14 @@ function renderTranscriptShell(
         requestUpdate: props.onRequestUpdate ?? (() => {}),
       })}
       ${transcriptContents}
+      ${
+        props.commentAttachments?.attachments?.some((attachment) => attachment.selectionAnnotation)
+          ? html`<openclaw-chat-comment-pins
+              .props=${props.commentAttachments}
+              .sessionKey=${props.sessionKey}
+            ></openclaw-chat-comment-pins>`
+          : nothing
+      }
     </div>
   `;
 }

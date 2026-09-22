@@ -28,12 +28,17 @@ import { detectMime } from "./openclaw-runtime-io.js";
 import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
-} from "./openclaw-runtime-memory.js";
+} from "./openclaw-runtime-paths.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-export { parseEmbedding, cosineSimilarity } from "./embedding-vector.js";
+export {
+  parseEmbedding,
+  cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
+} from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,

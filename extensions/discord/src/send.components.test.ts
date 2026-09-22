@@ -55,7 +55,7 @@ let sendDiscordComponentMessage: typeof import("./send.components.js").sendDisco
 
 function resetClassicMocks(): void {
   sendMessageDiscordMock.mockReset();
-  sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
+  sendMessageDiscordMock.mockResolvedValue({ messageId: "1001", channelId: "chan-1" });
   loadOutboundMediaFromUrlMock.mockReset();
   loadOutboundMediaFromUrlMock.mockResolvedValue({
     buffer: Buffer.from("media"),
@@ -114,7 +114,7 @@ describe("sendDiscordComponentMessage", () => {
   it("passes allowed mentions through component sends", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
 
     await sendDiscordComponentMessage(
       "channel:chan-1",
@@ -150,7 +150,7 @@ describe("sendDiscordComponentMessage", () => {
       type: ChannelType.DM,
       recipients: [{ id: "user-1" }],
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "dm-1" });
 
     await sendDiscordComponentMessage(
       "channel:dm-1",
@@ -183,7 +183,7 @@ describe("sendDiscordComponentMessage", () => {
     async ({ operation, registration }) => {
       const { rest, postMock, patchMock, getMock } = makeDiscordRest();
       getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
-      const platformResult = { id: "msg-progress", channel_id: "chan-1" };
+      const platformResult = { id: "1002", channel_id: "chan-1" };
       postMock.mockResolvedValueOnce(platformResult);
       patchMock.mockResolvedValueOnce(platformResult);
       let resolveRegistration!: () => void;
@@ -200,7 +200,7 @@ describe("sendDiscordComponentMessage", () => {
       const pendingDelivery =
         operation === "send"
           ? sendDiscordComponentMessage("channel:chan-1", spec, opts)
-          : editDiscordComponentMessage("channel:chan-1", "msg-progress", spec, opts);
+          : editDiscordComponentMessage("channel:chan-1", "1002", spec, opts);
       const outcome = pendingDelivery.then(
         (value) => {
           finished = true;
@@ -217,7 +217,7 @@ describe("sendDiscordComponentMessage", () => {
         expect(operation === "send" ? postMock : patchMock).toHaveBeenCalledOnce();
         if (operation === "send") {
           expect(onDeliveryResult).toHaveBeenCalledOnce();
-          expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("msg-progress");
+          expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("1002");
         } else {
           expect(onDeliveryResult).not.toHaveBeenCalled();
         }
@@ -231,9 +231,9 @@ describe("sendDiscordComponentMessage", () => {
           const result = await outcome;
           expect(result).toMatchObject({
             value: {
-              messageId: "msg-progress",
+              messageId: "1002",
               channelId: "chan-1",
-              receipt: { platformMessageIds: ["msg-progress"] },
+              receipt: { platformMessageIds: ["1002"] },
             },
           });
           if (operation === "send") {
@@ -292,7 +292,7 @@ describe("sendDiscordComponentMessage", () => {
     try {
       await editDiscordComponentMessage(
         "channel:chan-1",
-        "msg1",
+        "1001",
         {
           text: "Updated picker",
           blocks: [
@@ -315,7 +315,7 @@ describe("sendDiscordComponentMessage", () => {
       );
 
       const patch = loopback.requests.find((request) => request.method === "PATCH");
-      expect(patch?.path).toBe("/v10/channels/chan-1/messages/msg1");
+      expect(patch?.path).toBe("/v10/channels/chan-1/messages/1001");
       const body = JSON.parse(patch?.body ?? "{}") as {
         flags?: unknown;
         components?: Array<{ components?: Array<{ components?: Array<{ type?: number }> }> }>;
@@ -375,7 +375,7 @@ describe("sendDiscordComponentMessage", () => {
         if (operation === "send") {
           await sendDiscordComponentMessage("channel:789", spec, opts);
         } else {
-          await editDiscordComponentMessage("channel:789", "message-1", spec, opts);
+          await editDiscordComponentMessage("channel:789", "1003", spec, opts);
         }
         const request = loopback.requests.find(
           (entry) => entry.method === (operation === "send" ? "POST" : "PATCH"),
@@ -408,11 +408,11 @@ describe("sendDiscordComponentMessage", () => {
       type: ChannelType.GuildText,
       id: "273512430271856640",
     });
-    patchMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+    patchMock.mockResolvedValueOnce({ id: "1001", channel_id: "273512430271856640" });
 
     await editDiscordComponentMessage(
       "273512430271856640",
-      "msg1",
+      "1001",
       {
         text: "Updated picker",
         blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
@@ -427,12 +427,12 @@ describe("sendDiscordComponentMessage", () => {
     );
 
     expect(patchMock).toHaveBeenCalledTimes(1);
-    expect(readMockCall(patchMock, 0)[0]).toContain("/channels/273512430271856640/messages/msg1");
+    expect(readMockCall(patchMock, 0)[0]).toContain("/channels/273512430271856640/messages/1001");
   });
 
   it("registers a prebuilt component message against an edited message id", async () => {
     await registerBuiltDiscordComponentMessage({
-      messageId: "msg1",
+      messageId: "1001",
       ttlMs: 120_000,
       buildResult: {
         components: [],
@@ -444,7 +444,7 @@ describe("sendDiscordComponentMessage", () => {
     expect(registerMock).toHaveBeenCalledWith({
       entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
       modals: [{ id: "modal-1", title: "Modal", fields: [] }],
-      messageId: "msg1",
+      messageId: "1001",
       ttlMs: 120_000,
     });
   });
@@ -455,7 +455,7 @@ describe("sendDiscordComponentMessage", () => {
       type: ChannelType.DM,
       recipients: [{ id: "user-1" }],
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "dm-1" });
 
     await sendDiscordComponentMessage(
       "channel:dm-1",
@@ -596,7 +596,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
 
     await sendDiscordComponentMessage(
       "channel:chan-1",
@@ -623,7 +623,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       title?: string;
       fields?: Array<{ label?: string }>;
     }>;
-    expect(registration.messageId).toBe("msg1");
+    expect(registration.messageId).toBe("1001");
     expect(modals).toHaveLength(1);
     expect(modals[0]?.title).toBe("Feedback");
     expect(modals[0]?.fields).toHaveLength(1);
@@ -666,7 +666,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("png"),
       contentType: "image/png",
@@ -703,7 +703,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("png"),
       contentType: "image/png",
@@ -739,7 +739,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("png"),
       contentType: "image/png",
@@ -778,7 +778,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("opaque"),
       ...(contentType ? { contentType } : {}),
@@ -812,7 +812,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "273512430271856640",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "273512430271856640" });
 
     await sendDiscordComponentMessage(
       "273512430271856640",
@@ -857,7 +857,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
 
     await sendDiscordComponentMessage(
       "channel:chan-1",
@@ -883,7 +883,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       type: ChannelType.GuildText,
       id: "chan-1",
     });
-    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
 
     await sendDiscordComponentMessage(
       "channel:chan-1",

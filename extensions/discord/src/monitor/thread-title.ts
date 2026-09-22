@@ -1,4 +1,3 @@
-// Discord plugin module implements thread title behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

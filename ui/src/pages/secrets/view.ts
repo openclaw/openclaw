@@ -141,7 +141,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
             (entry) => html`
               <tr tabindex="0" aria-label=${entry.name}>
                 <td data-label=${t("secretsStore.name")}>
-                  <code class="secrets-store__name">${entry.name}</code>
+                  <code class="secrets-store__name" title=${entry.name}>${entry.name}</code>
                 </td>
                 <td data-label=${t("secretsStore.access")}>
                   <span class="secrets-store__mode secrets-store__mode--${entry.kind}"

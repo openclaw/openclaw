@@ -1,20 +1,33 @@
 // Talk Voice tests cover index plugin behavior.
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
+
+const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => gatewayMocks);
 
 function createHarness(initialConfig: Record<string, unknown>) {
   let config = initialConfig;
   let command: OpenClawPluginCommandDefinition | undefined;
+  let tool: AnyAgentTool | undefined;
   const runtime = {
     config: {
       current: vi.fn(() => config),
       loadConfig: vi.fn(() => config),
       mutateConfigFile: vi.fn(
-        async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        async ({
+          mutate,
+          writeOptions,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void;
+          writeOptions?: { assertCurrent?: () => void };
+        }) => {
           const draft = structuredClone(config);
           mutate(draft);
+          writeOptions?.assertCurrent?.();
           config = draft;
           return {
             path: "/tmp/openclaw.json",
@@ -42,12 +55,18 @@ function createHarness(initialConfig: Record<string, unknown>) {
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
       command = definition;
     }),
+    registerTool: vi.fn((definition: AnyAgentTool) => {
+      tool = definition;
+    }),
   };
   register.register(api as never);
   if (!command) {
     throw new Error("talk-voice command not registered");
   }
-  return { command, runtime };
+  if (!tool) {
+    throw new Error("talk_voice tool not registered");
+  }
+  return { command, tool, runtime };
 }
 
 function createCommandContext(
@@ -72,6 +91,112 @@ function createCommandContext(
 }
 
 describe("talk-voice plugin", () => {
+  beforeEach(() => {
+    gatewayMocks.callGatewayTool.mockReset();
+  });
+
+  it.each([false, true])(
+    "rechecks owner authority after voice lookup (gateway admin: %s)",
+    async (gatewayAdmin) => {
+      const initialConfig = { talk: { provider: "microsoft", providers: { microsoft: {} } } };
+      const { command, runtime } = createHarness(initialConfig);
+      let current = true;
+      const ctx = {
+        ...createCommandContext(
+          "set Ava",
+          "discord",
+          gatewayAdmin ? ["operator.admin"] : undefined,
+          true,
+        ),
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+      };
+      vi.mocked(runtime.tts.listVoices).mockImplementationOnce(async () => {
+        current = false;
+        ctx.assertOwnerCurrent = () => {};
+        return [{ id: "en-US-AvaNeural", name: "Ava" }];
+      });
+      const pending = command.handler(ctx);
+      if (gatewayAdmin) {
+        await expect(pending).resolves.toMatchObject({
+          text: expect.stringContaining("Talk voice set to Ava"),
+        });
+        expect(runtime.config.current()).not.toEqual(initialConfig);
+      } else {
+        await expect(pending).rejects.toThrow("original owner revoked");
+        expect(runtime.config.current()).toEqual(initialConfig);
+      }
+    },
+  );
+
+  it.each([
+    { action: "list", method: "talk.voice.get", request: {} },
+    { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
+  ])(
+    "executes $action with trusted identity and waits for the Gateway result",
+    async ({ action, method, request }) => {
+      const { tool, runtime } = createHarness({});
+      const rpc = createDeferred<Record<string, unknown>>();
+      gatewayMocks.callGatewayTool.mockReturnValue(rpc.promise);
+      const controller = new AbortController();
+      const completed = vi.fn();
+      const pending = tool
+        .execute(
+          "voice-tool-call",
+          {
+            action,
+            voice: "marin",
+            sessionKey: "agent:other:main",
+            voiceSessionId: "other-call",
+            gatewayUrl: "wss://other.example.test",
+            gatewayToken: "test-override-token",
+          },
+          controller.signal,
+        )
+        .then((result) => {
+          completed();
+          return result;
+        });
+
+      await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce());
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+        method,
+        { timeoutMs: 65_000 },
+        request,
+        { requireAgentRuntimeIdentity: true, signal: controller.signal },
+      );
+      expect(completed).not.toHaveBeenCalled();
+      const response = {
+        voiceSessionId: "current-call",
+        sessionKey: "agent:main:main",
+        provider: "openai",
+        model: "gpt-live-1",
+        voice: "marin",
+        voices: ["marin", "cedar"],
+        canChange: true,
+        ...(action === "set" ? { status: "applied" } : {}),
+      };
+      rpc.resolve(response);
+
+      expect((await pending).details).toEqual(response);
+      expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+      expect(runtime.tts.listVoices).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns a failed voice replacement as a tool failure", async () => {
+    const { tool, runtime } = createHarness({});
+    gatewayMocks.callGatewayTool.mockRejectedValue(new Error("Replacement voice call failed"));
+
+    await expect(
+      tool.execute("voice-tool-call", { action: "set", voice: "marin" }),
+    ).rejects.toThrow("Replacement voice call failed");
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
   function createElevenlabsVoiceSetHarness(channel = "webchat", scopes?: string[]) {
     const { command, runtime } = createHarness({
       talk: {
@@ -239,6 +364,7 @@ describe("talk-voice plugin", () => {
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
       afterWrite: { mode: "auto" },
+      writeOptions: { assertCurrent: undefined },
       mutate: expect.any(Function),
     });
     const updatedConfig = runtime.config.current() as { talk: Record<string, unknown> };
@@ -274,6 +400,7 @@ describe("talk-voice plugin", () => {
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
       afterWrite: { mode: "auto" },
+      writeOptions: { assertCurrent: undefined },
       mutate: expect.any(Function),
     });
     expect(runtime.config.current()).toEqual({

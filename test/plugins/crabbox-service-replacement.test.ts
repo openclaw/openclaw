@@ -86,6 +86,7 @@ describe("Crabbox service replacement", () => {
         registerService: (service) => {
           registry.services.push({
             pluginId: "crabbox",
+            id: service.id.trim(),
             service,
             source: "test",
             origin: "bundled",

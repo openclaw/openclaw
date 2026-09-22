@@ -9,6 +9,7 @@ import {
 } from "./src/crabbox-sandbox-backend.js";
 import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
 import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
+import { createCrabboxTool } from "./src/crabbox-tool.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
@@ -21,11 +22,21 @@ export default definePluginEntry({
   name: "Crabbox Worker Provider",
   description: "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI",
   register(api) {
+    api.registerTool((context) => createCrabboxTool({ context, gateway: api.runtime.gateway }), {
+      name: "crabbox",
+    });
+    api.registerToolMetadata({
+      toolName: "crabbox",
+      displayName: "Crabbox",
+      description: "Run and present apps on a temporary machine attached to this conversation.",
+      risk: "high",
+      tags: ["cloud", "desktop"],
+    });
     api.registerCli(
       async ({ program }) => {
         const { registerCrabboxWarmImageCommands } =
           await import("./src/crabbox-worker-warm-image-cli.js");
-        registerCrabboxWarmImageCommands(program);
+        registerCrabboxWarmImageCommands(program, api.runtime.state);
       },
       {
         descriptors: [
@@ -41,7 +52,7 @@ export default definePluginEntry({
       "crabbox.images.list",
       async (request) => {
         const { listCrabboxImages } = await import("./src/crabbox-gateway-methods.js");
-        listCrabboxImages(api, request);
+        await listCrabboxImages(api, request);
       },
       { scope: "operator.admin" },
     );
@@ -49,11 +60,12 @@ export default definePluginEntry({
       "crabbox.images.recover",
       async (request) => {
         const { recoverCrabboxImage } = await import("./src/crabbox-gateway-methods.js");
-        recoverCrabboxImage(request);
+        await recoverCrabboxImage(api.runtime.state, request);
       },
       { scope: "operator.admin" },
     );
     const provider = createCrabboxWorkerProvider({
+      state: api.runtime.state,
       openclawRoot: resolveOpenClawRoot(api.rootDir),
       wallpaperPath: workerWallpaperPath,
       warn: (message) => api.logger.warn(message),

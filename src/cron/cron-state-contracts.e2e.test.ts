@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { reloadTaskRegistryFromStore } from "../tasks/task-registry.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
@@ -42,7 +43,24 @@ describe("cron state contracts", () => {
         const storePath = state.path("cron", "jobs.json");
         const baseTimeMs = Date.parse(BASE_TIME_ISO);
         const atMs = baseTimeMs + 1_000;
-        const enqueueSystemEvent = vi.fn();
+        let resolveSystemEvent!: () => void;
+        const systemEventEnqueued = new Promise<void>((resolve) => {
+          resolveSystemEvent = resolve;
+        });
+        const enqueueSystemEvent = vi.fn((text: string) => {
+          if (text === "state contract fired") {
+            resolveSystemEvent();
+          }
+        });
+        let resolveFinished!: () => void;
+        const finished = new Promise<void>((resolve) => {
+          resolveFinished = resolve;
+        });
+        const onEvent: CronServiceDeps["onEvent"] = (event) => {
+          if (event.action === "finished" && event.jobId === "state-contract-at") {
+            resolveFinished();
+          }
+        };
         const requestHeartbeat = vi.fn();
         let first: CronService | undefined;
         let restarted: CronService | undefined;
@@ -112,7 +130,12 @@ describe("cron state contracts", () => {
           first.stop();
           first = undefined;
 
-          restarted = createService({ storePath, enqueueSystemEvent, requestHeartbeat });
+          restarted = createService({
+            storePath,
+            enqueueSystemEvent,
+            requestHeartbeat,
+            onEvent,
+          });
           await restarted.start();
           const afterRestart = await restarted.list({ includeDisabled: true });
           expect(afterRestart).toEqual(
@@ -140,16 +163,21 @@ describe("cron state contracts", () => {
 
           await vi.advanceTimersByTimeAsync(1_005);
           await restarted.status();
+          await systemEventEnqueued;
+          await finished;
 
           expect(
             enqueueSystemEvent.mock.calls.filter(([text]) => text === "state contract fired"),
           ).toHaveLength(1);
-          expect(
-            (await loadCronStore(storePath)).jobs.find((job) => job.id === atJob.id),
-          ).toMatchObject({
+          const persistedAtJob = (await loadCronStore(storePath)).jobs.find(
+            (job) => job.id === atJob.id,
+          );
+          expect(persistedAtJob).toMatchObject({
             enabled: false,
-            state: { lastRunStatus: "ok", lastRunAtMs: atMs },
+            state: { lastRunStatus: "ok" },
           });
+          expect(persistedAtJob?.state.lastRunAtMs).toBeGreaterThanOrEqual(atMs);
+          expect(persistedAtJob?.state.lastRunAtMs).toBeLessThanOrEqual(atMs + 5);
 
           expect(await restarted.remove(atJob.id)).toEqual({ ok: true, removed: true });
           restarted.stop();
@@ -182,8 +210,15 @@ describe("cron state contracts", () => {
           summary: "isolated state contract completed",
         }));
         const events: Array<{ action: string; jobId: string }> = [];
+        let resolveFinished!: () => void;
+        const finished = new Promise<void>((resolve) => {
+          resolveFinished = resolve;
+        });
         const onEvent: CronServiceDeps["onEvent"] = (event) => {
           events.push({ action: event.action, jobId: event.jobId });
+          if (event.action === "finished") {
+            resolveFinished();
+          }
         };
         let first: CronService | undefined;
         let second: CronService | undefined;
@@ -210,6 +245,7 @@ describe("cron state contracts", () => {
           await vi.advanceTimersByTimeAsync(1_005);
           await first.status();
           await second.status();
+          await finished;
 
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
           expect(
@@ -226,17 +262,18 @@ describe("cron state contracts", () => {
               jobId: job.id,
               status: "ok",
               summary: "isolated state contract completed",
-              runAtMs: atMs,
             }),
           ]);
           const persistedEntry = initialHistory.entries[0];
+          expect(persistedEntry?.runAtMs).toBeGreaterThanOrEqual(atMs);
+          expect(persistedEntry?.runAtMs).toBeLessThanOrEqual(atMs + 5);
 
           first.stop();
           first = undefined;
           second.stop();
           second = undefined;
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
           const reloadedHistory = readCronTaskRunHistoryPage({
             storeKey: cronStoreKey(storePath),

@@ -42,8 +42,41 @@ TDLIB_CACHE_ROOT = Path(
     or (Path.home() / ".cache/openclaw/telegram-e2e-userbot/tdlib")
 ).expanduser()
 
+# Propagated across the subprocess boundary so the doctor can distinguish a
+# stale credential archive from launcher, timeout, and unrelated TDLib failures.
+CREDENTIAL_STATE_MISSING_GROUP = "credential_state_missing_group"
+
+
+def remaining_request_timeout(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DriverError(
+            "Timed out during Telegram credential readiness",
+            tdlib_timed_out=True,
+        )
+    return min(10, remaining)
+
 
 class DriverError(RuntimeError):
+    def __init__(
+        self,
+        message,
+        *,
+        diagnostic_code="",
+        tdlib_code=None,
+        tdlib_message="",
+        tdlib_method="",
+        tdlib_timed_out=False,
+    ):
+        super().__init__(message)
+        self.diagnostic_code = diagnostic_code
+        self.tdlib_code = tdlib_code
+        self.tdlib_message = tdlib_message
+        self.tdlib_method = tdlib_method
+        self.tdlib_timed_out = tdlib_timed_out
+
+
+class TdRequestError(DriverError):
     pass
 
 
@@ -225,13 +258,7 @@ def resolve_sut(config, bot_config):
     user_id = env_or_config("TELEGRAM_USER_DRIVER_SUT_ID", config, "sutId")
     if username and user_id:
         return {"username": username.lstrip("@"), "id": int(user_id)}
-    token = (
-        os.environ.get("TELEGRAM_E2E_SUT_BOT_TOKEN")
-        or os.environ.get("OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN")
-        or bot_config.get("sutBotToken")
-        or bot_config.get("botAToken")
-        or bot_config.get("BOTA")
-    )
+    token = bot_config.get("sutBotToken")
     if token:
         me = telegram_bot(token, "getMe", test_dc=config.get("testDc") is True)
         return {"username": me.get("username", "").lstrip("@"), "id": int(me["id"])}
@@ -364,12 +391,20 @@ class TdClient:
                 continue
             if item.get("@extra") == extra:
                 if item.get("@type") == "error":
-                    raise DriverError(
-                        f"{payload['@type']} failed ({item.get('code')}): {item.get('message')}"
+                    message = item.get("message") or "TDLib error"
+                    raise TdRequestError(
+                        f"{payload['@type']} failed ({item.get('code')}): {message}",
+                        tdlib_code=item.get("code"),
+                        tdlib_message=message,
+                        tdlib_method=payload["@type"],
                     )
                 return item
             self.handle_update(item)
-        raise DriverError(f"Timed out waiting for {payload['@type']}")
+        raise DriverError(
+            f"Timed out waiting for {payload['@type']}",
+            tdlib_method=payload["@type"],
+            tdlib_timed_out=True,
+        )
 
     def handle_update(self, item):
         self.updates.append(item)
@@ -527,7 +562,40 @@ class UserDriver:
         print(link)
         print("")
 
-    def resolve_chat(self, chat):
+    def load_credential_chat(self, chat_id, deadline):
+        for chat_list_type in ("chatListMain", "chatListArchive"):
+            while True:
+                try:
+                    self.client.request(
+                        {
+                            "@type": "loadChats",
+                            "chat_list": {"@type": chat_list_type},
+                            "limit": 100,
+                        },
+                        timeout=remaining_request_timeout(deadline),
+                    )
+                except DriverError as load_error:
+                    if load_error.tdlib_method == "loadChats" and load_error.tdlib_code == 404:
+                        break
+                    raise
+                try:
+                    return self.client.request(
+                        {"@type": "getChat", "chat_id": chat_id},
+                        timeout=remaining_request_timeout(deadline),
+                    )["id"]
+                except DriverError as chat_error:
+                    if not (
+                        chat_error.tdlib_method == "getChat"
+                        and chat_error.tdlib_code == 400
+                        and chat_error.tdlib_message == "Chat not found"
+                    ):
+                        raise
+        raise DriverError(
+            f"Chat {chat_id} is absent after exhausting the cold-restored TDLib chat lists. Disable and republish the pooled credential.",
+            diagnostic_code=CREDENTIAL_STATE_MISSING_GROUP,
+        )
+
+    def resolve_chat(self, chat, *, credential_deadline=None):
         chat = chat or default_chat(self.config, self.bot_config)
         if not chat:
             raise DriverError("Missing chat. Pass --chat or configure defaultChatId. Run `user-driver.py chats --json` to list chats visible to the tester account.")
@@ -538,8 +606,24 @@ class UserDriver:
         if chat.startswith("https://t.me/") and "/" not in chat.removeprefix("https://t.me/"):
             return self.client.request({"@type": "searchPublicChat", "username": chat.removeprefix("https://t.me/")})["id"]
         try:
-            return self.client.request({"@type": "getChat", "chat_id": int(chat)}, timeout=10)["id"]
+            timeout = (
+                remaining_request_timeout(credential_deadline)
+                if credential_deadline is not None
+                else 10
+            )
+            return self.client.request(
+                {"@type": "getChat", "chat_id": int(chat)}, timeout=timeout
+            )["id"]
         except DriverError as error:
+            if not (
+                error.tdlib_method == "getChat"
+                and error.tdlib_code == 400
+                and error.tdlib_message == "Chat not found"
+            ):
+                raise
+            chat_id = int(chat)
+            if credential_deadline is not None:
+                return self.load_credential_chat(chat_id, credential_deadline)
             try:
                 self.client.request(
                     {
@@ -550,13 +634,17 @@ class UserDriver:
                     timeout=30,
                 )
             except DriverError as refresh_error:
-                if "failed (404)" not in str(refresh_error):
+                if not (
+                    isinstance(refresh_error, TdRequestError)
+                    and refresh_error.tdlib_method == "loadChats"
+                    and refresh_error.tdlib_code == 404
+                ):
                     raise
             try:
                 return self.client.request(
-                    {"@type": "getChat", "chat_id": int(chat)}, timeout=10
+                    {"@type": "getChat", "chat_id": chat_id}, timeout=10
                 )["id"]
-            except DriverError:
+            except DriverError as refreshed_error:
                 raise DriverError(
                     f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
                 ) from error
@@ -669,14 +757,20 @@ class UserDriver:
             "has_spoiler": False,
         }
 
-    def send_text(self, chat_id, text, reply_to=None, thread_id=0):
+    def message_target(self, chat_id, reply_to, thread_id, forum_topic_id):
+        if thread_id and forum_topic_id is not None:
+            raise DriverError("Choose a message thread or a forum topic, not both.")
+        if forum_topic_id is not None and int(forum_topic_id) < 1:
+            raise DriverError("Forum topic id must be positive.")
+        topic = {"@type": "messageTopicForum", "forum_topic_id": int(forum_topic_id)} if forum_topic_id is not None else ({"@type": "messageTopicThread", "message_thread_id": int(thread_id)} if thread_id else None)
+        return {"chat_id": chat_id, "topic_id": topic, "reply_to": {"@type": "inputMessageReplyToMessage", "message_id": int(reply_to), "quote": None, "checklist_task_id": 0, "poll_option_id": ""} if reply_to else None}
+
+    def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
         return self.settle_sent_message(
             self.client.request(
                 {
                     "@type": "sendMessage",
-                    "chat_id": chat_id,
-                    "message_thread_id": int(thread_id or 0),
-                    "reply_to_message_id": int(reply_to or 0),
+                    **self.message_target(chat_id, reply_to, thread_id, forum_topic_id),
                     "options": {
                         "@type": "messageSendOptions",
                         "disable_notification": True,
@@ -690,15 +784,13 @@ class UserDriver:
             )
         )
 
-    def send_photos(self, chat_id, paths, caption="", reply_to=None, thread_id=0):
+    def send_photos(self, chat_id, paths, caption="", reply_to=None, thread_id=0, forum_topic_id=None):
         contents = [
             self.photo_content(path, caption if index == 0 else "")
             for index, path in enumerate(paths)
         ]
         payload = {
-            "chat_id": chat_id,
-            "message_thread_id": int(thread_id or 0),
-            "reply_to_message_id": int(reply_to or 0),
+            **self.message_target(chat_id, reply_to, thread_id, forum_topic_id),
             "options": {
                 "@type": "messageSendOptions",
                 "disable_notification": True,
@@ -893,15 +985,26 @@ def command_login(args):
 def command_status(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
+    deadline = time.monotonic() + args.timeout_ms / 1000
     ready = driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms), need_ready=False)
     if not ready:
         print_result({"ok": False, "authorized": False, "next": "login --qr"}, args.json, getattr(args, "output", ""))
         sys.exit(1)
-    me = driver.client.request({"@type": "getMe"})
-    version = driver.client.request({"@type": "getOption", "name": "version"})
+    me = driver.client.request(
+        {"@type": "getMe"}, timeout=remaining_request_timeout(deadline)
+    )
+    version = driver.client.request(
+        {"@type": "getOption", "name": "version"},
+        timeout=remaining_request_timeout(deadline),
+    )
     group_write_access = None
     if args.check_chat:
         group_write_access = driver.check_group_write_access(driver.resolve_chat(args.check_chat), me["id"])
+    chat_id = (
+        driver.resolve_chat(args.require_chat, credential_deadline=deadline)
+        if args.require_chat
+        else None
+    )
     save_tester_identity(config, me)
     print_result(
         {
@@ -911,10 +1014,119 @@ def command_status(args):
             "tdlibVersion": version.get("value", ""),
             "testerGroupWriteAccess": group_write_access,
             "user": public_user(me),
+            **({"chatId": chat_id} if chat_id is not None else {}),
         },
         args.json,
         getattr(args, "output", ""),
     )
+
+
+def group_identity(driver):
+    if driver.config.get("testDc") is not True:
+        raise DriverError("Test group setup requires Telegram's Test Server.")
+    me = driver.client.request({"@type": "getMe"})
+    if str(me["id"]) != str(driver.config.get("testerUserId")):
+        raise DriverError("Test group setup requires the leased QA user.")
+    sut = resolve_sut(driver.config, driver.bot_config)
+    return {"testerUserId": str(me["id"]), "sutBotId": str(sut["id"]), "sutUsername": sut["username"]}
+
+
+def prepare_owned_group(driver, manifest_path, chat_id=None):
+    identity = group_identity(driver)
+    if manifest_path.exists():
+        raise DriverError("This lease already has a group setup record; reconcile it before another creation.")
+    if chat_id is not None:
+        chat = driver.client.request({"@type": "getChat", "chat_id": int(chat_id)})
+        if chat["type"]["@type"] not in {"chatTypeBasicGroup", "chatTypeSupergroup"} or chat["type"].get("is_channel"):
+            raise DriverError("Membership repair requires the selected group, not a private chat or channel.")
+        before = driver.client.request({"@type": "getChatMember", "chat_id": int(chat_id), "member_id": {"@type": "messageSenderUser", "user_id": int(identity["sutBotId"])}})
+        status = before["status"]["@type"]
+        if status in {"chatMemberStatusMember", "chatMemberStatusAdministrator", "chatMemberStatusCreator"}:
+            return {"ok": True, **identity, "groupId": str(chat_id), "status": "existing"}
+        if status != "chatMemberStatusLeft":
+            raise DriverError("Membership repair will not change an existing ban or restriction.")
+        record = {**identity, "groupId": str(chat_id), "status": "adding-member", "previousMembership": before, "chatType": chat["type"]}
+        write_json_private(manifest_path, record)
+        try:
+            added = driver.client.request({"@type": "addChatMember", "chat_id": int(chat_id), "user_id": int(identity["sutBotId"]), "forward_limit": 0})
+        except TdRequestError:
+            record["status"] = "membership-add-failed"
+            write_json_private(manifest_path, record)
+            raise
+        if added["failed_to_add_members"]:
+            record.update(status="membership-add-failed", addition=added)
+            write_json_private(manifest_path, record)
+            raise DriverError("The leased QA user could not add the SUT to the selected group.")
+        record.update(status="membership-added", addition=added)
+        write_json_private(manifest_path, record)
+        return {"ok": True, **record}
+    bot_chat = driver.client.request({"@type": "searchPublicChat", "username": identity["sutUsername"]})
+    if bot_chat["type"] != {"@type": "chatTypePrivate", "user_id": int(identity["sutBotId"])}:
+        raise DriverError("Test group bot lookup does not match the lease.")
+    record = {**identity, "status": "creating", "title": f"OpenClaw QA {secrets.token_hex(8)}"}
+    write_json_private(manifest_path, record)
+    try:
+        # The pinned TDLib 1.8.67 returns CreatedBasicGroupChat, not Chat.
+        created = driver.client.request({
+            "@type": "createNewBasicGroupChat", "user_ids": [int(identity["sutBotId"])],
+            "title": record["title"], "message_auto_delete_time": 0,
+        })
+    except TdRequestError:
+        record["status"] = "create-failed"
+        write_json_private(manifest_path, record)
+        raise
+    record.update(status="created", groupId=str(created["chat_id"]), creation=created)
+    # Persist the returned identity before any further check can fail.
+    write_json_private(manifest_path, record)
+    return {"ok": True, **record}
+
+
+def cleanup_owned_group(driver, manifest_path):
+    record = read_json(manifest_path)
+    if not record:
+        return {"ok": True, "status": "not-created"}
+    identity = group_identity(driver)
+    if any(record[key] != identity[key] for key in ("testerUserId", "sutBotId")):
+        raise DriverError("Test group cleanup record belongs to a different lease identity.")
+    if record["status"] in {"create-failed", "deleted", "membership-add-failed", "membership-removed"}:
+        return {"ok": True, **record}
+    if record["status"] == "membership-added":
+        token = driver.bot_config["sutBotToken"]
+        bot = telegram_bot(token, "getMe", test_dc=True)
+        if str(bot["id"]) != identity["sutBotId"]:
+            raise DriverError("Membership cleanup bot identity does not match the lease.")
+        removed = telegram_bot(token, "leaveChat", {"chat_id": record["groupId"]}, test_dc=True)
+        if removed is not True:
+            raise DriverError("The SUT did not confirm leaving its temporary membership.")
+        record.update(status="membership-removed", removal=removed)
+        write_json_private(manifest_path, record)
+        return {"ok": True, **record}
+    if record["status"] != "created":
+        raise DriverError("Test group creation is unconfirmed; preserve the lease for reconciliation.")
+    chat = driver.client.request({"@type": "getChat", "chat_id": int(record["groupId"])})
+    if chat["type"]["@type"] != "chatTypeBasicGroup" or not chat["can_be_deleted_for_all_users"]:
+        raise DriverError("The leased QA user cannot delete its test group for all members.")
+    deleted = driver.client.request({"@type": "deleteChat", "chat_id": int(record["groupId"])})
+    record.update(status="deleted", deletion=deleted)
+    write_json_private(manifest_path, record)
+    return {"ok": True, **record}
+
+
+def command_test_group(args):
+    if not os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR"):
+        raise DriverError("Test group commands require runner-owned leased credential state.")
+    manifest = STATE_DIR / "owned-test-group.json"
+    if args.command == "cleanup-group" and not manifest.exists():
+        print_result({"ok": True, "status": "not-created"}, args.json, args.output)
+        return
+    config, bot_config = load_config()
+    if config.get("testDc") is not True:
+        raise DriverError("Test group commands require Telegram's Test Server.")
+    driver = UserDriver(config, bot_config)
+    if not driver.authorize(args, need_ready=False):
+        raise DriverError("The leased QA user is not authorized.")
+    result = prepare_owned_group(driver, manifest, args.chat or None) if args.command == "prepare-group" else cleanup_owned_group(driver, manifest)
+    print_result(result, args.json, args.output)
 
 
 def command_confirm_qr(args):
@@ -958,13 +1170,25 @@ def save_tester_identity(config, user):
     write_json_private(CONFIG_PATH, config)
 
 
+def command_resolve_chat(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    if not driver.authorize(args, need_ready=False):
+        raise DriverError("The leased QA user is not authorized.")
+    group_identity(driver)
+    chat_id = driver.resolve_chat(args.chat)
+    chat = driver.client.request({"@type": "getChat", "chat_id": chat_id})
+    group = driver.client.request({"@type": "getSupergroup", "supergroup_id": chat["type"]["supergroup_id"]}) if chat["type"]["@type"] == "chatTypeSupergroup" else None
+    print_result({"ok": True, "chatId": str(chat_id), "type": chat["type"], "isForum": group["is_forum"] if group else False}, args.json, args.output)
+
+
 def command_send(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     chat_id = driver.resolve_chat(args.chat)
     if args.photo:
-        sent = driver.send_photos(chat_id, args.photo, args.caption, args.reply_to, args.thread_id)
+        sent = driver.send_photos(chat_id, args.photo, args.caption, args.reply_to, args.thread_id, args.forum_topic_id)
         print_result(
             {
                 "ok": True,
@@ -976,7 +1200,7 @@ def command_send(args):
         )
         return
     text, _run = apply_template(args.text, resolve_sut(config, bot_config))
-    sent = driver.send_text(chat_id, text, args.reply_to, args.thread_id)
+    sent = driver.send_text(chat_id, text, args.reply_to, args.thread_id, args.forum_topic_id)
     print_result({"ok": True, "sent": normalize_message(sent)}, args.json, getattr(args, "output", ""))
 
 
@@ -1292,7 +1516,19 @@ def main():
     status = sub.add_parser("status")
     add_common(status)
     status.add_argument("--check-chat", default="")
+    status.add_argument("--require-chat", default="")
     status.set_defaults(func=command_status)
+
+    resolve_chat = sub.add_parser("resolve-chat")
+    add_common(resolve_chat)
+    resolve_chat.add_argument("--chat", required=True)
+    resolve_chat.set_defaults(func=command_resolve_chat)
+
+    for name in ("prepare-group", "cleanup-group"):
+        group = sub.add_parser(name)
+        add_common(group)
+        group.add_argument("--chat", default="")
+        group.set_defaults(func=command_test_group)
 
     confirm_qr = sub.add_parser("confirm-qr")
     add_common(confirm_qr)
@@ -1307,6 +1543,7 @@ def main():
     send.add_argument("--caption", default="")
     send.add_argument("--reply-to")
     send.add_argument("--thread-id", type=int, default=0)
+    send.add_argument("--forum-topic-id", type=int)
     send.set_defaults(func=command_send)
 
     wait = sub.add_parser("wait")
@@ -1359,7 +1596,8 @@ def main():
     try:
         args.func(args)
     except DriverError as error:
-        print(str(error), file=sys.stderr)
+        code = f"[{error.diagnostic_code}] " if error.diagnostic_code else ""
+        print(f"{code}{error}", file=sys.stderr)
         sys.exit(1)
 
 

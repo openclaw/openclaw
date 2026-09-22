@@ -236,7 +236,10 @@ describe("telegramPlugin gateway startup", () => {
     expect(monitorOptions.useWebhook).toBe(false);
   });
 
-  it("starts a multi-agent account with its routed owner", async () => {
+  it.each([
+    { owner: "main", accountPattern: "*" },
+    { owner: "ops", accountPattern: "default" },
+  ])("starts a multi-agent account with routed owner $owner", async ({ owner, accountPattern }) => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
       ok: false,
@@ -251,7 +254,7 @@ describe("telegramPlugin gateway startup", () => {
         entries: { main: {}, ops: {}, research: {} },
       },
       channels: { telegram: { botToken: "123456:bad-token" } },
-      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+      bindings: [{ agentId: owner, match: { channel: "telegram", accountId: accountPattern } }],
     } as OpenClawConfig;
     const account = telegramPlugin.config.resolveAccount(cfg, "default");
     const startAccount = telegramPlugin.gateway?.startAccount;
@@ -263,7 +266,7 @@ describe("telegramPlugin gateway startup", () => {
 
     expect(latestMonitorOptions()).toMatchObject({
       accountId: "default",
-      ownerAgentId: "main",
+      ownerAgentId: owner,
     });
   });
 

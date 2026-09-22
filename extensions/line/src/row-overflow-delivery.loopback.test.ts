@@ -303,7 +303,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
       throw new Error("LINE presentation did not render");
     }
     if (delivery === "reply") {
-      const { deps } = createDeps({
+      createDeps({
         processLineMessage,
         chunkMarkdownText,
         createFlexMessage,
@@ -316,7 +316,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
         accountId: "default",
         payload: prepared,
         lineData: prepared.channelData?.line as LineChannelData,
-        deps,
       });
     } else {
       await lineOutboundAdapter.sendPayload!({
@@ -539,7 +538,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
   });
 
   it("preserves quick replies when LINE rejects the final Markdown card", async () => {
-    const { deps } = createDeps({
+    createDeps({
       processLineMessage,
       chunkMarkdownText,
       pushMessagesLine,
@@ -553,7 +552,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
       replyToken: undefined,
       payload: { text: "Choose one\n\n```js\nfirst()\n```" },
       lineData: { quickReplies: ["Continue"] },
-      deps,
     });
 
     expect(requests).toHaveLength(2);

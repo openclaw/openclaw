@@ -388,6 +388,19 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it.each(["", "   "])(
+    "rejects blank payload --script %j on add before Gateway access",
+    async (value) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        ...namedCronAddArgs("Replace script", "--message", "Other payload", "--script", value),
+      ]);
+      expectRuntimeErrorContaining("--script must not be blank");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(CRON_GATEWAY_COMMANDS)(
     "inherits parent Gateway options for cron $name",
     async ({ name, args }) => {
@@ -1593,6 +1606,11 @@ describe("cron cli", () => {
       args: ["--message", "hello"],
       tools: "read write",
     },
+    {
+      kind: "agentTurn",
+      args: ["--message", "hello"],
+      tools: "",
+    },
   ])(
     "preserves the requested tool allowlist for $kind cron jobs",
     async ({ kind, args, tools }) => {
@@ -1602,7 +1620,7 @@ describe("cron cli", () => {
 
       expect(params?.payload).toMatchObject({
         kind,
-        toolsAllow: ["read", "write"],
+        toolsAllow: tools ? ["read", "write"] : [],
       });
     },
   );

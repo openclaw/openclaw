@@ -800,24 +800,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
     } else if (slackMode === "relay" && relayConfig) {
+      const relaySource = await loadSlackRelaySource();
       runtime.log?.(
         `slack relay mode connecting to ${relayConfig.url} gateway_id:${relayConfig.gatewayId}`,
       );
-      // Send identity flows through the account default (relay hello ->
-      // setIdentity); resolveSlackSendIdentity falls back to it, so claimed
-      // relay events replayed after a restart dispatch with correct identity
-      // once the relay reattaches.
+      // Keep relay identity on the account default so claimed events retain it after restart.
       durableIngress.attachRelayDispatch(async (message, turnAdoptionLifecycle) => {
-        await handleSlackMessage(message as Parameters<typeof handleSlackMessage>[0], {
+        await handleSlackMessage(relaySource.requireSlackMessageEvent(message), {
           source: "message",
           wasMentioned: true,
           awaitDispatch: true,
           turnAdoptionLifecycle,
         });
       });
-      await (
-        await loadSlackRelaySource()
-      ).monitorSlackRelaySource({
+      await relaySource.monitorSlackRelaySource({
         config: relayConfig,
         acceptRelayEvent: durableIngress.acceptRelayEvent,
         runtime,

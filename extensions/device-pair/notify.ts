@@ -4,7 +4,10 @@ import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
@@ -80,7 +83,8 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
 }
 
 type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
-  deleteIf: NonNullable<PluginStateKeyedStore<NotifySubscription>["deleteIf"]>;
+  observe: NonNullable<PluginStateKeyedStore<NotifySubscription>["observe"]>;
+  compareAndApply: NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>;
 };
 
 function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
@@ -88,9 +92,9 @@ function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStor
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
-  if (!store.deleteIf) {
+  if (!store.observe || !store.compareAndApply) {
     throw new Error(
-      "device-pair notify requires a runtime with atomic plugin state conditional delete support",
+      "device-pair notify requires a runtime with atomic plugin state compare-and-apply support",
     );
   }
   return store as NotifySubscriberStore;
@@ -151,14 +155,16 @@ async function registerNotifySubscriber(params: {
   target: NotifyTarget;
   mode: NotifySubscription["mode"];
   refresh: boolean;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const store = openNotifySubscriberStore(params.api);
   const key = notifySubscriberStoreKey(params.target);
   const current = await store.lookup(key);
   if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  await store.register(key, nextNotifySubscription(params.target, params.mode));
+  await store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent });
   return true;
 }
 
@@ -177,6 +183,35 @@ function isSameNotifySubscription(
     current.addedAtMs === expected.addedAtMs &&
     notifySubscriberKey(current) === notifySubscriberKey(expected)
   );
+}
+
+function decideDeliveredNotifySubscriptionDeletion(
+  current: NotifySubscription | undefined,
+  delivered: NotifySubscription,
+): PluginStateCompareIntent<NotifySubscription> {
+  return {
+    operation: "delete",
+    action: current && isSameNotifySubscription(current, delivered) ? "delete" : "keep",
+  };
+}
+
+async function deleteDeliveredNotifySubscription(
+  store: NotifySubscriberStore,
+  key: string,
+  delivered: NotifySubscription,
+): Promise<void> {
+  let observation = await store.observe(key);
+  for (;;) {
+    const result = await store.compareAndApply(
+      key,
+      observation.comparison,
+      decideDeliveredNotifySubscriptionDeletion(observation.value, delivered),
+    );
+    if (result.status !== "conflict") {
+      return;
+    }
+    observation = result.current;
+  }
 }
 
 function buildPairingRequestNotificationText(request: PendingPairingRequest): string {
@@ -313,9 +348,7 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
           deliveredOneShots.add(entry.key);
           // Delivery is fallible and uncancellable. Delete only the exact arm
           // that was sent so an overlapping re-arm remains subscribed.
-          await subscriberStore.deleteIf(entry.key, (current) =>
-            isSameNotifySubscription(current, subscriber),
-          );
+          await deleteDeliveredNotifySubscription(subscriberStore, entry.key, subscriber);
         }
       }
 
@@ -346,6 +379,7 @@ async function runNotifyPoll(api: OpenClawPluginApi): Promise<void> {
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;
   ctx: {
+    assertOwnerCurrent?: () => void;
     channel: string;
     senderId?: string;
     from?: string;
@@ -367,6 +401,7 @@ export async function armPairNotifyOnce(params: {
     target,
     mode: "once",
     refresh: true,
+    assertCurrent: params.ctx.assertOwnerCurrent,
   });
   return true;
 }
@@ -374,6 +409,7 @@ export async function armPairNotifyOnce(params: {
 export async function handleNotifyCommand(params: {
   api: OpenClawPluginApi;
   ctx: {
+    assertOwnerCurrent?: () => void;
     channel: string;
     senderId?: string;
     from?: string;
@@ -383,6 +419,7 @@ export async function handleNotifyCommand(params: {
   };
   action: string;
 }): Promise<{ text: string }> {
+  const assertOwnerCurrent = params.ctx.assertOwnerCurrent;
   if (params.ctx.channel !== "telegram") {
     return { text: "Pairing notifications are currently supported only on Telegram." };
   }
@@ -401,6 +438,7 @@ export async function handleNotifyCommand(params: {
       target,
       mode: "persistent",
       refresh: false,
+      assertCurrent: assertOwnerCurrent,
     });
     return {
       text:
@@ -410,7 +448,7 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    await subscriberStore.delete(targetStoreKey);
+    await subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent });
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -435,6 +473,7 @@ export async function handleNotifyCommand(params: {
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
+    assertOwnerCurrent?.();
     const mode = current?.mode ?? "off";
     return {
       text: [

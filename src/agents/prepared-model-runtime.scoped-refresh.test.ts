@@ -1,11 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
@@ -13,10 +9,6 @@ import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-mode
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
@@ -32,8 +24,8 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness();
+const { mocks } = fixture;
 
 function serveCatalog(catalog: ModelCatalogSnapshot) {
   mocks.runPreparedModelCatalogWorker.mockImplementation(
@@ -66,18 +58,13 @@ async function prepareCatalogOwner(config: OpenClawConfig, catalog: ModelCatalog
   const owner = getPreparedModelRuntimeSnapshot({
     config,
     agentId: "pro",
-    agentDir: state.agentDir("pro"),
+    agentDir: fixture.state.agentDir("pro"),
   })!;
   await owner.loadFullModelCatalog!({ refresh: true });
   return owner;
 }
 
 describe("prepared model runtime scoped refresh", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
-  });
-
   it.each(["warm", "cold"] as const)(
     "does not carry catalog failure status from a %s source into its replacement",
     async (inventoryState) => {
@@ -101,12 +88,7 @@ describe("prepared model runtime scoped refresh", () => {
         gatewayLifecycle: true,
         catalogMode: "static",
       });
-      const input = {
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
-        config,
-      };
+      const input = fixture.agentInput("default", config);
       const original = await prepareModelRuntimeSnapshot(input);
       if (!original.loadFullModelCatalog) {
         throw new Error("catalog source diagnostic requires a full catalog loader");
@@ -419,7 +401,7 @@ describe("prepared model runtime scoped refresh", () => {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
       });
-      const input = { agentId: "pro", agentDir: state.agentDir("pro"), config };
+      const input = { agentId: "pro", agentDir: fixture.state.agentDir("pro"), config };
       const original = getPreparedModelRuntimeSnapshot(input)!;
       await original.loadFullModelCatalog!();
       const initialDiscoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;
@@ -525,7 +507,7 @@ describe("prepared model runtime scoped refresh", () => {
       routeVariants: [learned],
     });
     const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-    const input = { agentId: "pro", agentDir: state.agentDir("pro") };
+    const input = { agentId: "pro", agentDir: fixture.state.agentDir("pro") };
     try {
       await refreshPreparedModelRuntimeSnapshots(config, options);
       await getPreparedModelRuntimeSnapshot({ ...input, config })!.loadFullModelCatalog!({
@@ -603,7 +585,7 @@ describe("prepared model runtime scoped refresh", () => {
     const reloaded = getPreparedModelRuntimeSnapshot({
       config,
       agentId: "pro",
-      agentDir: state.agentDir("pro"),
+      agentDir: fixture.state.agentDir("pro"),
     })!;
     expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
   });
@@ -628,16 +610,13 @@ describe("prepared model runtime scoped refresh", () => {
         onBuildStats: (stats: { agentCount: number }) => buildCounts.push(stats.agentCount),
       };
       const freeInput = {
-        config: initialConfig,
-        agentId: "free",
-        agentDir: state.agentDir("free"),
-        inheritedAuthDir: state.agentDir("default"),
+        ...fixture.agentInput("free", initialConfig),
         workspaceDir: "/tmp/workspace-free",
       };
       const proInput = {
         ...freeInput,
         agentId: "pro",
-        agentDir: state.agentDir("pro"),
+        agentDir: fixture.state.agentDir("pro"),
         workspaceDir: "/tmp/workspace-pro",
       };
       // The harness stubs discovery, not the snapshot's catalog guards. Real worker retirement
@@ -681,8 +660,11 @@ describe("prepared model runtime scoped refresh", () => {
         const catalog = retainedReader.readFullModelCatalog!();
         expect(retained.readFullModelCatalog!()).toBe(catalog);
         expect(retainedReader.readFullModelCatalog!()).toBe(catalog);
+        const learned = { provider: "custom", id: ask, name: ask };
+        serveCatalog({ entries: [learned], routeVariants: [learned] });
         const refreshed = await retained.loadFullModelCatalog!({ refresh: true });
         expect(refreshed).not.toBe(catalog);
+        expect(refreshed.entries).toContainEqual(expect.objectContaining(learned));
         expect(retainedReader.readFullModelCatalog!()).toBe(refreshed);
         expect(() => previousPro.readFullModelCatalog!()).toThrow("superseded");
         await expect(previousPro.loadFullModelCatalog!()).rejects.toThrow("superseded");
@@ -729,7 +711,7 @@ describe("prepared model runtime scoped refresh", () => {
       credentials: mocks.authStorage.getAll(),
     });
     serveCatalog(catalog);
-    const input = { agentId: "pro", agentDir: state.agentDir("pro"), config: {} };
+    const input = { agentId: "pro", agentDir: fixture.state.agentDir("pro"), config: {} };
     for (const runtime of ["openclaw", "fixture-runtime", "openclaw"]) {
       const config: OpenClawConfig = {
         agents: {
@@ -885,7 +867,7 @@ describe("prepared model runtime scoped refresh", () => {
     const nextOwner = getPreparedModelRuntimeSnapshot({
       config: nextConfig,
       agentId: "pro",
-      agentDir: state.agentDir("pro"),
+      agentDir: fixture.state.agentDir("pro"),
     })!;
     const next = nextOwner.readFullModelCatalog!()!;
     expect(next.authoritative).toBe(false);
@@ -906,7 +888,7 @@ describe("prepared model runtime scoped refresh", () => {
     const refreshParams = {
       config: nextConfig,
       agentId: "pro",
-      agentDir: state.agentDir("pro"),
+      agentDir: fixture.state.agentDir("pro"),
       readOnly: false,
       refreshFullCatalog: true,
     };
@@ -943,7 +925,7 @@ describe("prepared model runtime scoped refresh", () => {
     const retired = getPreparedModelRuntimeSnapshot({
       config: retiredConfig,
       agentId: "pro",
-      agentDir: state.agentDir("pro"),
+      agentDir: fixture.state.agentDir("pro"),
     })!.readFullModelCatalog!()!;
     expect(retired.entries).toContainEqual(expect.objectContaining(learned));
     expect(retired.entries.some((entry) => entry.nativeRuntime === "fixture-native")).toBe(false);
@@ -1008,16 +990,9 @@ describe("prepared model runtime scoped refresh", () => {
     expect(buildCounts).toEqual([1, 1]);
     expect(
       getPreparedModelRuntimeSnapshot({
-        config: nextConfig,
-        agentId: "pro",
-        agentDir: state.agentDir("pro"),
-        inheritedAuthDir: state.agentDir("default"),
+        ...fixture.agentInput("pro", nextConfig),
         workspaceDir: "/tmp/workspace-pro",
       }),
     ).toMatchObject({ agentId: "pro", config: nextConfig });
   });
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

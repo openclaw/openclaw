@@ -11,7 +11,11 @@ import {
   measureGatewayCpuUsage,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
+  readGatewayResources,
 } from "../../scripts/lib/gateway-bench-profile.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+
+const nodeExecutable = requireNodeTool("node");
 
 type WorkerProfileManifest = {
   workers: Array<{
@@ -33,7 +37,7 @@ type WorkerProfileManifest = {
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     [fileURLToPath(new URL("./fixtures/gateway-bench-cpu-usage.mjs", import.meta.url))],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -50,6 +54,25 @@ it("measures fixed CPU work including a retired Worker without starting the insp
     await closed;
   });
   await waitMessage(child, "ready");
+  const initialResources = await readGatewayResources(child, { initial: true });
+  const resources = await readGatewayResources(child);
+  expect(resources.pid).toBe(child.pid);
+  expect(initialResources.atMonotonicMicros).toBeLessThan(resources.atMonotonicMicros);
+  expect(resources.runtime).toMatchObject({ node: expect.any(String), platform: process.platform });
+  for (const value of Object.values(resources.memory)) {
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(0);
+  }
+  const changeTimer = async (run: string) => {
+    const changed = once(child, "message");
+    child.send({ run });
+    expect((await changed)[0]).toEqual({ timerChanged: true });
+    return await readGatewayResources(child);
+  };
+  const held = await changeTimer("timer-start");
+  const released = await changeTimer("timer-stop");
+  expect(held.activeResources.Timeout).toBe((resources.activeResources.Timeout ?? 0) + 1);
+  expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
   const before = await readGatewayCpuUsage(child);
   const mainCompleted = once(child, "message");
   child.send({ run: "main" });
@@ -82,7 +105,7 @@ it("measures fixed CPU work including a retired Worker without starting the insp
 
 it.each(["exit", "disconnect"])("rejects a CPU sample when the child %ss", async (action) => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     ["-e", `process.on("message", () => process.${action}()); process.send({ ready: true });`],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -106,7 +129,7 @@ it.each([false, true])(
   async (unknownIdentity) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-startup-"));
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         fileURLToPath(new URL("./fixtures/gateway-bench-profile-startup.mjs", import.meta.url)),
         directory,
@@ -238,7 +261,7 @@ it.each([
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         "-e",
         workload,

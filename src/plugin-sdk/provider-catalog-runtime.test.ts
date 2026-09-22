@@ -8,8 +8,8 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import {
+  createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
-  runWithScheduledGatewayContext,
 } from "../gateway/scheduled-run-gateway-context.js";
 import {
   LegacyPluginSdkResourceHost,
@@ -456,18 +456,16 @@ it.each(["scheduled", "shared-scheduled"] as const)(
     bindGatewayContextResolver(second, fenceScheduledGatewayContextResolver(scheduled));
     const resolver =
       kind === "scheduled" ? scheduled : getSharedGatewayContextResolver([first, second]);
+    const runScheduled = createScheduledGatewayRunner(resolver);
     const inspection = await fixture.load();
     const resolve = () =>
       foreign.run(() =>
-        runWithScheduledGatewayContext({
-          resolveGatewayContext: resolver,
-          run: async () => {
-            const existing = getPluginRuntimeGatewayRequestScope();
-            return withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => ({}) }, () => {
-              expect(getPluginRuntimeGatewayRequestScope()).toBe(existing);
-              return fixture.resolve(inspection.registry, foreign);
-            });
-          },
+        runScheduled(async () => {
+          const existing = getPluginRuntimeGatewayRequestScope();
+          return withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => ({}) }, () => {
+            expect(getPluginRuntimeGatewayRequestScope()).toBe(existing);
+            return fixture.resolve(inspection.registry, foreign);
+          });
         }),
       );
     try {
@@ -506,15 +504,11 @@ it.each(["unknown", "mixed-composite"] as const)(
     const unknown = vi.fn(() => undefined);
     const resolver =
       kind === "unknown" ? unknown : getSharedGatewayContextResolver([first, second]);
+    const runScheduled = createScheduledGatewayRunner(resolver);
     const inspection = await fixture.load();
     try {
       await expect(
-        foreign.run(() =>
-          runWithScheduledGatewayContext({
-            resolveGatewayContext: resolver,
-            run: async () => fixture.resolve(inspection.registry, foreign),
-          }),
-        ),
+        foreign.run(() => runScheduled(async () => fixture.resolve(inspection.registry, foreign))),
       ).rejects.toThrow("Gateway SDK resource host is not bound");
       await inspection.release();
       expect(fixture.state.database?.isOpen).toBe(false);

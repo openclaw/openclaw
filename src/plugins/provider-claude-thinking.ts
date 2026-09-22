@@ -13,7 +13,7 @@ import {
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/model-contracts/anthropic";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 
 const BASE_CLAUDE_THINKING_LEVELS = [

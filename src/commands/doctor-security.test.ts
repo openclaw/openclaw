@@ -4,10 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -509,6 +514,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw secrets audit --check");
   });
 
+  it("names non-generatable redacted store credentials and leaves them unavailable until replaced", async () => {
+    await withExecApprovalsFile({ version: 1 }, async () => {
+      const entry = { scope: { kind: "team" as const }, name: "SYNTHETIC_PROVIDER_KEY" };
+      writeSecretStoreEntry({
+        ...entry,
+        value: "synthetic-initial-key",
+        kind: "secret",
+        updatedBy: "fixture",
+      });
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE secret_store_entries SET value = ? WHERE name = ?")
+        .run(REDACTED_SENTINEL, entry.name);
+
+      const findings = await noteSecurityWarnings({});
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: "doctor.secret_store_redacted_value",
+          detail: expect.stringContaining(entry.name),
+          remediation: expect.stringContaining(`openclaw secrets store set ${entry.name}`),
+        }),
+      );
+      expect(lastMessage()).toContain("unavailable until replaced");
+      expect(readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+    });
+  });
+
   it("warns when sensitive model provider headers are stored as plaintext in config", async () => {
     await noteSecurityWarnings({
       models: {
@@ -761,25 +793,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
-  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
-    const cfg = {
+  it.each([
+    {
+      name: "list",
+      agents: { list: [{ id: "ops", heartbeat: { target: "last" as const } }] },
+      path: 'heartbeat.directPolicy for agent "ops"',
+    },
+    {
+      name: "keyed",
       agents: {
-        list: [
-          {
-            id: "ops",
-            heartbeat: {
-              target: "last",
-            },
-          },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { heartbeat: { target: "last" as const } },
+        },
       },
-    } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain('Heartbeat agent "ops"');
-    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
-    expect(message).toContain("direct/DM targets by default");
-  });
+      path: "agents.entries.ops.heartbeat.directPolicy",
+    },
+  ])(
+    "warns at the $name agent config path for implicit heartbeat directPolicy",
+    async (testCase) => {
+      await noteSecurityWarnings({ agents: testCase.agents } as OpenClawConfig);
+
+      const message = lastMessage();
+      expect(message).toContain('Heartbeat agent "ops"');
+      expect(message).toContain(testCase.path);
+      expect(message).toContain("direct/DM targets by default");
+    },
+  );
 
   it("degrades safely when channel account resolution fails in read-only security checks", async () => {
     pluginRegistry.list = [

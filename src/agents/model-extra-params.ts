@@ -2,7 +2,7 @@ import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
 
 type ModelExtraParamSources = {
   defaultParams?: Record<string, unknown>;
@@ -62,7 +62,7 @@ export function resolveModelExtraParamSources(params: {
       (legacyKey ? configuredModels?.[legacyKey]?.params : undefined))
     : undefined;
   const agent =
-    params.agentId && params.config ? resolveAgentConfig(params.config, params.agentId) : undefined;
+    params.agentId && params.config ? resolveAgentEntry(params.config, params.agentId) : undefined;
   const agentModelParams = canonicalKey
     ? (agent?.models?.[canonicalKey]?.params ??
       (legacyKey ? agent?.models?.[legacyKey]?.params : undefined))

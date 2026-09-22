@@ -28,22 +28,23 @@ function supervisedBinding(pluginConfig: unknown, agentDir?: string) {
 }
 
 describe("Codex binding app-server connection", () => {
-  it("preserves ordinary harness runtime and auth ownership", () => {
-    const connection = resolveCodexBindingAppServerConnection({
+  it.each(["agent", "user"] as const)("preserves %s-home auth ownership", async (homeScope) => {
+    const connection = await resolveCodexBindingAppServerConnection({
       binding: {},
       authProfileId: "openai:work",
+      pluginConfig: { appServer: { homeScope } },
       env: {},
       requirementsToml: null,
     });
 
-    expect(connection.appServer.start.homeScope).toBe("agent");
+    expect(connection.appServer.start.homeScope).toBe(homeScope);
     expect(connection.usesSupervisionConnection).toBe(false);
     expect(connection.requestAuthProfileId).toBe("openai:work");
-    expect(connection.clientAuthProfileId).toBe("openai:work");
+    expect(connection.clientAuthProfileId).toBe(homeScope === "user" ? null : "openai:work");
   });
 
-  it("uses native user-home auth only for an enabled supervised binding", () => {
-    const connection = resolveCodexBindingAppServerConnection({
+  it("uses native user-home auth only for an enabled supervised binding", async () => {
+    const connection = await resolveCodexBindingAppServerConnection({
       binding: supervisedBinding({ supervision: { enabled: true } }),
       authProfileId: "openai:work",
       pluginConfig: { supervision: { enabled: true } },
@@ -62,7 +63,7 @@ describe("Codex binding app-server connection", () => {
     { sourceKind: "secondary", homeScope: "agent" },
     { sourceKind: "secondary", homeScope: "user" },
   ] as const)(
-    "recovers the exact $sourceKind Codex home with configured $homeScope scope",
+    "recovers the exact $sourceKind Codex home with configured $homeScope scope before browsing after restart",
     async ({ sourceKind, homeScope }) => {
       const root = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
@@ -88,13 +89,15 @@ describe("Codex binding app-server connection", () => {
         } as OpenClawConfig;
         const pluginConfig = { supervision: { enabled: true }, appServer: { homeScope } };
         const env = { ...process.env, CODEX_HOME: processCodexHome };
-        const homes = createCodexCatalogHomeResolver({
-          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-          config,
-          getRuntimeConfig: () => config,
-          getPluginConfig: () => pluginConfig,
-          env,
-        }).forAgent("beta");
+        const registerCatalog = () =>
+          createCodexCatalogHomeResolver({
+            resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+            config,
+            getRuntimeConfig: () => config,
+            getPluginConfig: () => pluginConfig,
+            env,
+          });
+        const homes = await registerCatalog().forAgent("beta");
         const source =
           sourceKind === "primary"
             ? homes[0]
@@ -105,7 +108,10 @@ describe("Codex binding app-server connection", () => {
           betaAgentDir,
         );
 
-        const connection = resolveCodexBindingAppServerConnection({
+        // A fresh plugin instance must recover the durable binding without a catalog warmup.
+        registerCatalog();
+
+        const connection = await resolveCodexBindingAppServerConnection({
           binding: {
             connectionScope: "supervision",
             appServerRuntimeFingerprint: fingerprint,
@@ -148,7 +154,7 @@ describe("Codex binding app-server connection", () => {
     ).toThrow("missing its native model and provider");
   });
 
-  it("preserves an explicit supervised WebSocket endpoint while selecting native auth", () => {
+  it("preserves an explicit supervised WebSocket endpoint while selecting native auth", async () => {
     const agentDir = path.join(os.tmpdir(), "openclaw-websocket-agent");
     const config = {
       agents: { list: [{ id: "main", agentDir, default: true }] },
@@ -164,7 +170,7 @@ describe("Codex binding app-server connection", () => {
       getPluginConfig: () => pluginConfig,
       env: {},
     });
-    const connection = resolveCodexBindingAppServerConnection({
+    const connection = await resolveCodexBindingAppServerConnection({
       binding: supervisedBinding(pluginConfig, agentDir),
       pluginConfig,
       config,
@@ -181,24 +187,24 @@ describe("Codex binding app-server connection", () => {
     expect(connection.clientAuthProfileId).toBeNull();
   });
 
-  it("fails closed when a supervised binding remains after supervision is disabled", () => {
-    expect(() =>
+  it("fails closed when a supervised binding remains after supervision is disabled", async () => {
+    await expect(
       resolveCodexBindingAppServerConnection({
         binding: { connectionScope: "supervision" },
         pluginConfig: { supervision: { enabled: false } },
         env: {},
         requirementsToml: null,
       }),
-    ).toThrow("Codex supervision is disabled");
+    ).rejects.toThrow("Codex supervision is disabled");
   });
 
-  it("fails closed when a supervised binding connection changes", () => {
+  it("fails closed when a supervised binding connection changes", async () => {
     const binding = supervisedBinding({
       supervision: { enabled: true },
       appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
     });
 
-    expect(() =>
+    await expect(
       resolveCodexBindingAppServerConnection({
         binding,
         pluginConfig: {
@@ -208,6 +214,6 @@ describe("Codex binding app-server connection", () => {
         env: {},
         requirementsToml: null,
       }),
-    ).toThrow("supervision connection changed");
+    ).rejects.toThrow("supervision connection changed");
   });
 });

@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
   createTestSessionCapability,
@@ -156,11 +156,12 @@ describe("sidebar routed-lineage freshness", () => {
           ).toContain(second.label);
         }
         expect(sidebar.querySelector(`[data-session-key="${first.key}"]`)?.textContent).toContain(
-          first.label,
+          refreshedFirst.label,
         );
         expect(sidebar.sessionKey).toBe(returnToFirst ? first.key : second.key);
+        // Accepted child facts update existing primary members without changing selection.
         expect(sessions.state.result?.sessions.find((row) => row.key === first.key)).toMatchObject(
-          reentrant ? refreshedFirst : first,
+          refreshedFirst,
         );
         if (reentrant) {
           expect(request).toHaveBeenCalledWith("sessions.describe", { key: second.key });

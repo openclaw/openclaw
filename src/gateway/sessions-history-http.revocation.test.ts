@@ -4,11 +4,11 @@
 import { EventEmitter } from "node:events";
 import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
-let transcriptUpdateHandler:
-  | ((update: { sessionFile?: string; message?: unknown; messageId?: string }) => void)
-  | undefined;
+let transcriptUpdateHandler: ((update: InternalSessionTranscriptUpdate) => void) | undefined;
 let authRevoked = false;
+let requestAuthorityCurrent = true;
 let gatewayConfig: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -27,6 +27,7 @@ let currentLifecycleRevision = "before-reset";
 let currentSessionStartedAt = 1;
 let beforeHistoryReadReturns: (() => Promise<void>) | undefined;
 let beforeHistoryRefreshReturns: (() => Promise<void>) | undefined;
+let beforeAuthCheckReturns: (() => Promise<void>) | undefined;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -65,6 +66,7 @@ vi.mock("./http-utils.js", () => ({
     cfg: { gateway: {} },
     requestAuth: {
       trustDeclaredOperatorScopes: true,
+      hasCurrentClientAuthority: () => requestAuthorityCurrent,
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     },
     operatorScopes: ["operator.read"],
@@ -74,6 +76,7 @@ vi.mock("./http-utils.js", () => ({
     allowRealIpFallback?: boolean;
   }) => {
     authCheckCalls += 1;
+    await beforeAuthCheckReturns?.();
     if (authRevoked) {
       return {
         ok: false as const,
@@ -137,7 +140,6 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 vi.mock("./session-history-state.js", () => ({
-  resolveCursorSeq: (_cursor: string | undefined) => undefined,
   readSessionHistorySnapshotAsync: async () => {
     if (transcriptReadError) {
       throw transcriptReadError;
@@ -364,17 +366,27 @@ function emitErrorOnNextTick(emitter: EventEmitter, error: Error): Promise<void>
 
 function emitTranscriptTextUpdate({
   sessionFile = SESSION_FILE,
+  target = {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main",
+    storePath: "/tmp",
+  },
   text,
   messageId,
 }: {
   sessionFile?: string;
+  target?: InternalSessionTranscriptUpdate["target"];
   text: string;
   messageId: string;
 }) {
   transcriptUpdateHandler?.({
     sessionFile,
+    target,
+    lifecycleRevision: "before-reset",
     message: { role: "assistant", content: [{ type: "text", text }] },
     messageId,
+    messageSeq: 1,
   });
 }
 
@@ -392,6 +404,7 @@ async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
 afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
+  requestAuthorityCurrent = true;
   authCheckCalls = 0;
   transcriptReadError = undefined;
   authenticatedUserProfile = undefined;
@@ -401,6 +414,7 @@ afterEach(() => {
   currentSessionStartedAt = 1;
   beforeHistoryReadReturns = undefined;
   beforeHistoryRefreshReturns = undefined;
+  beforeAuthCheckReturns = undefined;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -434,6 +448,8 @@ describe("session history SSE auth revocation", () => {
     { accept: "text/event-stream", change: "reset" },
     { accept: "application/json", change: "authentication" },
     { accept: "text/event-stream", change: "authentication" },
+    { accept: "application/json", change: "ingress policy" },
+    { accept: "text/event-stream", change: "ingress policy" },
   ] as const)(
     "withholds initial $accept history after $change during its read",
     async ({ accept, change }) => {
@@ -467,6 +483,8 @@ describe("session history SSE auth revocation", () => {
         } else if (change === "reset") {
           currentLifecycleRevision = "after-reset";
           currentSessionStartedAt = 2;
+        } else if (change === "ingress policy") {
+          requestAuthorityCurrent = false;
         } else {
           authRevoked = true;
         }
@@ -542,6 +560,43 @@ describe("session history SSE auth revocation", () => {
     emitTranscriptTextUpdate({ text: "role-revoked secret", messageId: "m-role" });
 
     await expectStreamClosedWithoutMessage(res, "role-revoked secret");
+  });
+
+  it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
+    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const entered = createDeferred();
+    const release = createDeferred();
+    let refreshCount = 0;
+    beforeAuthCheckReturns = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    beforeHistoryRefreshReturns = async () => {
+      refreshCount++;
+    };
+    try {
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      await entered.promise;
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      emitTranscriptTextUpdate({ text: "inline between refreshes", messageId: "inline-barrier" });
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      release.resolve();
+
+      await vi.waitFor(() =>
+        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(3),
+      );
+      expect(refreshCount).toBe(2);
+      expect(
+        res.writes
+          .filter((frame) => frame.startsWith("event:"))
+          .map((frame) => frame.split("\n")[0]),
+      ).toEqual(["event: history", "event: history", "event: message", "event: history"]);
+      expect(res.writes.join("")).toContain("inline between refreshes");
+    } finally {
+      release.resolve();
+      res.end();
+    }
   });
 
   it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
@@ -633,6 +688,12 @@ describe("session history SSE auth revocation", () => {
 
     emitTranscriptTextUpdate({
       sessionFile: "/tmp/other-session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "other-session",
+        sessionKey: "agent:main:other",
+        storePath: "/tmp",
+      },
       text: "other session",
       messageId: "m-3",
     });

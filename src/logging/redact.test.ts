@@ -87,6 +87,13 @@ describe("bounded replacement output", () => {
   });
 });
 
+describe("large benign text", () => {
+  it("preserves ordinary assignments at a replacement chunk boundary", () => {
+    const text = `${" ".repeat(16_381)}compass=visible${" ".repeat(16_384)}`;
+    expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+  });
+});
+
 describe("default redact pattern ownership", () => {
   it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
     expect(defaults).toEqual(DEFAULT_REDACT_STRING_PATTERNS);
@@ -1643,20 +1650,17 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
-  it("redactSensitiveText keeps single-capture custom patterns focused on the captured occurrence", () => {
+  it.each([
+    ["a backreference", String.raw`project_value=([^&]+)&confirm=\1`],
+    ["repeated text", String.raw`project_value=([^&]+)&confirm=[^&]+`],
+    ["an unmatched group", String.raw`(unused)?project_value=([^&]+)&confirm=\2`],
+    ["an empty last group", String.raw`project_value=([^&]+)()&confirm=\1`],
+    ["a named backreference", String.raw`project_value=(?<secret>[^&]+)&confirm=\k<secret>`],
+  ])("redactSensitiveText locates the custom capture with %s", (_name, pattern) => {
     const input = "project_value=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: [String.raw`project_value=([^&]+)&confirm=\1`],
-    });
-    expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
-  });
-
-  it("redactSensitiveText masks captured custom-pattern values even when the value repeats later", () => {
-    const input = "project_value=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`project_value=([^&]+)&confirm=[^&]+`],
+      patterns: [pattern],
     });
     expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });

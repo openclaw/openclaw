@@ -17,7 +17,7 @@ import {
   hasOfficialExternalWebSearchTarget,
 } from "../../../plugins/official-external-plugin-targets.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimeIds } from "./configured-runtime-plugin-installs.js";
 
 export type StartupPluginConvergencePlan = {
   required: boolean;
@@ -120,7 +120,7 @@ export function configMayRequireStartupPluginConvergence(params: {
   if (hasPotentialPluginConfig(params.config, params.env)) {
     return true;
   }
-  if (collectConfiguredRuntimePluginIds(params.config).length > 0) {
+  if (collectConfiguredRuntimeIds(params.config).length > 0) {
     return true;
   }
   if (

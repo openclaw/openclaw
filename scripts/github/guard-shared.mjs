@@ -1,3 +1,4 @@
+import { appendFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
@@ -5,8 +6,191 @@ export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 
-const githubApiRetryStatuses = new Set([502, 503, 504]);
+const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
+const githubApiRetryCodes = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
+// One primary quota window plus room for a fresh evaluation. Persist the deadline
+// across detect/autoscrub/enforce so each step cannot start another hour of waits.
+const securityReviewBudgetMs = 65 * 60_000;
+const recoveryDeadlineEnv = "OPENCLAW_SECURITY_REVIEW_DEADLINE_MS";
+
+export class GitHubRateLimitError extends Error {
+  constructor(message, response) {
+    super(message);
+    this.status = response.status;
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    const reset = Number(response.headers.get("x-ratelimit-reset"));
+    const retryAfter = response.headers.get("retry-after");
+    const retrySeconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+    const retryAt = Number.isFinite(retrySeconds)
+      ? Date.now() + Math.max(0, retrySeconds) * 1_000
+      : Date.parse(retryAfter ?? "");
+    this.retryAt = Math.max(
+      remaining === "0" && Number.isFinite(reset) ? reset * 1_000 : 0,
+      Number.isFinite(retryAt) ? retryAt : 0,
+    );
+  }
+}
+
+export class GitHubStatusPublicationError extends Error {
+  constructor(cause) {
+    super(cause.message, { cause });
+  }
+}
+
+export async function withSecurityReviewRecovery(evaluate) {
+  const recorded = process.env[recoveryDeadlineEnv];
+  const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
+  if (!Number.isSafeInteger(deadline) || deadline <= 0) {
+    throw new Error("Invalid Security Review recovery deadline.");
+  }
+  if (recorded === undefined && process.env.GITHUB_ENV) {
+    await appendFile(process.env.GITHUB_ENV, `${recoveryDeadlineEnv}=${deadline}\n`);
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await evaluate();
+    } catch (error) {
+      const rateLimited = error instanceof GitHubRateLimitError;
+      if (!rateLimited && !(error instanceof GitHubStatusPublicationError)) {
+        throw error;
+      }
+      // Do not resume a status write with stale authority after waiting. The
+      // caller restarts from live PR, file, comment, role, and CI observations.
+      const delay = rateLimited
+        ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
+          1_000 +
+          Math.floor(Math.random() * 15_000)
+        : githubApiRetryDelaysMs[attempt];
+      if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
+        throw new Error(
+          "GitHub API recovery budget exhausted; security review remains incomplete.",
+          { cause: error },
+        );
+      }
+      console.warn(
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+      );
+      await wait(delay);
+    }
+  }
+}
+
+const approvalCommands = new Set([
+  "/allow-security-sensitive-change",
+  "/allow-dependencies-change",
+]);
+
+export function parseApprovalCommands(body) {
+  const lines = (body ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.every((line) => approvalCommands.has(line)) ? lines : [];
+}
+
+// Commit statuses are the publisher's durable record of which PRs it evaluated.
+// GitHub's commit-to-PR association index is incomplete across fork repositories.
+export async function readSecurityReviewHistory(api, owner, repo, head) {
+  const contexts = new Set([
+    "openclaw/ci-gate",
+    "openclaw/security-sensitive-review",
+    "openclaw/dependency-review",
+  ]);
+  const statuses = await api.paginate(`/repos/${owner}/${repo}/commits/${head}/statuses`);
+  const numbers = new Set();
+  const counts = new Map();
+  for (const status of statuses) {
+    const context = typeof status.context === "string" ? status.context.toLowerCase() : "";
+    if (!contexts.has(context)) {
+      continue;
+    }
+    counts.set(context, (counts.get(context) ?? 0) + 1);
+    if (status.creator?.login !== "github-actions[bot]" || status.creator?.type !== "Bot") {
+      continue;
+    }
+    const recorded = /^PR #([1-9][0-9]*): /u.exec(status.description ?? "");
+    if (recorded && Number.isSafeInteger(Number(recorded[1]))) {
+      numbers.add(Number(recorded[1]));
+    }
+  }
+  return { pullRequestNumbers: [...numbers].toSorted((left, right) => left - right), counts };
+}
+
+export async function publishGuardStatus(guard, state, description) {
+  if (state === "success") {
+    // GitHub statuses belong to commits, while author and comment authority
+    // belong to PRs. Never lend one PR's approval to another PR with that head.
+    const history = await readSecurityReviewHistory(
+      guard.api,
+      guard.owner,
+      guard.repo,
+      guard.pullRequest.head.sha,
+    );
+    // GitHub refuses writes after 1,000 statuses per commit/context. Stop
+    // successes early so exhaustion cannot leave a permanently green result.
+    if ((history.counts.get(guard.context) ?? 0) >= 900) {
+      await publishGuardStatus(
+        guard,
+        "failure",
+        "Review status capacity is nearly exhausted; push a new commit",
+      );
+      throw new Error("Review status capacity is nearly exhausted; push a new commit.");
+    }
+    if (!history.pullRequestNumbers.includes(guard.pullRequest.number)) {
+      throw new Error("The current PR's security review status was not recorded.");
+    }
+    for (const number of history.pullRequestNumbers) {
+      if (number === guard.pullRequest.number) {
+        continue;
+      }
+      const other = await guard.api.request(`/repos/${guard.owner}/${guard.repo}/pulls/${number}`);
+      if (
+        other.state === "open" &&
+        other.base?.ref === guard.pullRequest.base.ref &&
+        other.head?.sha === guard.pullRequest.head.sha
+      ) {
+        await publishGuardStatus(
+          guard,
+          "failure",
+          "Multiple PRs use this head; close duplicates or push a distinct commit",
+        );
+        throw new Error(
+          "Multiple open PRs use the same head. Close duplicate PRs or push a distinct commit; security review updates automatically.",
+        );
+      }
+    }
+  }
+  try {
+    await guard.api.request(
+      `/repos/${guard.owner}/${guard.repo}/statuses/${guard.pullRequest.head.sha}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          context: guard.context,
+          state,
+          description: `PR #${guard.pullRequest.number}: ${description}`,
+          target_url: guard.runUrl,
+        }),
+      },
+    );
+  } catch (error) {
+    if (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code)) {
+      throw new GitHubStatusPublicationError(error);
+    }
+    throw error;
+  }
+}
 
 export function sanitizeGuardDisplayValue(value) {
   return String(value)
@@ -27,56 +211,6 @@ export function normalizeGuardLoginSet(value, fallback = "") {
   );
 }
 
-export function guardTrustedActorCandidates({ pullRequest, event, currentHeadSha }) {
-  const eventHeadSha = event?.pull_request?.head?.sha;
-  const eventAfterSha = event?.after;
-  const eventMatchesCurrentHead =
-    Boolean(currentHeadSha) &&
-    (eventHeadSha === currentHeadSha || eventAfterSha === currentHeadSha);
-  if (!eventMatchesCurrentHead) {
-    return [];
-  }
-  const candidates = [];
-  const seen = new Set();
-  for (const [source, login] of [["pull request author", pullRequest?.user?.login]]) {
-    if (typeof login !== "string" || login.length === 0) {
-      continue;
-    }
-    const normalizedLogin = login.toLowerCase();
-    if (seen.has(normalizedLogin)) {
-      continue;
-    }
-    seen.add(normalizedLogin);
-    candidates.push({ login, source });
-  }
-  return candidates;
-}
-
-export function isCommentNewerThan(comment, newerThan) {
-  if (!newerThan) {
-    return false;
-  }
-  const commentTime = Date.parse(comment.created_at ?? "");
-  const barrierTime = Date.parse(newerThan);
-  return Number.isFinite(commentTime) && Number.isFinite(barrierTime) && commentTime > barrierTime;
-}
-
-export function guardCommentHeadSha(comment) {
-  const body = comment?.body ?? "";
-  const patterns = [
-    /Approved SHA:\s+`([a-f0-9]{40})`/iu,
-    /current head SHA\s+\(`([a-f0-9]{40})`\)/iu,
-    /Current SHA:\s+`([a-f0-9]{40})`/iu,
-  ];
-  for (const pattern of patterns) {
-    const match = body.match(pattern);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
 export function createIssueMutationHelpers({
   api,
   issuePath,
@@ -86,8 +220,13 @@ export function createIssueMutationHelpers({
   warn = console.warn,
 }) {
   const ignoreUnavailableWritePermission = (action) => (error) => {
+    if (error instanceof GitHubRateLimitError) {
+      throw error;
+    }
     if (error?.status === 403) {
-      warn(`Skipping ${action}; token does not have write permission.`);
+      warn(
+        `Skipping ${action}; GitHub API rejected the request: ${sanitizeGuardDisplayValue(error.message)}`,
+      );
       return;
     }
     if (error?.status === 404 || error?.status === 422) {
@@ -146,63 +285,6 @@ export function createIssueMutationHelpers({
       .catch(ignoreUnavailableWritePermission("comment creation"));
   };
   return { removeLabelIfPresent, addLabelIfMissing, deleteCommentIfPresent, upsertComment };
-}
-
-export function createGuardApproverChecks({
-  api,
-  owner,
-  repo,
-  securityTeamSlug,
-  explicitSecurityApprovers,
-  warn = console.warn,
-}) {
-  const membershipCache = new Map();
-  const repositoryRoleCache = new Map();
-  const isSecurityMember = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (explicitSecurityApprovers.has(normalizedLogin)) {
-      return true;
-    }
-    if (membershipCache.has(normalizedLogin)) {
-      return membershipCache.get(normalizedLogin);
-    }
-    try {
-      const membership = await api.request(
-        `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
-      );
-      const allowed = membership?.state === "active";
-      membershipCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
-      }
-      membershipCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
-  const getRepositoryRoleName = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (repositoryRoleCache.has(normalizedLogin)) {
-      return repositoryRoleCache.get(normalizedLogin);
-    }
-    try {
-      const result = await api.request(
-        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      );
-      const roleName = typeof result?.role_name === "string" ? result.role_name : null;
-      repositoryRoleCache.set(normalizedLogin, roleName);
-      return roleName;
-    } catch (error) {
-      if (error?.status !== 404) {
-        warn(`Could not verify repository permission for ${login}: ${error.message}`);
-      }
-      repositoryRoleCache.set(normalizedLogin, null);
-      return null;
-    }
-  };
-  const isRepositoryAdmin = async (login) => (await getRepositoryRoleName(login)) === "admin";
-  return { getRepositoryRoleName, isSecurityMember, isRepositoryAdmin };
 }
 
 function githubErrorBodyTooLarge(maxBytes) {
@@ -276,11 +358,36 @@ export function createGitHubApi(token, options = {}) {
     });
     const operationPromise = (async () => {
       for (let attempt = 0; ; attempt += 1) {
-        const response = await fetchImpl(`https://api.github.com${path}`, {
-          ...requestOptions,
-          signal: requestSignal,
-          headers: { ...baseHeaders, ...requestOptions.headers },
-        });
+        let response;
+        try {
+          response = await fetchImpl(`https://api.github.com${path}`, {
+            ...requestOptions,
+            signal: requestSignal,
+            headers: { ...baseHeaders, ...requestOptions.headers },
+          });
+        } catch (error) {
+          // Node fetch wraps transport failures in a TypeError with the socket
+          // or resolver error as its cause. Unknown failures must not be retried.
+          const code = error?.cause?.code ?? error?.code;
+          if (
+            (method === "GET" || method === "HEAD") &&
+            !requestSignal.aborted &&
+            githubApiRetryCodes.has(code) &&
+            attempt < retryDelaysMs.length
+          ) {
+            await wait(retryDelaysMs[attempt], undefined, { signal: requestSignal });
+            continue;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          const requestError = new Error(
+            `GitHub API ${method} ${path} failed: ${code ? `${code}: ` : ""}${detail}`,
+            { cause: error },
+          );
+          if (!requestSignal.aborted) {
+            requestError.code = code;
+          }
+          throw requestError;
+        }
         if (response.status === 204) {
           return null;
         }
@@ -303,7 +410,17 @@ export function createGitHubApi(token, options = {}) {
           } catch (bodyError) {
             errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
           }
-          const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
+          const message = `GitHub API ${method} ${path} failed: ${response.status} ${response.statusText}: ${errorText}`;
+          if (
+            (response.status === 403 || response.status === 429) &&
+            (response.status === 429 ||
+              response.headers.get("x-ratelimit-remaining") === "0" ||
+              response.headers.has("retry-after") ||
+              /(?:API rate limit exceeded|secondary rate limit)/iu.test(errorText))
+          ) {
+            throw new GitHubRateLimitError(message, response);
+          }
+          const error = new Error(message);
           error.status = response.status;
           throw error;
         }

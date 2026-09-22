@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -7,13 +10,14 @@ import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
+  runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
+import { onTaskRegistryChange } from "../../../tasks/task-registry.store.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
@@ -233,6 +237,12 @@ it.each([
         }
         return exactRead(scope);
       });
+    const grandchildCancelled = createDeferred();
+    const unsubscribeTasks = onTaskRegistryChange(() => {
+      if (findTaskByRunId("g")?.status === "cancelled") {
+        grandchildCancelled.resolve();
+      }
+    });
     const pending = killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),
       controller: {
@@ -280,11 +290,17 @@ it.each([
       admissionA.release();
       if (phase === "later sibling drain") {
         await healthyEntered.promise;
-        await vi.waitFor(() => {
-          expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-          expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-          expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        await grandchildCancelled.promise;
+        // Publication precedes G's abort-marker write. Join its mutation from
+        // outside the observer's reentrant context before arming the next fault.
+        await runExclusiveSessionLifecycleMutation({
+          scope: storePath,
+          identities: [gKey, "g-session"],
+          run: async () => {},
         });
+        expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+        expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+        expect(findTaskByRunId("g")?.status).toBe("cancelled");
         expect(startG).not.toHaveBeenCalled();
         armed = true;
         admissionHealthy.release();
@@ -325,6 +341,7 @@ it.each([
       }
     } finally {
       armed = false;
+      unsubscribeTasks();
       admissionA.release();
       admissionD.release();
       admissionHealthy.release();

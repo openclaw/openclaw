@@ -24,14 +24,14 @@ import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
-import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../src/gateway/test-helpers.e2e.js";
-import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -109,7 +109,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   const inst = await createOpenClawTestInstance({
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     env: {
-      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+      ...Object.fromEntries(
+        listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+      ),
       ALL_PROXY: undefined,
       HTTP_PROXY: undefined,
       HTTPS_PROXY: undefined,
@@ -1704,10 +1706,13 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
+  // Deletion can settle through the runtime abort outcome instead of the RPC stop reason.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
     terminalLifecycleStatus &&
-    (result.stopReason === "rpc" || result.stopReason === "stop") &&
+    (result.stopReason === "rpc" ||
+      result.stopReason === "stop" ||
+      result.stopReason === "aborted") &&
     typeof result.endedAt === "number"
   ) {
     return;

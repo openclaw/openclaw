@@ -6,7 +6,6 @@ import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
 import { isRecord } from "../../utils.js";
 import {
-  optionalFiniteNumberSchema,
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
   optionalStringEnum,
@@ -194,7 +193,12 @@ function createCronPayloadSchema(params: {
           : {}),
         model: nullableStringSchema("Model override, or null to clear"),
         thinking: Type.Optional(Type.String({ description: "Thinking override" })),
-        timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
+        timeoutSeconds: Type.Optional(
+          Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
+            description:
+              "Timeout seconds; null restores the default on update (omission preserves it)",
+          }),
+        ),
         ...(params.triggersEnabled
           ? {
               toolBudget: optionalPositiveIntegerSchema({

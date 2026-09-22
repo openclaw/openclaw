@@ -9,6 +9,7 @@ import {
   withSessionPendingInputPersistence,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
+  resolveSessionTranscriptRuntimeTarget,
   rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
@@ -24,6 +25,7 @@ import {
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
 import {
+  buildRunUserTurnIdempotencyKey,
   normalizePersistedSteerTargetRunId,
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
@@ -66,13 +68,10 @@ export {
 } from "./user-turn-transcript.message.js";
 
 export {
+  buildRunUserTurnIdempotencyKey,
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
 };
-
-export function buildRunUserTurnIdempotencyKey(runId: string): string {
-  return `${runId}:user`;
-}
 
 // Store-backed persistence resolves the current session transcript file lazily
 // so callers can pass a session entry/store without knowing the final path.
@@ -243,6 +242,7 @@ export function createUserTurnTranscriptRecorder(
     const metadata = { ...candidate["__openclaw"] };
     if (candidate.content !== replacementText) {
       delete metadata.humanMentions;
+      delete metadata.workContext;
     }
     const next = { ...candidate, content: replacementText };
     delete next["__openclaw"];
@@ -548,18 +548,24 @@ export function createUserTurnTranscriptRecorder(
         if (!candidate || !target || persisted || runtimePersisted) {
           return false;
         }
-        pendingInput = await stageSessionPendingInput(target, {
-          ...options,
-          requestFingerprint: params.pendingInputRequestFingerprint,
-          trackCompletion: params.trackInputCompletion,
-          message: candidate,
-          config: target.config as SessionTranscriptTurnPersistOptions["config"],
-          prepareMessageAfterIdempotencyCheck: (next) =>
-            preparePersistedUserTurnMessageForTranscriptWrite(next, {
-              ...target,
-              beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
-            }),
-        });
+        const config = target.config as SessionTranscriptTurnPersistOptions["config"];
+        const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(target, config);
+        pendingInput = await stageSessionPendingInput(
+          { ...target, ...runtimeTarget },
+          {
+            ...options,
+            requestFingerprint: params.pendingInputRequestFingerprint,
+            trackCompletion: params.trackInputCompletion,
+            replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
+            message: candidate,
+            config,
+            prepareMessageAfterIdempotencyCheck: (next) =>
+              preparePersistedUserTurnMessageForTranscriptWrite(next, {
+                ...target,
+                beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
+              }),
+          },
+        );
         if (!pendingInput) {
           return false;
         }

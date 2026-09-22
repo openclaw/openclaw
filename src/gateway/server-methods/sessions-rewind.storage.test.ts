@@ -29,7 +29,7 @@ import {
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -500,6 +500,7 @@ describe("sessions.fork storage ownership", () => {
     { kind: "incognito", incognito: true },
     { kind: "ordinary", incognito: false },
     { kind: "repository", incognito: false },
+    { kind: "local-project", incognito: false },
   ])(
     "keeps the $kind child accessible in its source storage class",
     async ({ kind, incognito }) => {
@@ -520,6 +521,15 @@ describe("sessions.fork storage ownership", () => {
         if (repository) {
           await upsertSessionEntryCore(sourceScope, {
             repositoryWorkspaceId: repository.workspaceId,
+          });
+        }
+        const projectRoot = `${testState.stateDir}/qa-writer`;
+        if (kind === "local-project") {
+          fs.mkdirSync(projectRoot);
+          await upsertSessionEntryCore(sourceScope, {
+            projectId: "qa-writer",
+            spawnedCwd: projectRoot,
+            sessionRoot: projectRoot,
           });
         }
         const sourceEntry = loadSessionEntry(sourceScope);
@@ -546,6 +556,13 @@ describe("sessions.fork storage ownership", () => {
         expect(child.incognito === true).toBe(incognito);
         expect(child.sessionId).not.toBe(sourceScope.sessionId);
         expect(child.parentSessionKey).toBe(sessionKey);
+        if (kind === "local-project") {
+          expect(child).toMatchObject({
+            projectId: "qa-writer",
+            spawnedCwd: projectRoot,
+            sessionRoot: projectRoot,
+          });
+        }
         if (repository) {
           expect(child.repositoryWorkspaceId).toBeDefined();
           expect(child.repositoryWorkspaceId).not.toBe(repository.workspaceId);
@@ -557,6 +574,7 @@ describe("sessions.fork storage ownership", () => {
           expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
             repository,
           );
+          expect(child.sessionRoot).toBeUndefined();
           expect(child.worktree).toBeUndefined();
           expect(child.spawnedCwd).toBeUndefined();
         }

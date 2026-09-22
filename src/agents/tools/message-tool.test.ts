@@ -41,6 +41,7 @@ import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-deliv
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
@@ -514,37 +515,36 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
-  it("reports model-authored send normalization without inviting a retry", async () => {
-    const notice =
-      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: { ok: true },
-      normalization: { locationOmitted: true, notice },
-      toolResult: {
-        content: [{ type: "text", text: "sent" }],
-        details: { ok: true },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult);
+  it.each([false, true])(
+    "reports normalization guidance only after an actual send (dryRun=%s)",
+    async (dryRun) => {
+      const notice = "The normalized message was delivered; do not retry.";
+      const receipt = dryRun ? "Prepared reply" : "Sent reply";
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: "telegram:123",
+        handledBy: "plugin",
+        payload: { ok: true },
+        normalization: { locationOmitted: true, notice },
+        toolResult: {
+          content: [{ type: "text", text: receipt }],
+          details: { dryRun },
+        },
+        dryRun,
+      } satisfies MessageActionResult);
 
-    const { call, result } = await executeSendWithResult({
-      action: { channel: "telegram", target: "telegram:123", message: "hello" },
-    });
+      const { result } = await executeSendWithResult({
+        action: { channel: "telegram", target: "telegram:123", message: "hello", dryRun },
+      });
 
-    expect(call?.actionOrigin).toBe("message-tool");
-    expect(result).toEqual({
-      content: [
-        { type: "text", text: "sent" },
-        { type: "text", text: notice },
-      ],
-      details: { ok: true },
-    });
-  });
+      expect(result.content).toEqual([
+        { type: "text", text: receipt },
+        ...(dryRun ? [] : [{ type: "text", text: notice }]),
+      ]);
+    },
+  );
 
   it("carries core send settlement in private result details", async () => {
     const sendResult = {
@@ -1315,7 +1315,7 @@ describe("message tool secret scoping", () => {
       toolOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "webchat",
-        agentSessionKey: "agent:main",
+        agentSessionKey: "agent:main:main",
       },
     });
 
@@ -4188,7 +4188,7 @@ describe("message tool description", () => {
 
   it("describes userId as required directly for member-info, not via target", () => {
     const tool = createMessageTool({
-      config: {} as never,
+      config: { tools: { message: { actions: { allow: ["member-info"] } } } },
     });
     const properties = getToolProperties(tool);
     const userId = properties.userId as { description?: string } | undefined;
@@ -4553,6 +4553,12 @@ describe("message tool reasoning tag sanitization", () => {
               xLabel: "<think>axis rationale</think>Day",
               yLabel: "<think>axis rationale</think>Milliseconds",
             },
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Traffic",
+              segments: [{ label: "<think>segment rationale</think>Primary", value: 1 }],
+            },
           ],
         },
       },
@@ -4586,9 +4592,85 @@ describe("message tool reasoning tag sanitization", () => {
           xLabel: "Day",
           yLabel: "Milliseconds",
         },
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Traffic",
+          segments: [{ label: "Primary", value: 1 }],
+        },
       ],
     });
   });
+
+  it.each([true, false])(
+    "sanitizes every presentation record array while retaining the first reason (option suppressed: %s)",
+    (suppressOption) => {
+      const internalContext =
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+      const inboundContext = [
+        markInboundContextLabel("Conversation info:"),
+        "```json",
+        '{"chat_id":"group:test","sender_id":"test-sender"}',
+        "```",
+      ].join("\n");
+      const metadata = { retained: true };
+      const option = { label: suppressOption ? internalContext : "  Choice  ", metadata };
+      const nonString = { label: 7 };
+      const invalidArray = ["<think>unchanged</think>"];
+      const presentation = {
+        blocks: [
+          {
+            options: [option, null, invalidArray, nonString],
+            categories: [inboundContext],
+            segments: [
+              { label: internalContext, value: 1 },
+              { label: "<think>segment rationale</think>Slice", value: 2 },
+            ],
+            series: [
+              { name: internalContext, values: [1] },
+              { name: "<think>series rationale</think>Trend", values: [2] },
+            ],
+          },
+        ],
+      };
+      const original = structuredClone(presentation);
+      const params = { presentation };
+
+      expect(sanitizeMessageToolVisiblePayload(params)).toBe(
+        suppressOption ? "internal_runtime_context_echo" : "inbound_metadata_echo",
+      );
+
+      const block = params.presentation.blocks[0];
+      expect(block).toEqual({
+        options: [
+          { label: suppressOption ? "" : "  Choice  ", metadata },
+          null,
+          invalidArray,
+          nonString,
+        ],
+        categories: [""],
+        segments: [
+          { label: "", value: 1 },
+          { label: "Slice", value: 2 },
+        ],
+        series: [
+          { name: "", values: [1] },
+          { name: "Trend", values: [2] },
+        ],
+      });
+      expect(params.presentation).not.toBe(presentation);
+      expect(block).not.toBe(presentation.blocks[0]);
+      for (const field of ["options", "segments", "series"] as const) {
+        expect(block?.[field]).not.toBe(presentation.blocks[0]?.[field]);
+      }
+      expect(block?.options[0]).not.toBe(option);
+      expect(block?.options[2]).toBe(invalidArray);
+      expect(block?.options[3]).not.toBe(nonString);
+      expect(block?.segments[0]).not.toBe(presentation.blocks[0]?.segments[0]);
+      expect(block?.series[0]).not.toBe(presentation.blocks[0]?.series[0]);
+      expect(presentation).toEqual(original);
+    },
+  );
 
   it("strips internal runtime context from visible presentation fields before sending (#53732)", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
@@ -4707,7 +4789,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   afterEach(() => {
-    clearBootEchoContextForSession("agent:main");
+    clearBootEchoContextForSession("agent:main:main");
   });
 
   it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
@@ -4754,7 +4836,7 @@ describe("message tool boot-echo guard", () => {
   ] as const)(
     "preserves %s after sanitizing boot echo in %s: %j",
     async (mediaField, textField, media) => {
-      setBootEchoContextForSession("agent:main", longBootPrompt);
+      setBootEchoContextForSession("agent:main:main", longBootPrompt);
       mockSendResult({ channel: "telegram", to: "telegram:123" });
 
       const echoedText =
@@ -4765,7 +4847,7 @@ describe("message tool boot-echo guard", () => {
           [textField]: echoedText,
           [mediaField]: structuredClone(media),
         },
-        toolOptions: { agentSessionKey: "agent:main" },
+        toolOptions: { agentSessionKey: "agent:main:main" },
       });
       expect(call?.params?.[textField]).toBe("");
       expect(call?.params?.[mediaField]).toEqual(media);
@@ -4773,7 +4855,7 @@ describe("message tool boot-echo guard", () => {
   );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     const call = await executeSend({
@@ -4781,7 +4863,7 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Good morning! Project status looks healthy today.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
   });
@@ -4794,13 +4876,13 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Any message goes through unchanged.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Any message goes through unchanged.");
   });
 
   it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedBootText =
@@ -4825,7 +4907,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.presentation).toEqual({
@@ -4846,7 +4928,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   it("sanitizes boot echo text from presentation button links before dispatch", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedText =
@@ -4885,7 +4967,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.message).toBe("Visible");

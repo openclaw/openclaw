@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
+import {
+  bindInProcessSubagentResume,
+  readInProcessSubagentResume,
+} from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,13 +19,11 @@ vi.mock("../../gateway/method-scopes.js", () => ({
   resolveLeastPrivilegeOperatorScopesForMethod: () => ["operator.write"],
 }));
 
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: mocks.dispatch,
   getInProcessGatewayRequestContext: (resolver?: () => GatewayRequestContext | undefined) =>
     resolver ? resolver() : mocks.hasContext ? mocks.context : undefined,
   runWithOperatorToolGatewayCleanupContext: <T>(run: () => T) => run(),
-  hasInProcessGatewayContext: (resolveGatewayContext?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolveGatewayContext?.() ?? mocks.hasContext),
 }));
 
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
@@ -45,6 +47,34 @@ describe("trusted in-process Gateway session creation", () => {
     mocks.callGatewayTool.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
   });
 
+  it("keeps task resume authority inside trusted in-process admission and refuses transport fallback", async () => {
+    const subagentResume = {
+      caller: { agentId: "main", sessionKey: "agent:main:main", assertCurrent: vi.fn() },
+      childSessionKey: "agent:main:dashboard:child",
+      childSessionId: "child-session",
+      previousRunId: "paused-run",
+      taskRunId: "original-task",
+      generation: 1,
+      createdAt: 100,
+    };
+    const request = bindInProcessSubagentResume(
+      {
+        method: "agent",
+        params: { message: "Continue", sessionKey: subagentResume.childSessionKey },
+      },
+      subagentResume,
+    );
+    await callAgentToolGatewayRequest(request);
+    expect(mocks.dispatch).toHaveBeenCalledWith("agent", request.params, expect.anything());
+    expect(readInProcessSubagentResume(mocks.dispatch.mock.calls[0]?.[2])).toBe(subagentResume);
+    expect(request.params).not.toHaveProperty("subagentResume");
+    mocks.hasContext = false;
+    await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(
+      "trusted in-process Gateway dispatch",
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("surfaces creation provenance only on in-process dispatch", async () => {
     const creation = {
       via: "spawn" as const,
@@ -60,6 +90,7 @@ describe("trusted in-process Gateway session creation", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         sessionCreation: creation,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
       },
     );
@@ -112,31 +143,47 @@ describe("trusted in-process Gateway session creation", () => {
       allow: ["read", "sessions_spawn"],
       deny: ["exec"],
     };
+    const resolvedModel = { provider: "custom", model: "middle" };
+    const spawnModelAutoSelection = { model: "custom/middle", hasFallbackOrigin: true };
 
     mocks.callGatewayTool.mockImplementationOnce(async () => {
       expect(getGatewaySessionSpawnContext()).toEqual({
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
+        resolvedModel,
+        spawnModelAutoSelection,
       });
       return { key: "agent:main:dashboard:child" };
     });
 
     await callInProcessGatewayToolWithCreation(
       "sessions.create",
-      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        model: "custom/middle",
+      },
       {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
+        resolvedModel,
+        spawnModelAutoSelection,
       },
     );
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "sessions.create",
       {},
-      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        model: "custom/middle",
+      },
       {
         scopes: ["operator.write"],
         requireAgentRuntimeIdentity: true,
@@ -195,6 +242,7 @@ describe("trusted in-process Gateway session creation", () => {
         resolveGatewayContext: expect.any(Function),
         sessionCreation: creation,
         signal: controller.signal,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         timeoutMs: 2_000,
       });
@@ -330,6 +378,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         agentToolCaller,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         expectFinal: true,
         onAccepted,
@@ -572,6 +621,10 @@ describe("built-in Gateway foreground authority", () => {
       name: "generic",
       call: () => callInProcessGatewayTool("sessions.patch", { key: "target", pinned: true }),
     },
+    {
+      name: "Cron mutation",
+      call: () => callAgentToolGatewayRequest({ method: "cron.add", params: {} }),
+    },
   ];
 
   it.each(callers)(
@@ -627,6 +680,36 @@ describe("built-in Gateway foreground authority", () => {
       expect(committed).toBe(false);
     },
   );
+
+  it("keeps a preserved write fenced by its original request signal", async () => {
+    const controller = new AbortController();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const commit = vi.fn();
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      entered.resolve();
+      await release.promise;
+      options.sessionMutationCommitGuard?.();
+      commit();
+      return { ok: true };
+    });
+    const pending = bindAgentToolGatewayRequest({ revalidateOnCompletion: false })({
+      method: "message.action",
+      params: { action: "channel-edit" },
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toThrow("message request canceled");
+    try {
+      await entered.promise;
+      controller.abort(new Error("message request canceled"));
+      release.resolve();
+      await rejected;
+      expect(commit).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
 
   it("lets host-owned abort cleanup settle without reopening the closed foreground caller", async () => {
     const context = {} as GatewayRequestContext;

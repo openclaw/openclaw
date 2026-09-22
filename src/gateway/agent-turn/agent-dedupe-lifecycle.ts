@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  isSubagentCoordinationInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
@@ -30,6 +34,7 @@ export function createAgentDedupeLifecycle(params: {
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
   suppressVisibleSessionEffects: boolean;
+  inputProvenance?: InputProvenance;
   privateCompletion?: true;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -83,7 +88,9 @@ export function createAgentDedupeLifecycle(params: {
           status: "accepted" as const,
           ...(sessionKey ? { sessionKey } : {}),
           ...(dedupeAgentId ? { agentId: dedupeAgentId } : {}),
-          controlUiVisible: !params.suppressVisibleSessionEffects,
+          controlUiVisible:
+            !params.suppressVisibleSessionEffects &&
+            !isSubagentCoordinationInputProvenance(params.inputProvenance),
           acceptedAt,
           dedupeKeys: params.agentDedupeKeys,
           expiresAtMs: resolveAgentRunExpiresAtMs({ now: acceptedAt, timeoutMs: pendingTimeoutMs }),
@@ -116,6 +123,44 @@ export function createAgentDedupeLifecycle(params: {
       keys: params.agentDedupeKeys,
     });
     reserved = false;
+  };
+
+  const bindSessionTarget = (target: {
+    sessionKey: string;
+    agentId?: string;
+    sessionId?: string;
+  }) => {
+    const entry = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    if (
+      !entry?.ok ||
+      !isAcceptedAgentDedupePayload(entry.payload) ||
+      entry.payload.reservationId !== reservationId
+    ) {
+      return;
+    }
+    const previousKey =
+      typeof entry.payload.sessionKey === "string" ? entry.payload.sessionKey : undefined;
+    // Routing and the session COMMIT owner publish this attempt's target. Stop
+    // never manufactures a pending-run incarnation from its own row lookup.
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys.filter(
+        (key) => params.context.dedupe.get(key)?.payload === entry.payload,
+      ),
+      entry: {
+        ...entry,
+        payload: {
+          ...entry.payload,
+          ...target,
+          ...(previousKey && previousKey !== target.sessionKey
+            ? { sessionKeyAliases: [previousKey] }
+            : {}),
+        },
+      },
+    });
   };
 
   const abortForLifecycleRotation = (target?: { sessionKey?: string; agentId?: string }) => {
@@ -178,6 +223,7 @@ export function createAgentDedupeLifecycle(params: {
   return {
     reservationId,
     reserve,
+    bindSessionTarget,
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,

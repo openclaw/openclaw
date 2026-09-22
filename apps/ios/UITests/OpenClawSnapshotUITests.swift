@@ -402,9 +402,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let inlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
         XCTAssertTrue(inlineModelSelectionTarget.waitForExistence(timeout: 3))
         XCTAssertEqual(inlineModelSelectionTarget.label, "Changes the global default")
-        let inlineSelectedModel = app.buttons["openai/gpt-6-astra"]
+        let inlineSelectedModel = app.buttons["openai/gpt-5.6-sol"]
         XCTAssertTrue(inlineSelectedModel.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Default: openai/gpt-6-astra"].exists)
+        XCTAssertTrue(app.buttons["Default: openai/gpt-5.6-sol"].exists)
         let inlineNonDefaultModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(inlineNonDefaultModel.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "chat-composer-model")
@@ -418,11 +418,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(updatedInlineModelSelectionTarget.label, "Changes the global default")
         let selectedInlineModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(selectedInlineModel.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["openai/gpt-6-astra"].exists)
-        app.buttons["openai/gpt-6-astra"].tap()
+        XCTAssertTrue(app.buttons["openai/gpt-5.6-sol"].exists)
+        app.buttons["openai/gpt-5.6-sol"].tap()
         let restoredInlineModel = app.buttons["chat-composer-inline-model"]
         XCTAssertTrue(restoredInlineModel.waitForExistence(timeout: 3))
-        self.waitForValue("gpt-6-astra", of: restoredInlineModel)
+        self.waitForValue("gpt-5.6-sol", of: restoredInlineModel)
 
         inlineEffort.tap()
         XCTAssertTrue(app.buttons["Thinking"].waitForExistence(timeout: 3))
@@ -591,6 +591,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let latestSeededReply = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
         XCTAssertTrue(latestSeededReply.waitForExistence(timeout: 8))
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        work.tap()
+        for _ in 0..<12 where !latestSeededReply.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(latestSeededReply.isHittable)
 
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -649,6 +656,39 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.assertElementHasRenderedContent(reply, named: "reply after send")
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
+    }
+
+    func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "completed-work-initial")
+
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(work.frame.height, 44)
+        let earlier = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
+        XCTAssertFalse(earlier.exists)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
+        self.assertElementHasRenderedContent(latest, named: "final reply with work collapsed")
+        work.tap()
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "completed-work-expanded")
+        let workLabel = work.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        for _ in 0..<12 where !workLabel.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(workLabel.isHittable)
+        workLabel.tap()
+        XCTAssertTrue(earlier.waitForNonExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
+        self.assertElementHasRenderedContent(latest, named: "final reply after collapsing work again")
+        self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
     func testExistingSessionRestoresLatestOutput() throws {
@@ -909,6 +949,61 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.waitForValue("All", of: menu)
     }
 
+    /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.
+    /// Only the loopback Gateway is synthetic; no production UI state is injected.
+    func testManagedDocumentDownloadAndSystemShare() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"] != nil,
+            "Run through scripts/test-ios-chat-attachments.sh with the owned loopback fixture")
+        let fixtureURL = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"])
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        // A fixture/history failure must never produce the expected baseline regression marker.
+        guard app.staticTexts["Your report is ready."].waitForExistence(timeout: 15) else {
+            XCTFail("Managed document fixture history did not load")
+            return
+        }
+        let download = app.buttons["chat-file-download"]
+        let available = download.waitForExistence(timeout: 5)
+        let stage = ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_BASELINE"] == "1"
+            ? "before" : "after"
+        self.attachScreenshot(named: "document-\(stage)")
+        XCTAssertTrue(available, "MANAGED_DOCUMENT_DOWNLOAD_MISSING")
+        XCTAssertTrue(download.isEnabled)
+        download.tap()
+        let saveToFiles = app.descendants(matching: .any)["Save to Files"].firstMatch
+        XCTAssertTrue(saveToFiles.waitForExistence(timeout: 10), "Downloaded file must reach the system exporter")
+        self.attachScreenshot(named: "document-system-share")
+
+        let statusURL = try XCTUnwrap(URL(string: fixtureURL))
+        let (statusData, _) = try await URLSession.shared.data(from: statusURL)
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+        XCTAssertEqual(status["documentDownloads"] as? Int, 1)
+        let requests = try XCTUnwrap(status["requests"] as? [[String: Any]])
+        let artifacts = requests.filter { $0["method"] as? String == "artifacts.download" }
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(
+            artifacts.first?["artifactId"] as? String,
+            "artifact_managed_media_11111111-1111-4111-8111-111111111111")
+        XCTAssertTrue(["main", "agent:main:main"].contains(artifacts.first?["sessionKey"] as? String ?? ""))
+
+        // Relaunch exercises persisted history plus fresh scoped retrieval, not a retained ticket.
+        let reloaded = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let reloadedDownload = reloaded.buttons["chat-file-download"]
+        XCTAssertTrue(reloadedDownload.waitForExistence(timeout: 15))
+        let deniedURL = try XCTUnwrap(URL(string: fixtureURL + "/attachment-denied"))
+        _ = try await URLSession.shared.data(from: deniedURL)
+        reloadedDownload.tap()
+        XCTAssertTrue(reloaded.alerts["Unable to Download File"].waitForExistence(timeout: 10))
+        self.attachScreenshot(named: "document-expired")
+        let (reloadedStatusData, _) = try await URLSession.shared.data(from: statusURL)
+        let reloadedStatus = try XCTUnwrap(JSONSerialization.jsonObject(with: reloadedStatusData) as? [String: Any])
+        let reloadedRequests = try XCTUnwrap(reloadedStatus["requests"] as? [[String: Any]])
+        let refreshedArtifacts = reloadedRequests.filter { $0["method"] as? String == "artifacts.download" }
+        XCTAssertEqual(refreshedArtifacts.count, 2, "Relaunch must obtain fresh artifact access, not reuse a ticket")
+        XCTAssertEqual(refreshedArtifacts.last?["artifactId"] as? String, artifacts.first?["artifactId"] as? String)
+        XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
+    }
+
     func testLiveGatewayFreshInstallSetupAndRelaunch() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone setup proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
@@ -1153,7 +1248,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(popover.buttons["Sessions…"].exists)
         XCTAssertFalse(popover.buttons["Dashboard"].exists)
         XCTAssertTrue(popover.buttons["New session options…"].exists)
-        let defaultModel = app.buttons["Default: openai/gpt-6-astra"]
+        let defaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
         XCTAssertTrue(defaultModel.waitForExistence(timeout: 5))
         let defaultLogo = defaultModel.images["chat-model-provider-icon-openai"]
         XCTAssertTrue(defaultLogo.exists)
@@ -1162,15 +1257,15 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(providerDrawer.waitForExistence(timeout: 5))
         self.assertMinimumTouchTarget(providerDrawer)
         XCTAssertEqual(providerDrawer.value as? String, "Collapsed")
-        let explicitModel = app.buttons["openai/gpt-6-astra"]
+        let explicitModel = app.buttons["openai/gpt-5.6-sol"]
         let initialExplicitModelCount = app.buttons.matching(
-            NSPredicate(format: "label == %@", "openai/gpt-6-astra")).count
+            NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count
         providerDrawer.tap()
         XCTAssertEqual(providerDrawer.value as? String, "Expanded")
         XCTAssertTrue(explicitModel.exists)
         XCTAssertTrue(explicitModel.images["chat-model-provider-icon-openai"].exists)
         XCTAssertGreaterThan(
-            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-6-astra")).count,
+            app.buttons.matching(NSPredicate(format: "label == %@", "openai/gpt-5.6-sol")).count,
             initialExplicitModelCount)
         let explicitIsSelected = explicitModel.value as? String == "Selected"
         let selectedModel = explicitIsSelected ? explicitModel : defaultModel
@@ -1206,13 +1301,13 @@ extension OpenClawSnapshotUITests {
         XCTAssertGreaterThan(
             selectedNextModel.images["chat-menu-selection-checkmark"].frame.minX,
             selectedNextModel.frame.midX)
-        let restoredDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
+        let restoredDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
         XCTAssertTrue(restoredDefaultModel.waitForExistence(timeout: 5))
         restoredDefaultModel.tap()
         XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
 
         actions.tap()
-        let reselectedDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
+        let reselectedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
         XCTAssertTrue(reselectedDefaultModel.waitForExistence(timeout: 5))
         XCTAssertEqual(reselectedDefaultModel.value as? String, "Selected")
         XCTAssertGreaterThan(
@@ -1269,7 +1364,7 @@ extension OpenClawSnapshotUITests {
         let restoredVerbosity = app.segmentedControls["chat-verbosity-control"]
         XCTAssertTrue(restoredVerbosity.waitForExistence(timeout: 5))
         self.waitForEnabled(restoredVerbosity)
-        let settledDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
+        let settledDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
         XCTAssertTrue((settledDefaultModel.value as? String)?.contains("Selected") == true)
         XCTAssertTrue(popover.exists)
 
@@ -1288,9 +1383,9 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(reopenedActions.waitForExistence(timeout: 5))
         self.waitForHittable(true, of: reopenedActions)
         reopenedActions.tap()
-        let reopenedDefaultModel = app.buttons["Default: openai/gpt-6-astra"]
+        let reopenedDefaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
         XCTAssertTrue(reopenedDefaultModel.waitForExistence(timeout: 5))
-        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-6-astra")
+        XCTAssertEqual(reopenedDefaultModel.label, "Default: openai/gpt-5.6-sol")
         XCTAssertTrue((reopenedDefaultModel.value as? String)?.contains("Selected") == true)
         let reopenedThinkingSlider = app.sliders["chat-thinking-slider"]
         XCTAssertTrue(reopenedThinkingSlider.waitForExistence(timeout: 5))

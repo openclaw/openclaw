@@ -2,11 +2,14 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { withSqliteSnapshotSource } from "../infra/sqlite-snapshot-source.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  withSqliteSnapshotSource,
+} from "../infra/sqlite-snapshot-source.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -57,6 +60,53 @@ it("keeps a fresh live read inside the physical handle barrier", async () => {
   );
   expect(rows).toEqual([{ event_key: "preserved" }]);
   (await acquireOpenClawStateDatabaseFileExclusion(pathname)).release();
+});
+
+it("shares one online backup across concurrent snapshots of the live state owner", async () => {
+  const pathname = source();
+  const owner = openOpenClawStateDatabase({ path: pathname });
+  owner.db
+    .prepare(
+      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+    )
+    .run("readonly-exclusion", "single-flight", "{}", 2);
+  const sqlite = await import("../infra/node-sqlite.js").then((module) =>
+    module.requireNodeSqlite(),
+  );
+  const backup = sqlite.backup.bind(sqlite);
+  let backupCalls = 0;
+  vi.spyOn(sqlite, "backup").mockImplementation(async (...args) => {
+    backupCalls += 1;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    return await backup(...args);
+  });
+
+  const [first, second] = await Promise.all([
+    prepareSqliteReadOnlyLocation(pathname),
+    prepareSqliteReadOnlyLocation(pathname),
+  ]);
+  try {
+    expect(backupCalls).toBe(1);
+    expect(first.location).toBe(second.location);
+    expect(first.cleanup()).toBe(true);
+    expect(fs.existsSync(second.location)).toBe(true);
+    const snapshot = openNodeSqliteDatabase(second.location, { readOnly: true });
+    try {
+      expect(
+        snapshot
+          .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ? ORDER BY created_at")
+          .all("readonly-exclusion"),
+      ).toEqual([{ event_key: "preserved" }, { event_key: "single-flight" }]);
+    } finally {
+      snapshot.close();
+    }
+  } finally {
+    await first.cleanupAsync();
+    expect(await second.cleanupAsync()).toBe(true);
+  }
+  expect(fs.existsSync(second.location)).toBe(false);
 });
 
 it("refuses a new live readonly handle without touching an excluded source", async () => {

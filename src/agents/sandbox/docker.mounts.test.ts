@@ -119,6 +119,48 @@ describe("ensureSandboxContainer managed mounts", () => {
     expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
   });
 
+  it.each(["docker", "podman"] as const)(
+    "preserves hot %s tmpfs removal and replaces it only after stopping",
+    async (backend) => {
+      const workspaceDir = tempDirs.make("openclaw-tmpfs-lifecycle-");
+      const cfg = createSandboxConfig([], [], "rw");
+      cfg.backend = backend;
+      cfg.docker.tmpfs = ["/workspace/cache:rw"];
+      const params = {
+        scopeKey: "shared",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+        ...(backend === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+      };
+      spawnState.containerExists = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
+      await harness.ensureSandboxContainer(params);
+      const firstHash = spawnState.labelHash;
+      spawnState.mounts = JSON.stringify([
+        { Type: "bind", Source: workspaceDir, Destination: "/workspace", RW: true },
+      ]);
+      spawnState.tmpfs = { "/workspace/cache": backend === "podman" ? "rw,nosuid,nodev" : "rw" };
+      cfg.docker.env = { CHANGED: "1" };
+      await expect(harness.ensureSandboxContainer(params)).resolves.toBeDefined();
+      cfg.docker.tmpfs = [];
+      spawnState.calls.length = 0;
+      await expect(harness.ensureSandboxContainer(params)).rejects.toThrow(
+        "Sandbox mounts changed",
+      );
+      expect(
+        spawnState.calls.some((call) => ["rm", "create", "start"].includes(call.args[0]!)),
+      ).toBe(false);
+      expect(spawnState.labelHash).toBe(firstHash);
+      spawnState.inspectRunning = false;
+      await harness.ensureSandboxContainer(params);
+      const create = spawnState.calls.find((call) => call.args[0] === "create");
+      expect(create).toBeDefined();
+      expect(collectDockerFlagValues(create!.args, "--tmpfs")).not.toContain("/workspace/cache:rw");
+      expect(spawnState.labelHash).not.toBe(firstHash);
+    },
+  );
+
   it("applies custom binds after workspace mounts so overlapping binds can override", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const customRoot = tempDirs.make("openclaw-docker-mounts-");

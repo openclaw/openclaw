@@ -632,20 +632,36 @@ describe("Gemini embedding provider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects wrong single embedding vector shapes", async () => {
-    installFetchMock(() => ({ embedding: { values: [1, "bad"] } }));
-
+  it.each([
+    { label: "empty", values: [] },
+    { label: "missing", values: undefined },
+    { label: "null", values: null },
+    { label: "string", values: "bad" },
+    { label: "array-like", values: { 0: 1, length: 1 } },
+    { label: "mixed", values: [1, "bad"] },
+  ])("rejects $label vectors from direct and synchronous requests", async ({ values }) => {
+    installFetchMock((input) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      return url.endsWith(":batchEmbedContents")
+        ? { embeddings: [{ values }] }
+        : { embedding: { values } };
+    });
     const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
+      config: {},
       provider: "gemini",
       remote: { apiKey: "test-key" },
       model: "gemini-embedding-001",
       fallback: "none",
     });
-
     await expect(provider.embed("test query", { inputType: "query" })).rejects.toThrow(
       "gemini embeddings failed: malformed JSON response",
     );
+    await expect(provider.embedBatch(["one"], { inputType: "document" })).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
+    await expect(
+      provider.embedBatch([{ text: "one", parts: [{ type: "text", text: "one" }] }]),
+    ).rejects.toThrow("gemini embeddings failed: malformed JSON response");
   });
 
   it("rejects batch embedding count mismatches", async () => {

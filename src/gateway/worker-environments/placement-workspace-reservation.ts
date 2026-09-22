@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
@@ -86,6 +87,7 @@ function assertReconciled(
 }
 
 export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRuntime) {
+  const signal = getGatewayRestartDrainSignal();
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
@@ -99,6 +101,7 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
         leaseMs: 60000,
         waitMs: 0,
         leaseLabel: "session publication exclusion",
+        signal,
       },
       async (lease) => await run(() => lease.assertOwned()),
     );

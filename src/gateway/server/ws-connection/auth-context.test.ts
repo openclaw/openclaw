@@ -262,23 +262,26 @@ function expectBootstrapTokenAccepted(params: {
 }
 
 describe("resolveConnectAuthDecision", () => {
-  it("does not try credential fallbacks after proxy attribution fails", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-    const decision = await resolveDeviceTokenDecision({
-      verifyDeviceToken,
-      verifyBootstrapToken,
-      stateOverrides: {
-        authResult: { ok: false, reason: "proxy_attribution_required" },
-        bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
-      },
-    });
+  it.each(["proxy_attribution_required", "token_redacted_config", "password_redacted_config"])(
+    "does not try credential fallbacks after %s",
+    async (reason) => {
+      const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+      const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+      const decision = await resolveDeviceTokenDecision({
+        verifyDeviceToken,
+        verifyBootstrapToken,
+        stateOverrides: {
+          authResult: { ok: false, reason },
+          bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
+        },
+      });
 
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("proxy_attribution_required");
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-  });
+      expect(decision.authOk).toBe(false);
+      expect(decision.authResult.reason).toBe(reason);
+      expect(verifyDeviceToken).not.toHaveBeenCalled();
+      expect(verifyBootstrapToken).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
     const verifyDeviceToken = createVerifyDeviceToken({ ok: false });

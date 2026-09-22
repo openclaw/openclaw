@@ -1,9 +1,17 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
+import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import {
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+  resolveMessageSender,
+} from "../../../lib/chat/message-normalizer.ts";
 import {
   isUiGlobalScopeConfigured,
   isSubagentSessionKey,
@@ -11,31 +19,28 @@ import {
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
-import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
-  agentRunFrameGroups,
   buildCachedChatItems,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
-  deleteExpansionState,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
+  pruneAssistantMessageExpansions,
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
@@ -58,6 +63,7 @@ import {
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { projectTranscriptMessageIndex } from "./chat-transcript-message-index.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
@@ -78,11 +84,30 @@ export function projectChatTranscript(
   transcript: ChatTranscriptSession,
 ): ChatTranscriptProjection {
   const state = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(state, props);
+  const asyncQuestions = props.asyncQuestions;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
+  // Use unfiltered history and retained participants so searching or paging away
+  // another person's messages cannot turn a shared conversation into a solo one.
+  const showOwnSenderName =
+    (activeSession?.expandedParticipants ?? activeSession?.participants ?? []).some(
+      ({ identity }) =>
+        identity.type !== "agent" && !(identity.type === "profile" && identity.id === props.userId),
+    ) ||
+    [...props.messages, ...(props.pendingInputs ?? []).map((input) => input.message)].some(
+      (message) => {
+        if (normalizeRoleForGrouping(resolveMessageRole(message)) !== "user") {
+          return false;
+        }
+        const sender = resolveMessageSender(
+          asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]),
+        );
+        return Boolean(
+          sender && !(sender.identity?.type === "profile" && sender.identity.id === props.userId),
+        );
+      },
+    );
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
@@ -107,6 +132,16 @@ export function projectChatTranscript(
   };
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const expandedAssistantMessages = transcript.expandedAssistantMessages;
+  const recoveryKey = (messageId: string) =>
+    messageRecoveryKey(props.fullMessageAgentId, messageId);
+  if (expandedAssistantMessages.size > 0) {
+    pruneAssistantMessageExpansions(expandedAssistantMessages, props.fullMessageAgentId, [
+      ...props.messages,
+      ...props.toolMessages,
+      ...(props.pendingInputs ?? []).map((input) => input.message),
+    ]);
+  }
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -118,7 +153,7 @@ export function projectChatTranscript(
     toolMessages: props.toolMessages,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
-    stream: displayStream,
+    stream: props.stream ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
@@ -140,6 +175,14 @@ export function projectChatTranscript(
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
+    messageRecovery:
+      searchFiltering && props.loadFullAssistantMessage
+        ? {
+            messages: expandedAssistantMessages,
+            revision: getExpansionStateVersion(expandedAssistantMessages),
+            agentId: props.fullMessageAgentId,
+          }
+        : undefined,
   });
   const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
   const runOutputTokens = workingIndicator?.runId
@@ -154,27 +197,6 @@ export function projectChatTranscript(
   );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
-  const expandedAssistantMessages = transcript.expandedAssistantMessages;
-  const recoveryKey = (messageId: string) => JSON.stringify([props.fullMessageAgentId, messageId]);
-  if (expandedAssistantMessages.size > 0) {
-    // Search and virtualization only hide rows. Prune against source history so
-    // a removed message retires its body/load without refetching hidden rows.
-    const retainedKeys = new Set(
-      [
-        ...props.messages,
-        ...props.toolMessages,
-        ...(props.pendingInputs ?? []).map((input) => input.message),
-      ]
-        .map((message) => readChatThreadMessageIdentity(message)?.id)
-        .filter((id): id is string => typeof id === "string")
-        .map(recoveryKey),
-    );
-    for (const key of expandedAssistantMessages.keys()) {
-      if (!retainedKeys.has(key)) {
-        deleteExpansionState(expandedAssistantMessages, key);
-      }
-    }
-  }
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -212,7 +234,7 @@ export function projectChatTranscript(
         key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
-          : { status: "loaded", markdown, revision: revision + 1 },
+          : { status: "loaded", markdown, message: result?.message, revision: revision + 1 },
       );
       requestUpdate();
     };
@@ -265,10 +287,9 @@ export function projectChatTranscript(
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
-  const messageRowKeysById = new Map<string, string>();
-  const transcriptMessageKeys = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    entryRefFor: transcript.entryAnimations.refFor,
     presented: props.presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
@@ -295,10 +316,12 @@ export function projectChatTranscript(
     fetchLinkFavicon: props.fetchLinkFavicon,
     pluginToolIcons: props.pluginToolIcons,
     githubRepo: props.githubRepo,
+    githubRepositories: props.githubRepositories,
     showAssistantAvatar: avatarPlacement === "gutter",
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
+    branding: props.branding,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
@@ -343,6 +366,7 @@ export function projectChatTranscript(
       mainKey: props.mainKey,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
+      showOwnSenderName,
       userAvatar: props.userAvatar ?? null,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
       onDiscardQueuedMessage: props.onDiscardQueuedMessage,
@@ -406,7 +430,7 @@ export function projectChatTranscript(
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
-      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+      return renderChatDivider(item);
     }
     if (item.kind === "notice") {
       return renderChatNotice(item);
@@ -430,13 +454,14 @@ export function projectChatTranscript(
       if (!firstGroup) {
         return nothing;
       }
-      if (item.groups.length === 1) {
-        return renderMessageGroup(firstGroup, renderGroupOptions(firstGroup));
-      }
-      return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
+      return item.groups.length === 1
+        ? renderMessageGroup(firstGroup, renderGroupOptions(firstGroup))
+        : renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
     if (item.kind === "agent-run-frame") {
       return renderAgentRunFrame(item, {
+        basePath: props.basePath,
+        sessionPublicOrigin: props.sessionPublicOrigin,
         streamOptions: streamGroupOptions,
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
@@ -459,6 +484,7 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       runWorking: Boolean(props.runWorking),
       searchActive: searchFiltering,
+      session: activeSession,
     }),
     { searchActive: searchFiltering },
   );
@@ -524,44 +550,14 @@ export function projectChatTranscript(
     (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
       ? tailStatusOwner.key
       : null;
-  for (const item of transcriptItems) {
-    const groups =
-      item.kind === "agent-run-frame"
-        ? agentRunFrameGroups(item)
-        : item.kind === "group"
-          ? [item]
-          : [];
-    const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
-    if (!firstGroup) {
-      continue;
-    }
-    const senderLabel = resolveMessageGroupSenderLabel(firstGroup, {
-      assistantName: props.assistantName,
-      userId: props.userId,
-      userName: props.userName,
-      userAvatar: props.userAvatar,
-    });
-    for (const group of groups) {
-      for (const source of group.messages) {
-        transcriptMessageKeys.set(source.key, item.key);
-        const sourceMessageId = persistedMessageEntryId(source.message);
-        // The preview resolves content lazily; indexing only needs persisted identities.
-        if (sourceMessageId) {
-          messageRowKeysById.set(sourceMessageId, item.key);
-          loadedReplySources.set(sourceMessageId, {
-            message: source.message,
-            messageId: source.key,
-            senderLabel,
-          });
-        }
-      }
-    }
-  }
+  const { messageRowKeysById, transcriptMessageKeys, expandReplyTargetWork } =
+    projectTranscriptMessageIndex(transcriptItems, expandedToolCards, props, loadedReplySources);
   const positionIndex = projectChatPositions(
     transcriptItems,
     expandedToolCards,
     messageRowKeysById,
   );
+  transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
@@ -609,8 +605,16 @@ export function projectChatTranscript(
   if (typingIndicator) {
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
+  // Deferred palettes apply leaf branding after the preference snapshot.
+  const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
     locale,
+    props.branding?.mascot,
+    props.branding?.avatarHat,
+    props.branding?.artwork,
+    props.branding?.workingPhrases,
+    appliedBranding.mascot,
+    appliedBranding.avatarHat,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
@@ -639,6 +643,8 @@ export function projectChatTranscript(
     props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
+    state.asyncQuestionRevision,
+    props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
@@ -649,8 +655,11 @@ export function projectChatTranscript(
     props.mainKey,
     props.userId,
     props.userName,
+    showOwnSenderName,
     props.userAvatar,
     props.resourceBasePath,
+    props.basePath,
+    props.sessionPublicOrigin,
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,
@@ -661,9 +670,10 @@ export function projectChatTranscript(
     props.pluginToolIcons,
     props.githubRepo?.owner,
     props.githubRepo?.repo,
+    markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
-    Boolean(props.onAsyncQuestionSubmit),
+    Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
@@ -674,10 +684,12 @@ export function projectChatTranscript(
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
-  state.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     const loaded = loadedReplySources.get(replyToId);
     if (loaded && resolveMessageReplyText(loaded.message)) {
+      // Loaded targets also serve read-only views without reply-message access.
+      // Reveal waits for this expansion to commit before locating the bubble.
+      expandReplyTargetWork(replyToId);
       transcript.revealMessage(replyToId);
       return;
     }

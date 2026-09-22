@@ -23,7 +23,8 @@ type ShellRenderState = {
   render: () => TemplateResult;
 };
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
 });
 
@@ -171,6 +172,13 @@ describe("OpenClaw shell dock suppression", () => {
           custodianSuppressed: boolean;
         }
       ).custodianSuppressed,
+    ).toBe(true);
+
+    shell.routeState = { routeId: "systems" };
+    renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { suppressed: boolean }>("openclaw-desktop-panel")
+        ?.suppressed,
     ).toBe(true);
 
     shell.routeState = { routeId: "chat" };

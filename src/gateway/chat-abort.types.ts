@@ -43,6 +43,8 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** Bounded private timeout settlement while the aborted producer unwinds. */
+  pendingTimeoutCompletion?: { expiresAtMs: number; settle: () => void };
   /** False after the owning reply run commits a terminal outcome. */
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   /** Runs once when this registration is actually removed. */

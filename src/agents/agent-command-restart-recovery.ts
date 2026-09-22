@@ -1,14 +1,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidenceResult,
+} from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
+import {
+  captureHarnessCompletionRecovery,
+  createHarnessCompletionSourceAssertion,
+  getOwedHarnessCompletionTask,
+} from "../tasks/agent-harness-completion-recovery.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   hasCommittedOutboundDeliveryEvidence,
-  hasExplicitlyVisibleAgentPayload,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -150,7 +159,15 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   )
     ? rawPayloads.slice(0, 64).map((payload) => {
         const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
-        const visible = hasExplicitlyVisibleAgentPayload(payload);
+        const visible = hasVisibleAgentPayload(
+          { payloads: [payload] },
+          {
+            requireTerminalContent: true,
+            includeErrorPayloads: false,
+            includeReasoningPayloads: false,
+            includeSilentReplyPayloads: false,
+          },
+        );
         const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
         if (mediaUrls.length > 0) {
           evidence.mediaUrls = mediaUrls;
@@ -201,6 +218,11 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
+        ...(typeof rawDeliveryStatus?.resultCount === "number" &&
+        Number.isSafeInteger(rawDeliveryStatus.resultCount) &&
+        rawDeliveryStatus.resultCount >= 0
+          ? { resultCount: rawDeliveryStatus.resultCount }
+          : {}),
         ...(errorMessage ? { errorMessage } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
@@ -245,6 +267,9 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
           }
           if (record.threadSuppressed === true) {
             evidence.threadSuppressed = true;
+          }
+          if (typeof record.sourceReplyFinal === "boolean") {
+            evidence.sourceReplyFinal = record.sourceReplyFinal;
           }
           if (mediaUrls.length > 0) {
             evidence.mediaUrls = mediaUrls;
@@ -319,6 +344,7 @@ export function shouldPersistRestartRecoveryCleanup(
 }
 
 export function buildCurrentRunRestartRecoveryClaim(params: {
+  harnessCompletion?: HarnessCompletionRecovery;
   deliveryContext?: DeliveryContext;
   deliveryMediaUrls?: string[];
   disableMessageTool?: boolean;
@@ -336,6 +362,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryDisableMessageTool"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryHarnessCompletion"
   | "restartRecoveryForceSafeTools"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
@@ -343,7 +370,11 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
 > {
   // Recovery can preclaim a run by id. Preserve its original source semantics
   // while the resumed RPC replaces only the active delivery run id.
-  const adoptsExistingClaim = params.entry.restartRecoveryDeliveryRunId === params.runId;
+  const bindsAdmittedHarnessSource =
+    params.harnessCompletion?.sourceRunId === params.runId &&
+    params.entry.restartRecoveryDeliverySourceRunId === undefined;
+  const adoptsExistingClaim =
+    params.entry.restartRecoveryDeliveryRunId === params.runId && !bindsAdmittedHarnessSource;
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
@@ -351,6 +382,15 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     throw new Error("restart recovery source ownership is required for a new claim");
   }
   return {
+    ...(adoptsExistingClaim
+      ? params.entry.restartRecoveryHarnessCompletion
+        ? { restartRecoveryHarnessCompletion: params.entry.restartRecoveryHarnessCompletion }
+        : {}
+      : params.harnessCompletion
+        ? { restartRecoveryHarnessCompletion: params.harnessCompletion }
+        : params.entry.restartRecoveryHarnessCompletion
+          ? { restartRecoveryHarnessCompletion: undefined }
+          : {}),
     restartRecoveryDeliveryContext: adoptsExistingClaim
       ? params.entry.restartRecoveryDeliveryContext
       : params.deliveryContext,
@@ -392,4 +432,86 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
         ? true
         : undefined,
   };
+}
+
+/** Prepare only an admitted channel completion, or the exact saved recovery claim. */
+export function prepareCommandHarnessCompletionRecovery(params: {
+  entry: SessionEntry;
+  sessionId: string;
+  sessionKey: string;
+  runId: string;
+  agentId: string;
+  opts: AgentCommandOpts;
+  hasDeliveryContext: boolean;
+}) {
+  const { entry, sessionId, sessionKey, runId, agentId, opts } = params;
+  const harnessCompletion = params.hasDeliveryContext
+    ? captureHarnessCompletionRecovery({
+        agentId,
+        sessionKey,
+        entry: { ...entry, sessionId },
+        runId,
+        inputProvenance: opts.inputProvenance,
+      })
+    : undefined;
+  const generatedMediaSourceRunId =
+    opts.internalDeliveryMediaUrls !== undefined &&
+    opts.inputProvenance?.kind === "inter_session" &&
+    isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+      ? runId
+      : undefined;
+  const claimedHarnessCompletion =
+    entry.restartRecoveryDeliveryRunId === runId
+      ? entry.restartRecoveryHarnessCompletion
+      : undefined;
+  const guardedHarnessCompletion = harnessCompletion ?? claimedHarnessCompletion;
+  if (guardedHarnessCompletion && !getOwedHarnessCompletionTask(guardedHarnessCompletion, entry)) {
+    throw createSessionWorkStartChangedError(sessionKey);
+  }
+  return {
+    harnessCompletion,
+    guardedHarnessCompletion,
+    isCompletionCurrent: (current: SessionEntry | undefined) =>
+      !guardedHarnessCompletion ||
+      Boolean(current && getOwedHarnessCompletionTask(guardedHarnessCompletion, current)),
+    sourceOptions: {
+      sourceIngress:
+        generatedMediaSourceRunId || harnessCompletion ? ("internal" as const) : undefined,
+      sourceRunId: generatedMediaSourceRunId ?? harnessCompletion?.sourceRunId,
+      sourceReplyDeliveryMode:
+        opts.sourceReplyDeliveryMode ?? (harnessCompletion ? ("automatic" as const) : undefined),
+    },
+  };
+}
+
+/** Called after the caller has recorded the committed entry for failure cleanup. */
+export function bindCommandHarnessCompletionAssertion(params: {
+  claim?: HarnessCompletionRecovery;
+  persisted?: SessionEntry;
+  sessionKey: string;
+  storePath?: string;
+  opts: AgentCommandOpts;
+}): AgentCommandOpts {
+  const { claim, persisted, sessionKey, storePath, opts } = params;
+  if (
+    claim &&
+    (!persisted ||
+      persisted.restartRecoveryHarnessCompletion?.taskId !== claim.taskId ||
+      !getOwedHarnessCompletionTask(claim, persisted))
+  ) {
+    throw createSessionWorkStartChangedError(sessionKey);
+  }
+  if (!claim || !storePath) {
+    return opts;
+  }
+  const guarded = {
+    ...opts,
+    assertSourceCurrent: createHarnessCompletionSourceAssertion({
+      claim,
+      storePath,
+      priorAssertion: opts.assertSourceCurrent,
+    }),
+  };
+  guarded.assertSourceCurrent();
+  return guarded;
 }

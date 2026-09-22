@@ -295,7 +295,7 @@ describe("getStatusSummary", () => {
       expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
       expect(summary.queuedSystemEvents).toEqual(
         scope === "global"
-          ? ["pending: global"]
+          ? ["pending: agent:research:global", "pending: agent:ops:global"]
           : ["pending: agent:research:inbox", "pending: agent:ops:inbox"],
       );
     },

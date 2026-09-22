@@ -546,6 +546,10 @@ wa-switch.settings-toggle {
   width: 340px;
 }
 
+.settings-row__control input.settings-input {
+  text-align: right;
+}
+
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
@@ -589,7 +593,6 @@ wa-switch.settings-toggle {
   .settings-row__control
   > input[type="number"].settings-input {
   width: 110px;
-  text-align: center;
 }
 
 /* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
@@ -670,6 +673,45 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-permission-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  align-items: center;
+  gap: var(--space-3);
+  width: 20rem;
+  max-width: 100%;
+}
+
+.settings-permission-control .settings-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-permission-control .settings-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-permission-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-permission-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-permission-control > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
+.settings-permission-recovery {
+  grid-column: 2;
+}
+
 .updates-status-control {
   display: inline-flex;
   align-items: center;
@@ -681,6 +723,10 @@ textarea.settings-input {
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+.updates-status-check-failed .settings-status {
+  color: var(--warn);
 }
 
 .updates-attempt-details {

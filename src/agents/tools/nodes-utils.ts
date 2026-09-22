@@ -76,8 +76,11 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
-  return ordered[0] ?? null;
+  return candidates.reduce<NodeListNode | null>(
+    (best, node) =>
+      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
+    null,
+  );
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {

@@ -33,7 +33,14 @@ function runCli(...args: string[]) {
   });
 }
 
-type LinuxAsset = { name: string; digest: string; state: string; size: number; bytes?: string };
+type LinuxAsset = {
+  name: string;
+  digest: string;
+  state: string;
+  size: number;
+  bytes?: string;
+  id?: number;
+};
 const linuxRepository = "openclaw/openclaw";
 
 function linuxAsset(name: string, bytes: string): LinuxAsset {
@@ -61,19 +68,24 @@ function linuxPublication(version: string) {
       },
     }),
   );
-  return {
-    tagName: `v${version}`,
-    isDraft: false,
-    isPrerelease: false,
-    assets: [
-      { name: appimage, digest: `sha256:${"1".repeat(64)}`, state: "uploaded", size: 100 },
-      { name: deb, digest: `sha256:${"2".repeat(64)}`, state: "uploaded", size: 100 },
-      linuxAsset(
+  const assets: LinuxAsset[] = [
+    { name: appimage, digest: `sha256:${"1".repeat(64)}`, state: "uploaded", size: 100, id: 101 },
+    { name: deb, digest: `sha256:${"2".repeat(64)}`, state: "uploaded", size: 100, id: 102 },
+    {
+      ...linuxAsset(
         "SHA256SUMS.linux-app.txt",
         `${"1".repeat(64)}  ./${appimage}\n${"2".repeat(64)}  ./${deb}\n`,
       ),
-      selector,
-    ],
+      id: 103,
+    },
+    selector,
+  ];
+  return {
+    databaseId: 42,
+    tagName: `v${version}`,
+    isDraft: false,
+    isPrerelease: false,
+    assets,
   };
 }
 
@@ -111,7 +123,13 @@ function linuxCloseoutFixture(carried = false, tag = "v2026.9.4") {
     `openclaw-${version}-postpublish-evidence.json`,
     "immutable evidence",
   );
-  const carrier = { tagName: tag, isDraft: false, isPrerelease: false, assets: [evidence] };
+  const carrier = {
+    databaseId: 42,
+    tagName: tag,
+    isDraft: false,
+    isPrerelease: false,
+    assets: [evidence],
+  };
   if (carried) {
     carrier.assets.push(
       expectDefined(
@@ -140,13 +158,27 @@ process.stdout.write('${"a".repeat(40)}\\n');
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
+if (args[0] === 'api' && args[1]?.startsWith('repos/${linuxRepository}/commits/')) {
+  process.stdout.write('${"a".repeat(40)}\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1]?.startsWith('repos/${linuxRepository}/releases/tags/')) {
+  const tag = args[1].slice('repos/${linuxRepository}/releases/tags/'.length);
+  const release = releases[tag];
+  if (!release) throw new Error('Missing release');
+  process.stdout.write(JSON.stringify({id: release.databaseId, tag_name: tag,
+    draft: release.isDraft, prerelease: release.isPrerelease,
+    assets: release.assets.map(({bytes, ...asset}) => asset)}));
+  process.exit(0);
+}
 const release = releases[args[2]];
 if (args[0] !== 'release' || !release) throw new Error('Unexpected GitHub operation');
 if (args[1] === 'view') {
+  if (args[args.indexOf('--json') + 1].includes('databaseId')) throw new Error('Unknown JSON field: databaseId');
   process.stdout.write(JSON.stringify({...release, assets: release.assets.map(({bytes, ...asset}) => asset)}));
 } else if (args[1] === 'download') {
   const name = args[args.indexOf('--pattern') + 1];
-  if (!['latest.json', 'SHA256SUMS.linux-app.txt'].includes(name)) throw new Error('Binary download forbidden');
+  if (!['latest.json', 'SHA256SUMS.linux-app.txt', 'OpenClaw-' + args[2].slice(1) + '-linux.json'].includes(name)) throw new Error('Binary download forbidden');
   const asset = release.assets.find(asset => asset.name === name);
   if (!asset || typeof asset.bytes !== 'string') throw new Error('Missing asset');
   process.stdout.write(asset.bytes);
@@ -188,6 +220,31 @@ if (args[1] === 'view') {
     publishLinux() {
       carrier.assets = [evidence, ...linuxPublication(version).assets];
     },
+    publishImmutable() {
+      const publication = linuxPublication(version);
+      const selector = expectDefined(
+        publication.assets.find((asset) => asset.name === "latest.json"),
+        "selector",
+      );
+      const value = JSON.parse(expectDefined(selector.bytes, "selector bytes"));
+      value.linuxPublication = {
+        schemaVersion: 1,
+        sourceSha: "a".repeat(40),
+        toolingSha: "b".repeat(40),
+        channelSha: "c".repeat(40),
+        releaseId: 42,
+        publicKeySha256: "d".repeat(64),
+        assets: publication.assets
+          .filter((asset) => asset.name !== "latest.json")
+          .map((asset) => ({
+            id: asset.id,
+            name: asset.name,
+            size: asset.size,
+            sha256: asset.digest.slice(7),
+          })),
+      };
+      carrier.assets.push(linuxAsset(`OpenClaw-${version}-linux.json`, JSON.stringify(value)));
+    },
     params() {
       return { ...baseParams, release: metadata() };
     },
@@ -217,6 +274,24 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it("accepts only the validated exact late immutable Linux manifest", () => {
+    const fixture = linuxCloseoutFixture();
+    expect(fixture.run().status).toBe(0);
+    const original = readFileSync(fixture.outputPath);
+    writeFileSync(fixture.originalPath, original);
+    fixture.publishLinux();
+    fixture.publishImmutable();
+    const replay = fixture.run(true);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(fixture.outputPath)).toEqual(original);
+    const immutable = expectDefined(
+      fixture.carrier.assets.find((asset) => asset.name.endsWith("-linux.json")),
+      "immutable manifest",
+    );
+    immutable.digest = `sha256:${"f".repeat(64)}`;
+    expect(fixture.run(true).status).toBe(1);
+  });
+
   it.each([
     { carried: false, tag: "v2026.9.4" },
     { carried: true, tag: "v2026.9.4" },
@@ -453,9 +528,111 @@ describe("verify-stable-main-closeout", () => {
       `Recorded release asset changed or disappeared: ${evidence.name}`,
     );
   });
+
+  it("keeps 2026.9.6 closeout pending without thin feeds and replays with published feeds", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-thin-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
+    }
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    const release: {
+      tagName: string;
+      isDraft: boolean;
+      isPrerelease: boolean;
+      assets: Array<{ name: string; digest: string }>;
+    } = { tagName: tag, isDraft: false, isPrerelease: false, assets: [] };
+    writeFileSync(releasePath, JSON.stringify(release));
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+      "--allow-failed-publish-recovery",
+      "true",
+    ];
+
+    const initial = runCli(...args);
+    expect(initial.status, initial.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      appcast: "pending",
+      appPlatforms: { macos: "pending" },
+    });
+    writeFileSync(originalPath, readFileSync(outputPath));
+
+    release.assets = ["", "-arm64", "-x86_64"]
+      .flatMap((suffix) =>
+        ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
+      )
+      .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` }));
+    writeFileSync(releasePath, JSON.stringify(release));
+    const publishedFeedSpecs: Array<[string, string, string]> = [
+      ["--published-appcast", "appcast.xml", `OpenClaw-${version}.zip`],
+      ["--published-appcast-arm64", "appcast-arm64.xml", `OpenClaw-${version}-arm64.zip`],
+      ["--published-appcast-x86-64", "appcast-x86_64.xml", `OpenClaw-${version}-x86_64.zip`],
+    ];
+    const publishedArgs = publishedFeedSpecs.flatMap(([flag, name, asset]) => {
+      const appcastPath = path.join(dir, name);
+      writeFileSync(
+        appcastPath,
+        `https://github.com/openclaw/openclaw/releases/download/${tag}/${asset}`,
+      );
+      return [flag, appcastPath];
+    });
+    const replay = runCli(...args, "--existing-manifest", originalPath, ...publishedArgs);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+  });
 });
 
 describe("stable closeout workflow publication routing", () => {
+  it("treats thin replay appcasts as optional until publication", () => {
+    const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
+    const closeoutStep = workflow
+      .split("      - name: Verify stable state and write closeout manifest\n", 2)[1]
+      ?.split("\n      - name:", 1)[0];
+
+    expect(closeoutStep).toContain(
+      'if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main"',
+    );
+    expect(closeoutStep).toContain("Thin appcast is not published yet: $appcast");
+    expect(closeoutStep).toContain(
+      'existing_manifest_args+=(--published-appcast-arm64 "$published")',
+    );
+    expect(closeoutStep).toContain(
+      'existing_manifest_args+=(--published-appcast-x86-64 "$published")',
+    );
+  });
+
   it.each([
     {
       name: "ordinary successful parent",

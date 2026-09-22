@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -32,6 +33,7 @@ import {
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
+import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   agentDiscoveryMock,
   connectOk,
@@ -109,35 +111,6 @@ describe("gateway server chat", () => {
   beforeEach(() => {
     dispatchInboundMessageMock.mockReset();
   });
-
-  const removeTempDir = async (dir: string): Promise<void> => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  };
-
-  const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
-    createGatewayHistoryText("user", "hello", 1),
-    createGatewayHistoryText("assistant", "NO_REPLY", 2),
-    createGatewayHistoryText("assistant", "real reply", 3),
-    {
-      role: "assistant",
-      text: "real text field reply",
-      content: "NO_REPLY",
-      timestamp: 4,
-    },
-    createGatewayHistoryText("user", "NO_REPLY", 5),
-    ...(includeMixedAssistant
-      ? [
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "NO_REPLY" },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
-            ],
-            timestamp: 6,
-          },
-        ]
-      : []),
-  ];
 
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
@@ -1473,8 +1446,10 @@ describe("gateway server chat", () => {
             (o) =>
               o.type === "event" &&
               o.event === "sessions.changed" &&
-              o.payload?.reason === "chat.dispatch-error" &&
-              o.payload?.sessionKey === "agent:main:main",
+              o.payload?.sessionKey === "agent:main:main" &&
+              o.payload?.status === "failed" &&
+              o.payload?.lastRunId === "idem-dispatch-error-1" &&
+              o.payload?.hasActiveRun === false,
             8_000,
           );
           messagePromises.push(sessionChangedPromise);
@@ -1544,6 +1519,9 @@ describe("gateway server chat", () => {
     });
   });
 
+  const contextOverflowCopy =
+    "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
+
   test.each([
     {
       name: "structured context-overflow code",
@@ -1551,7 +1529,7 @@ describe("gateway server chat", () => {
         errorCode: "context_overflow",
         errorMessage: "private upstream body: 203557 tokens sent",
       },
-      overflow: true,
+      expected: contextOverflowCopy,
     },
     {
       name: "provider request-too-large code",
@@ -1559,7 +1537,7 @@ describe("gateway server chat", () => {
         errorCode: "request_too_large",
         errorMessage: "private upstream body: 196607 tokens sent",
       },
-      overflow: true,
+      expected: contextOverflowCopy,
     },
     {
       name: "provider context-window message",
@@ -1567,12 +1545,12 @@ describe("gateway server chat", () => {
         errorType: "invalid_request_error",
         errorMessage: "Request size exceeds model context window: 203557 tokens",
       },
-      overflow: true,
+      expected: contextOverflowCopy,
     },
     {
       name: "embedded context-overflow message",
       fields: { errorMessage: "Unhandled stop reason: context_overflow" },
-      overflow: true,
+      expected: contextOverflowCopy,
     },
     {
       name: "token-per-minute rate limit",
@@ -1580,16 +1558,17 @@ describe("gateway server chat", () => {
         errorCode: "rate_limit_exceeded",
         errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
       },
-      overflow: false,
+      expected:
+        "⚠️ LLM request failed (rate limited, HTTP 413). This is usually temporary — try again shortly.",
     },
     {
       name: "private upstream failure",
       fields: { errorMessage: "private upstream at secret.internal.example failed" },
-      overflow: false,
+      expected: "The agent run failed before producing a reply.",
     },
   ])(
     "chat.history safely displays $name over authenticated WebSocket",
-    async ({ fields, overflow }) => {
+    async ({ fields, expected }) => {
       const historyMessages = await loadChatHistoryWithMessages([
         {
           role: "assistant",
@@ -1600,11 +1579,7 @@ describe("gateway server chat", () => {
         },
       ]);
 
-      expect(collectHistoryTextValues(historyMessages)).toEqual([
-        overflow
-          ? "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit."
-          : "The agent run failed before producing a reply.",
-      ]);
+      expect(collectHistoryTextValues(historyMessages)).toEqual([expected]);
       const wirePayload = JSON.stringify(historyMessages);
       expect(wirePayload).not.toContain("203557");
       expect(wirePayload).not.toContain("196607");
@@ -1615,687 +1590,233 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.history hides assistant NO_REPLY-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
-    const textValues = collectHistoryTextValues(historyMessages);
-    // The NO_REPLY assistant message (content block) should be dropped.
-    // The assistant with text="real text field reply" + content="NO_REPLY" stays
-    // because entry.text takes precedence over entry.content for the silent check.
-    // The user message with NO_REPLY text is preserved (only assistant filtered).
-    expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
-  });
+  test.each([
+    {
+      name: "hides assistant control replies in Responses output blocks",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "NO_REPLY" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible response" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "NO_REPLY" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "visible assistant input" }],
+          timestamp: 4,
+        },
+      ],
+      expected: ["assistant:visible response", "assistant:visible assistant input"],
+    },
+    {
+      name: "hides commentary-only assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "text", text: "thinking like caveman" }],
+          timestamp: 2,
+        },
+        createGatewayHistoryText("assistant", "real reply", 3),
+      ],
+      expected: ["user:hello", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant announce/reply skip-only entries",
+      messages: [
+        createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
+        createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "ANNOUNCE_SKIP",
+          timestamp: 3,
+        },
+        createGatewayHistoryText("assistant", "real reply", 4),
+      ],
+      expected: ["assistant:real text field reply", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        createGatewayHistoryText("assistant", "NO_REPLY", 2),
+        createGatewayHistoryText("assistant", "real reply", 3),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
+        createGatewayHistoryText("user", "NO_REPLY", 5),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "NO_REPLY" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+          ],
+          timestamp: 6,
+        },
+      ],
+      expected: [
+        "user:hello",
+        "assistant:real reply",
+        "assistant:real text field reply",
+        "user:NO_REPLY",
+        "assistant:NO_REPLY",
+      ],
+    },
+  ])("chat.history $name", async ({ messages, expected }) => {
+    const historyMessages = await loadChatHistoryWithMessages(messages);
+    const roleAndText = historyMessages.map((message) => {
+      const entry = isRecord(message) ? message : {};
+      const role = typeof entry.role === "string" ? entry.role : "unknown";
+      const text =
+        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
+      return `${role}:${text}`;
+    });
 
-  test("chat.history hides assistant control replies in Responses output blocks", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "NO_REPLY" }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "visible response" }],
-        timestamp: 2,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "NO_REPLY" }],
-        timestamp: 3,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "visible assistant input" }],
-        timestamp: 4,
-      },
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "visible response",
-      "visible assistant input",
-    ]);
-  });
-
-  test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
-    const replyText = "Here, love. Eva, not Evo.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "Evo, you there?", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-1",
-        { action: "send", message: replyText },
-        2,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-1",
-        { ok: true, messageId: "24268", chatId: "8455538490" },
-        3,
-      ),
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
+    expect(roleAndText).toEqual(expected);
   });
 
   test.each([
+    { name: "legacy success", result: { ok: true, messageId: "legacy" } },
+    { name: "failure", result: { ok: false } },
+    { name: "dry run", result: { ok: true, dryRun: true } },
+    { name: "suppressed", result: { ok: true, deliveryStatus: "suppressed" } },
+    { name: "capped result", result: { status: "ok", persistedDetailsTruncated: true } },
     {
-      name: "chat.history mirrors message success encoded in a result text block",
-      content: [{ type: "text", text: JSON.stringify({ ok: true, messageId: "text-result" }) }],
-      visible: true,
-    },
-    {
-      name: "chat.history mirrors message success encoded in a result content block",
-      content: [
-        { type: "message", content: JSON.stringify({ ok: true, messageId: "content-result" }) },
-      ],
-      visible: true,
-    },
-    {
-      name: "chat.history hides failed delivery encoded in a result text block",
-      content: [{ type: "text", text: JSON.stringify({ ok: false }) }],
-      visible: false,
-    },
-    {
-      name: "chat.history honors a dry-run result after an earlier success block",
-      content: [
-        { type: "text", text: JSON.stringify({ ok: true }) },
-        { type: "message", content: JSON.stringify({ dryRun: true }) },
-      ],
-      visible: false,
-    },
-    {
-      name: "chat.history honors suppressed delivery after an earlier success block",
-      content: [
-        { type: "text", text: JSON.stringify({ ok: true }) },
-        { type: "message", content: JSON.stringify({ deliveryStatus: "suppressed" }) },
-      ],
-      visible: false,
-    },
-    {
-      name: "chat.history hides suppressed delivery encoded in a result text block",
-      content: [{ type: "text", text: JSON.stringify({ ok: true, deliveryStatus: "suppressed" }) }],
-      visible: false,
-    },
-    {
-      name: "chat.history hides dry-run delivery encoded in a result content block",
-      content: [{ type: "message", content: JSON.stringify({ ok: true, dryRun: true }) }],
-      visible: false,
-    },
-  ])("$name", async ({ content, visible }) => {
-    const replyText = "Nested message-tool reply.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "call-message-nested-result",
-        { action: "send", message: replyText },
-        1,
-      ),
-      createGatewayHistoryMessageToolResult("call-message-nested-result", content, 2),
-      createGatewayHistoryText("assistant", "NO_REPLY", 3),
-    ]);
-
-    const resultText = content.flatMap((block) => ("text" in block ? [block.text] : []));
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      ...resultText,
-      ...(visible ? [replyText] : []),
-    ]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(visible);
-  });
-
-  test("chat.history marks message-tool replies held for internal source delivery", async () => {
-    const replyText = "Forward this source reply.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "call-message-internal-source",
-        { action: "send", message: replyText },
-        1,
-      ),
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-internal-source",
-        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
-        details: {
-          status: "ok",
-          deliveryStatus: "sent",
-          sourceReplySink: "internal-ui",
+      name: "canceled partial broadcast",
+      result: {
+        kind: "broadcast",
+        payload: {
+          results: [
+            { to: "first", ok: true, payload: { ok: true, messageId: "sent-first" } },
+            { to: "second", ok: false, attempted: false },
+          ],
         },
-        timestamp: 2,
       },
-      createGatewayHistoryText("assistant", "NO_REPLY", 3),
-    ]);
+    },
+  ])(
+    "chat.history omits argument-derived replies for $name and retains diagnostics",
+    async ({ result }) => {
+      const argumentsRecord = {
+        action: "send",
+        channel: "telegram",
+        target: "current",
+        message: "Unverified argument caption.",
+      };
+      const call = createGatewayHistoryMessageToolCall("reused-call", argumentsRecord, 2);
+      const historyMessages = await loadChatHistoryWithMessages([
+        createGatewayHistoryText("user", "reply here", 1),
+        call,
+        createGatewayHistoryMessageToolResult("reused-call", result, 3),
+        createGatewayHistoryText("assistant", "NO_REPLY", 4),
+        createGatewayHistoryText("assistant", "An ordinary final reply.", 5),
+      ]);
 
-    const visibleAssistantMessages = historyMessages.filter((message) => {
-      if (!message || typeof message !== "object") {
-        return false;
+      expect(collectHistoryTextValues(historyMessages)).toEqual([
+        "reply here",
+        "An ordinary final reply.",
+      ]);
+      expect(historyMessages).toContainEqual(expect.objectContaining({ content: call.content }));
+      expect(historyMessages).toContainEqual(
+        expect.objectContaining({ role: "toolResult", toolCallId: "reused-call", content: result }),
+      );
+      expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
+    },
+  );
+
+  test.each(["before", "after"])(
+    "chat.history retains canonical publications %s tool results without caption or call-ID joins",
+    async (order) => {
+      const imageBlocks = ["first", "second"].map((name) => ({
+        type: "image",
+        artifactId: `artifact_managed_image_${name}`,
+        url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+        openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+        alt: `${name}.png`,
+        mimeType: "image/png",
+      }));
+      const publications = imageBlocks.map((image, index) => ({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Sanitized publication." }, image],
+        openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "different-call" },
+        timestamp: index + 3,
+      }));
+      const result = createGatewayHistoryMessageToolResult("reused-call", { ok: true }, 5);
+      const historyMessages = await loadChatHistoryWithMessages([
+        createGatewayHistoryMessageToolCall(
+          "reused-call",
+          { action: "send", message: "Unverified argument caption." },
+          1,
+        ),
+        ...(order === "before" ? [...publications, result] : [result, ...publications]),
+        createGatewayHistoryText("assistant", "NO_REPLY", 6),
+      ]);
+      expect(collectHistoryTextValues(historyMessages)).toEqual([
+        "Sanitized publication.",
+        "Sanitized publication.",
+      ]);
+      for (const publication of publications) {
+        expect(historyMessages).toContainEqual(expect.objectContaining(publication));
       }
-      const entry = message as { role?: unknown };
-      return entry.role === "assistant" && extractFirstTextBlock(message) !== undefined;
-    });
-    expect(visibleAssistantMessages).toEqual([
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: replyText }],
-        openclawMessageToolMirror: {
-          toolName: "message",
-          toolCallId: "call-message-internal-source",
-          sourceReplySink: "internal-ui",
-          sourceMessageSeq: 1,
-        },
-      }),
-    ]);
-  });
+      expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
+      const publicRows = historyMessages.filter(isRecord);
+      expect(publicRows).toHaveLength(historyMessages.length);
+      const reprojected = await loadChatHistoryWithMessages(publicRows);
+      expect(collectHistoryTextValues(reprojected)).toEqual([
+        "Sanitized publication.",
+        "Sanitized publication.",
+      ]);
+      for (const publication of publications) {
+        expect(reprojected).toContainEqual(expect.objectContaining(publication));
+      }
+    },
+  );
 
-  test("chat.history hides raw delivery-mirror rows but keeps message-tool mirrors", async () => {
-    const replyText = "One visible send.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "send once", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-transcript-only",
-        { action: "send", message: replyText },
-        2,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-transcript-only",
-        { ok: true, messageId: "24271", chatId: "current-run" },
-        3,
-      ),
-      createGatewayHistoryDeliveryMirror(replyText, 4),
-      createGatewayHistoryText("assistant", "NO_REPLY", 5),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["send once", replyText]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history carries managed images from a message-tool delivery mirror", async () => {
-    const replyText = "Two visible attachments.";
-    const imageBlocks = ["first", "second"].map((name) => ({
-      type: "image",
-      artifactId: `artifact_managed_image_${name}`,
-      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      alt: `${name}.png`,
-      mimeType: "image/png",
-    }));
+  test("chat.history drops retired synthetic replies without dropping canonical or forwarded messages", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       createGatewayHistoryMessageToolCall(
-        "call-message-images",
-        {
-          action: "send",
-          message: replyText,
-          mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
-        },
+        "reused-call",
+        { action: "send", message: "Private old arguments." },
         1,
       ),
       {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: [{ type: "text", text: replyText }, ...imageBlocks],
-        timestamp: 2,
+        ...createGatewayHistoryText("assistant", "Private old arguments.", 2),
+        openclawMessageToolMirror: { toolName: "message", toolCallId: "reused-call" },
       },
+      createGatewayHistoryDeliveryMirror("Published reply.", 3),
       {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-images",
-        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
-        details: {
-          status: "ok",
-          deliveryStatus: "sent",
-          sourceReplySink: "internal-ui",
+        ...createGatewayHistoryText("assistant", "Forwarded update.", 4),
+        senderLabel: "Forwarded from main",
+        senderSession: { sessionKey: "agent:main:source", agentId: "main" },
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:source",
+          sourceTool: "sessions_send",
         },
-        timestamp: 3,
       },
     ]);
-
-    expect(historyMessages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: replyText }, ...imageBlocks],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-images",
-          sourceReplySink: "internal-ui",
-        }),
-      }),
-    );
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history binds equal-text delivery mirrors to their message tool calls", async () => {
-    const replyText = "Repeated attachment caption.";
-    const imageBlocks = ["first", "second"].map((name) => ({
-      type: "image",
-      artifactId: `artifact_managed_image_${name}`,
-      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      alt: `${name}.png`,
-      mimeType: "image/png",
-    }));
-    const historyMessages = await loadChatHistoryWithMessages([
-      {
-        role: "assistant",
-        content: ["first", "second"].map((name) => ({
-          type: "toolCall",
-          id: `call-message-${name}`,
-          name: "message",
-          arguments: {
-            action: "send",
-            message: replyText,
-            media: `/tmp/${name}.png`,
-          },
-        })),
-        timestamp: 1,
-      },
-      ...["first", "second"].map((name, index) => ({
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: `call-message-${name}`,
-        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
-        details: {
-          status: "ok",
-          deliveryStatus: "sent",
-          sourceReplySink: "internal-ui",
-        },
-        timestamp: index + 2,
-      })),
-      ...["first", "second"].map((name, index) => ({
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: [{ type: "text", text: replyText }, imageBlocks[index]],
-        openclawDeliveryMirror: {
-          kind: "message-tool-source-reply",
-          toolCallId: `call-message-${name}`,
-        },
-        timestamp: index + 4,
-      })),
-    ]);
-
-    const mirrors = historyMessages.filter(hasGatewayHistoryMessageToolMirror);
-    expect(mirrors).toHaveLength(2);
-    expect(mirrors).toEqual([
-      expect.objectContaining({
-        content: [{ type: "text", text: replyText }, imageBlocks[0]],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-first",
-        }),
-      }),
-      expect.objectContaining({
-        content: [{ type: "text", text: replyText }, imageBlocks[1]],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-second",
-        }),
-      }),
-    ]);
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history does not caption-match a populated unmatched delivery ID", async () => {
-    const replyText = "Repeated attachment caption.";
-    const wrongImage = {
-      type: "image",
-      artifactId: "artifact_managed_image_wrong",
-      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/wrong/full",
-      openUrl: "/api/chat/media/outgoing/agent%3Amain%3Amain/wrong/full",
-      alt: "wrong.png",
-      mimeType: "image/png",
-    };
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "call-message-expected",
-        { action: "send", message: replyText, media: "/tmp/expected.png" },
-        1,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-expected",
-        { ok: true, messageId: "24276", chatId: "current-run" },
-        2,
-      ),
-      {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: [{ type: "text", text: replyText }, wrongImage],
-        openclawDeliveryMirror: {
-          kind: "message-tool-source-reply",
-          toolCallId: "call-message-other",
-        },
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(historyMessages).toContainEqual(
-      expect.objectContaining({
-        content: [{ type: "text", text: replyText }],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-expected",
-        }),
-      }),
-    );
-    expect(historyMessages).toContainEqual(
-      expect.objectContaining({
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: [{ type: "text", text: replyText }, wrongImage],
-      }),
-    );
-  });
-
-  test("chat.history keeps message-tool mirrors before silent completion rows", async () => {
-    const replyText = "Visible before completion.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "call-message-before-completion",
-        { action: "send", message: replyText },
-        1,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-before-completion",
-        { ok: true, messageId: "24272", chatId: "current-run" },
-        2,
-      ),
-      createGatewayHistoryDeliveryMirror(replyText, 3),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history hides delivery mirrors that precede successful tool results", async () => {
-    const replyText = "Visible after result.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "call-message-before-result",
-        { action: "send", message: replyText },
-        1,
-      ),
-      createGatewayHistoryDeliveryMirror(replyText, 2),
-      createGatewayHistoryMessageToolResult(
-        "call-message-before-result",
-        { ok: true, messageId: "24273", chatId: "current-run" },
-        3,
-      ),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history preserves other pending message-tool mirrors while deduping one send", async () => {
-    const firstText = "First visible send.";
-    const secondText = "Second visible send.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call-message-first",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: firstText,
-            },
-          },
-          {
-            type: "toolCall",
-            id: "call-message-second",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: secondText,
-            },
-          },
-        ],
-        timestamp: 1,
-      },
-      createGatewayHistoryMessageToolResult(
-        "call-message-first",
-        { ok: true, messageId: "24274", chatId: "current-run" },
-        2,
-      ),
-      createGatewayHistoryDeliveryMirror(firstText, 3),
-      createGatewayHistoryMessageToolResult(
-        "call-message-second",
-        { ok: true, messageId: "24275", chatId: "current-run" },
-        4,
-      ),
-      createGatewayHistoryDeliveryMirror(secondText, 5),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([firstText, secondText]);
-    expect(historyMessages.filter(hasGatewayHistoryMessageToolMirror)).toHaveLength(2);
-    expect(historyMessages).not.toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-  });
-
-  test("chat.history keeps standalone delivery-mirror rows", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryDeliveryMirror("standalone delivered reply", 1),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["standalone delivered reply"]);
-  });
-
-  test("chat.history mirrors current-session message tool sends with channel hints", async () => {
-    const replyText = "Still the current chat.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "reply here", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-channel-hint",
-        { action: "send", channel: "telegram", message: replyText },
-        2,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-channel-hint",
-        { ok: true, messageId: "24270", chatId: "current-run" },
-        3,
-      ),
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here", replyText]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
-  });
-
-  test("chat.history does not mirror explicitly routed message tool sends", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "send that elsewhere", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-remote",
-        { action: "send", to: "8455538490", message: "Remote-only reply" },
-        2,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-remote",
-        { ok: true, messageId: "24269", chatId: "8455538490" },
-        3,
-      ),
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["send that elsewhere"]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-  });
-
-  test("chat.history keeps confirmed current-source sends before a later final", async () => {
-    const sourceReply = "Visible reply delivered to Telegram.";
-    const laterFinal = "A later run produced this different final.";
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "reply in this Telegram chat", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-current-source",
-        {
-          action: "send",
-          channel: "telegram",
-          target: "8455538490",
-          message: sourceReply,
-        },
-        2,
-      ),
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-current-source",
-        content: { ok: true, messageId: "24269", chatId: "8455538490" },
-        details: {
-          ok: true,
-          messageId: "24269",
-          chatId: "8455538490",
-          sourceReplyRoute: "current-source",
-        },
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-      createGatewayHistoryText("user", "continue", 5),
-      createGatewayHistoryText("assistant", laterFinal, 6),
-    ]);
-
     expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "reply in this Telegram chat",
-      sourceReply,
-      "continue",
-      laterFinal,
+      "Published reply.",
+      "Forwarded update.",
     ]);
-    expect(historyMessages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: sourceReply }],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-current-source",
-        }),
-      }),
-    );
-  });
-
-  test("chat.history does not mirror suppressed current-source sends", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "reply here", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-suppressed-current-source",
-        { action: "send", target: "8455538490", message: "Must not appear" },
-        2,
-      ),
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-suppressed-current-source",
-        content: { ok: true, messageId: "suppressed" },
-        details: {
-          ok: true,
-          messageId: "suppressed",
-          deliveryStatus: "suppressed",
-          sourceReplyRoute: "current-source",
-        },
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
-  });
-
-  test("chat.history does not mirror message tool sends from unmatched results", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "reply here", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-expected",
-        { action: "send", message: "Should wait for matching result." },
-        2,
-      ),
-      {
-        role: "toolResult",
-        content: { ok: true, messageId: "wrong-result" },
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
   });
 
-  test("chat.history does not mirror dry-run message tool sends", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "preview that", 1),
-      createGatewayHistoryMessageToolCall(
-        "call-message-dry-run",
-        { action: "send", dryRun: true, message: "Preview-only reply" },
-        2,
-      ),
-      createGatewayHistoryMessageToolResult(
-        "call-message-dry-run",
-        { ok: true, dryRun: true, deliveryStatus: "dry_run" },
-        3,
-      ),
-      createGatewayHistoryText("assistant", "NO_REPLY", 4),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["preview that"]);
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-  });
-
-  test("chat.history hides commentary-only assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "hello", 1),
-      {
-        role: "assistant",
-        phase: "commentary",
-        content: [{ type: "text", text: "thinking like caveman" }],
-        timestamp: 2,
-      },
-      createGatewayHistoryText("assistant", "real reply", 3),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
-  });
-
-  test("chat.history hides assistant announce/reply skip-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
-      createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
-      {
-        role: "assistant",
-        text: "real text field reply",
-        content: "ANNOUNCE_SKIP",
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "real reply", 4),
-    ]);
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
-  });
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
@@ -2660,35 +2181,6 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual([
-      "user:hello",
-      "assistant:real reply",
-      "assistant:real text field reply",
-      "user:NO_REPLY",
-      "assistant:NO_REPLY",
-    ]);
-  });
-
   test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -3027,7 +2519,7 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-vs-stale-agent";
       const seedAgentRes = await rpcReq(ws, "agent", {
-        sessionKey: "main",
+        sessionKey: "agent:main:stale-wait-snapshot",
         message: "seed stale agent snapshot",
         idempotencyKey: runId,
       });

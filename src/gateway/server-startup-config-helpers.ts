@@ -30,6 +30,7 @@ import {
 } from "../secrets/runtime-gateway-auth-surfaces.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
@@ -46,7 +47,6 @@ export type GatewayStartupConfigMeasure = <T>(
 
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
-  wroteConfig: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -100,7 +100,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ));
   const configSnapshot = snapshotRead.snapshot;
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-  const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && resolveIsConfigReadOnly()) {
     throw createInvalidConfigError(
       configSnapshot.path,
@@ -129,7 +128,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
-      wroteConfig,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     };
   }
@@ -137,14 +135,17 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   params.log.info(
     `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
   );
+  const autoEnabledRuntimeConfig = mergeActivationSectionsIntoRuntimeConfig({
+    runtimeConfig: configSnapshot.runtimeConfig,
+    activationConfig: autoEnable.config,
+  });
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(configSnapshot.sourceConfig);
   const runtimeConfig = legacyDefaultAgentId
-    ? materializeLegacyDefaultAgentRoles(autoEnable.config, legacyDefaultAgentId).config
-    : autoEnable.config;
+    ? materializeLegacyDefaultAgentRoles(autoEnabledRuntimeConfig, legacyDefaultAgentId).config
+    : autoEnabledRuntimeConfig;
   retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
   return {
     snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
-    wroteConfig,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }

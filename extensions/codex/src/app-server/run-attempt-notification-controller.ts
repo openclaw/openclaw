@@ -18,10 +18,8 @@ import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import {
-  CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
-  waitForPromiseOrAbort,
-} from "./turn-router.js";
+import { waitForPromiseOrAbort } from "./timeout.js";
+import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
 export function createCodexAttemptNotificationController(
@@ -29,7 +27,7 @@ export function createCodexAttemptNotificationController(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
 ) {
-  const { prompt, state: resourceState, projectorRef, registerNativeSubagentMonitor } = resources;
+  const { prompt, state: resourceState, projectorRef } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
   const { appServer, runAbortController } = runtime.connection;
@@ -37,7 +35,6 @@ export function createCodexAttemptNotificationController(
   const {
     state,
     turnIdRef,
-    userInputBridgeRef,
     steeringQueueRef,
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
@@ -90,7 +87,6 @@ export function createCodexAttemptNotificationController(
     }
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
-    userInputBridgeRef.current?.handleNotification(notification);
     if (!projector || !turnId) {
       if (notification.method === "error") {
         state.latestStartupErrorNotification = notification;
@@ -273,7 +269,6 @@ export function createCodexAttemptNotificationController(
   const drainNotificationQueue = async () => {
     await resourceState.turnRoute?.drain();
   };
-  registerNativeSubagentMonitor(resourceState.thread.threadId);
   return {
     waitForActiveNativeTurnCompletion,
     waitForNativeTerminalItems,

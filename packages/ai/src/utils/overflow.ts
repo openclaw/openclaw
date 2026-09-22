@@ -5,11 +5,6 @@ import type { AssistantMessage } from "../types.js";
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
 
-/** Detects DS4-style raw token-count context overflow errors. */
-export function isConfiguredContextSizeOverflowError(errorMessage: string): boolean {
-  return CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE.test(errorMessage);
-}
-
 /**
  * Canonical scoped patterns for context overflow errors from different providers.
  *

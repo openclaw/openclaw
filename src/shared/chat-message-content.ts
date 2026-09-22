@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Chat message content helpers extract user-visible text from mixed message parts.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
@@ -22,6 +23,7 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 }
 
 export type AssistantPhase = "commentary" | "final_answer";
+type AssistantTextBlock = Record<string, unknown> & { type: string; text: string };
 
 type AssistantTextSignature = { id?: string; phase?: AssistantPhase } | null;
 type AssistantTextSignatureBlock = { textSignature?: unknown };
@@ -129,6 +131,38 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
   );
 }
 
+/** Selects original text blocks with the same explicit-phase precedence used for delivery. */
+export function readAssistantTextBlocksForPhase(
+  message: unknown,
+  phase?: AssistantPhase,
+): AssistantTextBlock[] {
+  const entry = asOptionalRecord(message);
+  if (!Array.isArray(entry?.content)) {
+    return [];
+  }
+  const hasExplicitPhases = entry.content.some((value) => {
+    const block = asOptionalRecord(value);
+    return Boolean(
+      block &&
+      isAssistantTextContentBlockType(block.type) &&
+      parseAssistantTextSignature(block)?.phase,
+    );
+  });
+  if (!phase && hasExplicitPhases) {
+    return [];
+  }
+  const messagePhase = hasExplicitPhases ? undefined : normalizeAssistantPhase(entry.phase);
+  return entry.content.filter((value): value is AssistantTextBlock => {
+    const block = asOptionalRecord(value);
+    return Boolean(
+      block &&
+      isAssistantTextContentBlockType(block.type) &&
+      typeof block.text === "string" &&
+      (parseAssistantTextSignature(block)?.phase ?? messagePhase) === phase,
+    );
+  });
+}
+
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
@@ -157,39 +191,11 @@ export function extractAssistantTextForPhase(
     return undefined;
   }
 
-  const hasExplicitPhasedTextBlocks = entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentBlockType(record.type)) {
-      return false;
-    }
-    return Boolean(parseAssistantTextSignature(record)?.phase);
-  });
-
-  // Once explicit phased blocks exist, unphased extraction should not revive legacy text.
-  if (!phase && hasExplicitPhasedTextBlocks) {
-    return undefined;
-  }
-
   const parts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
-      continue;
-    }
-    const resolvedPhase =
-      parseAssistantTextSignature(record)?.phase ??
-      (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
-    if (resolvedPhase === phase) {
-      const sanitized = sanitizeBlockText(record.text);
-      if (sanitized.trim()) {
-        parts.push(sanitized);
-      }
+  for (const block of readAssistantTextBlocksForPhase(message, phase)) {
+    const sanitized = sanitizeBlockText(block.text);
+    if (sanitized.trim()) {
+      parts.push(sanitized);
     }
   }
   return parts.length ? parts.join(joinWith) : undefined;
@@ -202,4 +208,11 @@ export function extractAssistantPhaseText(message: unknown): string | undefined 
     return finalAnswerText;
   }
   return extractAssistantTextForPhase(message);
+}
+
+/** Captures authored display sources without making commentary a final reply. */
+export function extractAssistantTranscriptSourceText(message: unknown): string | undefined {
+  const commentary = extractAssistantTextForPhase(message, { phase: "commentary" });
+  const reply = extractAssistantPhaseText(message);
+  return commentary && reply ? `${commentary}\n${reply}` : (commentary ?? reply);
 }

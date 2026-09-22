@@ -118,8 +118,8 @@ async function invoke(
   return respond;
 }
 
-afterEach(() => {
-  flushPendingSessionsChangedEvents();
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   resumeChat.mockReset();
 });
 

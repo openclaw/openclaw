@@ -276,6 +276,70 @@ run_plugins_clawhub_scenario
   );
 
   it.each([
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=0
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+`,
+      expectedId: "openclaw-kitchen-sink-fixture",
+      expectedSpec: "clawhub:@openclaw/plugin-e2e-fixture",
+      name: "fixture default",
+    },
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+`,
+      expectedId: "openclaw-kitchen-sink-fixture",
+      expectedSpec: "clawhub:@openclaw/kitchen-sink",
+      name: "live default",
+    },
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/custom-plugin
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=custom-plugin
+`,
+      expectedId: "custom-plugin",
+      expectedSpec: "clawhub:@example/custom-plugin",
+      name: "explicit override",
+    },
+  ])("selects the ClawHub identity for $name", ({ environment, expectedId, expectedSpec }) => {
+    const root = tempDirs.make("openclaw-clawhub-identity-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+${environment}
+source scripts/e2e/lib/plugins/sweep.sh
+node() {
+  case "$1" in
+    scripts/e2e/lib/clawhub-fixture-server.cjs)
+      printf '12345\\n' > "$3"
+      while true; do sleep 1; done
+      ;;
+    scripts/e2e/lib/plugins/assertions.mjs) return 0 ;;
+    *) command node "$@" ;;
+  esac
+}
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const install = result.calls.find((args) => args[1] === "install" && !args.includes("--help"));
+    expect(install?.[2]).toBe(expectedSpec);
+    expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
+      expectedId,
+      expectedId,
+    ]);
+    expect(result.calls.find((args) => args[1] === "update")?.[2]).toBe(expectedId);
+    expect(result.calls.find((args) => args[1] === "uninstall")?.[2]).toBe(expectedSpec);
+  });
+
+  it.each([
     ["  --accept-capabilities  Accept\n", [consent]],
     ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
     ["  --accept-capabilities-extra  Other\n", []],

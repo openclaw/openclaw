@@ -252,10 +252,10 @@ function withScriptOperandPlanFixture<T>(
   return run(fixture, tmp);
 }
 
-const DENIED_RUNTIME_APPROVAL = {
+const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
-  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-} as const;
+  reason: "unsupported-command-shape",
+});
 
 function runNamedCase(name: string, run: () => void) {
   try {

@@ -118,9 +118,9 @@ describe("installPackageDir publication failure", () => {
     },
   );
 
-  it.each(["unchanged", "replaced"] as const)(
-    "retries backup cleanup after restoration publication with the %s canonical target",
-    async (targetState) => {
+  it.each(["unchanged", "replaced", "backup removed"] as const)(
+    "retries backup cleanup after restoration publication (%s)",
+    async (retryState) => {
       await fixtureRootTracker.setup();
       const fixtureRoot = await fixtureRootTracker.make("restoration-cleanup-retry");
       const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
@@ -188,13 +188,15 @@ describe("installPackageDir publication failure", () => {
         '{"original":true}\n',
       );
 
-      if (targetState === "replaced") {
+      if (retryState === "replaced") {
         await fs.rename(targetDir, path.join(fixtureRoot, "retained-original"));
         await fs.mkdir(targetDir);
         await fs.writeFile(path.join(targetDir, "marker.txt"), "successor");
+      } else if (retryState === "backup removed") {
+        await fs.rm(backupDir, { recursive: true });
       }
       const targetIdentity = await fs.lstat(targetDir, { bigint: true });
-      if (targetState === "unchanged") {
+      if (retryState !== "replaced") {
         await transaction.rollback();
         await expect(fs.lstat(backupDir)).rejects.toHaveProperty("code", "ENOENT");
         expect(await fs.readFile(path.join(targetDir, "settings.json"), "utf8")).toBe(
@@ -205,7 +207,7 @@ describe("installPackageDir publication failure", () => {
         expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
       }
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe(
-        targetState === "unchanged" ? "old" : "successor",
+        retryState === "replaced" ? "successor" : "old",
       );
       expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
         dev: targetIdentity.dev,

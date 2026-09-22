@@ -10,6 +10,30 @@ sidebarTitle: "Media helpers"
 
 Speech, media understanding, generation, web search, and the low-level media utilities. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## FFmpeg command discovery
+
+Official plugin sources use `resolveFfmpegBin` from
+the private `openclaw/plugin-sdk/media-ffmpeg` runtime. It resolves the same
+trusted system paths as the media runtime and throws an installation hint when
+FFmpeg is unavailable. This narrow entry point keeps media generation and agent
+runtimes out of source audio worker startup. It has a JavaScript-only host export;
+its declarations are excluded from the package. Third-party plugins retain the
+existing `resolveFfmpegBin` export from `openclaw/plugin-sdk/media-runtime`.
+
+The official plugin publication builder emits `media-runtime` for this private
+import, including worker entries, so published plugins keep working on supported
+hosts that predate `media-ffmpeg`. Both paths use the host's FFmpeg resolver.
+
+## Realtime voice playback
+
+Official audio workers use `createRealtimeVoiceOutputActivityTracker` and
+`isRealtimeVoiceAudioAudible` from the private
+`openclaw/plugin-sdk/realtime-voice-playback` runtime to avoid loading voice
+session and agent runtimes from source. The publication builder emits the
+existing `openclaw/plugin-sdk/realtime-voice` host import for these helpers,
+including worker entries, to preserve supported hosts. The source facade has a
+JavaScript-only host export; its declarations are excluded from the package.
+
 ## Media and generation namespaces
 
 <AccordionGroup>
@@ -162,27 +186,41 @@ Speech, media understanding, generation, web search, and the low-level media uti
     });
     ```
 
+    Search callers may supply a synchronous `assertCurrent` callback with `signal`
+    to retain their authority through provider preparation. Guarded HTTP requests
+    check it after transport preparation and before each request or redirect.
+    A registered search provider using another transport must call the execution
+    context's `assertCurrent` before each external side effect, after awaited
+    preparation. The callback belongs to the caller and expires when the search
+    finishes; providers must not replace it or treat its absence as permission.
+
   </Accordion>
   <Accordion title="api.runtime.media">
     Low-level media utilities.
 
     ```typescript
+    const webMedia = await api.runtime.media.loadWebMedia(url);
+    const mime = await api.runtime.media.detectMime({ buffer });
+    const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
+    const isVoice = api.runtime.media.isVoiceCompatibleAudio({ fileName: filePath });
+    const metadata = await api.runtime.media.getImageMetadata(buffer);
+    const resized = await api.runtime.media.resizeToJpeg({ buffer, maxSide: 800, quality: 85 });
+    ```
+
+    QR helpers are exported by `openclaw/plugin-sdk/media-runtime`:
+
+    ```typescript
     import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
-    const webMedia = await api.runtime.media.loadWebMedia(url);
-    const mime = await api.runtime.media.detectMime(buffer);
-    const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
-    const isVoice = api.runtime.media.isVoiceCompatibleAudio(filePath);
-    const metadata = await api.runtime.media.getImageMetadata(filePath);
-    const resized = await api.runtime.media.resizeToJpeg(buffer, { maxWidth: 800 });
-    const terminalQr = await api.runtime.media.renderQrTerminal("https://openclaw.ai");
-    const pngQr = await api.runtime.media.renderQrPngBase64("https://openclaw.ai", {
+    const qr = await import("openclaw/plugin-sdk/media-runtime");
+    const terminalQr = await qr.renderQrTerminal("https://openclaw.ai");
+    const pngQr = await qr.renderQrPngBase64("https://openclaw.ai", {
       scale: 6, // 1-12
       marginModules: 4, // 0-16
     });
-    const pngQrDataUrl = await api.runtime.media.renderQrPngDataUrl("https://openclaw.ai");
+    const pngQrDataUrl = await qr.renderQrPngDataUrl("https://openclaw.ai");
     const tmpRoot = resolvePreferredOpenClawTmpDir();
-    const pngQrFile = await api.runtime.media.writeQrPngTempFile("https://openclaw.ai", {
+    const pngQrFile = await qr.writeQrPngTempFile("https://openclaw.ai", {
       tmpRoot,
       dirPrefix: "my-plugin-qr-",
       fileName: "qr.png",

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -10,22 +11,25 @@ import {
   hasShownPluginBindingFallbackNotice,
   markPluginBindingFallbackNoticeShown,
 } from "../../plugins/conversation-binding.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
-import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
+import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
   const {
@@ -66,7 +70,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     logKind: "fast_abort" | "fast_approve";
   }) => {
     if (pluginOwnedBinding) {
-      getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
+      await getSessionBindingService().touchAsync(
+        pluginOwnedBinding.bindingId,
+        undefined,
+        pluginOwnedBinding,
+      );
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
@@ -124,6 +132,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
   });
   if (fastAbort.handled) {
+    if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {
+      state.markInboundDedupeReplayUnsafe();
+    }
     return await finishFastCommand({
       payload: {
         text: formatAbortReplyTextResolver(
@@ -163,6 +174,15 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   ) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
+  const assertCurrentBindingRoute = async () => {
+    if (ctx.InternalTurnSource === undefined && readConversationBindingRouteFacts(ctx)) {
+      await assertPreparedConversationBindingRouteCurrent(ctx);
+      if (isPreDispatchOperationAborted()) {
+        throw new DispatchReplyOperationAbortedError();
+      }
+    }
+  };
+  await assertCurrentBindingRoute();
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
     "pre_dispatch",
     Boolean(pluginOwnedBinding),
@@ -202,15 +222,31 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
-    params.replyOptions ??= {};
+    await getSessionBindingService().touchAsync(
+      pluginOwnedBinding.bindingId,
+      undefined,
+      pluginOwnedBinding,
+    );
+    const currentBinding =
+      await getSessionBindingService().resolveByConversationAsync(pluginOwnedBinding);
     if (
-      shouldBypassPluginOwnedBindingForCommand(
-        ctx,
-        cfg,
-        params.replyOptions as PluginCommandExecutionReplyOptions,
-      )
+      currentBinding?.bindingId !== pluginOwnedBinding.bindingId ||
+      currentBinding.boundAt !== pluginOwnedBinding.boundAt ||
+      currentBinding.targetSessionKey !== state.pluginBindingSessionKey ||
+      currentBinding.targetKind !== state.pluginBindingTargetKind ||
+      currentBinding.metadata?.pluginBindingOwner !== "plugin" ||
+      currentBinding.metadata?.pluginId !== pluginOwnedBinding.pluginId ||
+      currentBinding.metadata?.pluginRoot !== pluginOwnedBinding.pluginRoot
     ) {
+      throw new DispatchSessionRefreshRequiredError(
+        new Error("conversation binding changed while recording activity"),
+      );
+    }
+    if (isPreDispatchOperationAborted()) {
+      return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+    }
+    params.replyOptions ??= {};
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg, params.replyOptions)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
@@ -256,7 +292,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
                   authorizedInboundClaimEvent,
-                  { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
+                  withClaimingHookAdmission(
+                    { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
+                    assertCurrentBindingRoute,
+                  ),
                 ),
             );
           })()
@@ -356,7 +395,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
 
   emitMessageReceivedHooks();
-  return { status: "ready" as const, state };
+  return {
+    status: "ready" as const,
+    state: extendPreparedDispatchState(state, { assertCurrentBindingRoute }),
+  };
 }
 
 type PrepareDispatchOperationResult = Awaited<ReturnType<typeof prepareDispatchOperation>>;

@@ -15,18 +15,21 @@ import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
+type ChildAdapterFactory =
+  typeof import("../../process/supervisor/adapters/child.js").createChildAdapter;
+type ChildAdapter = Awaited<ReturnType<ChildAdapterFactory>>["adapter"];
+
 const { createChildAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock:
-    vi.fn<typeof import("../../process/supervisor/adapters/child.js").createChildAdapter>(),
+    vi.fn<(...args: Parameters<ChildAdapterFactory>) => Promise<ChildAdapter>>(),
 }));
 
 vi.mock("../../process/supervisor/adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (...args: Parameters<ChildAdapterFactory>) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
-
-type ChildAdapter = Awaited<
-  ReturnType<typeof import("../../process/supervisor/adapters/child.js").createChildAdapter>
->;
 
 type TestAdapter = ChildAdapter & {
   emitStdout: (chunk: string) => void;
@@ -103,6 +106,7 @@ function createRunContext(params: {
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: "test-cli",

@@ -249,6 +249,8 @@ For `image_generate`, OpenClaw tries providers in this order:
 If a provider fails (auth error, rate limit, etc.), the next configured
 candidate is tried automatically. If all fail, the error includes details
 from each attempt.
+For reference-image requests, candidates that cannot edit images or accept
+the supplied reference count are skipped.
 
 <AccordionGroup>
   <Accordion title="Per-call model overrides are exact">

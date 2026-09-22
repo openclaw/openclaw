@@ -15,7 +15,7 @@ import { hasSlackMessageTableBlock } from "./block-text.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
-import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   buildSlackMessageDispatchReplayKey,
   claimSlackMessageDispatchReplay,
@@ -242,19 +242,20 @@ export function createSlackMessageHandler(params: {
                   ...last.message,
                   text: combinedText,
                 };
-                const { prepareSlackMessage, dispatchPreparedSlackMessage } =
-                  await loadSlackMessagePipeline();
                 const {
                   dispatchCompletion: _completion,
                   awaitDispatch: _awaitDispatch,
                   turnAdoptionLifecycle,
                   ...lastOpts
                 } = last.opts;
-                let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
                 let visibleDrop = false;
                 let settlementHandedOff = false;
                 try {
-                  prepared = await prepareSlackMessage({
+                  admissionLifecycle.abortSignal.throwIfAborted();
+                  const { prepareSlackMessage, dispatchPreparedSlackMessage } =
+                    await loadSlackMessagePipeline();
+                  admissionLifecycle.abortSignal.throwIfAborted();
+                  const prepared = await prepareSlackMessage({
                     ctx: runtimeContext,
                     account: resolveSlackAccount({
                       cfg: runtimeContext.cfg,
@@ -264,6 +265,11 @@ export function createSlackMessageHandler(params: {
                     opts: {
                       ...lastOpts,
                       wasMentioned: combinedMentioned || last.opts.wasMentioned,
+                      sourceMessageIds: surviving.flatMap((entry) =>
+                        entry.message.ts ? [entry.message.ts] : [],
+                      ),
+                      abortSignal: admissionLifecycle.abortSignal,
+                      isRuntimePolicyCurrent: runtimeContext.isRuntimePolicyCurrent,
                       onVisibleDrop: () => {
                         visibleDrop = true;
                       },
@@ -282,6 +288,13 @@ export function createSlackMessageHandler(params: {
                     return;
                   }
                   await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
+                  const deferredHeartbeatIntervals = [
+                    turnAdoptionLifecycle?.deferredHeartbeatIntervalMs,
+                    admissionLifecycle.deferredHeartbeatIntervalMs,
+                  ].filter(
+                    (interval): interval is number =>
+                      interval !== undefined && Number.isFinite(interval) && interval > 0,
+                  );
                   // Commit at adoption (durable turn ownership), release on abandonment;
                   // deferred turns hand settlement to the reply lane with the claim held.
                   prepared.turnAdoptionLifecycle = {
@@ -308,6 +321,9 @@ export function createSlackMessageHandler(params: {
                       turnAdoptionLifecycle?.onDeferredHeartbeat?.();
                       admissionLifecycle.onDeferredHeartbeat?.();
                     },
+                    ...(deferredHeartbeatIntervals.length > 0
+                      ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
+                      : {}),
                     onAbandoned: () => {
                       settlementHandedOff = true;
                       releaseClaims();

@@ -1,7 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
-export type CustodianConfiguredInferenceState = "unresolved" | "required" | "ready";
+export type CustodianConfiguredInferenceState = "unresolved" | "required" | "utility" | "ready";
 
 export function resolveCustodianConfiguredInferenceState(
   context: ApplicationContext | null,
@@ -22,5 +22,9 @@ export function resolveCustodianConfiguredInferenceState(
   if (!selectedAgent) {
     return "unresolved";
   }
-  return selectedAgent.model?.primary?.trim() ? "ready" : "required";
+  return selectedAgent.model?.primary?.trim()
+    ? "ready"
+    : selectedAgent.utilityModel?.trim()
+      ? "utility"
+      : "required";
 }

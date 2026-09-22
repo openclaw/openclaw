@@ -203,59 +203,6 @@ describe("CodexAppServerClient", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   });
 
-  it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const notifications: unknown[] = [];
-    harness.client.addNotificationHandler((notification) => {
-      notifications.push(notification);
-    });
-
-    harness.process.stdout.write(
-      '{"method":"item/commandExecution/outputDelta","params":{"delta":"first' +
-        "\n" +
-        'second"}}\n',
-    );
-
-    await vi.waitFor(() =>
-      expect(notifications).toEqual([
-        {
-          method: "item/commandExecution/outputDelta",
-          params: { delta: "first\nsecond" },
-        },
-      ]),
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("recovers large app-server messages split by raw newlines inside JSON strings", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const notifications: unknown[] = [];
-    harness.client.addNotificationHandler((notification) => {
-      notifications.push(notification);
-    });
-    const largePrefix = "x".repeat(1_100_000);
-
-    harness.process.stdout.write(
-      '{"method":"item/commandExecution/outputDelta","params":{"delta":"' +
-        largePrefix +
-        "\n" +
-        'second"}}\n',
-    );
-
-    await vi.waitFor(() => expect(notifications).toHaveLength(1));
-    expect(notifications).toEqual([
-      {
-        method: "item/commandExecution/outputDelta",
-        params: { delta: largePrefix + "\nsecond" },
-      },
-    ]);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("preserves JSON-RPC error codes", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -433,6 +380,45 @@ describe("CodexAppServerClient", () => {
         },
         capabilities: {
           experimentalApi: true,
+          optOutNotificationMethods: [
+            "account/login/completed",
+            "app/list/updated",
+            "command/exec/outputDelta",
+            "deprecationNotice",
+            "externalAgentConfig/import/completed",
+            "externalAgentConfig/import/progress",
+            "fs/changed",
+            "fuzzyFileSearch/sessionCompleted",
+            "fuzzyFileSearch/sessionUpdated",
+            "mcpServer/event/stream/notification",
+            "mcpServer/oauthLogin/completed",
+            "mcpServer/startupStatus/updated",
+            "process/exited",
+            "process/outputDelta",
+            "project/changed",
+            "remoteControl/status/changed",
+            "thread/environment/connected",
+            "thread/environment/disconnected",
+            "thread/goal/cleared",
+            "thread/project/updated",
+            "thread/queue/changed",
+            "thread/realtime/closed",
+            "thread/realtime/error",
+            "thread/realtime/item/completed",
+            "thread/realtime/item/started",
+            "thread/realtime/item/transcript/delta",
+            "thread/realtime/itemAdded",
+            "thread/realtime/outputAudio/delta",
+            "thread/realtime/sdp",
+            "thread/realtime/started",
+            "thread/realtime/transcript/delta",
+            "thread/realtime/transcript/done",
+            "windows/worldWritableWarning",
+            "windowsSandbox/setupCompleted",
+            "turn/diff/updated",
+            "item/fileChange/outputDelta",
+            "thread/compacted",
+          ],
           extensions: {
             "openai/standard-form-input": {},
             "openai/form": {},
@@ -849,6 +835,85 @@ describe("CodexAppServerClient", () => {
       timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
     });
   });
+
+  it.each([
+    { executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 },
+    {
+      executionTimeoutMs: 2_147_483_647,
+      beforeDeadlineMs: 2_147_000_000,
+      deadlineMs: 2_147_483_647,
+    },
+  ])(
+    "accepts one owner execution budget of $executionTimeoutMs ms",
+    async ({ executionTimeoutMs, beforeDeadlineMs, deadlineMs }) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+      harness.client.addRequestHandler((_request, signal, setTimeoutMs) => {
+        requestSignal = signal;
+        setExecutionTimeoutMs = setTimeoutMs;
+        setTimeoutMs?.(executionTimeoutMs);
+        return new Promise<never>(() => {});
+      });
+
+      harness.send({ id: "owned-budget", method: "item/tool/call", params: { tool: "node_exec" } });
+      await vi.advanceTimersByTimeAsync(beforeDeadlineMs);
+      expect(harness.writes).toHaveLength(0);
+      expect(requestSignal?.aborted).toBe(false);
+
+      setExecutionTimeoutMs?.(1_800_000);
+      await vi.advanceTimersByTimeAsync(deadlineMs - beforeDeadlineMs);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(harness.writes).toHaveLength(1);
+      expect(JSON.parse(harness.writes[0] ?? "{}")).toMatchObject({
+        id: "owned-budget",
+        result: {
+          success: false,
+          contentItems: [{ text: expect.stringContaining(`${deadlineMs}ms`) }],
+        },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["completed", "timed out"] as const)(
+    "ignores an execution budget reported after the request %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+      harness.client.addRequestHandler((_request, signal, setTimeoutMs) => {
+        requestSignal = signal;
+        setExecutionTimeoutMs = setTimeoutMs;
+        return outcome === "completed"
+          ? { success: true, contentItems: [] }
+          : new Promise<never>(() => {});
+      });
+
+      harness.send({
+        id: "retired-budget",
+        method: "item/tool/call",
+        params: { tool: "node_exec" },
+      });
+      await vi.advanceTimersByTimeAsync(
+        outcome === "completed" ? 0 : CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+      );
+      expect(harness.writes).toHaveLength(1);
+      expect(requestSignal?.aborted).toBe(outcome === "timed out");
+
+      setExecutionTimeoutMs?.(900_000);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(930_000);
+      expect(harness.writes).toHaveLength(1);
+      expect(requestSignal?.aborted).toBe(outcome === "timed out");
+    },
+  );
 
   it.each([
     { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },

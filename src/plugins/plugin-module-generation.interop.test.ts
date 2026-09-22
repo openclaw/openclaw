@@ -3,55 +3,132 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { describe, expect, it } from "vitest";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
+import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
-const temp = useAutoCleanupTempDirTracker(afterEach);
-const instances: PluginInstance[] = [];
-afterEach(async () => {
-  for (const instance of instances.splice(0).toReversed()) {
-    await instance.dispose();
-  }
-});
-function fixture(files: Record<string, string>) {
-  const root = temp.make("plugin-native-interop-");
-  for (const [name, source] of Object.entries(files)) {
-    const filename = path.join(root, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, source);
-  }
-  return root;
-}
-function host(rootDir: string, standalone = false) {
-  let instance: PluginInstance | undefined;
-  return {
-    load(entry: string): unknown {
-      const source = path.join(rootDir, entry);
-      if (!instance) {
-        instance = new PluginInstance("interop-fixture");
-        instances.push(instance);
-        const owner = instance;
-        withPluginCache(createPluginCache(), () =>
-          bindPluginInstanceModuleLoader({
-            instance: owner,
-            origin: "config",
-            source,
-            rootDir,
-            standalone,
-          }),
-        );
-      }
-      return instance.loadModule(source);
-    },
-    dispose: () => instance?.dispose(),
-  };
-}
+const { temp, fixture, host } = createPluginModuleGenerationTestHarness();
 
 describe("native plugin generation interop", () => {
+  it.each(["", "@fixture/"])(
+    "preserves %ssibling dependency assets across nested installs and generations",
+    async (scope) => {
+      const readerName = `${scope}asset-reader`;
+      const platformName = `${scope}platform`;
+      const installs = [
+        ["", "1.0.0"],
+        ["nested/", "2.0.0"],
+      ] as const;
+      const files: Record<string, string> = {
+        "entry.cjs": `const root = require(${JSON.stringify(readerName)});
+          const nested = require('./nested/entry.cjs');
+          exports.read = () => [root.read(), nested.read()];`,
+        "nested/entry.cjs": `module.exports = require(${JSON.stringify(readerName)});`,
+      };
+      for (const [prefix, version] of installs) {
+        files[`${prefix}package.json`] = JSON.stringify({
+          dependencies: { [readerName]: version },
+        });
+        files[`${prefix}node_modules/${readerName}/package.json`] = JSON.stringify({
+          name: readerName,
+          version,
+          main: "index.cjs",
+          optionalDependencies: { [platformName]: version },
+        });
+        files[`${prefix}node_modules/${readerName}/index.cjs`] = `
+          const fs = require('node:fs');
+          const path = require('node:path');
+          exports.read = () => fs.readFileSync(path.join(__dirname, '../platform/vec0.so'), 'utf8');`;
+        files[`${prefix}node_modules/${platformName}/package.json`] = JSON.stringify({
+          name: platformName,
+          version,
+        });
+        files[`${prefix}node_modules/${platformName}/vec0.so`] = `before-${version}`;
+      }
+      const root = fixture(files);
+      type Plugin = { read(): string[] };
+      const entry = path.join(root, "entry.cjs");
+      const before = ["before-1.0.0", "before-2.0.0"];
+      expect((createRequire(entry)(entry) as Plugin).read()).toEqual(before);
+      const firstHost = host(root);
+      const first = firstHost.load("entry.cjs") as Plugin;
+      expect(first.read()).toEqual(before);
+      for (const [prefix, version] of installs) {
+        fs.writeFileSync(
+          path.join(root, `${prefix}node_modules/${platformName}/vec0.so`),
+          `after-${version}`,
+        );
+      }
+      const second = host(root).load("entry.cjs") as Plugin;
+      const after = ["after-1.0.0", "after-2.0.0"];
+      expect(second.read()).toEqual(after);
+      fs.rmSync(root, { recursive: true, force: true });
+      expect(first.read()).toEqual(before);
+      expect(second.read()).toEqual(after);
+      await firstHost.dispose();
+      expect(second.read()).toEqual(after);
+    },
+  );
+
+  it("resolves an ancestor dependency alias matching a noninstalled plugin directory", () => {
+    const root = fixture({
+      "shared/package.json": '{"dependencies":{"shared":"npm:actual-shared@1.0.0"}}',
+      "shared/entry.cjs": "module.exports = require('shared');",
+      "node_modules/shared/package.json": '{"name":"actual-shared","main":"index.cjs"}',
+      "node_modules/shared/index.cjs": "exports.value = 42;",
+    });
+    expect(host(path.join(root, "shared")).load("entry.cjs")).toMatchObject({ value: 42 });
+  });
+
+  it.each([true, false])(
+    "preserves native-addon package-root detection (declared loader: %s)",
+    (declared) => {
+      const root = fixture({
+        "package.json": '{"dependencies":{"native-addon":"1.0.0"}}',
+        "entry.cjs": "module.exports = require('native-addon');",
+        "node_modules/native-addon/package.json": JSON.stringify({
+          name: "native-addon",
+          main: "lib/database.cjs",
+          dependencies: declared ? { "root-loader": "1.0.0" } : undefined,
+        }),
+        "node_modules/native-addon/lib/database.cjs": `
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = require('root-loader')(__filename);
+          exports.relativeRoot = path.relative(__dirname, root);
+          exports.read = () => fs.readFileSync(path.join(root, 'build/Release/addon.txt'), 'utf8');`,
+        "node_modules/native-addon/build/Release/addon.txt": "before",
+        "node_modules/root-loader/package.json": '{"main":"index.cjs"}',
+        "node_modules/root-loader/index.cjs": `
+          const fs = require('node:fs');
+          const path = require('node:path');
+          module.exports = file => {
+            let directory = path.dirname(file);
+            while (!fs.existsSync(path.join(directory, 'package.json')) &&
+                   !fs.existsSync(path.join(directory, 'node_modules'))) {
+              const parent = path.dirname(directory);
+              if (parent === directory) throw new Error('Package root not found');
+              directory = parent;
+            }
+            return directory;
+          };`,
+      });
+      type Addon = { relativeRoot: string; read(): string };
+      const entry = path.join(root, "entry.cjs");
+      const original = createRequire(entry)(entry) as Addon;
+      expect(original.relativeRoot).toBe("..");
+      expect(original.read()).toBe("before");
+      const captured = host(root).load("entry.cjs") as Addon;
+      expect(captured.relativeRoot).toBe(original.relativeRoot);
+      fs.writeFileSync(
+        path.join(root, "node_modules/native-addon/build/Release/addon.txt"),
+        "after",
+      );
+      expect(captured.read()).toBe("before");
+      expect((host(root).load("entry.cjs") as Addon).read()).toBe("after");
+    },
+  );
+
   it.each(["ts", "cjs"])(
     "reclaims only the retired %s generation's Node cache records",
     async (extension) => {
@@ -86,7 +163,7 @@ describe("native plugin generation interop", () => {
       const owned = records(plugin);
       expect(owned.length).toBeGreaterThan(0);
       expect(owned.some(([id]) => id === plugin.captured)).toBe(true);
-      if (extension === "ts") {
+      if (extension === "ts" && !process.versions.bun) {
         expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".mjs"))).toBe(true);
         expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".js"))).toBe(true);
         expect(owned.some(([id]) => id.startsWith("file:"))).toBe(true);
@@ -158,7 +235,10 @@ describe("native plugin generation interop", () => {
     const effect = path.join(temp.make("plugin-async-commonjs-effects-"), "effect.txt");
     fs.writeFileSync(
       path.join(root, "index.ts"),
-      "export const read = () => import('./failure.cts');",
+      `const Map = {};
+       export const read = () => import('./failure.cts');
+       export const literal = "jitiImport(";
+       export const strictThis = (function(this: void) { return this === undefined; })();`,
     );
     fs.writeFileSync(
       path.join(root, "failure.cts"),
@@ -169,7 +249,13 @@ describe("native plugin generation interop", () => {
       throw new Error('async fixture failure');
     `,
     );
-    const current = host(root).load("index.ts") as { read(): Promise<unknown> };
+    const current = host(root).load("index.ts") as {
+      literal: string;
+      strictThis: boolean;
+      read(): Promise<unknown>;
+    };
+    expect(current.literal).toBe("jitiImport(");
+    expect(current.strictThis).toBe(true);
     const failure = await current.read().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toHaveProperty("message", "async fixture failure");
@@ -459,23 +545,29 @@ describe("native plugin generation interop", () => {
 
   it.each(
     [false, true].flatMap((standalone) =>
-      ["static", "computed"].map((reference) => ({ standalone, reference })),
+      ["static", "computed"].flatMap((reference) =>
+        [false, true].map((nestedManifest) => ({ standalone, reference, nestedManifest })),
+      ),
     ),
   )(
-    "resolves nested dependency versions from each importer ($reference, standalone: $standalone)",
-    async ({ standalone, reference }) => {
+    "resolves nested dependency versions from each importer ($reference, standalone: $standalone, nested manifest: $nestedManifest)",
+    async ({ standalone, reference, nestedManifest }) => {
       const root = fixture({
         "package.json": JSON.stringify({
           type: "module",
           dependencies: { "versioned-dependency": "1.0.0" },
         }),
         "entry.mjs":
-          'import { value as rootVersion } from "versioned-dependency"; export { rootVersion }; export { read as readNested } from "./nested/consumer.mjs";',
-        "nested/package.json": JSON.stringify({
-          type: "module",
-          dependencies: { "versioned-dependency": "2.0.0" },
-        }),
-        "nested/consumer.mjs":
+          'import { value as rootVersion } from "versioned-dependency"; export { rootVersion }; export { read as readNested } from "./nested/lib/consumer.mjs";',
+        ...(nestedManifest
+          ? {
+              "nested/package.json": JSON.stringify({
+                type: "module",
+                dependencies: { "versioned-dependency": "2.0.0" },
+              }),
+            }
+          : {}),
+        "nested/lib/consumer.mjs":
           reference === "static"
             ? 'import { value } from "versioned-dependency"; export const read = async () => value;'
             : "export const read = async name => (await import(name)).value;",
@@ -516,7 +608,10 @@ describe("native plugin generation interop", () => {
       process.on(event, observe);
       try {
         createRequire(import.meta.url)(path.join(root, "entry.mjs"));
-        expect(values).toEqual([type === "module" ? "undefined" : "object"]);
+        expect(values).toHaveLength(1);
+        if (!process.versions.bun) {
+          expect(values[0]).toBe(type === "module" ? "undefined" : "object");
+        }
         host(root).load("entry.mjs");
         expect(values[1]).toBe(values[0]);
       } finally {
@@ -693,20 +788,24 @@ describe("native plugin generation interop", () => {
           readNamed(): number;
           lazy(): Promise<Namespace>;
         };
-        expect(entry.value.answer, name).toBe(42);
+        const importedValue =
+          process.versions.bun && name === "own-default"
+            ? (entry.required.default as Value)
+            : entry.required;
+        expect(entry.value.answer, name).toBe(importedValue.answer);
         expect(entry.hidden).toBe(17);
-        expect(entry.value).toBe(entry.required);
+        expect(entry.value).toBe(importedValue);
         expect(entry.cached).toBe(entry.required);
         expect(managed.load(filename)).toBe(entry.required);
-        expect(entry.reexported).toBe(entry.required);
-        expect(entry.namespace.default).toBe(entry.required);
+        expect(entry.reexported).toBe(importedValue);
+        expect(entry.namespace.default).toBe(importedValue);
         expect(await entry.lazy()).toBe(entry.namespace);
         if (first) {
           expect(first).toBe(entry.namespace);
         }
-        expect(entry.required.getterReads).toBe(0);
+        expect(entry.required.getterReads).toBe(process.versions.bun ? 1 : 0);
         entry.required.answer = 43;
-        expect(entry.value.answer).toBe(43);
+        expect(entry.value.answer).toBe(importedValue === entry.required ? 43 : 0);
         expect(entry.readNamed()).toBe(42);
         expect(entry.answer).toBe(42);
       }
@@ -817,12 +916,22 @@ describe("native plugin generation interop", () => {
     expect(entry.reexported).toBe("require");
     expect(entry.namespace.token).toBe(entry.imported.token);
     expect(entry.required.value).toBe("require");
-    expect(entry.createdRequire).toBe(entry.required);
+    if (process.versions.bun) {
+      expect(entry.createdRequire).toEqual(entry.required);
+      expect(entry.createdRequire.token).toBe(entry.required.token);
+    } else {
+      expect(entry.createdRequire).toBe(entry.required);
+    }
     const lazy = await entry.lazy();
     expect(lazy.value).toBe("import");
     expect(lazy.token).not.toBe(entry.imported.token);
     const lazyModule = await entry.lazyModule();
     expect(lazyModule.token).toBe(lazy.token);
-    expect(lazyModule.required).toBe(entry.required);
+    if (process.versions.bun) {
+      expect(lazyModule.required).toEqual(entry.required);
+      expect(lazyModule.required.token).toBe(entry.required.token);
+    } else {
+      expect(lazyModule.required).toBe(entry.required);
+    }
   });
 });

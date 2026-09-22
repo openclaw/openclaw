@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -13,13 +14,14 @@ import {
   assignSessionOwner,
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { scanDoctorSessionEntriesStrict } from "./session-accessor.sqlite-canonical-inventory.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
@@ -41,12 +43,12 @@ function createScope() {
 }
 
 describe("cold canonical session validation", () => {
-  it("lists existing metadata without creating absent owner columns", () => {
+  it("lists existing metadata without creating absent first-use columns", () => {
     const scope = createScope();
     replaceSessionEntrySync(scope, { sessionId: "cold-key", updatedAt: 1, label: "existing" });
     const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-    for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
-      database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName}`);
+    for (const { columnName, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      database.db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`);
     }
     closeOpenClawAgentDatabasesForTest();
     expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry).toEqual({
@@ -57,17 +59,13 @@ describe("cold canonical session validation", () => {
     });
     const readOnly = new DatabaseSync(scope.storePath, { readOnly: true });
     try {
-      const names = new Set(
-        readOnly
-          .prepare("PRAGMA table_info(session_nodes)")
-          .all()
-          .map((row) => row.name),
-      );
-      expect(
-        FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.every(
-          ({ columnName }) => !names.has(columnName),
-        ),
-      ).toBe(true);
+      for (const { columnName, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+        expect(
+          readOnly
+            .prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?")
+            .get(tableName, columnName),
+        ).toBeUndefined();
+      }
     } finally {
       readOnly.close();
     }
@@ -114,43 +112,56 @@ describe("cold canonical session validation", () => {
     expect(doctor[0]?.updatedAt).toBe(1);
   });
 
-  it("reloads metadata when another connection commits during canonical validation", () => {
-    const scope = createScope();
-    const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
-    replaceSessionEntrySync(scope, entry);
-    closeOpenClawAgentDatabasesForTest();
-    openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-    const writer = new DatabaseSync(scope.storePath);
-    const originalParse = JSON.parse;
-    let committed = false;
-    const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      const value = originalParse(text, reviver);
-      if (!committed && value?.sessionId === entry.sessionId && value?.label === "before") {
-        committed = true;
-        writer.exec("BEGIN IMMEDIATE");
-        writer
-          .prepare("UPDATE session_nodes SET entry_json = ?, label = 'after' WHERE session_key = ?")
-          .run(JSON.stringify({ ...entry, label: "after" }), scope.sessionKey);
-        writer
-          .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-          .run(scope.sessionKey);
-        writer.exec("COMMIT");
+  it.each([false, true])(
+    "reloads metadata after a commit during required validation (pending rewrite: %s)",
+    (certifiedReopen) => {
+      const scope = createScope();
+      const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
+      replaceSessionEntrySync(scope, entry);
+      if (certifiedReopen) {
+        const pending = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+        pending.db.exec(
+          "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
+        );
+        closeOpenClawAgentDatabaseByPath(scope.storePath);
+      } else {
+        closeOpenClawAgentDatabasesForTest();
       }
-      return value;
-    });
-    try {
-      expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
-        "after",
-      );
-      expect(committed).toBe(true);
-      expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
-        "after",
-      );
-    } finally {
-      parse.mockRestore();
-      writer.close();
-    }
-  });
+      openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+      const writer = new DatabaseSync(scope.storePath);
+      const originalParse = JSON.parse;
+      let committed = false;
+      const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        const value = originalParse(text, reviver);
+        if (!committed && value?.sessionId === entry.sessionId && value?.label === "before") {
+          committed = true;
+          writer.exec("BEGIN IMMEDIATE");
+          writer
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, label = 'after' WHERE session_key = ?",
+            )
+            .run(JSON.stringify({ ...entry, label: "after" }), scope.sessionKey);
+          writer
+            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+            .run(scope.sessionKey);
+          writer.exec("COMMIT");
+        }
+        return value;
+      });
+      try {
+        expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
+          "after",
+        );
+        expect(committed).toBe(true);
+        expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
+          "after",
+        );
+      } finally {
+        parse.mockRestore();
+        writer.close();
+      }
+    },
+  );
 
   it("does not publish a partial snapshot after a later malformed row", () => {
     const scope = createScope();
@@ -195,6 +206,68 @@ describe("cold canonical session validation", () => {
     expect(() => listSessionEntriesReadOnly({ ...scope, projection: "list" })).toThrow(
       "openclaw doctor --fix",
     );
+  });
+
+  it("revalidates a changed policy before refusing a warm transcript root", () => {
+    const scope = createScope();
+    const otherKey = "agent:main:z-later";
+    const otherEntry = { sessionId: "later", updatedAt: 1 };
+    replaceSessionEntrySync(scope, { sessionId: "cold-key", updatedAt: 1 });
+    replaceSessionEntrySync({ ...scope, sessionKey: otherKey }, otherEntry);
+    const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+    runOpenClawAgentWriteTransaction(
+      (writer) => {
+        ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-key" }, 1);
+      },
+      { ...scope, path: scope.storePath },
+    );
+    const append = () =>
+      runOpenClawAgentWriteTransaction(
+        (writer) =>
+          appendTranscriptEventInTransaction(
+            writer,
+            { ...scope, sessionKey: "agent:main:main", sessionId: "new-root" },
+            { type: "message", id: "new-message", message: { role: "user", content: "new" } },
+          ),
+        { ...scope, path: scope.storePath },
+      );
+    // A separate writer changes policy without clearing this reader's warm validation.
+    const external = new DatabaseSync(scope.storePath);
+    try {
+      external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("custom");
+      external
+        .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
+        .run(otherKey);
+      expect(append).toThrow(
+        "invalid persisted session row requires repair for agent:main:z-later",
+      );
+      external
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(JSON.stringify(otherEntry), otherKey);
+      external
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(otherKey);
+      expect(append).toThrow("refusing non-canonical session key write agent:main:main");
+      expect(
+        database.db
+          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
+          .get("new-root"),
+      ).toBeUndefined();
+      expect(
+        database.db
+          .prepare("SELECT seq FROM transcript_events WHERE session_id = ?")
+          .all("new-root"),
+      ).toEqual([]);
+      external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("main");
+      expect(append()).toEqual(expect.any(String));
+      expect(
+        database.db
+          .prepare("SELECT seq FROM transcript_events WHERE session_id = ?")
+          .all("new-root"),
+      ).toEqual([{ seq: 0 }]);
+    } finally {
+      external.close();
+    }
   });
 
   it.each([false, true])(

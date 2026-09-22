@@ -1,5 +1,5 @@
 // Script erasability tests cover Node's transformation-free TypeScript boundary.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,6 +38,56 @@ function writeScriptsTree(files: Record<string, string>): string {
 }
 
 describe("check-script-erasability", () => {
+  it.each([
+    { file: "input.ts", source: "export const value: string = 'ready';", status: 0 },
+    { file: "input.ts", source: "enum State { Ready }", status: 1 },
+    { file: "lib/local-check-runtime.mts", source: "enum State { Ready }", status: 1 },
+  ])(
+    "preserves CLI diagnostics for $file and exit status $status on the current runtime",
+    ({ file, source, status }) => {
+      const scriptsRoot = writeScriptsTree({ "input.ts": "" });
+      const fixtureRoot = path.dirname(scriptsRoot);
+      for (const relativePath of [
+        "scripts/check-script-erasability.mjs",
+        "scripts/lib/tsx-cli-shim.mjs",
+        "scripts/lib/local-check-runtime.mts",
+        "src/infra/node-runtime-executable.ts",
+      ]) {
+        const destination = path.join(fixtureRoot, relativePath);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.copyFileSync(path.resolve(relativePath), destination);
+      }
+      const sourcePath = path.join(scriptsRoot, file);
+      const existingSource = fs.readFileSync(sourcePath, "utf8");
+      const prefix = existingSource ? `${existingSource}\n` : "";
+      const line = prefix.split("\n").length;
+      fs.writeFileSync(sourcePath, `${prefix}${source}\n`);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--disable-warning=ExperimentalWarning",
+          path.join(scriptsRoot, "check-script-erasability.mjs"),
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.error).toBeUndefined();
+      if (status === 0) {
+        expect(result.stdout).toBe(
+          "[script-erasability] checked 2 TypeScript implementation files\n",
+        );
+        expect(result.stderr).toBe("");
+      } else {
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(
+          "TypeScript syntax under scripts/ must be erasable by Node without transformation:",
+        );
+        expect(result.stderr).toContain(`- scripts/${file}:${line}: `);
+        expect(result.stderr).toMatch(/enum.*strip-only/u);
+      }
+      expect(result.status).toBe(status);
+    },
+  );
+
   it("accepts erasable annotations and enum-like string content", () => {
     const scriptsRoot = writeScriptsTree({
       "annotations.ts": `

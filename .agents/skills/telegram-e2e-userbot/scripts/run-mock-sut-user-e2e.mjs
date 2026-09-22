@@ -1,17 +1,12 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  parseRecorderReady,
-  readScenarioFile,
-  resolveChatTarget,
-  selectChatTarget,
-} from "./scenario.mjs";
+import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
 import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
@@ -27,7 +22,7 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
-const ownedChildren = new Set();
+import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
 const CHILD_ENV_DENIED_PREFIXES = [
   "BWS_",
   "CLAWSWEEPER_",
@@ -39,11 +34,6 @@ const CHILD_ENV_DENIED_PREFIXES = [
 const CHILD_ENV_DENIED_KEYS = new Set(["TELEGRAM_E2E_STATE_DIR", "TELEGRAM_USER_DRIVER_STATE_DIR"]);
 const CHILD_ENV_SECRET_KEY =
   /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
-let activeCredential;
-let activeCredentialPromise;
-let cleanupPromise;
-let shutdownPromise;
-let shuttingDown = false;
 
 export function sanitizeChildEnvironment(env = process.env) {
   return Object.fromEntries(
@@ -85,89 +75,25 @@ export function summarizeScenarioCommand({ action, result, elapsedMs, durationMs
   };
 }
 
-export function createGatewayEnvironment({
-  baseEnv = process.env,
-  configPath,
-  stateDir,
-  sutToken,
-}) {
+export function createGatewayEnvironment({ baseEnv = process.env, configPath, stateDir }) {
   return {
     ...sanitizeChildEnvironment(baseEnv),
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
-    TELEGRAM_BOT_TOKEN: sutToken,
     OPENAI_API_KEY: "openclaw-e2e-mock-key",
   };
 }
 
 function assertRunnerActive() {
-  if (shuttingDown) throw new Error("Telegram E2E runner is shutting down.");
+  currentTelegramRun().assertActive();
 }
 
 export function ownChild(child) {
-  ownedChildren.add(child);
-  return child;
-}
-
-export function ownCredentialAcquisition(promise) {
-  activeCredentialPromise = promise;
-  return promise;
-}
-
-async function stopOwnedChildren() {
-  await Promise.allSettled([...ownedChildren].map((child) => stopChild(child)));
-}
-
-export async function cleanupOwnedRuntime(credential = activeCredential) {
-  if (cleanupPromise) return cleanupPromise;
-  const cleanup = (async () => {
-    const pendingCredential = activeCredentialPromise;
-    if (!credential && pendingCredential) {
-      credential = await pendingCredential.catch(() => undefined);
-      if (activeCredentialPromise === pendingCredential) activeCredentialPromise = undefined;
-    }
-    await stopOwnedChildren();
-    await credential?.release();
-  })();
-  cleanupPromise = cleanup;
-  try {
-    await cleanup;
-  } finally {
-    if (cleanupPromise === cleanup) cleanupPromise = undefined;
-  }
+  return currentTelegramRun().ownChild(child, stopChildProcess);
 }
 
 export function removeRunnerScratch(root) {
   fs.rmSync(root, { recursive: true, force: true });
-}
-
-export async function fenceLeaseFailure({
-  error,
-  cancelControls,
-  probe,
-  controlWork,
-  persistLogs,
-}) {
-  cancelControls();
-  const children = new Set([...ownedChildren, probe].filter(Boolean));
-  await Promise.allSettled([...children].map((child) => stopChild(child)));
-  await Promise.allSettled(controlWork);
-  persistLogs();
-  throw error;
-}
-
-export async function waitForGatewayLeaseReady({ child, readiness, leaseFailure }) {
-  const outcome = await Promise.race([readiness.then(() => ({ type: "ready" })), leaseFailure]);
-  if (outcome.type === "lease-failure") {
-    await fenceLeaseFailure({
-      error: outcome.error,
-      cancelControls: () => {},
-      probe: child,
-      controlWork: [],
-      persistLogs: () => {},
-    });
-  }
-  return child;
 }
 
 function parseArgs(argv) {
@@ -212,7 +138,7 @@ function parseArgs(argv) {
     else if (arg === "--backend") {
       const value = (argv[++i] || "").trim();
       if (!["mock", "qa-mock", "claude-cli"].includes(value)) {
-        throw new Error(`--backend takes "mock", "qa-mock", or "claude-cli", got "${value}".`);
+        throw new Error(`--backend takes "mock", "qa-mock", "claude-cli", got "${value}".`);
       }
       args.backend = value;
     } else if (arg === "--any-sut-reply") args.anySutReply = true;
@@ -288,6 +214,11 @@ function printHelp() {
 
 Runtime:
   --source-gateway     run the exact TypeScript checkout without building dist
+
+Chat selection:
+  --dm                direct chat with the leased SUT
+  --chat TARGET       TDLib id, username, or supported Telegram link
+  Scenario send actions accept forumTopicId for a specific forum topic.
 
 Backends:
   --backend mock          (default) basic deterministic mock-openai
@@ -371,20 +302,19 @@ export async function applyScenarioConfigPatch({
   return restarted;
 }
 
-async function readTester(driverEnv, leaseFailure, repoRoot) {
+async function readTester(driverEnv, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     result = await runCommand("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
       cwd: repoRoot,
       env: driverEnv,
-      leaseFailure,
       timeoutMs: 30_000,
     });
     if (result.status === 0) break;
     if (attempt < 3) {
       // A restored TDLib archive reported unauthorized once, then became ready
       // 1.2s later (observed 2026-08). Bound this restore-only startup race.
-      await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+      await currentTelegramRun().sleep(1_000);
     }
   }
   if (!result || result.status !== 0) {
@@ -420,12 +350,15 @@ export function assertSutMatchesLease(sut, credential) {
 // api made those scenarios untestable without forking this runner.
 const PROVIDER_API = process.env.E2E_TELEGRAM_PROVIDER_API || "openai-responses";
 
-function writeConfig(params) {
+export function writeConfig(params) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-user-mock-sut-"));
+  currentTelegramRun().ownScratch(root, removeRunnerScratch);
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  const tokenFile = path.join(root, "telegram-bot-token");
+  fs.writeFileSync(tokenFile, params.sutToken, { mode: 0o600 });
   const configPath = path.join(root, "openclaw.json");
   // The Claude CLI backend authenticates through the operator's own Claude CLI
   // credentials and needs no model provider entry; it also must not point at
@@ -464,7 +397,7 @@ function writeConfig(params) {
       port: params.gatewayPort,
       bind: "loopback",
       auth: { mode: "none" },
-      ...(params.sourceGateway ? { controlUi: { enabled: false } } : {}),
+      controlUi: { enabled: false },
     },
     // Scope logs to this run. The default /tmp/openclaw/<date>.log is shared by
     // every gateway on the box, so it is useless as evidence. Only the config
@@ -474,6 +407,7 @@ function writeConfig(params) {
     agents: {
       defaults: {
         model: { primary: agentModelRef },
+        modelPolicy: { allow: [] },
         models: agentModelPolicy,
       },
       entries: {
@@ -492,7 +426,7 @@ function writeConfig(params) {
     channels: {
       telegram: {
         enabled: true,
-        botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        tokenFile,
         apiRoot: params.telegramApiRoot,
         dmPolicy: "allowlist",
         allowFrom: [params.testerId],
@@ -517,30 +451,34 @@ function writeConfig(params) {
     readConfigPatch("E2E_TELEGRAM_CONFIG_PATCH"),
   );
   config = mergeConfig(config, readConfigPatch("E2E_ROOT_CONFIG_PATCH"));
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return { root, stateDir, workspace, configPath };
 }
 
-export async function fetchWithLease(url, init, lease, fetchImpl = fetch) {
+export async function fetchWithLease(
+  url,
+  init,
+  lease,
+  fetchImpl = fetch,
+  consume = (response) => response.json(),
+) {
+  const scope = currentTelegramRun();
+  scope.assertActive();
   lease.assertHealthy();
-  const controller = new AbortController();
-  const outcome = await Promise.race([
-    fetchImpl(url, {
-      ...init,
-      signal: controller.signal,
-    }).then((response) => ({ type: "response", response })),
-    lease.whenUnhealthy,
-  ]);
-  if (outcome.type === "lease-failure") {
-    controller.abort(outcome.error);
-    throw outcome.error;
-  }
-  lease.assertHealthy();
-  return outcome.response;
+  const work = (async () => {
+    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
+    const response = await fetchImpl(url, { ...init, signal });
+    scope.assertActive();
+    const payload = await consume(response);
+    scope.assertActive();
+    lease.assertHealthy();
+    return { response, payload };
+  })();
+  return await scope.trackIo(work);
 }
 
 async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
-  const response = await fetchWithLease(
+  const { response, payload } = await fetchWithLease(
     `https://api.telegram.org/bot${token}/test/${method}`,
     {
       method: "POST",
@@ -550,7 +488,6 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     lease,
     fetchImpl,
   );
-  const payload = await response.json();
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);
@@ -654,6 +591,7 @@ export async function runCommand(command, args, options) {
     };
     child.once("exit", finish);
     child.once("error", (error) => {
+      child.spawnError = error;
       stderr = `${stderr}${error instanceof Error ? error.message : String(error)}`.slice(
         -1024 * 1024,
       );
@@ -662,7 +600,6 @@ export async function runCommand(command, args, options) {
   });
   let timeout;
   const outcomes = [completion.then((result) => ({ type: "exit", result }))];
-  if (options.leaseFailure) outcomes.push(options.leaseFailure);
   if (options.timeoutMs) {
     outcomes.push(
       new Promise((resolveTimeout) => {
@@ -670,17 +607,16 @@ export async function runCommand(command, args, options) {
       }),
     );
   }
-  const outcome = await Promise.race(outcomes);
-  if (timeout) clearTimeout(timeout);
-  if (outcome.type === "lease-failure") {
-    await fenceLeaseFailure({
-      error: outcome.error,
-      cancelControls: () => {},
-      probe: child,
-      controlWork: [],
-      persistLogs: () => {},
-    });
+  let outcome;
+  try {
+    outcome = await currentTelegramRun().wait(Promise.race(outcomes));
+  } catch (error) {
+    await currentTelegramRun().stopConsumers();
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
+
   if (outcome.type === "timeout") {
     await stopChild(child);
     const result = await completion;
@@ -696,12 +632,14 @@ async function runCronScenarioAction({
   message,
   bestEffort,
   isStopped,
+  assertActionsActive,
 }) {
   let jobId;
   let runResult;
   let cronError;
   try {
     if (isStopped()) throw new Error("Cron scenario cancelled after lease loss.");
+    assertActionsActive();
     const added = await runCommand(
       "pnpm",
       [
@@ -733,6 +671,7 @@ async function runCronScenarioAction({
     jobId = JSON.parse(added.stdout).id;
     if (typeof jobId !== "string" || !jobId) throw new Error("cron add returned no id");
     if (isStopped()) throw new Error("Cron scenario cancelled after lease loss.");
+    assertActionsActive();
     const run = await runCommand(
       "pnpm",
       ["openclaw", "cron", "run", jobId, "--wait", "--wait-timeout", "1m", "--json"],
@@ -766,30 +705,40 @@ async function runCronScenarioAction({
 }
 
 function waitForOutput(child, pattern, label, timeoutMs) {
-  return new Promise((resolveWait, reject) => {
+  const scope = currentTelegramRun();
+  scope.assertActive();
+  return new Promise((resolve, reject) => {
     let output = "";
-    const timeout = setTimeout(() => {
-      reject(
-        new Error(`${label} did not become ready within ${timeoutMs}ms\n${output.slice(-4000)}`),
-      );
-    }, timeoutMs);
+    const finish = (error) => {
+      clearTimeout(timer);
+      scope.signal.removeEventListener("abort", aborted);
+      child.stdout.off("data", onData);
+      child.stderr.off("data", onData);
+      child.off("error", failed);
+      child.off("exit", exited);
+      if (error) reject(error);
+      else resolve(output);
+    };
+    const aborted = () => finish(scope.signal.reason);
+    const failed = (error) => finish(error);
+    const exited = (code) =>
+      finish(new Error(`${label} exited before ready with code ${code}\n${output.slice(-4000)}`));
     const onData = (chunk) => {
       output += chunk;
-      if (pattern.test(output)) {
-        clearTimeout(timeout);
-        resolveWait(output);
-      }
+      if (pattern.test(output)) finish();
     };
+    const timer = setTimeout(
+      () =>
+        finish(
+          new Error(`${label} did not become ready within ${timeoutMs}ms\n${output.slice(-4000)}`),
+        ),
+      timeoutMs,
+    );
+    scope.signal.addEventListener("abort", aborted, { once: true });
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`${label} exited before ready with code ${code}\n${output.slice(-4000)}`));
-    });
+    child.once("error", failed);
+    child.once("exit", exited);
   });
 }
 
@@ -797,24 +746,33 @@ async function waitForGatewayReady(child, port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.spawnError) throw child.spawnError;
-    if (child.exitCode !== null) {
-      throw new Error(`gateway exited before ready with code ${child.exitCode}\n${child.output}`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `gateway exited before ready: ${child.signalCode ?? child.exitCode}\n${child.output}`,
+      );
     }
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
-        signal: AbortSignal.timeout(1_000),
-      });
+      const { response } = await fetchWithLease(
+        `http://127.0.0.1:${port}/readyz`,
+        {
+          signal: AbortSignal.timeout(1_000),
+        },
+        currentTelegramRun().health,
+        fetch,
+        (response) => response.arrayBuffer(),
+      );
       if (response.ok) return;
     } catch {
       // Startup owns the port but has not reached RPC readiness yet.
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await currentTelegramRun().sleep(250);
   }
   throw new Error(`gateway did not become ready within ${timeoutMs}ms\n${child.output}`);
 }
 
 function waitForExit(child, timeoutMs) {
-  if (!child || child.spawnError || child.exitCode !== null) return Promise.resolve(true);
+  if (!child || child.spawnError || child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve(true);
   return new Promise((resolveWait) => {
     const timeout = setTimeout(() => finish(false), timeoutMs);
     const finish = (exited) => {
@@ -832,8 +790,14 @@ function processGroupExists(child) {
   try {
     process.kill(-child.pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    // macOS answers EPERM for a signal-0 probe of a group that holds a process we do not own;
+    // the group inventory decides instead of aborting cleanup (2026-09-14, lease left unreleased).
+    if (error.code !== "EPERM" || process.platform !== "darwin") throw error;
+    const groups = execFileSync("ps", ["-axo", "pgid="], { encoding: "utf8" }).trim().split(/\s+/u);
+    if (groups.some((group) => !/^\d+$/u.test(group))) throw error;
+    return groups.includes(String(child.pid));
   }
 }
 
@@ -854,11 +818,16 @@ export function watchChildCompletion(child) {
 }
 
 function waitForProcessGroupExit(child, timeoutMs) {
-  return new Promise((resolveWait) => {
+  return new Promise((resolveWait, reject) => {
     const deadline = Date.now() + timeoutMs;
     const poll = () => {
-      if (!processGroupExists(child)) {
-        resolveWait(true);
+      try {
+        if (!processGroupExists(child)) {
+          resolveWait(true);
+          return;
+        }
+      } catch (error) {
+        reject(error);
         return;
       }
       if (Date.now() >= deadline) {
@@ -879,20 +848,25 @@ function signalChild(child, signal) {
   }
 }
 
-async function stopChild(child, graceMs = 5_000) {
+async function stopChild(child, graceMs) {
+  return await currentTelegramRun().stopChild(child, graceMs);
+}
+
+async function stopChildProcess(child, graceMs = 5_000) {
   if (!child) return;
-  try {
-    signalChild(child, "SIGTERM");
-    const [childExited, groupExited] = await Promise.all([
-      waitForExit(child, graceMs),
-      waitForProcessGroupExit(child, graceMs),
-    ]);
-    if (childExited && groupExited) return;
-    signalChild(child, "SIGKILL");
-    await Promise.all([waitForExit(child, 2_000), waitForProcessGroupExit(child, 2_000)]);
-  } finally {
-    ownedChildren.delete(child);
-  }
+  signalChild(child, "SIGTERM");
+  const [childExited, groupExited] = await Promise.all([
+    waitForExit(child, graceMs),
+    waitForProcessGroupExit(child, graceMs),
+  ]);
+  if (childExited && groupExited) return;
+  signalChild(child, "SIGKILL");
+  const stopped = await Promise.all([
+    waitForExit(child, 2_000),
+    waitForProcessGroupExit(child, 2_000),
+  ]);
+  if (stopped.some((value) => !value))
+    throw new Error(`Telegram process group did not stop: ${child.pid}`);
 }
 
 async function waitForRecorderReady(pathname, child, timeoutMs = 30_000) {
@@ -902,10 +876,12 @@ async function waitForRecorderReady(pathname, child, timeoutMs = 30_000) {
     if (fs.existsSync(pathname)) {
       return parseRecorderReady(JSON.parse(fs.readFileSync(pathname, "utf8")));
     }
-    if (child.exitCode !== null) {
-      throw new Error(`Telegram recorder exited before ready with code ${child.exitCode}.`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Telegram recorder exited before ready: ${child.signalCode ?? child.exitCode}.`,
+      );
     }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    await currentTelegramRun().sleep(50);
   }
   throw new Error(`Telegram recorder did not become ready within ${timeoutMs}ms.`);
 }
@@ -914,7 +890,7 @@ async function waitForScenarioOffset(startedAt, atMs, isStopped) {
   while (!isStopped()) {
     const remaining = atMs - (Date.now() - startedAt);
     if (remaining <= 0) return true;
-    await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(remaining, 50)));
+    await currentTelegramRun().sleep(Math.min(remaining, 50));
   }
   return false;
 }
@@ -925,9 +901,15 @@ async function sampleGatewayHealth(port, health, startedAt, isStopped) {
   while (await waitForScenarioOffset(startedAt, sampleAt, isStopped)) {
     const beganAt = Date.now();
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
-        signal: AbortSignal.timeout(health.timeoutMs),
-      });
+      const { response } = await fetchWithLease(
+        `http://127.0.0.1:${port}/healthz`,
+        {
+          signal: AbortSignal.timeout(health.timeoutMs),
+        },
+        currentTelegramRun().health,
+        fetch,
+        (response) => response.arrayBuffer(),
+      );
       samples.push({
         elapsedMs: beganAt - startedAt,
         durationMs: Date.now() - beganAt,
@@ -947,83 +929,97 @@ async function sampleGatewayHealth(port, health, startedAt, isStopped) {
   return samples;
 }
 
-function shutdownOnSignal(signal) {
-  if (shutdownPromise) return;
-  shuttingDown = true;
-  const exitCode = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
-  shutdownPromise = (async () => {
-    await cleanupOwnedRuntime();
-  })()
-    .catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-    })
-    .finally(() => process.exit(exitCode));
-}
-
-async function main() {
-  assertRunnerActive();
+async function main(signal) {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
-  if (!fs.existsSync(path.join(repoRoot, "scripts/e2e/mock-openai-server.mjs"))) {
+  if (
+    args.backend === "mock" &&
+    !fs.existsSync(path.join(repoRoot, "scripts/e2e/mock-openai-server.mjs"))
+  ) {
     throw new Error("Run from the OpenClaw repo root; missing scripts/e2e/mock-openai-server.mjs.");
   }
 
-  const credentialPromise = ownCredentialAcquisition(acquireTelegramTestCredential());
+  const result = await runTelegramTestScenario({ args, repoRoot, signal });
+  console.log(JSON.stringify(result.report, null, 2));
+  process.exitCode = result.exitCode;
+}
+
+async function checkScenarioCredential(credential, { signal, args }) {
+  const { checkTelegramTestCredential } = await import("./telegram-test-doctor.mjs");
+  return await checkTelegramTestCredential({
+    credential,
+    signal,
+    dm: args?.dm,
+    chat: args?.chat,
+    requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+  });
+}
+
+export async function runTelegramTestScenario({
+  args,
+  repoRoot,
+  signal,
+  acquireCredential = acquireTelegramTestCredential,
+  checkCredential = checkScenarioCredential,
+  driveScenario = drive,
+}) {
   let credential;
   try {
-    credential = await credentialPromise;
-    activeCredential = credential;
-    if (activeCredentialPromise === credentialPromise) activeCredentialPromise = undefined;
-    assertRunnerActive();
-    credential.assertLeaseHealthy();
-    await drive(args, repoRoot, credential);
-    credential.assertLeaseHealthy();
+    return await withTelegramRun(
+      async (scope) => {
+        scope.assertActive();
+        credential = await scope.acquire(acquireCredential({ signal: scope.signal }));
+        scope.observeLease(credential);
+        await checkCredential(credential, { signal: scope.signal, args });
+        scope.assertActive();
+        const result = await driveScenario(args, repoRoot, credential, {
+          signal: scope.signal,
+        });
+        scope.assertActive();
+        return result;
+      },
+      { signal },
+    );
   } finally {
-    if (activeCredentialPromise === credentialPromise) activeCredentialPromise = undefined;
-    try {
-      await cleanupOwnedRuntime(credential);
-    } finally {
-      if (activeCredential === credential) activeCredential = undefined;
+    if (args?.output && credential?.testGroup) {
+      const evidenceDir = dirname(resolve(args.output));
+      fs.mkdirSync(evidenceDir, { recursive: true });
+      writePrivateJson(path.join(evidenceDir, "test-group.json"), credential.testGroup);
     }
   }
 }
 
 async function drive(args, repoRoot, creds) {
-  const telegramProxy = await startTelegramTestApiProxy({
-    leaseHealth: {
-      assertHealthy: creds.assertLeaseHealthy,
-      whenUnhealthy: creds.whenLeaseUnhealthy,
-    },
-  });
+  const scope = currentTelegramRun();
+  const leaseHealth = scope.health;
+  let telegramProxy;
   try {
-    await driveWithTelegramProxy(args, repoRoot, {
-      ...creds,
-      telegramApiRoot: telegramProxy.apiRoot,
-      telegramProxy,
-    });
+    leaseHealth.assertHealthy();
+    telegramProxy = scope.ownProxy(await startTelegramTestApiProxy({ leaseHealth }));
+    leaseHealth.assertHealthy();
+    return await driveWithTelegramProxy(
+      args,
+      repoRoot,
+      {
+        ...creds,
+        telegramApiRoot: telegramProxy.apiRoot,
+        telegramProxy,
+      },
+      leaseHealth,
+    );
   } finally {
-    await telegramProxy.close();
+    await scope.closeProxy(telegramProxy);
   }
 }
 
-async function driveWithTelegramProxy(args, repoRoot, creds) {
+async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   const driverEnv = { ...sanitizeChildEnvironment(), ...creds.driverEnv };
-  const leaseFailure = creds.whenLeaseUnhealthy.then((error) => ({
-    type: "lease-failure",
-    error,
-  }));
-  const tester = await readTester(driverEnv, leaseFailure, repoRoot);
+  const tester = await readTester(driverEnv, repoRoot);
   assertTesterMatchesLease(tester, creds);
-  const lease = { assertHealthy: creds.assertLeaseHealthy, whenUnhealthy: leaseFailure };
+  const lease = leaseHealth;
   const sut = await sutIdentity(creds, lease);
   const drained = await drainSutUpdates(creds.sutToken, lease);
-  let selectedChatTarget = selectChatTarget({
-    dm: args.dm,
-    explicitChat: args.chat,
-    leasedGroupId: creds.groupId,
-    sutUsername: sut.username,
-    testerId: tester.id,
-  });
+  let selectedChatTarget = creds.chatTarget;
   const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
   const temp = writeConfig({
@@ -1051,11 +1047,29 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     writePrivateJson(normalizedScenarioPath, args.scenario);
     fs.mkdirSync(scenarioBarrierDir, { recursive: true, mode: 0o700 });
   }
+  // Fence scenario mutations, not the lease: the recorder must keep observing.
+  const actionFailurePath = args.scenario
+    ? path.join(scenarioBarrierDir, "action-failure.json")
+    : "";
+  let actionFailure;
+  const readActionFailure = () => {
+    if (!actionFailure && actionFailurePath && fs.existsSync(actionFailurePath)) {
+      actionFailure = readJson(actionFailurePath);
+    }
+    return actionFailure;
+  };
+  const assertScenarioActionsActive = () => {
+    if (readActionFailure()) {
+      throw new Error(`Scenario actions stopped after uncertain send: ${actionFailure.error}`);
+    }
+  };
 
   let mock;
   let gateway;
+  let scenarioWatcher;
   try {
-    creds.assertLeaseHealthy();
+    leaseHealth.assertHealthy();
+    if (args.scenario) scenarioWatcher = fs.watch(scenarioBarrierDir, readActionFailure);
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(
@@ -1087,7 +1101,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     const gatewayEnv = createGatewayEnvironment({
       configPath: temp.configPath,
       stateDir: temp.stateDir,
-      sutToken: creds.sutToken,
     });
     const heldTelegramMethods = [
       ...new Set(
@@ -1132,6 +1145,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       telegramApiRoot: creds.telegramApiRoot,
     });
     const startGateway = async () => {
+      assertScenarioActionsActive();
       const command = "node";
       const gatewayArgs = args.sourceGateway
         ? [
@@ -1145,43 +1159,31 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        return await waitForGatewayLeaseReady({
-          child,
-          readiness: waitForGatewayReady(
-            child,
-            args.gatewayPort,
-            args.sourceGateway ? 300_000 : 45_000,
-          ),
-          leaseFailure,
-        });
+        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
+        return child;
       } catch (error) {
         await stopChild(child);
         throw error;
       }
     };
     gateway = await startGateway();
-    creds.assertLeaseHealthy();
+    leaseHealth.assertHealthy();
 
     for (const text of args.preSend) {
-      creds.assertLeaseHealthy();
+      leaseHealth.assertHealthy();
       const sent = await runCommand("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
         cwd: repoRoot,
         env: driverEnv,
-        leaseFailure,
         timeoutMs: args.timeoutMs,
       });
       if (sent.status !== 0 || sent.timedOut) {
         throw new Error(`pre-send failed: ${sent.stderr || sent.stdout}`);
       }
-      await waitForGatewayLeaseReady({
-        child: gateway,
-        readiness: new Promise((settle) => setTimeout(settle, 1000)),
-        leaseFailure,
-      });
+      await currentTelegramRun().sleep(1000);
     }
 
     const recording = Boolean(args.record);
-    creds.assertLeaseHealthy();
+    leaseHealth.assertHealthy();
     const recorderReadyPath = path.join(temp.root, "recorder-ready.json");
     const probeArgs = recording ? ["run", USER_RECORD_PATH] : ["run", USER_DRIVER_PATH, "probe"];
     if (recording) {
@@ -1261,12 +1263,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         mode: 0o600,
       });
     };
+    currentTelegramRun().preserveEvidence(persistRecorderLogs);
     let recorderReady;
     if (args.scenario) {
+      const readiness = waitForRecorderReady(recorderReadyPath, probe);
       try {
-        recorderReady = await waitForRecorderReady(recorderReadyPath, probe);
+        recorderReady = await readiness;
+        leaseHealth.assertHealthy();
       } catch (error) {
         await stopChild(probe);
+        await readiness.catch(() => {});
         persistRecorderLogs();
         throw error;
       }
@@ -1274,6 +1280,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     }
     const scenarioStartedAt = recorderReady?.startedAtUnixMs ?? Date.now();
     let controlsStopped = false;
+    const scenarioActionsStopped = () => controlsStopped || Boolean(readActionFailure());
     const gatewayActions = [];
     let followupControlSeq = 0;
     const runFollowupControl = async (command, action) => {
@@ -1285,6 +1292,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       });
       const deadline = Date.now() + action.timeoutMs;
       while (Date.now() < deadline) {
+        assertScenarioActionsActive();
         const status = readJson(followupControlStatusPath);
         if (status.seq === seq) {
           if (status.status !== "completed") {
@@ -1292,186 +1300,185 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           }
           return status;
         }
-        await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+        await currentTelegramRun().sleep(25);
       }
       throw new Error(`Followup control ${command} timed out after ${action.timeoutMs}ms.`);
     };
-    const gatewayControl = (async () => {
-      const actions = (args.scenario?.actions ?? [])
-        .map((action, index) => ({ action, index }))
-        .filter(({ action }) =>
-          [
-            "restartGateway",
-            "patchConfig",
-            "systemEvent",
-            "cron",
-            "command",
-            "telegramApiHold",
-            "telegramApiWaitHeld",
-            "telegramApiRelease",
-            "followupDrainHold",
-            "followupDrainWaitHeld",
-            "followupDrainRelease",
-          ].includes(action.type),
-        )
-        .toSorted((left, right) => left.action.atMs - right.action.atMs);
-      const backgroundActions = [];
-      for (const { action, index } of actions) {
-        if (!(await waitForScenarioOffset(scenarioStartedAt, action.atMs, () => controlsStopped))) {
-          break;
-        }
-        const beganAt = Date.now();
-        creds.assertLeaseHealthy();
-        if (action.type === "cron") {
-          const actionRecord = {
-            type: action.type,
-            elapsedMs: beganAt - scenarioStartedAt,
-            durationMs: 0,
-            status: "running",
-          };
-          gatewayActions.push(actionRecord);
-          backgroundActions.push(
-            runCronScenarioAction({
-              repoRoot,
-              gatewayEnv: controlEnv,
-              cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
-              message: action.message,
-              bestEffort: action.bestEffort,
-              isStopped: () => controlsStopped,
-            }).then(
-              (result) => {
-                Object.assign(actionRecord, result);
-                actionRecord.durationMs = Date.now() - beganAt;
-                actionRecord.status = "completed";
-              },
-              (error) => {
-                actionRecord.durationMs = Date.now() - beganAt;
-                actionRecord.status = "failed";
-                actionRecord.error = error instanceof Error ? error.message : String(error);
-              },
-            ),
-          );
-          continue;
-        }
-        try {
-          let telegramApi;
-          let followupControl;
-          if (action.type === "restartGateway") {
-            await stopChild(gateway, action.graceMs);
-            if (controlsStopped) throw new Error("Gateway restart cancelled after lease loss.");
-            creds.assertLeaseHealthy();
-            gateway = await startGateway();
-            markScenarioBarrier(scenarioBarrierDir, index);
-          } else if (action.type === "patchConfig") {
-            gateway = await applyScenarioConfigPatch({
-              configPath: temp.configPath,
-              patch: action.patch,
-              gateway,
-              stopGateway: stopChild,
-              startGateway,
-              markApplied: () => markScenarioBarrier(scenarioBarrierDir, index),
-            });
-          } else if (action.type === "systemEvent") {
-            const result = await runCommand(
-              "pnpm",
-              ["openclaw", "system", "event", "--text", action.text, "--mode", "now", "--json"],
-              { cwd: repoRoot, env: controlEnv, timeoutMs: action.timeoutMs ?? 60_000 },
-            );
-            if (result.status !== 0 || result.timedOut) {
-              throw new Error(result.stderr || result.stdout || "system event failed");
-            }
-          } else if (action.type === "command") {
-            const cwd = {
-              repo: repoRoot,
-              workspace: temp.workspace,
-              state: temp.stateDir,
-              root: temp.root,
-            }[action.cwd];
-            const result = await runCommand(action.argv[0], action.argv.slice(1), {
-              cwd,
-              env: commandEnv,
-              leaseFailure,
-              timeoutMs: action.timeoutMs,
-            });
-            gatewayActions.push(
-              summarizeScenarioCommand({
-                action,
-                result,
-                elapsedMs: beganAt - scenarioStartedAt,
-                durationMs: Date.now() - beganAt,
-              }),
+    const gatewayControl = currentTelegramRun().trackTask(
+      (async () => {
+        const actions = (args.scenario?.actions ?? [])
+          .map((action, index) => ({ action, index }))
+          .filter(({ action }) =>
+            [
+              "restartGateway",
+              "patchConfig",
+              "systemEvent",
+              "cron",
+              "command",
+              "telegramApiHold",
+              "telegramApiWaitHeld",
+              "telegramApiRelease",
+              "followupDrainHold",
+              "followupDrainWaitHeld",
+              "followupDrainRelease",
+            ].includes(action.type),
+          )
+          .toSorted((left, right) => left.action.atMs - right.action.atMs);
+        const backgroundActions = [];
+        for (const { action, index } of actions) {
+          if (
+            !(await waitForScenarioOffset(scenarioStartedAt, action.atMs, scenarioActionsStopped))
+          ) {
+            break;
+          }
+          const beganAt = Date.now();
+          leaseHealth.assertHealthy();
+          if (scenarioActionsStopped()) break;
+          if (action.type === "cron") {
+            const actionRecord = {
+              type: action.type,
+              elapsedMs: beganAt - scenarioStartedAt,
+              durationMs: 0,
+              status: "running",
+            };
+            gatewayActions.push(actionRecord);
+            backgroundActions.push(
+              currentTelegramRun().trackTask(
+                runCronScenarioAction({
+                  repoRoot,
+                  gatewayEnv: controlEnv,
+                  cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
+                  message: action.message,
+                  bestEffort: action.bestEffort,
+                  isStopped: () => controlsStopped,
+                  assertActionsActive: assertScenarioActionsActive,
+                }).then(
+                  (result) => {
+                    Object.assign(actionRecord, result);
+                    actionRecord.durationMs = Date.now() - beganAt;
+                    actionRecord.status = "completed";
+                  },
+                  (error) => {
+                    actionRecord.durationMs = Date.now() - beganAt;
+                    actionRecord.status = "failed";
+                    actionRecord.error = error instanceof Error ? error.message : String(error);
+                  },
+                ),
+              ),
             );
             continue;
-          } else if (action.type === "telegramApiHold") {
-            creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });
-            telegramApi = { method: action.method, skip: action.skip };
-          } else if (action.type === "telegramApiWaitHeld") {
-            const held = await creds.telegramProxy.waitForHeldResponse(
-              action.method,
-              action.timeoutMs,
-            );
-            telegramApi = { method: held.method, ordinal: held.ordinal };
-          } else if (action.type === "telegramApiRelease") {
-            const held = creds.telegramProxy.releaseHeldResponse();
-            telegramApi = {
-              method: held.method,
-              ordinal: held.ordinal,
-              providerRequestsBeforeRelease: countNdjsonRows(requestLog),
-            };
-          } else if (action.type === "followupDrainHold") {
-            followupControl = await runFollowupControl("arm", action);
-          } else if (action.type === "followupDrainWaitHeld") {
-            followupControl = await runFollowupControl("waitHeld", action);
-          } else if (action.type === "followupDrainRelease") {
-            followupControl = await runFollowupControl("release", action);
           }
-          gatewayActions.push({
-            type: action.type,
-            elapsedMs: beganAt - scenarioStartedAt,
-            durationMs: Date.now() - beganAt,
-            status: "completed",
-            ...(telegramApi ? { telegramApi } : {}),
-            ...(followupControl ? { followupControl } : {}),
-          });
-        } catch (error) {
-          gatewayActions.push({
-            type: action.type,
-            elapsedMs: beganAt - scenarioStartedAt,
-            durationMs: Date.now() - beganAt,
-            status: "failed",
-            error: error instanceof Error ? error.message : String(error),
-          });
+          try {
+            let telegramApi;
+            let followupControl;
+            if (action.type === "restartGateway") {
+              await stopChild(gateway, action.graceMs);
+              if (controlsStopped) throw new Error("Gateway restart cancelled after lease loss.");
+              leaseHealth.assertHealthy();
+              gateway = await startGateway();
+              markScenarioBarrier(scenarioBarrierDir, index);
+            } else if (action.type === "patchConfig") {
+              gateway = await applyScenarioConfigPatch({
+                configPath: temp.configPath,
+                patch: action.patch,
+                gateway,
+                stopGateway: stopChild,
+                startGateway,
+                markApplied: () => markScenarioBarrier(scenarioBarrierDir, index),
+              });
+            } else if (action.type === "systemEvent") {
+              const result = await runCommand(
+                "pnpm",
+                ["openclaw", "system", "event", "--text", action.text, "--mode", "now", "--json"],
+                { cwd: repoRoot, env: controlEnv, timeoutMs: action.timeoutMs ?? 60_000 },
+              );
+              if (result.status !== 0 || result.timedOut) {
+                throw new Error(result.stderr || result.stdout || "system event failed");
+              }
+            } else if (action.type === "command") {
+              const cwd = {
+                repo: repoRoot,
+                workspace: temp.workspace,
+                state: temp.stateDir,
+                root: temp.root,
+              }[action.cwd];
+              const result = await runCommand(action.argv[0], action.argv.slice(1), {
+                cwd,
+                env: commandEnv,
+                timeoutMs: action.timeoutMs,
+              });
+              gatewayActions.push(
+                summarizeScenarioCommand({
+                  action,
+                  result,
+                  elapsedMs: beganAt - scenarioStartedAt,
+                  durationMs: Date.now() - beganAt,
+                }),
+              );
+              continue;
+            } else if (action.type === "telegramApiHold") {
+              creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });
+              telegramApi = { method: action.method, skip: action.skip };
+            } else if (action.type === "telegramApiWaitHeld") {
+              const held = await creds.telegramProxy.waitForHeldResponse(
+                action.method,
+                action.timeoutMs,
+              );
+              telegramApi = { method: held.method, ordinal: held.ordinal };
+            } else if (action.type === "telegramApiRelease") {
+              const held = creds.telegramProxy.releaseHeldResponse();
+              telegramApi = {
+                method: held.method,
+                ordinal: held.ordinal,
+                providerRequestsBeforeRelease: countNdjsonRows(requestLog),
+              };
+            } else if (action.type === "followupDrainHold") {
+              followupControl = await runFollowupControl("arm", action);
+            } else if (action.type === "followupDrainWaitHeld") {
+              followupControl = await runFollowupControl("waitHeld", action);
+            } else if (action.type === "followupDrainRelease") {
+              followupControl = await runFollowupControl("release", action);
+            }
+            gatewayActions.push({
+              type: action.type,
+              elapsedMs: beganAt - scenarioStartedAt,
+              durationMs: Date.now() - beganAt,
+              status: "completed",
+              ...(telegramApi ? { telegramApi } : {}),
+              ...(followupControl ? { followupControl } : {}),
+            });
+          } catch (error) {
+            gatewayActions.push({
+              type: action.type,
+              elapsedMs: beganAt - scenarioStartedAt,
+              durationMs: Date.now() - beganAt,
+              status: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
-      }
-      await Promise.all(backgroundActions);
-    })();
+        await Promise.all(backgroundActions);
+      })(),
+    );
     const gatewayHealth = args.scenario?.health
-      ? sampleGatewayHealth(
-          args.gatewayPort,
-          args.scenario.health,
-          scenarioStartedAt,
-          () => controlsStopped,
+      ? currentTelegramRun().trackTask(
+          sampleGatewayHealth(
+            args.gatewayPort,
+            args.scenario.health,
+            scenarioStartedAt,
+            () => controlsStopped,
+          ),
         )
       : Promise.resolve([]);
-    const probeOutcome = await Promise.race([probeCompletion, leaseFailure]);
-    if (probeOutcome.type === "lease-failure") {
-      await fenceLeaseFailure({
-        error: probeOutcome.error,
-        cancelControls: () => {
-          controlsStopped = true;
-        },
-        probe,
-        controlWork: [gatewayControl, gatewayHealth],
-        persistLogs: persistRecorderLogs,
-      });
-    }
+    const probeOutcome = await currentTelegramRun().wait(probeCompletion);
     if (probeOutcome.type === "spawn-error") throw probeOutcome.error;
     const code = probeOutcome.code;
-    ownedChildren.delete(probe);
+    await stopChild(probe);
     persistRecorderLogs();
     controlsStopped = true;
     await gatewayControl;
     const gatewayHealthSamples = await gatewayHealth;
+    readActionFailure();
     if (recording && args.scenario) {
       const summary = readJson(outputPath);
       writePrivateJson(outputPath, {
@@ -1479,59 +1486,60 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         scenario: {
           recorderReady,
           selectedChatTarget,
+          ...(actionFailure ? { actionFailure } : {}),
           gatewayActions,
           gatewayHealth: gatewayHealthSamples,
           telegramApiResponseHolds: creds.telegramProxy.getResponseHoldEvents(),
         },
       });
     }
-    const actionFailed = gatewayActions.some((action) => action.status === "failed");
+    const actionFailed =
+      Boolean(actionFailure) || gatewayActions.some((action) => action.status === "failed");
     const exitCode = code === 0 && !actionFailed ? 0 : (code ?? 1) || 1;
     const requestRows = countNdjsonRows(requestLog);
     const redactRunnerText = (text) =>
       [creds.sutToken, tester.id, tester.username, sut.id, sut.username, temp.root, repoRoot]
         .filter(Boolean)
         .reduce((redacted, value) => redacted.replaceAll(String(value), "<redacted>"), text);
-    console.log(
-      JSON.stringify(
-        {
-          completed: exitCode === 0,
-          credentialSource: creds.credentialSource,
-          mode: recording ? "record" : "probe",
-          scratchRemovedAfterExit: true,
-          mockRequests: requestRows,
-          gatewayActions: gatewayActions.map((action) => ({
-            type: action.type,
-            status: action.status,
-          })),
-          gatewayHealthSamples: gatewayHealthSamples.length,
-          drainedUpdates: drained.drained,
-          gatewayLogTail:
-            exitCode === 0 ? "" : redactRunnerText((gateway?.output ?? "").slice(-4000)),
-          mockLogTail: exitCode === 0 ? "" : redactRunnerText((mock?.output ?? "").slice(-2000)),
-        },
-        null,
-        2,
-      ),
-    );
-    process.exitCode = exitCode;
+    return {
+      exitCode,
+      report: {
+        completed: exitCode === 0,
+        credentialSource: creds.credentialSource,
+        mode: recording ? "record" : "probe",
+        scratchRemovedAfterExit: true,
+        mockRequests: requestRows,
+        ...(actionFailure
+          ? { actionFailure: { ...actionFailure, error: redactRunnerText(actionFailure.error) } }
+          : {}),
+        gatewayActions: gatewayActions.map((action) => ({
+          type: action.type,
+          status: action.status,
+        })),
+        gatewayHealthSamples: gatewayHealthSamples.length,
+        drainedUpdates: drained.drained,
+        gatewayLogTail:
+          exitCode === 0 ? "" : redactRunnerText((gateway?.output ?? "").slice(-4000)),
+        mockLogTail: exitCode === 0 ? "" : redactRunnerText((mock?.output ?? "").slice(-2000)),
+      },
+    };
   } finally {
+    scenarioWatcher?.close();
     await stopChild(gateway);
     await stopChild(mock);
-    removeRunnerScratch(temp.root);
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.once("SIGHUP", () => shutdownOnSignal("SIGHUP"));
-  process.once("SIGINT", () => shutdownOnSignal("SIGINT"));
-  process.once("SIGTERM", () => shutdownOnSignal("SIGTERM"));
-  main().catch(async (error) => {
-    if (shutdownPromise) {
-      await shutdownPromise;
-      return;
-    }
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+  runTelegramCli(main).catch((error) => {
+    // An AggregateError carries the run failure and the cleanup failure; both are needed to diagnose.
+    const describe = (value) =>
+      value instanceof AggregateError
+        ? [value.message, ...value.errors.map((cause) => `  - ${describe(cause)}`)].join("\n")
+        : value instanceof Error
+          ? value.message
+          : String(value);
+    console.error(describe(error));
+    process.exitCode ||= 1;
   });
 }

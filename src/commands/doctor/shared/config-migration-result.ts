@@ -1,15 +1,48 @@
 import { isDeepStrictEqual } from "node:util";
+import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
 import type {
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
+export type DoctorConfigPreflightOptions = {
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  migrateState?: boolean;
+  /** Select Doctor normalization without enabling repair-only migrations. */
+  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
+  migrateLegacyConfig?: boolean;
+  repairPrefixedConfig?: boolean;
+  recoverCorruptTargetStore?: boolean;
+  invalidConfigNote?: string | false;
+  observe?: boolean;
+  measure?: ConfigSnapshotReadMeasure;
+  /** Return false or reject on config drift; the preflight always unwinds owned resources. */
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
+  /** CLI readiness policy evaluates the dry repaired config before any startup writes. */
+  validateStartupConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
+  requireStateMigrationCheckpoint?: boolean;
+  requireStartupMigrationCheckpoint?: boolean;
+  /** Load one authoritative plugin metadata snapshot for the caller's full lifecycle. */
+  preparePluginMetadataSnapshot?: boolean;
+  /** Core state was proven absent before Gateway selection could create runtime files. */
+  skipPristineCoreStateMigrations?: boolean;
+  /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
+  skipPristineStartupStateMigrations?: boolean;
+  /** Enable Doctor-owned migrations under explicit repair or exclusive startup maintenance. */
+  doctorOnlyStateMigrations?: boolean;
+};
+
 export type DoctorConfigPreflightResult = {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];

@@ -1030,7 +1030,9 @@ extension QuickChatModel {
         guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
-            self.modelChoices.contains(where: { $0.selectionID == normalized && $0.available != false })
+            self.modelChoices.contains(where: {
+                $0.selectionID == normalized && $0.manualSelectionAllowed != false && $0.available != false
+            })
         else { return }
         guard normalized != self.selectedModelSelectionID else { return }
         let patchDecision = QuickChatModelControlLogic.modelPatchDecision(
@@ -1105,15 +1107,10 @@ extension QuickChatModel {
     }
 
     var modelControlLabel: String {
-        let automatic = String(localized: "Auto")
-        let model = QuickChatModelControlLogic.displayName(
+        QuickChatModelControlLogic.displayName(
             selectionID: self.displayedModelSelectionID,
             models: self.modelChoices,
-            automaticLabel: automatic)
-        let thinking = self.thinkingOptions.first(where: { $0.id == self.displayedThinkingLevel })?.label
-            ?? self.displayedThinkingLevel
-            ?? automatic
-        return self.speed.isEnabled ? "\(model) · \(thinking) · \(String(localized: "Fast"))" : "\(model) · \(thinking)"
+            automaticLabel: String(localized: "Session default"))
     }
 
     private func startModelCatalogEvents(id: UUID) {

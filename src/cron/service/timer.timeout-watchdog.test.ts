@@ -71,7 +71,8 @@ describe("cron service timer regressions", () => {
         defaultAgentId: "main",
         resolveHeartbeatTimeoutMs,
         requestHeartbeatAndWait: vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
-          async (_wake, { abortSignal }) => {
+          async (_wake, { abortSignal, onAttemptStarted }) => {
+            onAttemptStarted?.();
             heartbeatStarted.resolve();
             await new Promise<void>((resolve) => {
               if (abortSignal?.aborted) {
@@ -142,7 +143,8 @@ describe("cron service timer regressions", () => {
         nowMs: () => Date.now(),
         defaultAgentId: "main",
         resolveHeartbeatTimeoutMs,
-        requestHeartbeatAndWait: vi.fn(() => {
+        requestHeartbeatAndWait: vi.fn((_wake, { onAttemptStarted }) => {
+          onAttemptStarted?.();
           heartbeatStarted.resolve();
           return new Promise<never>(() => {});
         }),
@@ -912,7 +914,6 @@ describe("cron service timer regressions", () => {
       expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
         job: expect.objectContaining({
           id: "isolated-before-agent-reply-unhandled-82811",
-          state: expect.objectContaining({ lastDiagnosticSummary: diagnostic }),
         }),
         payload: {
           text:

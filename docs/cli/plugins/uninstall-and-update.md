@@ -16,13 +16,17 @@ package operation finishes. Without a running Gateway, these commands save chang
 for its next startup. See [Install plugins](/cli/plugins/install#install) for
 installation sources and Gateway-host path requirements.
 
+If the Gateway rejects a lifecycle request because another operation is still
+running, the CLI honors its retry delay within the existing request timeout.
+Connection failures and failures after a mutation starts still stop the command.
+
 ## Uninstall
 
 ```bash
-openclaw plugins uninstall <id>
-openclaw plugins uninstall <id> --dry-run
-openclaw plugins uninstall <id> --keep-files
-openclaw plugins uninstall <id> --force
+openclaw plugins uninstall <ids...>
+openclaw plugins uninstall <ids...> --dry-run
+openclaw plugins uninstall <ids...> --keep-files
+openclaw plugins uninstall <ids...> --force
 ```
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
@@ -30,6 +34,13 @@ openclaw plugins uninstall <id> --force
 Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
+
+When several IDs are supplied, uninstall resolves the whole selection before
+removing anything. Repeated IDs and children of the same package select that
+package once. Packages are processed in first-requested order, with a separate
+preview and confirmation for each. Cancellation or failure stops the remaining
+removals; earlier successful removals stay committed. An invalid target rejects
+the selection before any package is removed.
 
 If a tracked package has no discovered plugin entries, uninstall can remove its exact install record and same-owner policy, including owner-keyed channel config that no other discovered plugin claims. This recovery is allowed only when no other install record shares its package path and no discovered plugin matches its id or recorded paths. Unrelated policy remains unchanged. Registry refresh rebuilds discovery metadata; it does not remove these orphan install records.
 
@@ -42,15 +53,24 @@ Discovered packages with missing, ambiguous, or conflicting ownership still fail
 ## Update
 
 ```bash
-openclaw plugins update <id-or-npm-spec>
+openclaw plugins update <ids-or-npm-specs...>
 openclaw plugins update --all
-openclaw plugins update <id-or-npm-spec> --dry-run
+openclaw plugins update <ids-or-npm-specs...> --dry-run
 openclaw plugins update @openclaw/voice-call
 openclaw plugins update @acme/demo
 openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-warning
 ```
 
 Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
+
+Supply multiple IDs or npm specs to update a selection, or use `--all` without
+IDs. Repeated targets and sibling plugin IDs update their package once. An
+explicit npm spec overrides an ID-only selection of the same package; two
+different explicit specs for one package are rejected. Unknown targets and
+conflicting selections fail before updates start, including with `--dry-run`.
+The existing bulk updater processes plugin packages and then hook packs, retains
+successful updates when another package fails, and applies saved changes to the
+running Gateway with one final refresh.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 
@@ -103,18 +123,24 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
 ## Reload
 
 ```bash
-openclaw plugins reload <plugin-id>
-openclaw plugins reload <plugin-id> --json
+openclaw plugins reload <ids...>
+openclaw plugins reload <ids...> --json
 ```
 
-Reload a discovered plugin after editing its TypeScript source, imported helpers,
+Reload discovered plugins after editing their TypeScript source, imported helpers,
 or manifest, including plugins selected through `plugins.load.paths`. The command
 requires a running Gateway and waits for the replacement to finish without
 restarting it. Configured enablement is preserved, and unchanged
 plugins keep their runtime instances. JSON output includes `pluginIds`,
 `restartRequired: false`, and the applied runtime receipt with its generation
-and source digests when available. The CLI still takes one plugin ID; the Gateway
-request uses the same target-array envelope as a multi-plugin reload.
+and source digests when available. Multiple IDs use one Gateway reload request
+and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
+resolves package siblings together. The request supports up to 64 distinct IDs.
+
+Before stopping a plugin's services or channels, replacement waits up to 60 seconds
+for its in-flight work to finish. If that work does not finish, the reload fails
+once and the previous plugin generation keeps serving. Retry
+`openclaw plugins reload <id>` after the work finishes.
 
 Cleanup is best effort. A successful replacement can return `warnings` when an
 old service or cleanup hook could not stop. Modules and native libraries may

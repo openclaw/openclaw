@@ -1,5 +1,6 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
 import { spawnSync } from "node:child_process";
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
@@ -20,14 +21,13 @@ export function probeScheduledTaskState(
   taskName: string,
   timeoutMs?: number,
 ): ScheduledTaskStateProbe {
-  const probeTimeoutMs =
-    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5_000;
+  const probeTimeoutMs = resolvePositiveTimerTimeoutMs(timeoutMs, 5_000);
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",
     `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
     "$lookup=$false",
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); if($lookup){exit 1}; exit 2 }",
+    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }",
     // A registered task stays found even when state or optional history cannot be read.
     "$result=@{state=$null}",
     "try { $result.state=[int]$task.State } catch {}",
@@ -50,7 +50,8 @@ export function probeScheduledTaskState(
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
       timeout: probeTimeoutMs,
-      windowsHide: true,
+      // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
+      windowsHide: false,
     },
   );
   if (probe.error) {
@@ -91,7 +92,7 @@ export function probeScheduledTaskState(
     ? { status: "missing" }
     : {
         status: "unknown",
-        detail: `Scheduled Task probe failed (exit ${probe.status}): ${probe.stdout || probe.stderr}`,
+        detail: `Scheduled Task probe failed (exit ${probe.status}): ${probe.stdout.trim() || probe.stderr.trim() || "no output from PowerShell."}`,
       };
 }
 

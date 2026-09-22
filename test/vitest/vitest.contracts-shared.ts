@@ -7,9 +7,10 @@ import {
   channelSurfaceContractPatterns,
   pluginContractPatterns,
 } from "./vitest.contracts-paths.mjs";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
@@ -35,6 +36,7 @@ export function createContractsVitestConfig(
   const envIncludePatterns = intersectIncludePatterns(
     includePatterns,
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+    matchesVitestGlob,
   );
   return defineConfig({
     ...base,

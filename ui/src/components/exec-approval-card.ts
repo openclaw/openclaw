@@ -1,9 +1,9 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -210,17 +210,17 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
       : nothing
   }
   ${
+    active.pluginDetail
+      ? html`<pre class="exec-approval-command mono" dir="ltr">${active.pluginDetail}</pre>`
+      : nothing
+  }
+  ${
     variant === "modal" && active.request.sessionKey
       ? renderDetails(
           html`${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}`,
         )
       : nothing
   }`;
-}
-
-export function compactApprovalCommand(command: string): string {
-  const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
 function approvalDecisionLabel(decision: ExecApprovalDecision, kind: ExecApprovalRequest["kind"]) {

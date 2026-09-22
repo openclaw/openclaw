@@ -12,6 +12,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  normalizeAcceptedSessionSpawnResult,
+} from "../accepted-session-spawn.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -21,7 +25,6 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -105,6 +108,11 @@ function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
   context: "fork" | "isolated" | undefined,
 ): void {
+  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
+  if (instance && accepted) {
+    mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
+  }
   const childSessionKey =
     typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
   const targetAgentId = childSessionKey
@@ -339,22 +347,25 @@ export function createSessionsSpawnTool(
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
+  const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
-    config: opts?.config,
+    config: effectiveConfig,
     sandboxed: opts?.sandboxed,
   });
-  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
+  const threadAvailability = resolveSessionsSpawnThreadAvailability({
+    ...opts,
+    config: effectiveConfig,
+  });
   const threadAvailable = hasAnyThreadAvailability(threadAvailability);
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
-  const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
-  const visibilityCfg = opts?.config ?? getRuntimeConfig();
+  const swarmConfig = resolveSwarmConfig(effectiveConfig, requesterAgentId);
   const sessionToolsVisibility = resolveEffectiveSessionToolsVisibility({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     sandboxed: opts?.sandboxed === true,
   });
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     agentSessionKey: opts?.agentSessionKey,
     requesterAgentId,
     sandboxed: opts?.sandboxed,
@@ -382,11 +393,11 @@ export function createSessionsSpawnTool(
     parameters,
     execute: async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
-        const assertSourceActive = captureAgentToolSourceExecutionGuard(
+        const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
-            : (signal ?? opts?.signal),
-        );
+            : (signal ?? opts?.signal);
+        const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -476,14 +487,6 @@ export function createSessionsSpawnTool(
         const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
         const lightContext = params.lightContext === true;
         const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
-        const deliveryPressure = getSubagentDeliveryBacklogPressure();
-        if (deliveryPressure.blocked) {
-          return jsonResult({
-            status: "forbidden",
-            error: `sessions_spawn is paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
-            ...roleContext,
-          });
-        }
         const expectedParentSessionKey = opts?.agentSessionKey?.trim();
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
@@ -499,11 +502,16 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: { ...opts, onSpawnEffectsStart },
+            options: {
+              ...opts,
+              onSpawnEffectsStart,
+              assertActive,
+              signal: executionSignal,
+            },
           });
         const visibleResult = opts?.expectedParentSessionId
           ? await runWithScopedSessionAccess({
-              cfg: visibilityCfg,
+              cfg: effectiveConfig,
               expectedSessionId: opts.expectedParentSessionId,
               ...(opts.signal ? { signal: opts.signal } : {}),
               targetSessionKey: expectedParentSessionKey!,
@@ -519,7 +527,10 @@ export function createSessionsSpawnTool(
         if (runtime === "acp" && !acpAvailable) {
           return jsonResult({
             status: "error",
-            error: resolveAcpUnavailableMessage(opts),
+            error: resolveAcpUnavailableMessage({
+              config: effectiveConfig,
+              sandboxed: opts?.sandboxed,
+            }),
             ...roleContext,
           });
         }
@@ -670,6 +681,7 @@ export function createSessionsSpawnTool(
               agentSessionKey: opts?.agentSessionKey,
               requesterTurnRunId: opts?.requesterTurnRunId,
               requesterThinkingLevel: opts?.requesterThinkingLevel,
+              requesterModel: opts?.requesterModel,
               completionOwnerKey: opts?.completionOwnerKey,
               agentChannel: opts?.agentChannel,
               agentAccountId: opts?.agentAccountId,

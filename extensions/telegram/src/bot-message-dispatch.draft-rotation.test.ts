@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 beforeEach(() => registerChannelDelivery.mockReset());
 import {
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createStatusReactionController,
   deliverReplies,
@@ -196,7 +197,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await replyOptions?.onPartialReply?.({ text: "Done ", delta: "Done " });
         await replyOptions?.onPartialReply?.({ text: "Done answer", delta: "answer" });
         await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });

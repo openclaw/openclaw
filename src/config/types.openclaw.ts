@@ -88,7 +88,7 @@ export type OpenClawConfig = {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
     /** One-time doctor migrations already applied to this config. */
-    migrations?: { modelPolicyAllowlist?: true };
+    migrations?: { modelPolicyAllowlist?: true; utilityModelSeparation?: true };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -170,7 +170,7 @@ export type OpenClawConfig = {
         | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** User-selected Control UI accent color (#RRGGBB). */
+      /** Control UI accent: #RRGGBB, or "theme" to bypass inherited accent colors. */
       accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
@@ -271,6 +271,10 @@ export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 export type RuntimeConfig = BrandedConfigState<"runtime">;
 
 export type ConfigValidationIssue = {
+  errorCode?: string;
+  fixHint?: string;
+  code?: import("../plugins/manifest-types.js").PluginDiagnosticCode;
+  source?: string;
   /** Dot-path to the invalid or legacy config value. */
   path: string;
   /** Structured validator path used internally for lossless source diagnostics. */
@@ -306,6 +310,8 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Internal include-expanded authored values paired with sourceConfigBeforeMigrations. */
+  authoredConfig?: OpenClawConfig;
   /** Include/env-resolved source before raw compatibility migrations. */
   sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**

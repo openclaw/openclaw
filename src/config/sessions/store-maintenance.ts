@@ -14,7 +14,7 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import type { SessionEntry } from "./types.js";
@@ -428,7 +428,11 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
   return { patch: null, cleared: false };
 }
 
-function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): number {
+export function getSessionMaintenanceActivityAt(
+  entry:
+    | Pick<SessionEntry, "updatedAt" | "lastInteractionAt" | "lastActivityAt" | "sessionStartedAt">
+    | undefined,
+): number {
   return Math.max(
     entry?.lastInteractionAt ?? 0,
     entry?.lastActivityAt ?? 0,

@@ -68,6 +68,7 @@ import type {
 } from "../../infra/embedded-state-lock.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
+import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { redactStatusSecrets } from "../status-all/format.js";
@@ -288,7 +289,9 @@ function withDirectCredential(
       },
     },
   };
-  copyConfigResolutionFactsExcept(cfg, next, [`models.providers.${configKey}.apiKey`]);
+  copyConfigResolutionFactsExcept(cfg, next, [
+    `${appendConfigPathSegment("models.providers", configKey)}.apiKey`,
+  ]);
   return next;
 }
 
@@ -415,7 +418,7 @@ export async function buildProbeTargets(params: {
       configuredProviderEntry &&
       resolveConfigSecretRef({
         config: cfg,
-        path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
+        path: `${appendConfigPathSegment("models.providers", configuredProviderEntry.providerKey)}.apiKey`,
         value: configuredProvider?.apiKey,
         defaults: cfg.secrets?.defaults,
       }),
@@ -463,7 +466,7 @@ export async function buildProbeTargets(params: {
           : await resolveConfiguredProbeCredential({
               cfg,
               input: configuredProvider?.apiKey,
-              path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
+              path: `${appendConfigPathSegment("models.providers", configuredProviderEntry.providerKey)}.apiKey`,
               cache: refResolveCache,
             })
         : null;

@@ -14,7 +14,8 @@ export type BackgroundTasksProps = {
   tasks: TaskSummary[] | null;
   activeCount: number;
   subagentActivity: SubagentActivityPresentation;
-  openTaskId?: string;
+  /** Projection of the persisted Tasks panel selection, never controller-owned. */
+  selectedTaskId?: string;
   taskDetails: ReadonlyMap<string, TaskSummary>;
   taskDetailErrors: ReadonlyMap<string, string>;
   taskDetailLoadingIds: ReadonlySet<string>;
@@ -24,6 +25,7 @@ export type BackgroundTasksProps = {
   onToggleFinished: () => void;
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
-  onLoadDetail?: (task: TaskSummary) => void;
+  onLoadDetail?: (task: Pick<TaskSummary, "id">) => void;
   onOpenTaskDetail?: (task: TaskSummary) => void;
+  onOpenTaskList?: () => void;
 };

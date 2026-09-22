@@ -29,7 +29,6 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "cloudWorkers",
   "commitments",
   "cron",
-  "discovery",
   "env",
   "marketplaces",
   "mcp",
@@ -46,6 +45,27 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "transcripts",
   "web",
 ]);
+
+// mDNS modes have no legacy state inputs; other discovery shapes retain migration work.
+function hasOnlyMigrationSafeDiscovery(config: Record<string, unknown>): boolean {
+  const discovery = config.discovery;
+  if (discovery === undefined) {
+    return true;
+  }
+  if (!isRecord(discovery) || Object.keys(discovery).some((key) => key !== "mdns")) {
+    return false;
+  }
+  const mdns = discovery.mdns;
+  return (
+    mdns === undefined ||
+    (isRecord(mdns) &&
+      Object.keys(mdns).every((key) => key === "mode") &&
+      (mdns.mode === undefined ||
+        mdns.mode === "off" ||
+        mdns.mode === "minimal" ||
+        mdns.mode === "full"))
+  );
+}
 
 // Canonical internal entries have no legacy machine state to import. Keep every
 // older or external hook shape on Doctor's full migration path.
@@ -184,7 +204,7 @@ function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
     return false;
   }
-  if (!hasOnlyMigrationSafeInternalHooks(config)) {
+  if (!hasOnlyMigrationSafeDiscovery(config) || !hasOnlyMigrationSafeInternalHooks(config)) {
     return false;
   }
   if (containsObjectKey(config.agents, "memorySearch")) {

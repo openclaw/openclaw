@@ -569,9 +569,10 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
     additionalDeniedFeatures?: readonly string[];
     allowedManagedRequirementsFingerprint?: string;
     allowConfiguredManagedHooks?: boolean;
+    privateManagedHooksPresent?: boolean;
   },
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<{ enableManagedHooks: boolean }> {
   const requirements = await readCodexManagedRequirements(client, signal);
   const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(requirements);
   const managedRequirementsMatch =
@@ -585,8 +586,12 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
     );
   }
   if (requirements === null) {
-    return;
+    return {
+      enableManagedHooks: managedHooksAllowed && options.privateManagedHooksPresent === true,
+    };
   }
+  let hasManagedHooks = false;
+  let requiredHooksEnabled: boolean | undefined;
   if (options.restrictedToolSurface) {
     for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
       const hooks = requirements[key];
@@ -596,7 +601,8 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       if (!isJsonObject(hooks)) {
         throw new Error("Codex configRequirements/read returned invalid managed hooks");
       }
-      if (hasNonEmptyJsonValue(hooks) && !managedHooksAllowed) {
+      hasManagedHooks ||= hasNonEmptyJsonValue(hooks);
+      if (hasManagedHooks && !managedHooksAllowed) {
         throw new Error("Codex restricted tool surface cannot override managed hooks");
       }
     }
@@ -625,6 +631,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
           CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
         additionalDeniedFeatures.has(canonicalFeature);
       if (canonicalFeature === "hooks" && managedHooksAllowed) {
+        requiredHooksEnabled = enabled;
         continue;
       }
       if (enabled && deniedByToolPolicy) {
@@ -632,6 +639,14 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       }
     }
   }
+  return {
+    enableManagedHooks:
+      managedHooksAllowed &&
+      requiredHooksEnabled !== false &&
+      (hasManagedHooks ||
+        options.privateManagedHooksPresent === true ||
+        requiredHooksEnabled === true),
+  };
 }
 
 /** Hashes the exact managed requirements without retaining their hook commands or policy details. */

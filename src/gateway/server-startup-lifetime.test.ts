@@ -99,21 +99,6 @@ function createStartupTestState(label: string) {
   });
 }
 
-function registerSecretsClearFailure(
-  register: (hook: () => void) => void,
-  error: Error,
-): () => void {
-  let failure: Error | undefined = error;
-  register(function failRegisteredSecretsClear() {
-    if (failure) {
-      throw failure;
-    }
-  });
-  return () => {
-    failure = undefined;
-  };
-}
-
 describe("Gateway startup lifetime", () => {
   it.each(["donor", "metadata cache", "metadata borrower"] as const)(
     "releases idle prepared %s custody when one of two Gateways closes",
@@ -515,20 +500,22 @@ describe("Gateway startup lifetime", () => {
           const released = vi.fn();
           const close = owner.close.bind(owner);
           vi.spyOn(owner, "close").mockImplementation(async (...args) => {
-            await close(...args);
+            const result = await close(...args);
             released();
+            return result;
           });
           metadataOwners.push({ owner, released });
           return owner;
         });
+      const clearSecrets = secretsModule.clearSecretsRuntimeSnapshotState;
       const clearSecretsSpy = vi.spyOn(secretsModule, "clearSecretsRuntimeSnapshotState");
-      const clearError = new Error("synthetic registered secrets clear failure");
-      const stopClearFailure = clearFails
-        ? registerSecretsClearFailure(
-            secretsModule.registerSecretsRuntimeStateClearHook,
-            clearError,
-          )
-        : undefined;
+      const clearError = new Error("synthetic secrets clear failure");
+      if (clearFails) {
+        clearSecretsSpy.mockImplementation(() => {
+          clearSecrets();
+          throw clearError;
+        });
+      }
       const database = new DatabaseSync(":memory:");
       const entered = createDeferred();
       const resume = createDeferred();
@@ -598,7 +585,6 @@ describe("Gateway startup lifetime", () => {
         expect(clearSecretsSpy).toHaveBeenCalledOnce();
         expect(metadataOwners[0]?.released).toHaveBeenCalledOnce();
       } finally {
-        stopClearFailure?.();
         resume.resolve();
         await outcome;
         bootstrapSpy.mockRestore();

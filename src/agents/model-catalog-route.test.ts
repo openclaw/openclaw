@@ -78,13 +78,24 @@ describe("projectModelCatalogEntryForRoute", () => {
     const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
       entry,
       projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-      catalog: [platformEntry, chatGPTEntry],
+      catalog: [
+        platformEntry,
+        {
+          ...chatGPTEntry,
+          contextWindows: [{ id: "native", label: "Native", contextWindow: 400_000 }],
+          contextWindowDefault: "native",
+        },
+      ],
     });
     expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
     expect(runtimeEntry.compat).toEqual({ supportsTools: true });
     expect(runtimeEntry.contextWindow).toBe(400_000);
     expect(publicEntry).not.toHaveProperty("params");
     expect(publicEntry).not.toHaveProperty("compat");
+    expect(publicEntry.contextWindows).toEqual([
+      { id: "native", label: "Native", contextWindow: 400_000 },
+    ]);
+    expect(runtimeEntry.contextWindowDefault).toBe("native");
   });
 
   it("projects one physical row onto the selected route capabilities", () => {

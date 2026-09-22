@@ -5,19 +5,32 @@ import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
+import { ContextEngineFactoryResources } from "../../context-engine/registry.resources.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  createPluginCache,
+  getPluginMetadataSnapshotCache,
+  getPluginCacheRetention,
+  retainPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
   AsyncWorkScope,
@@ -27,6 +40,11 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  refreshPreparedModelRuntimeSnapshots,
+} from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { AgentSession } from "../sessions/agent-session.js";
@@ -35,6 +53,7 @@ import { loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import type { ExtensionContext } from "../sessions/extensions/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
+import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 type Mode =
@@ -47,9 +66,18 @@ type Mode =
   | "provider-tail"
   | "cleanup-tail"
   | "preparation-failure"
+  | "mcp-caller-abort"
+  | "mcp-parent-abort"
+  | "mcp-ready"
+  | "lsp-caller-abort"
+  | "lsp-parent-abort"
+  | "lsp-ready"
   | "before_compaction"
   | "after_compaction"
-  | "raw";
+  | "raw"
+  | "reload"
+  | "reload-abort-before-commit"
+  | "reload-queued";
 type Connection = { file: string; database: DatabaseSync; disposals: number };
 type Fixture = {
   mode: Mode;
@@ -65,6 +93,8 @@ type Fixture = {
   context?: ExtensionContext;
   disposals: number;
   envRestored: boolean;
+  admittedMetadata?: ReturnType<typeof resolvePluginMetadataSnapshot>;
+  releases: Array<() => Promise<void>>;
   lateReads: number;
 };
 const active = vi.hoisted(() => ({ fixture: undefined as Fixture | undefined }));
@@ -86,6 +116,14 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       options: Parameters<typeof actual.acquireAgentRunPreparedModelRuntime>[1],
     ) => {
       const current = fixture();
+      if (current.mode.startsWith("reload")) {
+        const lease = await actual.acquireAgentRunPreparedModelRuntime(input, options);
+        current.admittedMetadata = lease.snapshot.metadataSnapshot;
+        current.source = expectDefined(current.registrations.at(-1), "replacement registration");
+        const release = vi.fn(() => lease[Symbol.asyncDispose]());
+        current.releases.push(release);
+        return { ...lease, [Symbol.asyncDispose]: release };
+      }
       let standalone: Awaited<ReturnType<typeof actual.activateStandalonePreparedModelRuntime>>;
       if (current.mode === "raw") {
         const metadataSnapshot = resolvePluginMetadataSnapshot({
@@ -179,7 +217,10 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
           (api) => {
             api.on("session_before_compact", async (event, context) => {
               current.context = context;
-              if (current.mode === "abort-before-commit") {
+              if (
+                current.mode === "abort-before-commit" ||
+                current.mode === "reload-abort-before-commit"
+              ) {
                 await remember(current, hold(current));
                 return {
                   compaction: {
@@ -253,6 +294,15 @@ vi.mock("./stream-resolution.js", async (importOriginal) => {
       const resolved = actual.resolveEmbeddedAgentStream(params);
       const streamFn: StreamFn = (model) => {
         const current = fixture();
+        if (current.mode.startsWith("reload")) {
+          expect(
+            resolvePluginMetadataSnapshot({
+              config: {},
+              workspaceDir: current.root,
+              allowWorkspaceScopedCurrent: true,
+            }),
+          ).toBe(current.admittedMetadata);
+        }
         if (current.mode === "provider-tail") {
           const pending = remember(current, hold(current));
           expectDefined(
@@ -281,40 +331,83 @@ function openTool(current: Fixture, name: string): Connection {
 
 // These real SQLite handles stand at the existing MCP/LSP factory boundary;
 // this fixture tests runtime custody, not either wire protocol.
-vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>()),
-  createBundleMcpToolRuntime: async () => {
-    const current = fixture();
-    const connection = openTool(current, "mcp");
-    const track = captureAsyncWorkTracker();
-    if (current.mode === "preparation-failure") {
-      void remember(
-        current,
-        track(() => hold(current)),
-      );
-    }
-    return {
-      tools: [],
-      dispose: async () => {
-        if (current.mode === "cleanup-tail") {
-          void remember(
-            current,
-            track(() => hold(current, false)),
-          );
-        }
-        connection.disposals++;
-        connection.database.close();
-      },
-    };
-  },
-}));
+vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>();
+  return {
+    ...actual,
+    createBundleMcpToolRuntime: async (
+      params: Parameters<typeof actual.createBundleMcpToolRuntime>[0],
+    ) => {
+      const current = fixture();
+      const connection = openTool(current, "mcp");
+      if (current.mode.startsWith("mcp-")) {
+        return actual.createBundleMcpToolRuntime({
+          ...params,
+          createRuntime: (input) => ({
+            sessionId: input.sessionId,
+            workspaceDir: input.workspaceDir,
+            configFingerprint: "delegate-mcp",
+            createdAt: 0,
+            lastUsedAt: 0,
+            markUsed() {},
+            peekCatalog: () => null,
+            getCatalog: async () => {
+              current.entered.resolve();
+              await current.finish.promise;
+              return { version: 1, generatedAt: 0, servers: {}, tools: [] };
+            },
+            callTool: async () => {
+              throw new Error("Compaction must not execute fixture MCP tools");
+            },
+            joinCleanup: async () => {},
+            dispose: async () => {
+              current.finish.resolve();
+              if (connection.database.isOpen) {
+                connection.disposals++;
+                connection.database.close();
+              }
+            },
+          }),
+        });
+      }
+      const track = captureAsyncWorkTracker();
+      if (current.mode === "preparation-failure") {
+        void remember(
+          current,
+          track(() => hold(current)),
+        );
+      }
+      return {
+        tools: [],
+        dispose: async () => {
+          if (current.mode === "cleanup-tail") {
+            void remember(
+              current,
+              track(() => hold(current, false)),
+            );
+          }
+          connection.disposals++;
+          connection.database.close();
+        },
+      };
+    },
+  };
+});
 
 vi.mock("../agent-bundle-lsp-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-bundle-lsp-runtime.js")>()),
-  createBundleLspToolRuntime: async () => {
+  createBundleLspToolRuntime: async (params: Parameters<typeof createBundleLspToolRuntime>[0]) => {
     const current = fixture();
     if (current.mode === "preparation-failure") {
       throw new Error("fixture LSP setup failed");
+    }
+    if (
+      current.mode === "lsp-caller-abort" ||
+      current.mode === "lsp-parent-abort" ||
+      current.mode === "lsp-ready"
+    ) {
+      current.entered.resolve();
+      await racePromiseWithAbortSignal(current.finish.promise, params.abortSignal);
     }
     const connection = openTool(current, "lsp");
     return {
@@ -357,12 +450,26 @@ describe("delegate compaction resource retirement", () => {
     "provider-tail",
     "cleanup-tail",
     "preparation-failure",
+    "mcp-caller-abort",
+    "mcp-parent-abort",
+    "mcp-ready",
+    "lsp-caller-abort",
+    "lsp-parent-abort",
+    "lsp-ready",
     "before_compaction",
     "after_compaction",
     "raw",
+    "reload",
+    "reload-abort-before-commit",
+    "reload-queued",
   ])(
     "keeps actual work owned through %s",
     async (mode) => {
+      const lspCancelled = mode === "lsp-caller-abort" || mode === "lsp-parent-abort";
+      const mcpCancelled = mode === "mcp-caller-abort" || mode === "mcp-parent-abort";
+      const pendingPreparation =
+        lspCancelled || mcpCancelled || mode === "lsp-ready" || mode === "mcp-ready";
+      const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
       await withOpenClawTestState(
         { label: "delegate-resources", layout: "split" },
         async (state) => {
@@ -377,6 +484,7 @@ describe("delegate compaction resource retirement", () => {
             eventBus: createEventBus(),
             disposals: 0,
             envRestored: false,
+            releases: [],
             lateReads: 0,
           };
           active.fixture = current;
@@ -484,8 +592,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
           };
           await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
           const manager = SessionManager.open(target, state.workspaceDir);
-          manager.appendModelChange(model.provider, model.id);
-          manager.appendThinkingLevelChange("off");
+          await manager.appendModelChange(model.provider, model.id);
+          await manager.appendThinkingLevelChange("off");
           for (const text of [
             "Review the deployment checklist.",
             "Compare the remaining options.",
@@ -494,13 +602,45 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             manager.appendMessage({ role: "user", content: text, timestamp: 1 });
             manager.appendMessage(assistant(model, `Recorded: ${text}`));
           }
+          const toolCall = {
+            ...assistant(model, ""),
+            content: [
+              {
+                type: "toolCall" as const,
+                id: "completed-tool",
+                name: "exec",
+                arguments: { command: "echo done" },
+              },
+            ],
+            stopReason: "toolUse" as const,
+          };
+          manager.appendMessage(toolCall);
+          manager.appendMessage({
+            role: "toolResult",
+            toolCallId: "completed-tool",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+            isError: false,
+            timestamp: 2,
+          });
+          manager.appendMessage(assistant(model, "The action is complete."));
           manager.flushPendingPersistence();
+          const originalMessages = manager.getBranch().filter((entry) => entry.type === "message");
+          // A distinct compaction workspace requires a new prepared owner instead of
+          // borrowing the already-published configured snapshot.
+          const compactionWorkspace = mode.startsWith("reload")
+            ? state.path("compaction-workspace")
+            : state.workspaceDir;
+          fs.mkdirSync(compactionWorkspace, { recursive: true });
           const runtimeContext = {
-            workspaceDir: state.workspaceDir,
+            workspaceDir: compactionWorkspace,
             provider: providerId,
             model: "model",
-            trigger: mode === "automatic-after-commit" ? "overflow" : "manual",
-            thinkLevel: "off",
+            trigger:
+              mode === "automatic-after-commit" || mode.startsWith("reload")
+                ? "overflow"
+                : "manual",
+            thinkLevel: "off" as const,
             config,
           };
           const recordUsage = vi.fn();
@@ -516,17 +656,84 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               await resetPreparedModelRuntimeSnapshotsForTest();
               clearPluginMetadataLifecycleCaches();
               initializeGlobalHookRunner(createEmptyPluginRegistry());
+              let captured: ContextEngineFactoryResources | undefined;
+              let previousLease:
+                | Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>
+                | undefined;
+              let retirement: ReturnType<typeof retirePluginCache> | undefined;
+              let replacementMetadata: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
+              let replacementCache: ReturnType<typeof createPluginCache> | undefined;
               try {
-                operation = parent.track(() =>
-                  delegateCompactionToRuntime({
-                    sessionId: target.sessionId,
-                    sessionKey: target.sessionKey,
-                    sessionTarget: target,
-                    runtimeContext,
-                    abortSignal: controller.signal,
-                  }),
-                );
-                const held = mode !== "success" && mode !== "raw";
+                if (mode.startsWith("reload")) {
+                  const publication = { gatewayLifecycle: true, catalogMode: "static" as const };
+                  const previousCache = createPluginCache();
+                  const previousMetadata = withPluginCache(previousCache, () =>
+                    resolvePluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir }),
+                  );
+                  setGatewayPluginMetadataSnapshot(previousMetadata, {
+                    config,
+                    workspaceDir: state.workspaceDir,
+                  });
+                  await refreshPreparedModelRuntimeSnapshots(config, publication);
+                  previousLease = await acquireAgentRunPreparedModelRuntime({
+                    config,
+                    agentId: "main",
+                    agentDir: state.agentDir(),
+                    workspaceDir: state.workspaceDir,
+                  });
+                  captured = withPluginRuntimeGenerationScope(
+                    previousLease.snapshot,
+                    () => new ContextEngineFactoryResources([]),
+                  );
+                  const replacementConfig = {
+                    ...config,
+                    messages: { responsePrefix: "replacement" },
+                  };
+                  replacementCache = createPluginCache();
+                  replacementMetadata = withPluginCache(replacementCache, () =>
+                    resolvePluginMetadataSnapshot({
+                      config: replacementConfig,
+                      workspaceDir: state.workspaceDir,
+                    }),
+                  );
+                  setGatewayPluginMetadataSnapshot(replacementMetadata, {
+                    config: replacementConfig,
+                    workspaceDir: state.workspaceDir,
+                  });
+                  await refreshPreparedModelRuntimeSnapshots(replacementConfig, publication);
+                  retirement = retirePluginCache(previousCache);
+                  expect(() => retainPluginCache(previousCache)).toThrow(
+                    "Plugin inventory has retired",
+                  );
+                  expect(previousLease.snapshot.metadataSnapshot).toBe(previousMetadata);
+                  expect(getPluginMetadataSnapshotCache(replacementMetadata)).not.toBe(
+                    previousCache,
+                  );
+                }
+                const compact = () =>
+                  mode === "reload-queued"
+                    ? compactEmbeddedAgentSession({
+                        ...target,
+                        sessionTarget: target,
+                        sessionFile: target.sessionKey,
+                        ...runtimeContext,
+                        trigger: "manual",
+                        abortSignal: controller.signal,
+                        enqueue: async (task) => await task(),
+                      })
+                    : delegateCompactionToRuntime({
+                        sessionId: target.sessionId,
+                        sessionKey: target.sessionKey,
+                        sessionTarget: target,
+                        runtimeContext,
+                        abortSignal: controller.signal,
+                      });
+                operation = parent.track(() => (captured ? captured.run(compact) : compact()));
+                const held =
+                  mode !== "success" &&
+                  mode !== "raw" &&
+                  mode !== "reload" &&
+                  mode !== "reload-queued";
                 if (held) {
                   await Promise.race([
                     current.entered.promise,
@@ -542,21 +749,47 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   }
                   if (
                     mode === "abort-before-commit" ||
+                    mode === "reload-abort-before-commit" ||
                     mode === "abort-after-commit" ||
-                    mode === "automatic-after-commit"
+                    mode === "automatic-after-commit" ||
+                    mode === "lsp-caller-abort" ||
+                    mode === "mcp-caller-abort"
                   ) {
                     controller.abort(new Error("fixture caller cancelled compaction"));
                   }
+                  if (mode === "lsp-parent-abort" || mode === "mcp-parent-abort") {
+                    parent.beginClose(new Error("fixture parent cancelled compaction"));
+                    expect(controller.signal.aborted).toBe(false);
+                  }
+                  if (mode === "lsp-ready" || mode === "mcp-ready") {
+                    current.finish.resolve();
+                  }
                 }
-                const result = await operation;
+                const result = pendingPreparation
+                  ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
+                  : await operation;
                 const cancelled =
                   mode === "abort-before-commit" ||
+                  mode === "reload-abort-before-commit" ||
                   mode === "abort-after-commit" ||
                   mode === "automatic-after-commit" ||
                   mode === "timeout-after-commit";
-                expect(result.ok).toBe(!cancelled && mode !== "preparation-failure");
+                expect(result.ok, result.reason).toBe(!cancelled && !preparationFailed);
+                if (mode.startsWith("reload")) {
+                  expect(current.admittedMetadata).toBe(replacementMetadata);
+                  expect(result.compacted).toBe(mode !== "reload-abort-before-commit");
+                  expect(
+                    SessionManager.open(target, state.workspaceDir)
+                      .getBranch()
+                      .filter((entry) => entry.type === "message"),
+                  ).toEqual(originalMessages);
+                }
                 expect(current.envRestored).toBe(true);
-                expect(current.disposals).toBe(mode === "preparation-failure" ? 0 : 1);
+                expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+                if (lspCancelled || mcpCancelled) {
+                  expect(current.session).toBeUndefined();
+                  expect(current.tools).toHaveLength(1);
+                }
                 if (current.context) {
                   expect(() => current.context?.isIdle()).toThrow();
                 }
@@ -566,22 +799,27 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   assistant(model, summary).usage,
                 );
                 expect(recordUsage.mock.calls.length).toBe(usageCount);
-                const committed = mode !== "abort-before-commit" && mode !== "preparation-failure";
+                const committed =
+                  mode !== "abort-before-commit" &&
+                  mode !== "reload-abort-before-commit" &&
+                  !preparationFailed;
                 expect(
                   SessionManager.open(target, state.workspaceDir)
                     .getBranch()
                     .filter((entry) => entry.type === "compaction").length,
                 ).toBe(committed ? 1 : 0);
-                expect(recordCompaction.mock.calls.length).toBe(committed ? 1 : 0);
+                expect(recordCompaction.mock.calls.length).toBe(
+                  committed && mode !== "reload-queued" ? 1 : 0,
+                );
                 const source = expectDefined(current.source, "selected managed source");
-                if (held) {
+                if (held && !pendingPreparation) {
                   expect(source.database.isOpen).toBe(true);
                   expect(current.tools.length).toBe(mode === "preparation-failure" ? 1 : 2);
                   if (mode !== "cleanup-tail") {
                     expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
                   }
                   let finished = false;
-                  drained = parent.drain().then(() => {
+                  drained = (captured?.work ?? parent).drain().then(() => {
                     finished = true;
                   });
                   await new Promise<void>((resolve) => {
@@ -592,16 +830,24 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   await Promise.all(current.pending);
                   await drained;
                   expect(current.lateReads).toBeGreaterThan(0);
+                } else if (pendingPreparation) {
+                  await withTestTimeout(
+                    parent.drain(),
+                    5_000,
+                    "Tool preparation cleanup did not settle",
+                  );
                 } else {
                   await parent.drain();
                 }
-                expect(source.disposals).toBe(mode === "raw" ? 0 : 1);
-                expect(source.database.isOpen).toBe(mode === "raw");
+                expect(source.disposals).toBe(mode === "raw" || mode.startsWith("reload") ? 0 : 1);
+                expect(source.database.isOpen).toBe(mode === "raw" || mode.startsWith("reload"));
                 for (const tool of current.tools) {
                   expect(tool.disposals).toBe(1);
                   expect(tool.database.isOpen).toBe(false);
                 }
-                expect(recordCompaction.mock.calls.length).toBe(committed ? 1 : 0);
+                expect(recordCompaction.mock.calls.length).toBe(
+                  committed && mode !== "reload-queued" ? 1 : 0,
+                );
                 if (mode !== "raw") {
                   const reopened = new DatabaseSync(source.file);
                   try {
@@ -614,7 +860,27 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 current.finish.resolve();
                 await Promise.allSettled([operation, ...current.pending]);
                 await (drained ?? parent.drain());
+                await captured?.work.drain();
+                await captured?.release();
+                await previousLease?.[Symbol.asyncDispose]();
                 await resetPreparedModelRuntimeSnapshotsForTest();
+                await retirement;
+                if (replacementCache) {
+                  await retirePluginCache(replacementCache);
+                }
+                if (mode.startsWith("reload")) {
+                  // RUN registries remain root-owned; these compaction leases and
+                  // their inventory references must nevertheless settle exactly once.
+                  for (const release of current.releases) {
+                    expect(release).toHaveBeenCalledOnce();
+                  }
+                  expect(
+                    getPluginCacheRetention(
+                      getPluginMetadataSnapshotCache(previousLease!.snapshot.metadataSnapshot),
+                    ),
+                  ).toBeUndefined();
+                  expect(getPluginCacheRetention(replacementCache!)).toBeUndefined();
+                }
                 current.eventBus.clear();
                 vi.restoreAllMocks();
                 for (const connection of [...current.registrations, ...current.tools]) {

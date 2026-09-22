@@ -74,32 +74,6 @@ export async function packageRootExists(packageRoot: string): Promise<boolean> {
   }
 }
 
-export type LocalOverridePackageRootIdentity = {
-  realPath: string;
-  device: bigint;
-  inode: bigint;
-};
-
-export async function readLocalOverridePackageRootIdentity(
-  packageRoot: string,
-): Promise<LocalOverridePackageRootIdentity> {
-  const realPath = await fs.realpath(packageRoot);
-  const stats = await fs.stat(realPath, { bigint: true });
-  if (!stats.isDirectory()) {
-    throw new Error(`local override package root is not a directory: ${packageRoot}`);
-  }
-  return { realPath, device: stats.dev, inode: stats.ino };
-}
-
-export function isSameLocalOverridePackageRoot(
-  left: LocalOverridePackageRootIdentity,
-  right: LocalOverridePackageRootIdentity,
-): boolean {
-  return (
-    left.realPath === right.realPath && left.device === right.device && left.inode === right.inode
-  );
-}
-
 export type LocalPackageOverrideTargetProbe =
   | { status: "missing" }
   | { status: "blocked" }

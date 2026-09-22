@@ -106,6 +106,44 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "dynamic-tools",
+      "title": "Dynamic tools",
+      "order": 10,
+      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude"]
+    },
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 20,
+      "properties": ["sessionCatalog", "supervision"]
+    },
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 30,
+      "properties": ["discovery"]
+    },
+    {
+      "id": "computer-use",
+      "title": "Computer use",
+      "order": 40,
+      "properties": ["computerUse"]
+    },
+    {
+      "id": "native-plugins",
+      "title": "Native plugins",
+      "order": 50,
+      "properties": ["codexPlugins"]
+    },
+    {
+      "id": "app-server-connection",
+      "title": "App Server connection",
+      "order": 60,
+      "properties": ["appServer"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
@@ -15,7 +16,6 @@ import {
   readScheduledTaskCommand,
 } from "./schtasks-layout.js";
 import {
-  readWindowsProcessSnapshot,
   resolveScheduledTaskOwnedGatewayPids,
   terminateScheduledTaskGatewayListeners,
 } from "./schtasks-process.js";
@@ -164,8 +164,7 @@ server.listen(port, "127.0.0.1", () => {
         port,
       });
       expect(observed.pid).not.toBe(child.pid);
-      const snapshot = readWindowsProcessSnapshot();
-      expect(snapshot?.some((entry) => entry.ProcessId === observed.pid)).toBe(true);
+      expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
       const installed = await readScheduledTaskCommand(env, { requireEffective: true });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");

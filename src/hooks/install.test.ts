@@ -2,7 +2,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +10,7 @@ import {
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import { createZipBuffer, createZipHookPackBuffer } from "./install-archive.test-support.js";
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
@@ -138,14 +138,6 @@ function writeHookPackManifest(params: {
   );
 }
 
-async function createZipBuffer(entries: Array<{ path: string; contents: string }>) {
-  const zip = new JSZip();
-  for (const entry of entries) {
-    zip.file(entry.path, entry.contents);
-  }
-  return Buffer.from(await zip.generateAsync({ type: "nodebuffer", compression: "STORE" }));
-}
-
 function writeHookPackFiles(params: {
   pkgDir: string;
   packageName: string;
@@ -182,38 +174,6 @@ function writeHookPackFiles(params: {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
   manifest.name = params.packageName;
   fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf-8");
-}
-
-async function createZipHookPackBuffer(params: {
-  packageName: string;
-  hookName: string;
-  hookDescription: string;
-  heading: string;
-}) {
-  const packageJson = JSON.stringify({
-    name: params.packageName,
-    version: "0.0.1",
-    openclaw: { hooks: [`./hooks/${params.hookName}`] },
-  });
-  return createZipBuffer([
-    { path: "package/package.json", contents: packageJson },
-    {
-      path: `package/hooks/${params.hookName}/HOOK.md`,
-      contents: [
-        "---",
-        `name: ${params.hookName}`,
-        `description: ${params.hookDescription}`,
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        `# ${params.heading}`,
-      ].join("\n"),
-    },
-    {
-      path: `package/hooks/${params.hookName}/handler.ts`,
-      contents: "export default async () => {};\n",
-    },
-  ]);
 }
 
 async function createTarGzHookPackBuffer(params: {
@@ -418,6 +378,46 @@ describe("installHooksFromPath", () => {
             hooksDir: path.join(stateDir, "hooks"),
           }),
       });
+    },
+  );
+
+  it.each(["install", "update"] as const)(
+    "preserves the declared OpenClaw dependency during %s",
+    async (mode) => {
+      const pkgDir = makeTempDir();
+      const hooksDir = path.join(makeTempDir(), "hooks");
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        hookName: "one-hook",
+        hookDescription: "One hook",
+        heading: "One Hook",
+        dependencies: { openclaw: ">=2026.4.5" },
+      });
+      if (mode === "update") {
+        fs.mkdirSync(path.join(hooksDir, "test-hooks"), { recursive: true });
+      }
+      runCommandWithTimeoutMock.mockImplementation(async (_argv, optionsOrTimeout) => {
+        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+        if (!cwd) {
+          throw new Error("expected staged hook install cwd");
+        }
+        const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+        expect(manifest.dependencies?.openclaw).toBe(">=2026.4.5");
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+
+      const result = await installHooksFromPath({ path: pkgDir, hooksDir, mode });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalled();
     },
   );
 

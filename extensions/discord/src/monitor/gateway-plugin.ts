@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway plugin behavior.
 import { randomUUID } from "node:crypto";
 import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";

@@ -1,5 +1,4 @@
 // Memory Core tests cover short term promotion plugin behavior.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +7,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { previewRemDreaming } from "./dreaming-phases.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -206,13 +207,10 @@ describe("short-term promotion", () => {
   }
 
   type WorkspaceTest = (title: string, run: (workspaceDir: string) => Promise<void>) => void;
-  const it: WorkspaceTest & Pick<typeof baseIt, "runIf"> = Object.assign(
-    (title: string, run: (workspaceDir: string) => Promise<void>) =>
-      baseIt(title, async () => {
-        await withTempWorkspace(run);
-      }),
-    { runIf: baseIt.runIf },
-  );
+  const it: WorkspaceTest = (title, run) =>
+    baseIt(title, async () => {
+      await withTempWorkspace(run);
+    });
 
   async function writeDailyMemoryNote(
     workspaceDir: string,
@@ -552,42 +550,38 @@ describe("short-term promotion", () => {
     expect(await readRecallStoreEntries(workspaceDir)).toEqual({});
   });
 
-  it("ignores contaminated dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        1,
-        0.92,
-        "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+  it("excludes staged and generated REM recalls while keeping ordinary reflections", async (workspaceDir) => {
+    const ordinary = "Reflections on deployment planning: keep a verified backup before release.";
+    const snippets = [
+      [
+        "- Candidate: Default to action.",
+        "  - confidence: 0.76",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+        "  - recalls: 3",
+        "  - status: staged",
+      ].join("\n"),
+      previewRemDreaming({
+        entries: [
+          recallStoreEntryFixture({
+            key: "source",
+            path: "memory/2026-04-03.md",
+            conceptTags: ["deployment"],
+          }),
+        ],
+        limit: 1,
+        minPatternStrength: 0.5,
+      }).bodyLines.join("\n"),
+      ordinary,
+    ];
+    await recordMemoryRecalls(
+      workspaceDir,
+      "deployment planning",
+      snippets.map((snippet, index) =>
+        memoryRecallResult("memory/2026-04-03.md", index + 1, index + 1, 0.92, snippet),
       ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
-  });
-
-  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        5,
-        0.92,
-        [
-          "- Candidate: Default to action.",
-          "  - confidence: 0.76",
-          "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
-          "  - recalls: 3",
-          "  - status: staged",
-        ].join("\n"),
-      ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
+    );
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual([ordinary]);
   });
 
   it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {
@@ -1349,7 +1343,7 @@ describe("short-term promotion", () => {
     }
   });
 
-  it("keeps recent valid recall stats ahead of malformed timestamps at the entry cap", async (workspaceDir) => {
+  it("keeps valid recall and promotion stats with malformed timestamps at the entry cap", async (workspaceDir) => {
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     const malformedEntries = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => {
@@ -1382,6 +1376,26 @@ describe("short-term promotion", () => {
       updatedAt: "2026-04-05T10:00:00.000Z",
       entries: {
         ...malformedEntries,
+        malformedPromotion: recallStoreEntryFixture({
+          key: "malformedPromotion",
+          path: "memory/2026-04-01-malformed-promotion.md",
+          promotedAt: "not-a-timestamp",
+        }),
+        previousDay: recallStoreEntryFixture({
+          key: "previousDay",
+          path: "memory/2026-04-04-previous-day.md",
+          promotedAt: "2026-04-04T18:00:00.000Z",
+        }),
+        utcDay: recallStoreEntryFixture({
+          key: "utcDay",
+          path: "memory/2026-04-05-utc-day.md",
+          promotedAt: "2026-04-05T06:00:00.000Z",
+        }),
+        today: recallStoreEntryFixture({
+          key: "today",
+          path: "memory/2026-04-05-today.md",
+          promotedAt: "2026-04-05T09:00:00.000Z",
+        }),
         recent: {
           key: "recent",
           path: "memory/2026-04-05-recent.md",
@@ -1411,6 +1425,26 @@ describe("short-term promotion", () => {
     expect(stats.shortTermEntries.map((entry) => entry.path)).not.toContain(
       "memory/2026-04-01-malformed-7.md",
     );
+    expect(stats.promotedEntries).toHaveLength(4);
+    expect(stats.promotedEntries).toContainEqual(
+      expect.objectContaining({ key: "malformedPromotion", promotedAt: "not-a-timestamp" }),
+    );
+    for (const [timezone, promotedToday] of [
+      ["America/Los_Angeles", 1],
+      ["UTC", 2],
+      ["America/Los_Angeles", 1],
+    ] as const) {
+      const zonedStats = await loadShortTermPromotionDreamingStats({
+        workspaceDir,
+        nowMs,
+        timezone,
+      });
+      expect(zonedStats).toMatchObject({
+        promotedTotal: 4,
+        promotedToday,
+        lastPromotedAt: "2026-04-05T09:00:00.000Z",
+      });
+    }
   });
 
   it("reconciles existing promotion markers instead of appending duplicates", async (workspaceDir) => {
@@ -2383,6 +2417,17 @@ describe("short-term promotion", () => {
     expect(applied.applied).toBe(1);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Promoted From Short-Term Memory (2026-04-01)");
+    for (const [now, promotedToday] of [
+      ["2026-04-02T06:59:59.000Z", 1],
+      ["2026-04-02T07:00:00.000Z", 0],
+    ] as const) {
+      const stats = await loadShortTermPromotionDreamingStats({
+        workspaceDir,
+        nowMs: Date.parse(now),
+        timezone: "America/Los_Angeles",
+      });
+      expect(stats).toMatchObject({ promotedTotal: 1, promotedToday });
+    }
   });
 
   it("audits and repairs invalid store metadata plus stale locks", async (workspaceDir) => {
@@ -2777,44 +2822,6 @@ describe("short-term promotion", () => {
     expect(await testing.readRecallStore(workspaceDir, new Date().toISOString())).toEqual(raw);
   });
 
-  it("waits for an active short-term lock before repairing", async (workspaceDir) => {
-    await testing.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: "2026-04-04T00:00:00.000Z",
-      entries: {
-        bad: {
-          path: "",
-        },
-      },
-    });
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.pid}:${Date.now()}`,
-      acquiredAt: Date.now(),
-    });
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      let settled = false;
-      const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
-        settled = true;
-        return result;
-      });
-
-      await vi.advanceTimersByTimeAsync(41);
-      expect(settled).toBe(false);
-
-      await testing.deleteShortTermLock(workspaceDir);
-      await vi.advanceTimersByTimeAsync(40);
-      const repair = await repairPromise;
-
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      expect(repair.removedInvalidEntries).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("preserves recall updates from sequential and parallel nested workspace writers", async (workspaceDir) => {
     const result = memoryRecallResult(
       "memory/2026-04-03.md",
@@ -2895,20 +2902,17 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("reclaims a stale sqlite lock owned by a Linux zombie", async (workspaceDir) => {
+  it("reclaims a stale sqlite lock when its owner is definitely dead", async (workspaceDir) => {
     const ownerPid = 4242;
     await testing.writeShortTermLock(workspaceDir, {
       owner: `${ownerPid}:0`,
       acquiredAt: Date.now() - 120_000,
     });
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
-      if (String(filePath) === `/proc/${ownerPid}/status`) {
-        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\nThreads:\t1\n`;
-      }
-      throw new Error(`unexpected read: ${String(filePath)}`);
-    });
+    const originalIsPidDefinitelyDead = processRuntime.isPidDefinitelyDead;
+    // Keep SQLite's platform and coordinator identity native while probing the synthetic owner.
+    vi.spyOn(processRuntime, "isPidDefinitelyDead").mockImplementation(
+      (pid) => pid === ownerPid || originalIsPidDefinitelyDead(pid),
+    );
 
     const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
     expect(audit.issues.map((issue) => issue.code)).toContain("recall-lock-stale");
@@ -3261,7 +3265,7 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md atomic promotion write", () => {
-    it.runIf(process.platform !== "win32")(
+    baseIt.runIf(process.platform !== "win32")(
       "preserves a dangling MEMORY.md symlink and its target directory mode",
       async () => {
         await withTempWorkspace(async (workspaceDir) => {

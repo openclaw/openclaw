@@ -131,16 +131,18 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride ?? targetAgentConfig?.thinkingDefault;
-  if (!thinking && model) {
+  let thinking = thinkingPlan.thinkingOverride;
+  if (!thinking) {
     const { provider, model: modelId } = splitModelRef(model);
-    if (provider && modelId) {
-      thinking = resolveThinkingDefault({
-        cfg: params.cfg,
-        provider,
-        model: modelId,
-      });
-    }
+    thinking =
+      provider && modelId
+        ? resolveThinkingDefault({
+            cfg: params.cfg,
+            agentId: policyAgentId,
+            provider,
+            model: modelId,
+          })
+        : targetAgentConfig?.thinkingDefault;
   }
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =

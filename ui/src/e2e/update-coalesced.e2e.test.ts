@@ -321,7 +321,7 @@ suite.define(() => {
           reason: "version-mismatch",
           updatedAtMs: run.updatedAtMs + 1,
           finishedAtMs: Date.now(),
-          after: { version: "1.0.0" },
+          after: { version: "2.0.0" },
           verification: {
             booted: true,
             serviceRunning: true,
@@ -393,6 +393,7 @@ suite.define(() => {
           : createUpdateRunFixture({
               phase: "finished",
               status: outcome,
+              reason: outcome === "skipped" ? "no-upstream" : "build-failed",
               finishedAtMs: Date.now(),
             });
       const gateway = await installMockGateway(page, {

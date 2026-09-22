@@ -215,7 +215,7 @@ impl TunnelManager {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteGatewayRequest {
     pub transport: String,
@@ -264,6 +264,31 @@ pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
         );
     }
     Ok(url)
+}
+
+/// Node pairing follows the logical SSH endpoint, not a replacement tunnel's local port.
+pub(crate) fn desktop_node_identity_scope(
+    request: &RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> Result<String, String> {
+    let context = gateway_url.path().trim_end_matches('/');
+    if request.transport == "ssh" {
+        let (target, ssh_port) = validate_ssh_target(
+            request
+                .ssh_target
+                .as_deref()
+                .ok_or("The SSH Gateway target is missing.")?,
+        )?;
+        return Ok(format!(
+            "ssh://{target}:{}/{remote_port}{context}",
+            ssh_port.unwrap_or(22),
+            remote_port = request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)
+        ));
+    }
+    Ok(format!(
+        "{}{context}",
+        gateway_url.origin().ascii_serialization()
+    ))
 }
 
 fn is_private_host(host: &str) -> bool {
@@ -1013,9 +1038,14 @@ pub(crate) fn start_tunnel(
         Some(port) => port,
         None => available_port(remote_port, raw_target)?,
     };
-    let executable = ["/usr/bin/ssh", "/bin/ssh"]
-        .iter()
-        .find(|candidate| Path::new(candidate).is_file())
+    #[cfg(target_os = "windows")]
+    let mut candidates = env::var_os("SystemRoot")
+        .into_iter()
+        .map(|root| PathBuf::from(root).join("System32/OpenSSH/ssh.exe"));
+    #[cfg(not(target_os = "windows"))]
+    let mut candidates = [PathBuf::from("/usr/bin/ssh"), PathBuf::from("/bin/ssh")].into_iter();
+    let executable = candidates
+        .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
             "OpenSSH is not installed. Install your system's OpenSSH client.".to_string()
         })?;

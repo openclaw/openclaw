@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,6 +82,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     // The agent close releases its leases through shared state and reopens it, so the
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -132,7 +134,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.exec(`
       INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});
+        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', x'', ${Date.now()});
       INSERT INTO memory_index_sources (path, source, hash, mtime, size)
         VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
     `);

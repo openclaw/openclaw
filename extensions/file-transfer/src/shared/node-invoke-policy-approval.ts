@@ -14,7 +14,7 @@ export type GrantedAuthorization = {
 };
 
 export function commandKind(command: FileTransferNodeInvokeCommand): FilePolicyKind {
-  return command === "file.write" ? "write" : "read";
+  return command === "file.write" || command === "file.create" ? "write" : "read";
 }
 
 export function promptVerb(command: FileTransferNodeInvokeCommand): string {
@@ -23,10 +23,14 @@ export function promptVerb(command: FileTransferNodeInvokeCommand): string {
       return "Fetch directory";
     case "dir.list":
       return "List directory";
+    case "file.create":
+      return "Create file";
     case "file.write":
       return "Write file";
     case "file.fetch":
       return "Read file";
+    case "file.stat":
+      return "Read file metadata";
   }
   return command;
 }

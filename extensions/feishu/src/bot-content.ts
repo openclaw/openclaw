@@ -1,4 +1,3 @@
-// Feishu plugin module implements bot content behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";

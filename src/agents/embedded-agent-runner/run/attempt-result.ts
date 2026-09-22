@@ -14,6 +14,7 @@ import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,
 } from "../../failover/message-patterns.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -66,6 +67,7 @@ export function createAttemptCarryover() {
 }
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  answerSegments?: EmbeddedAttemptSubscription["answerSegments"];
   successfulNestedToolNames?: string[];
 };
 
@@ -224,6 +226,7 @@ export function completeEmbeddedAttemptResult(
     lastAssistant: settled.lastAssistant,
     currentAttemptAssistant: settled.currentAttemptAssistant,
     currentAttemptCompletedAssistant: settled.currentAttemptCompletedAssistant,
+    hasSuccessfulModelResponse: subscription.hasSuccessfulModelResponse(),
     successfulNestedToolNames: settled.successfulNestedToolNames,
     attemptUsage: settled.attemptUsage,
     promptCache: sessionRuntime.state.promptCache,
@@ -366,6 +369,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
     assistantTexts,
+    answerSegments: subscription.answerSegments,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
@@ -380,6 +384,7 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     sourceReplyDelivered: subscription.getSourceReplyDelivered(),
+    sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -415,8 +420,7 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads.length +
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
-    terminalReplyExpectation: attempt.terminalReplyExpectation,
+    terminalReplyExpectation: resolveReplyExpectation(attempt),
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,

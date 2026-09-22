@@ -132,7 +132,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function selectAgentOnAgentsPage(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
+  const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
   await select.locator(".agent-select__trigger").click();
   await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
   await expect
@@ -242,7 +242,7 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
-      const agentSelect = page.locator('openclaw-agent-select[name="skills-agent"]');
+      const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await expect
         .poll(async () => (await agentSelect.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");

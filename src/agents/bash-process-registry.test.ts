@@ -145,22 +145,75 @@ describe("bash process registry", () => {
     expect(session.truncated).toBe(true);
   });
 
-  it("keeps independently capped stream chunks in callback order", () => {
+  it.each(
+    (
+      [
+        {
+          name: "partial eviction",
+          cap: 10,
+          chunks: [
+            ["stdout", "aaaaaa"],
+            ["stderr", "ERR-safe\n"],
+            ["stdout", "bbbbbb"],
+          ],
+          pendingChars: 10,
+          otherChars: 9,
+          expected: "aaaaERR-safe\nbbbbbb",
+        },
+        {
+          name: "multiple whole evictions",
+          cap: 6,
+          chunks: [
+            ["stderr", "<"],
+            ["stdout", "aa"],
+            ["stderr", "|"],
+            ["stdout", "bb"],
+            ["stderr", ">"],
+            ["stdout", "cc"],
+            ["stderr", "!"],
+            ["stdout", "dddd"],
+          ],
+          pendingChars: 6,
+          otherChars: 4,
+          expected: "<|>cc!dddd",
+        },
+        {
+          name: "whole eviction followed by a UTF-16 boundary cut",
+          cap: 7,
+          chunks: [
+            ["stderr", "<"],
+            ["stdout", "aa"],
+            ["stderr", "|"],
+            ["stdout", "a🎉bc"],
+            ["stderr", ">"],
+            ["stdout", "dddd"],
+          ],
+          pendingChars: 6,
+          otherChars: 3,
+          expected: "<|bc>dddd",
+        },
+      ] as const
+    ).flatMap((testCase) =>
+      (["stdout", "stderr"] as const).map((stream) => ({ name: testCase.name, testCase, stream })),
+    ),
+  )("keeps callback order after $name from $stream", ({ testCase, stream }) => {
+    const { cap, chunks, pendingChars, otherChars, expected } = testCase;
     const session = createRegistrySession({
       maxOutputChars: 100,
-      pendingMaxOutputChars: 10,
+      pendingMaxOutputChars: cap,
       backgrounded: true,
     });
 
     addSession(session);
-    appendOutput(session, "stdout", "a".repeat(6));
-    appendOutput(session, "stderr", "ERR-safe\n");
-    appendOutput(session, "stdout", "b".repeat(6));
+    const otherStream = stream === "stdout" ? "stderr" : "stdout";
+    for (const [source, text] of chunks) {
+      appendOutput(session, source === "stdout" ? stream : otherStream, text);
+    }
 
-    expect(session.pendingStdoutChars).toBe(10);
-    expect(session.pendingStderrChars).toBe(9);
+    expect(session.pendingStdoutChars).toBe(stream === "stdout" ? pendingChars : otherChars);
+    expect(session.pendingStderrChars).toBe(stream === "stderr" ? pendingChars : otherChars);
     const drained = drainSession(session);
-    expect(drained.output).toBe(`${"a".repeat(4)}ERR-safe\n${"b".repeat(6)}`);
+    expect(drained.output).toBe(expected);
     expect(drained.outputDropped).toBe(true);
     expect(session.pendingStdoutChars).toBe(0);
     expect(session.pendingStderrChars).toBe(0);

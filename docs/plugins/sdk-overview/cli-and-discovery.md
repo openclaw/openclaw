@@ -133,6 +133,14 @@ Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
 
+The registrar receives native Commander objects. Callbacks registered inside
+the registrar retain the plugin instance for later actions, hooks, parsing,
+help, and events. A preconfigured command tree added with `program.addCommand`
+also transfers its callbacks to the adding instance. Commands already attached
+to the host before registration remain caller-owned; command identity and
+function-valued argument or option data do not change. Reload or disablement
+rejects new callback invocations while admitted asynchronous actions finish.
+
 ## CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local

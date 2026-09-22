@@ -2,6 +2,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { settingsSelection } from "./agents-page.test-support.ts";
 import { page, type AgentsRouteData } from "./route.ts";
 
 const agentsList: AgentsListResult = {
@@ -22,6 +23,7 @@ async function loadRoute(url: string): Promise<AgentsRouteData> {
   const context = {
     basePath: "",
     gateway,
+    settingsAgentSelection: settingsSelection(null),
     agents: {
       state: { agentsList: null, agentsError: null },
       ensureList,

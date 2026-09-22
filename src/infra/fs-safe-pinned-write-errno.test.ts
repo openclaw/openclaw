@@ -1,15 +1,24 @@
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { writeFileWithinRoot } from "openclaw/plugin-sdk/file-access-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { root } from "./fs-safe.js";
 
 const tempDirs = createTrackedTempDirs();
+let nativeModeEnv: ReturnType<typeof captureEnv>;
 const relativePath = "nested/file.txt";
 const writeRoutes = {
   write: async (rootDir: string) => (await root(rootDir)).write(relativePath, "next"),
   create: async (rootDir: string) => (await root(rootDir)).create(relativePath, "next"),
+  createStream: async (rootDir: string) =>
+    (await root(rootDir)).create(
+      relativePath,
+      (async function* () {
+        yield Buffer.from("next");
+      })(),
+    ),
   writeJson: async (rootDir: string) =>
     (await root(rootDir)).writeJson(relativePath, { next: true }),
   createJson: async (rootDir: string) =>
@@ -18,8 +27,15 @@ const writeRoutes = {
     writeFileWithinRoot({ rootDir, relativePath, data: "next" }),
 };
 
+beforeEach(() => {
+  nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+  // This fault hook exercises JavaScript preparation, which remains supported in off mode.
+  setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+});
+
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  nativeModeEnv.restore();
   await tempDirs.cleanup();
 });
 

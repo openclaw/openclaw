@@ -6,6 +6,7 @@ import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
@@ -133,7 +134,10 @@ export function normalizeHeaderValues(params: {
       source && sourceValue !== undefined
         ? {
             config: source.config,
-            path: `models.providers.${source.providerKey}.headers.${headerName}`,
+            path: appendConfigPathSegment(
+              `${appendConfigPathSegment("models.providers", source.providerKey)}.headers`,
+              headerName,
+            ),
             value: sourceValue,
             defaults: source.config.secrets?.defaults,
           }

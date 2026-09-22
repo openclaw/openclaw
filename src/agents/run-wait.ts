@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -18,7 +19,9 @@ import {
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -37,7 +40,7 @@ export type { AgentWaitResult };
 
 type GatewayCaller = typeof callGateway;
 
-const AGENT_RUN_DRAIN_RETRY_DELAY_MS = 100;
+const AGENT_RUN_WAIT_RETRY_DELAY_MS = 100;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
@@ -210,6 +213,7 @@ export async function waitForAgentRun(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
+  signal?: AbortSignal;
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
@@ -220,6 +224,7 @@ export async function waitForAgentRun(params: {
         timeoutMs,
       },
       timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", params.runId, wait);
@@ -244,13 +249,49 @@ export async function waitForAgentRun(params: {
   }
 }
 
+/** Retry-grace and observation timeouts do not settle the accepted run. */
+export function isTerminalAgentWaitTimeout(wait: AgentWaitResult): boolean {
+  return (
+    wait.status === "timeout" &&
+    wait.pendingError !== true &&
+    (wait.endedAt !== undefined ||
+      Boolean(wait.stopReason || wait.livenessState) ||
+      buildAgentRunTerminalOutcomeFromWaitResult(wait)?.reason === "hard_timeout")
+  );
+}
+
 /** Read the completed run's reply without inferring delivery from display history. */
 export async function waitForAgentRunReply(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
+  untilTerminal?: true;
 }): Promise<AgentWaitResult & { replyText?: string }> {
-  const wait = await waitForAgentRun(params);
+  const scopeSignal = getAsyncWorkSignal();
+  const signal = params.untilTerminal
+    ? AbortSignal.any([getGatewayRestartDrainSignal(), ...(scopeSignal ? [scopeSignal] : [])])
+    : undefined;
+  let wait: AgentWaitResult;
+  for (;;) {
+    signal?.throwIfAborted();
+    wait = await waitForAgentRun({ ...params, signal });
+    signal?.throwIfAborted();
+    if (
+      !params.untilTerminal ||
+      !(
+        wait.status === "pending" ||
+        (wait.status === "timeout" &&
+          wait.timeoutPhase !== "gateway_draining" &&
+          !isTerminalAgentWaitTimeout(wait) &&
+          (wait.pendingError === true || !wait.error))
+      )
+    ) {
+      break;
+    }
+    // Queued and retry-grace snapshots can return immediately. Retain the
+    // accepted run's observation without spinning or extending its execution.
+    await delay(AGENT_RUN_WAIT_RETRY_DELAY_MS, undefined, { signal, ref: false });
+  }
   return wait.status === "ok" && wait.terminalReply?.disposition === "visible"
     ? { ...wait, replyText: wait.terminalReply.text }
     : wait;
@@ -285,7 +326,7 @@ export async function waitForAgentRunsToDrain(params: {
     );
     const previousRunIds = pendingRunIds;
     pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
-    const retryDelayMs = Math.min(AGENT_RUN_DRAIN_RETRY_DELAY_MS, deadlineAtMs - Date.now());
+    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
     if (
       retryDelayMs > 0 &&
       pendingRunIds.size > 0 &&

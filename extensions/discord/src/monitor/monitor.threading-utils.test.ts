@@ -403,20 +403,20 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:parent" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: null,
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:parent",
         expectedReplyTarget: "channel:parent",
-        expectedReplyReferenceCalls: ["m1"],
+        expectedReplyReferenceCalls: ["1001"],
       },
       {
         name: "created thread disables reply references",
         input: {
           replyTarget: "channel:parent" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: null,
           createdThreadId: "thread",
         },
@@ -429,7 +429,7 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "off" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
@@ -442,26 +442,26 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "all" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:thread",
         expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["m1", "m1"],
+        expectedReplyReferenceCalls: ["1001", "1001"],
       },
       {
         name: "thread + first mode",
         input: {
           replyTarget: "channel:thread" as const,
           replyToMode: "first" as const,
-          messageId: "m1",
+          messageId: "1001",
           threadChannel: { id: "thread" },
           createdThreadId: null,
         },
         expectedDeliverTarget: "channel:thread",
         expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["m1", undefined],
+        expectedReplyReferenceCalls: ["1001", undefined],
       },
     ] as const;
 
@@ -481,7 +481,7 @@ describe("maybeCreateDiscordAutoThread", () => {
     return {
       client,
       message: {
-        id: "m1",
+        id: "1001",
         channelId: "parent",
       } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
@@ -539,7 +539,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
         overrides?.client ??
         ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
       message: {
-        id: "m1",
+        id: "1001",
         channelId: "parent",
       } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
@@ -610,7 +610,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           threadChannel: { id: "thread" },
         },
         expectedDeliverTarget: "channel:thread",
-        expectedReplyReference: "m1",
+        expectedReplyReference: "1001",
         expectedSessionKey: null,
         expectedParentSessionKey: undefined,
       },
@@ -620,7 +620,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
         },
         expectedDeliverTarget: "channel:parent",
-        expectedReplyReference: "m1",
+        expectedReplyReference: "1001",
         expectedSessionKey: null,
         expectedParentSessionKey: undefined,
       },

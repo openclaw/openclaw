@@ -1,4 +1,3 @@
-// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -21,7 +20,8 @@ import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
+import { withFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
@@ -118,14 +118,16 @@ async function sendFallbackDirect(
 ): Promise<FeishuSendResult> {
   const response = await requestFeishuApi(
     () =>
-      client.im.message.create({
-        params: { receive_id_type: params.receiveIdType },
-        data: {
-          receive_id: params.receiveId,
-          content: params.content,
-          msg_type: params.msgType,
-        },
-      }),
+      withFeishuMessageDispatch(() =>
+        client.im.message.create({
+          params: { receive_id_type: params.receiveIdType },
+          data: {
+            receive_id: params.receiveId,
+            content: params.content,
+            msg_type: params.msgType,
+          },
+        }),
+      ),
     errorPrefix,
     { includeNestedErrorLogId: true },
   );
@@ -171,14 +173,16 @@ export async function sendReplyOrFallbackDirect(
   try {
     response = await requestFeishuApi(
       () =>
-        client.im.message.reply({
-          path: { message_id: params.replyToMessageId! },
-          data: {
-            content: params.content,
-            msg_type: params.msgType,
-            ...(params.replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
+        withFeishuMessageDispatch(() =>
+          client.im.message.reply({
+            path: { message_id: params.replyToMessageId! },
+            data: {
+              content: params.content,
+              msg_type: params.msgType,
+              ...(params.replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        ),
       params.replyErrorPrefix,
       { includeNestedErrorLogId: true },
     );
@@ -231,7 +235,7 @@ function parseFeishuMessageContent(
   }
 
   if (msgType === "post") {
-    return parsePostContent(rawContent).textContent;
+    return renderPostContent(parsed).textContent;
   }
 
   if (msgType === "interactive") {
@@ -328,7 +332,7 @@ export async function getMessageFeishu(params: {
     if (parsedItem.contentType === "merge_forward" && responseItems) {
       return {
         ...parsedItem,
-        content: parseMergeForwardContent({ content: JSON.stringify(responseItems) }),
+        content: parseMergeForwardContent(responseItems),
       };
     }
     return parsedItem;

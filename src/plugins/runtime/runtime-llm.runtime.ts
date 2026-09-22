@@ -1,10 +1,11 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import type { UsageLike } from "../../agents/usage.js";
-import { normalizeUsage } from "../../agents/usage.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
@@ -200,19 +201,17 @@ function readFiniteNonNegativeNumber(value: unknown): number | undefined {
 }
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const cost = (raw as { cost?: unknown }).cost;
+  const cost = asOptionalRecord(raw)?.cost;
   if (typeof cost === "number") {
     return readFiniteNonNegativeNumber(cost);
   }
-  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+  const record = asOptionalRecord(cost);
+  if (!record) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
-    readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
+    readFiniteNonNegativeNumber(record.totalUsd) ??
+    (hasRecordedUsageCost(record) ? readFiniteNonNegativeNumber(record.total) : undefined)
   );
 }
 

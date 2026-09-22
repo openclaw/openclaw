@@ -12,7 +12,7 @@ title: "Omarchy"
 The OpenClaw Omarchy plugin puts agents, recent sessions, and a quick prompt in
 your desktop bar. Its monochrome mascot follows the shell theme, blinks, and
 animates with reported agent activity. With the Linux desktop app running, the
-plugin becomes the single bar entry and uses the app's selected Gateway.
+plugin becomes the single bar entry and uses the app's Primary Gateway.
 
 This page covers the plugin in the OpenClaw source tree. Install it separately;
 do not assume an older desktop release includes the matching integration.
@@ -53,8 +53,8 @@ omarchy plugin enable openclaw.desktop
 ```
 
 Click the OpenClaw mascot. Confirm that the panel shows the expected agents
-and sessions before sending a prompt. When using the desktop app, connect it
-to your intended Gateway first.
+and sessions before sending a prompt. When using the desktop app, set your
+intended Gateway as Primary first.
 
 ## Use agents, sessions, and quick prompts
 
@@ -93,8 +93,9 @@ review approvals.
 | Older app without integration   | The plugin yields when it recognizes the app's session-bus registration. |
 
 While both are connected, session actions and quick prompts use the desktop
-app's selected Gateway, including remote connections. Opening a session focuses
-the existing app. If that app disconnects, the plugin shows the connection
+app's Primary Gateway, including remote connections. Opening a session focuses
+or opens its Primary dashboard window. Switching a dashboard to another saved
+Gateway leaves this connection unchanged. If the app disconnects, the plugin shows the connection
 problem and disables sending instead of switching to a different CLI Gateway.
 
 If the Gateway changes, the plugin clears the previous session selection and
@@ -125,7 +126,7 @@ See [Updating](/install/updating) for Gateway update guidance.
 | No plugin icon                             | Validate and enable the plugin using the commands above. An older running desktop app may own the visible icon.                                      |
 | Two OpenClaw icons                         | Update both the plugin and desktop app to versions with the integration. They must run in the same desktop user session.                             |
 | CLI not found                              | Check `OPENCLAW_DESKTOP_CLI`, `~/.openclaw/bin/openclaw`, or the graphical session's `PATH`. Install through your normal OpenClaw installation path. |
-| Desktop connection unavailable             | Open the desktop app and reconnect to its selected Gateway. Resolve authentication or pairing there.                                                 |
+| Desktop connection unavailable             | Open the desktop app and reconnect to its Primary Gateway. Resolve authentication or pairing there.                                                  |
 | Sessions look stale or sending is disabled | Refresh the panel and check the connection error. The plugin retains cached results after a failed refresh.                                          |
 | A prompt may have been sent                | Open the target session and inspect its latest messages before resubmitting.                                                                         |
 

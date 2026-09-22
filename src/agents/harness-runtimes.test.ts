@@ -30,6 +30,29 @@ function collectConfiguredAgentHarnessRuntimes(
 }
 
 describe("collectConfiguredAgentHarnessRuntimes", () => {
+  it("preloads explicit picker alternatives without changing an OpenClaw default", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6-sol",
+          models: {
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "openclaw" },
+              pickerRuntimes: ["codex", "codex", "openclaw"],
+            },
+          },
+        },
+        entries: { ops: { models: { "fixture/model": { pickerRuntimes: ["fixture-harness"] } } } },
+      },
+    };
+    expect(
+      collectConfiguredAgentHarnessRuntimes(config, { includeImplicitRuntimePreferences: false }),
+    ).toEqual(["codex", "fixture-harness"]);
+    expect(config.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id).toBe(
+      "openclaw",
+    );
+  });
+
   it("requires Codex for selectable default OpenAI agent models", () => {
     const config = {
       agents: {

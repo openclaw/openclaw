@@ -21,9 +21,11 @@ import {
   listSessionEntriesReadOnly,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -33,12 +35,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
-import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
 import { buildSessionRowFixture, listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
@@ -63,6 +63,11 @@ import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
 } from "./session-utils-store.js";
+import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
+import {
+  closeSessionSqliteDatabasesForTest,
+  withStateDirEnv,
+} from "./session-utils.test-support.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 
 const providerArtifactMocks = vi.hoisted(() => ({
@@ -75,11 +80,6 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
-
-function closeSessionSqliteDatabasesForTest(): void {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-}
 
 test("resolves fixed-store and auth compatibility owners", () => {
   const cfg = retainLegacyDefaultAgentId(
@@ -148,7 +148,7 @@ test("projects a channel avatar route without exposing its media-store reference
   );
   expect(row.origin).toEqual({ provider: "discord", to: "user:user-1" });
   expect(JSON.stringify(row)).not.toContain(localReference);
-  expect(buildGatewaySessionEventFields({ sessionRow: row })).toMatchObject({
+  expect(buildGatewaySessionSnapshot({ sessionRow: row })).toMatchObject({
     channelAvatarUrl: row.channelAvatarUrl,
   });
 
@@ -177,25 +177,9 @@ test("projects a channel avatar route without exposing its media-store reference
   expect(replacedRow.channelAvatarUrl).not.toBe(row.channelAvatarUrl);
 });
 
-async function withStateDirEnv<T>(
-  prefix: string,
-  fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
-): Promise<T> {
-  return withRawStateDirEnv(prefix, async (ctx) => {
-    try {
-      return await fn(ctx);
-    } finally {
-      closeSessionSqliteDatabasesForTest();
-    }
-  });
-}
-
-async function seedSessionEntries(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
+function seedSessionEntries(storePath: string, entries: Record<string, SessionEntry>): void {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
   }
 }
 
@@ -285,9 +269,6 @@ function buildGatewaySessionRow(
   const rowContext = buildSessionListRowMetadataContext({
     now: params.now ?? Date.now(),
   });
-  // Row projection tests do not own ACP persistence. Mark the supplied fixture
-  // as already checked so each assertion does not open the ambient state DB.
-  rowContext.acpSessionMetaByEntry.set(entry, undefined);
   return buildSessionRowFixture({
     ...params,
     entry,
@@ -404,7 +385,6 @@ describe("gateway session utils", () => {
     expect(row.model).toBe("gpt-5.4");
     expect(row.modelOverrideSource).toBeNull();
   });
-
   test("projects an inherited parent model as the child's effective selection", () => {
     const parentKey = "agent:main:dashboard:parent";
     const childKey = "agent:main:dashboard:child";
@@ -488,6 +468,38 @@ describe("gateway session utils", () => {
     expect(row.activeModel).toBeUndefined();
   });
 
+  test("projects a running candidate across aliased keys without changing the configured model", () => {
+    const runId = "live-model-projection";
+    const context = {
+      agentId: "main",
+      sessionKey: "agent:main:canonical",
+      sessionId: "live-model-session",
+      activeModel: { provider: "ollama", model: "qwen3.5:9b" },
+    };
+    registerAgentRunContext(runId, context);
+    onTestFinished(() => clearAgentRunContext(runId));
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: context.sessionId,
+        updatedAt: 1,
+        status: "running",
+        lastRunId: runId,
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+    expect(row).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      activeModelProvider: "ollama",
+      activeModel: "qwen3.5:9b",
+    });
+  });
+
   test.each([
     { name: "never read", entry: {}, expected: false },
     {
@@ -544,7 +556,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.swarmGroupId).toBe("swarm:agent:main:parent:turn-42");
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).swarmGroupId).toBe(
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).swarmGroupId).toBe(
       "swarm:agent:main:parent:turn-42",
     );
   });
@@ -560,9 +572,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.toolOverrides).toEqual(toolOverrides);
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).toolOverrides).toEqual(
-      toolOverrides,
-    );
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).toolOverrides).toEqual(toolOverrides);
   });
 
   test("projects restart recovery tombstones", () => {
@@ -584,7 +594,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.restartRecoveryStatus).toBe("tombstoned");
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).restartRecoveryStatus).toBe(
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).restartRecoveryStatus).toBe(
       "tombstoned",
     );
   });
@@ -598,7 +608,7 @@ describe("gateway session utils", () => {
       entry: {} as SessionEntry,
     });
 
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).controlOwnerSessionKey).toBeNull();
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).controlOwnerSessionKey).toBeNull();
   });
 
   test("projects only unexpired agent status", () => {
@@ -646,7 +656,7 @@ describe("gateway session utils", () => {
       updatedAt: observerDigest.updatedAt,
       revision: observerDigest.revision,
     });
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).observerDigest).toEqual(
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toEqual(
       row.observerDigest,
     );
   });
@@ -673,7 +683,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.observerDigest).toBeUndefined();
-    expect(buildGatewaySessionEventFields({ sessionRow: row }).observerDigest).toBeNull();
+    expect(buildGatewaySessionSnapshot({ sessionRow: row }).observerDigest).toBeNull();
   });
 
   test("session lists apply a bounded default and expose truncation metadata", async () => {
@@ -738,55 +748,167 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
-  test("session lists separate archived rows and sort pinned sessions first", async () => {
+  test("Activity lists select newest interactions and completions before the 100-row page", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-    const store: Record<string, SessionEntry> = {
-      recent: { sessionId: "recent", updatedAt: 30 },
-      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
-      archived: {
-        sessionId: "archived",
-        updatedAt: 20,
-        archivedAt: 50,
-        archiveReason: "active-session-cap",
-      },
-    } satisfies Record<string, SessionEntry>;
-
-    const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
-    expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
-    expect(active.sessions[0]).toMatchObject({
-      pinned: true,
-      pinnedAt: 40,
-      archived: false,
-    });
-
-    const archived = await listSessionFixture({
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = Object.fromEntries(
+      Array.from({ length: 101 }, (_, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: now - index,
+          lastActivityAt: now - 10_000 - index,
+          ...(index === 0 ? { pinnedAt: now } : {}),
+        } satisfies SessionEntry,
+      ]),
+    );
+    store["new-completion"] = {
+      sessionId: "new-completion",
+      updatedAt: now - 100_000,
+      lastActivityAt: now - 1,
+      lastInteractionAt: now - 200_000,
+    };
+    store["new-input"] = {
+      sessionId: "new-input",
+      updatedAt: now - 200_000,
+      lastActivityAt: now - 200_000,
+      lastInteractionAt: now,
+    };
+    const original = structuredClone(store);
+    const firstPage = await listSessionFixture({
       cfg,
       storePath: "",
       store,
-      opts: { archived: true },
+      opts: { sortBy: "activity" },
     });
-    expect(archived.sessions).toMatchObject([
-      {
-        key: "archived",
-        archived: true,
-        archivedAt: 50,
-        archiveReason: "active-session-cap",
-        pinned: false,
-      },
+    expect(firstPage.sessions.map((row) => row.key)).toEqual([
+      "new-input",
+      "new-completion",
+      ...Array.from({ length: 98 }, (_, index) => `session-${index}`),
     ]);
-
-    const all = await listSessionFixture({
+    expect(firstPage).toMatchObject({ totalCount: 103, nextOffset: 100, hasMore: true });
+    const lastPage = await listSessionFixture({
       cfg,
       storePath: "",
       store,
-      opts: { archived: "all" },
+      opts: { sortBy: "activity", offset: firstPage.nextOffset ?? 0 },
     });
-    expect(all.sessions.map((session) => session.key)).toEqual(["pinned", "recent", "archived"]);
+    expect(lastPage.sessions.map((row) => row.key)).toEqual([
+      "session-98",
+      "session-99",
+      "session-100",
+    ]);
+    expect(lastPage).toMatchObject({ totalCount: 103, nextOffset: null, hasMore: false });
+    expect(store).toEqual(original);
+    expect(Object.keys(store)).toEqual(Object.keys(original));
+  });
+
+  test("Activity time filters use activity age without changing ordinary metadata filters", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const now = 1_800_000_000_000;
+    const cutoff = now - 60 * 60_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    onTestFinished(() => clock.mockRestore());
+    const store: Record<string, SessionEntry> = {
+      "new-input": {
+        sessionId: "new-input",
+        updatedAt: cutoff - 1,
+        lastActivityAt: cutoff - 1,
+        lastInteractionAt: now,
+      },
+      "boundary-completion": {
+        sessionId: "boundary-completion",
+        updatedAt: cutoff - 1,
+        lastActivityAt: cutoff,
+      },
+      "metadata-only-update": {
+        sessionId: "metadata-only-update",
+        updatedAt: now,
+        lastActivityAt: cutoff - 1,
+        lastInteractionAt: cutoff - 2,
+      },
+      "legacy-boundary": { sessionId: "legacy-boundary", updatedAt: cutoff },
+      "old-session": { sessionId: "old-session", updatedAt: cutoff - 1 },
+    };
+    const activity = await listSessionFixture({
+      cfg,
+      storePath: "",
+      store,
+      opts: { sortBy: "activity", activeMinutes: 60 },
+    });
+    expect(activity.sessions.map((row) => row.key)).toEqual([
+      "new-input",
+      "boundary-completion",
+      "legacy-boundary",
+    ]);
+    expect(activity.totalCount).toBe(3);
+    const ordinary = await listSessionFixture({
+      cfg,
+      storePath: "",
+      store,
+      opts: { activeMinutes: 60 },
+    });
+    expect(ordinary.sessions.map((row) => row.key)).toEqual([
+      "metadata-only-update",
+      "legacy-boundary",
+    ]);
   });
 
   test.each([
+    ["pinned", {}],
+    ["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }],
+  ])(
+    "session lists separate archived rows and sort pinned %s first",
+    async (pinnedKey, lineage) => {
+      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+      const store: Record<string, SessionEntry> = {
+        recent: { sessionId: "recent", updatedAt: 30 },
+        [pinnedKey]: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, ...lineage },
+        archived: {
+          sessionId: "archived",
+          updatedAt: 20,
+          archivedAt: 50,
+          archiveReason: "active-session-cap",
+        },
+      } satisfies Record<string, SessionEntry>;
+
+      const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
+      expect(active.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent"]);
+      expect(active.sessions[0]).toMatchObject({
+        pinned: true,
+        pinnedAt: 40,
+        archived: false,
+      });
+
+      const archived = await listSessionFixture({
+        cfg,
+        storePath: "",
+        store,
+        opts: { archived: true },
+      });
+      expect(archived.sessions).toMatchObject([
+        {
+          key: "archived",
+          archived: true,
+          archivedAt: 50,
+          archiveReason: "active-session-cap",
+          pinned: false,
+        },
+      ]);
+
+      const all = await listSessionFixture({
+        cfg,
+        storePath: "",
+        store,
+        opts: { archived: "all" },
+      });
+      expect(all.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent", "archived"]);
+    },
+  );
+
+  test.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }],
-    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:main" }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:dashboard:parent" }],
     ["agent:main:subagent:child", {}],
   ] as const)(
     "ignores stale child pins in session list projection and ordering: %s %j",
@@ -1249,6 +1371,8 @@ describe("gateway session utils", () => {
         patch: { key: "agent:main:main", contextWindow: String(after) },
         defaultProvider: "ollama",
         defaultModel: "qwen3:8b",
+        runtimeId: () => "openclaw",
+        routeVariants: () => catalog,
         *loadModelCatalog() {
           yield;
           return catalog;
@@ -1285,7 +1409,7 @@ describe("gateway session utils", () => {
         skipTranscriptUsageFallback: true,
       });
       expect(bound.hasAutomation).toBe(true);
-      expect(buildGatewaySessionEventFields({ sessionRow: bound }).hasAutomation).toBe(true);
+      expect(buildGatewaySessionSnapshot({ sessionRow: bound }).hasAutomation).toBe(true);
 
       const plain = buildGatewaySessionRow({
         cfg,
@@ -1296,7 +1420,7 @@ describe("gateway session utils", () => {
         skipTranscriptUsageFallback: true,
       });
       expect(plain.hasAutomation).toBeUndefined();
-      expect(buildGatewaySessionEventFields({ sessionRow: plain }).hasAutomation).toBe(false);
+      expect(buildGatewaySessionSnapshot({ sessionRow: plain }).hasAutomation).toBe(false);
     } finally {
       registerSessionAutomationSource(null);
     }
@@ -1320,12 +1444,12 @@ describe("gateway session utils", () => {
     });
 
     expect(failed.lastRunError).toBe("Provider credits exhausted");
-    expect(buildGatewaySessionEventFields({ sessionRow: failed }).lastRunError).toBe(
+    expect(buildGatewaySessionSnapshot({ sessionRow: failed }).lastRunError).toBe(
       "Provider credits exhausted",
     );
 
     const cleared = { ...failed, status: "running" as const, lastRunError: undefined };
-    expect(buildGatewaySessionEventFields({ sessionRow: cleared }).lastRunError).toBeNull();
+    expect(buildGatewaySessionSnapshot({ sessionRow: cleared }).lastRunError).toBeNull();
   });
 
   test("session rows and update events project the exact settled run identity", () => {
@@ -1345,73 +1469,11 @@ describe("gateway session utils", () => {
     });
 
     expect(settled.lastRunId).toBe("run-settled");
-    expect(buildGatewaySessionEventFields({ sessionRow: settled }).lastRunId).toBe("run-settled");
+    expect(buildGatewaySessionSnapshot({ sessionRow: settled }).lastRunId).toBe("run-settled");
 
     const running = { ...settled, status: "running" as const, lastRunId: undefined };
-    expect(buildGatewaySessionEventFields({ sessionRow: running }).lastRunId).toBeNull();
+    expect(buildGatewaySessionSnapshot({ sessionRow: running }).lastRunId).toBeNull();
   });
-
-  test.each([
-    ["absent", undefined, undefined, undefined],
-    ["null", null, undefined, undefined],
-    ["non-array", {}, undefined, undefined],
-    ["empty", [], 0, undefined],
-    ["all invalid", [null], 0, undefined],
-    [
-      "mixed validity and tied latest timestamps",
-      [
-        {
-          checkpointId: "checkpoint-older",
-          sessionKey: "agent:main:main",
-          sessionId: "session-1",
-          createdAt: 10,
-          reason: "manual",
-          preCompaction: { sessionId: "session-1" },
-          postCompaction: { sessionId: "session-1" },
-        },
-        null,
-        { checkpointId: "", createdAt: 30, reason: "manual" },
-        { checkpointId: "checkpoint-bad-reason", createdAt: 40, reason: "bogus" },
-        { checkpointId: "checkpoint-infinite", createdAt: Infinity, reason: "manual" },
-        { checkpointId: "checkpoint-nan", createdAt: Number.NaN, reason: "manual" },
-        { checkpointId: "checkpoint-auto", createdAt: 20, reason: "auto-threshold" },
-        {
-          checkpointId: "  checkpoint-newer  ",
-          sessionKey: "agent:main:main",
-          sessionId: "session-1",
-          createdAt: 50,
-          reason: "overflow-retry",
-          preCompaction: { sessionId: "session-1" },
-          postCompaction: { sessionId: "session-1" },
-        },
-        { checkpointId: "checkpoint-tied-later", createdAt: 50, reason: "timeout-retry" },
-      ],
-      4,
-      { checkpointId: "checkpoint-newer", createdAt: 50, reason: "overflow-retry" },
-    ],
-  ])(
-    "session rows ignore malformed compaction checkpoints (%s)",
-    (_name, compactionCheckpoints, expectedCount, expectedLatest) => {
-      const original = structuredClone(compactionCheckpoints);
-      const row = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-        storePath: "",
-        store: {},
-        key: "agent:main:main",
-        lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 1,
-          compactionCheckpoints,
-        } as unknown as SessionEntry,
-      });
-
-      expect(row.compactionCheckpointCount).toBe(expectedCount);
-      expect(row.latestCompactionCheckpoint).toEqual(expectedLatest);
-      expect(compactionCheckpoints).toEqual(original);
-    },
-  );
 
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
@@ -1746,9 +1808,6 @@ describe("gateway session utils", () => {
       });
       setTestActivePluginRegistry(registry);
       const rowContext = buildSessionListRowMetadataContext({ now: 1 });
-      for (const current of Object.values(store)) {
-        rowContext.acpSessionMetaByEntry.set(current, undefined);
-      }
       const readRow = (key: keyof typeof store) =>
         buildGatewaySessionRowOwner({
           cfg,
@@ -1770,7 +1829,7 @@ describe("gateway session utils", () => {
         opts: { search: "openai/gpt-5.6-luna" },
       });
       expect(matches.sessions.map((row) => row.key)).toEqual([nativeKey]);
-      expect(buildGatewaySessionEventFields({ sessionRow: nativeRow })).toMatchObject({
+      expect(buildGatewaySessionSnapshot({ sessionRow: nativeRow })).toMatchObject({
         modelProvider: "openai",
         model: "gpt-5.6-luna",
       });
@@ -2125,7 +2184,7 @@ describe("gateway session utils", () => {
           model: "gpt-5.5",
           agentHarnessId: "openclaw",
         } as SessionEntry;
-        await seedSessionEntries(storePath, { [sessionKey]: entry });
+        seedSessionEntries(storePath, { [sessionKey]: entry });
         appendTranscriptMessages({
           sessionId,
           sessionKey,
@@ -2422,7 +2481,7 @@ describe("gateway session utils", () => {
         ["work", 40],
       ] as const) {
         const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           global: { sessionId, updatedAt: 1 },
         });
         appendTranscriptMessages({
@@ -2466,7 +2525,7 @@ describe("gateway session utils", () => {
         totalTokens: 1_124_767,
         totalTokensFresh: false,
       };
-      await seedSessionEntries(storePath, { [sessionKey]: entry });
+      seedSessionEntries(storePath, { [sessionKey]: entry });
       appendTranscriptMessages({
         sessionId,
         sessionKey,
@@ -2771,16 +2830,26 @@ describe("gateway session utils", () => {
     expect(titledRow.displayName).toBe("Release Planning");
   });
 
-  test("buildGatewaySessionRow prefers generated titles over Android node stamps", () => {
+  test.each<[string, Partial<SessionEntry>, string]>([
+    ["generated title", {}, "Release Planning"],
+    [
+      "explicit rename",
+      { label: "  OpenClaw App · Release planning · 1234567890ab  " },
+      "OpenClaw App · Release planning · 1234567890ab",
+    ],
+    ["blank explicit label", { label: "  " }, "Release Planning"],
+    ["empty stored name", { displayName: "" }, ""],
+    ["empty automatic name", { displayName: undefined, autoLabel: "" }, ""],
+  ])("buildGatewaySessionRow preserves title precedence for %s", (_name, overrides, expected) => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const key = "agent:main:node-1234567890ab";
-    const stamp = "OpenClaw App · Pixel · 1234567890ab";
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: "node-1",
       updatedAt: 1,
-      autoLabel: stamp,
+      autoLabel: "OpenClaw App · Pixel · 1234567890ab",
       displayName: "Release Planning",
-    } as SessionEntry;
+      ...overrides,
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -2788,22 +2857,9 @@ describe("gateway session utils", () => {
       key,
       entry,
     });
-    expect(row.autoLabel).toBe(stamp);
-    expect(row.label).toBeUndefined();
-    expect(row.displayName).toBe("Release Planning");
-
-    const manualPrefix = {
-      ...entry,
-      label: "OpenClaw App · Release planning · 1234567890ab",
-    } as SessionEntry;
-    const manualRow = buildGatewaySessionRow({
-      cfg,
-      storePath: "",
-      store: { [key]: manualPrefix },
-      key,
-      entry: manualPrefix,
-    });
-    expect(manualRow.displayName).toBe("OpenClaw App · Release planning · 1234567890ab");
+    expect(row.autoLabel).toBe(entry.autoLabel);
+    expect(row.label).toBe(entry.label);
+    expect(row.displayName).toBe(expected);
   });
 
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
@@ -2879,7 +2935,7 @@ describe("gateway session utils", () => {
           sessionKey: key,
           ctx: { ...ctx, TopicName: topicName },
         });
-        closeSessionSqliteDatabasesForTest();
+        await closeSessionSqliteDatabasesForTest();
         const store = readStore();
         const entry = expectDefined(store[key], "topic session");
         const row = buildGatewaySessionRow({ cfg, storePath, store, key, entry });
@@ -2927,7 +2983,7 @@ describe("gateway session utils", () => {
       });
       expect(labeledRow.displayName).toBe("My planning chat");
     } finally {
-      closeSessionSqliteDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2980,7 +3036,7 @@ describe("gateway session utils", () => {
       expect(row.displayName).toBe("Engineering");
       expect(row.origin?.nativeChannelId).toBe(roomId);
     } finally {
-      closeSessionSqliteDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -3044,7 +3100,7 @@ describe("gateway session utils", () => {
       expect(row.displayName).toBe(subject);
       expect(row.origin?.nativeChannelId).toBe(channelId);
     } finally {
-      closeSessionSqliteDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -3067,7 +3123,6 @@ describe("gateway session utils", () => {
       entry: channelEntry,
     });
     expect(channelRow.displayName).toBe("Acme #general");
-
     const labeled = { ...channelEntry, label: "Team room" } as SessionEntry;
     const labeledRow = buildGatewaySessionRow({
       cfg,
@@ -3451,7 +3506,7 @@ describe("gateway session utils", () => {
         sessionId: "sess-acp-repair",
         updatedAt: 1,
       } satisfies SessionEntry;
-      await seedSessionEntries(storePath, {
+      seedSessionEntries(storePath, {
         [acpKey]: entry,
       });
       writeAcpSessionMetaForMigration({
@@ -3647,10 +3702,10 @@ describe("gateway session utils", () => {
     await withStateDirEnv("session-utils-fixed-store-", async ({ stateDir }) => {
       const fixedStorePath = path.join(stateDir, "configured", "sessions.json");
       const staleStorePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
-      await seedSessionEntries(fixedStorePath, {
+      seedSessionEntries(fixedStorePath, {
         "agent:ops:main": { sessionId: "sess-fixed", updatedAt: 1 },
       });
-      await seedSessionEntries(staleStorePath, {
+      seedSessionEntries(staleStorePath, {
         "agent:ops:main": { sessionId: "sess-stale", updatedAt: 99 },
       });
       const cfg = {
@@ -3681,7 +3736,7 @@ describe("gateway session utils", () => {
       const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
       fs.mkdirSync(retiredSessionsDir, { recursive: true });
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-      await seedSessionEntries(retiredStorePath, {
+      seedSessionEntries(retiredStorePath, {
         "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
       });
 
@@ -3704,7 +3759,7 @@ describe("gateway session utils", () => {
       const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
       fs.mkdirSync(retiredSessionsDir, { recursive: true });
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-      await seedSessionEntries(retiredStorePath, {
+      seedSessionEntries(retiredStorePath, {
         "agent:retired-agent:other": { sessionId: "sess-discovered-other", updatedAt: 1 },
       });
       const cfg = {
@@ -3756,12 +3811,9 @@ describe("gateway session utils", () => {
         { agentId: "ops", store: { global: { sessionId: "global-ops" } } },
       ]);
       for (const directory of ["Retired Agent", "retired-agent"]) {
-        await seedSessionEntries(
-          path.join(stateDir, "agents", directory, "sessions", "sessions.json"),
-          {
-            "agent:retired-agent:main": { sessionId: directory, updatedAt: 1 },
-          },
-        );
+        seedSessionEntries(path.join(stateDir, "agents", directory, "sessions", "sessions.json"), {
+          "agent:retired-agent:main": { sessionId: directory, updatedAt: 1 },
+        });
       }
       const key = "agent:retired-agent:main";
       expect(() =>
@@ -3784,7 +3836,7 @@ describe("gateway session utils", () => {
         "sessions",
         "sessions.json",
       );
-      await seedSessionEntries(retiredStorePath, {
+      seedSessionEntries(retiredStorePath, {
         "agent:old:main": { sessionId: "sess-retired-cross-root", updatedAt: 1 },
       });
       const cfg = {
@@ -3870,7 +3922,7 @@ describe("gateway session utils", () => {
         const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
         fs.mkdirSync(retiredSessionsDir, { recursive: true });
         const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-        await seedSessionEntries(retiredStorePath, {
+        seedSessionEntries(retiredStorePath, {
           "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
         });
         const cfg = {
@@ -3899,7 +3951,7 @@ describe("gateway session utils", () => {
         const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(sessionsDir, { recursive: true });
         const storePath = path.join(sessionsDir, "sessions.json");
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
         });
         const cfg = {
@@ -3957,7 +4009,7 @@ describe("gateway session utils", () => {
           agents: { entries: { main: {} } },
         } satisfies OpenClawConfig;
         const sessionKey = "agent:main:main";
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           [sessionKey]: { sessionId: "session-before", updatedAt: 1 },
         });
         setRuntimeConfigSnapshot(cfg, cfg);
@@ -3996,7 +4048,7 @@ describe("gateway session utils", () => {
         const parentKey = "agent:main:main";
         const childKey = "agent:main:child";
         const now = Date.now();
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           [parentKey]: { sessionId: "parent", updatedAt: now },
           [childKey]: { sessionId: "child", spawnedBy: parentKey, updatedAt: now + 1 },
           ...Object.fromEntries(
@@ -4053,7 +4105,7 @@ describe("gateway session utils", () => {
         const legacyParentKey = "agent:main:main";
         const childKey = "agent:main:child";
         const now = Date.now();
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           [legacyParentKey]: { sessionId: "parent", updatedAt: now },
           [childKey]: {
             sessionId: "child",
@@ -4126,10 +4178,10 @@ describe("gateway session utils", () => {
           fs.mkdirSync(deletedSessionsDir, { recursive: true });
           const liveStorePath = path.join(liveSessionsDir, "sessions.json");
           const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-          await seedSessionEntries(liveStorePath, {
+          seedSessionEntries(liveStorePath, {
             "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
           });
-          await seedSessionEntries(deletedStorePath, {
+          seedSessionEntries(deletedStorePath, {
             "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
           });
           const cfg = {
@@ -4187,7 +4239,7 @@ describe("gateway session utils", () => {
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         fs.mkdirSync(path.dirname(storePath), { recursive: true });
         const key = "agent:main:dashboard:incognito-retired-owner";
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           "agent:main:main": { sessionId: "durable-main", updatedAt: 1 },
           [key]: { sessionId: "incognito-owner", updatedAt: 1, incognito: true },
         });
@@ -4244,11 +4296,11 @@ describe("gateway session utils", () => {
         const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(liveSessionsDir, { recursive: true });
         fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        await seedSessionEntries(path.join(liveSessionsDir, "sessions.json"), {
+        seedSessionEntries(path.join(liveSessionsDir, "sessions.json"), {
           "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
         });
         const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        await seedSessionEntries(deletedStorePath, {
+        seedSessionEntries(deletedStorePath, {
           "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
         });
         const cfg = {
@@ -4266,20 +4318,19 @@ describe("gateway session utils", () => {
       resetConfigRuntimeState();
     }
   });
-
   test("loadSessionEntry keeps the configured canonical store authoritative", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
         const canonicalSessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(canonicalSessionsDir, { recursive: true });
-        await seedSessionEntries(path.join(canonicalSessionsDir, "sessions.json"), {
+        seedSessionEntries(path.join(canonicalSessionsDir, "sessions.json"), {
           "agent:main:main": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
         });
 
         const discoveredSessionsDir = path.join(stateDir, "agents", "main ", "sessions");
         fs.mkdirSync(discoveredSessionsDir, { recursive: true });
-        await seedSessionEntries(path.join(discoveredSessionsDir, "sessions.json"), {
+        seedSessionEntries(path.join(discoveredSessionsDir, "sessions.json"), {
           "agent:main:main": { sessionId: "sess-discovered-mid", updatedAt: 500 },
         });
 
@@ -4326,7 +4377,7 @@ describe("gateway session utils", () => {
     ).toThrow("openclaw doctor --fix");
   });
 
-  test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
+  test("listAgentsForGateway rejects avatar symlink escapes outside workspace", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-outside-"));
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
@@ -4339,11 +4390,11 @@ describe("gateway session utils", () => {
 
     const cfg = createSingleAgentAvatarConfig(workspace);
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBeUndefined();
   });
 
-  test("listAgentsForGateway allows avatar symlinks that stay inside workspace", () => {
+  test("listAgentsForGateway allows avatar symlinks that stay inside workspace", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-inside-"));
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(path.join(workspace, "avatars"), { recursive: true });
@@ -4356,13 +4407,13 @@ describe("gateway session utils", () => {
 
     const cfg = createSingleAgentAvatarConfig(workspace);
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });
 
-  test.each(["local", "data"])("keeps %s avatar bytes out of browser agent rows", (kind) => {
+  test.each(["local", "data"])("keeps %s avatar bytes out of browser agent rows", async (kind) => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-browser-avatar-"));
     onTestFinished(() => fs.rmSync(workspace, { recursive: true, force: true }));
     const dataUrl = `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`;
@@ -4371,16 +4422,16 @@ describe("gateway session utils", () => {
     if (kind === "data") {
       cfg.agents!.list![0]!.identity!.avatar = dataUrl;
     }
-    const browser = listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
       /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
     );
     expect(browser.agents[0]?.identity?.avatar).toBe(browser.agents[0]?.identity?.avatarUrl);
     expect(JSON.stringify(browser)).not.toContain(dataUrl);
-    expect(listAgentsForGateway(cfg).agents[0]?.identity?.avatarUrl).toBe(dataUrl);
+    expect((await listAgentsForGateway(cfg)).agents[0]?.identity?.avatarUrl).toBe(dataUrl);
   });
 
-  test("listAgentsForGateway falls back to identity.name when name is unset", () => {
+  test("listAgentsForGateway falls back to identity.name when name is unset", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4388,7 +4439,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
 
     expect(result.agents[0]).toMatchObject({
       id: "main",
@@ -4397,7 +4448,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway prefers explicit name over identity.name", () => {
+  test("listAgentsForGateway prefers explicit name over identity.name", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4412,7 +4463,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
 
     expect(result.agents[0]).toMatchObject({
       id: "main",
@@ -4421,7 +4472,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway leaves name unset when both configured and identity names are absent", () => {
+  test("listAgentsForGateway leaves name unset when both configured and identity names are absent", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4429,7 +4480,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
 
     expect(result.agents[0]).toMatchObject({
       id: "main",
@@ -4448,7 +4499,7 @@ describe("gateway session utils", () => {
         agents: { list: [{ id: "main", default: true }] },
       } as OpenClawConfig;
 
-      const { agents } = listAgentsForGateway(cfg);
+      const { agents } = await listAgentsForGateway(cfg);
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
     });
   });
@@ -4458,7 +4509,7 @@ describe("gateway session utils", () => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
 
-      const result = listAgentsForGateway({}, undefined, { includeSystem: true });
+      const result = await listAgentsForGateway({}, undefined, { includeSystem: true });
 
       expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
         { id: "main", kind: "agent" },
@@ -4472,7 +4523,7 @@ describe("gateway session utils", () => {
     await withStateDirEnv("openclaw-agent-list-legacy-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
 
-      const agents = listAgentsForGateway({}).agents;
+      const agents = (await listAgentsForGateway({})).agents;
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
       expect(agents[0]).not.toHaveProperty("kind");
     });
@@ -4505,13 +4556,13 @@ describe("gateway session utils", () => {
   ] as const)(
     "listAgentsForGateway labels global %j plus agent %j as %s",
     async (globalExec, agentExec, expected) => {
-      await withStateDirEnv("openclaw-agent-permission-label-", async () => {
+      await withAgentPermissionState(async () => {
         const cfg: OpenClawConfig = {
           tools: { exec: globalExec },
           agents: { entries: { main: { tools: { exec: agentExec } } } },
         };
         const original = structuredClone(cfg);
-        const agent = listAgentsForGateway(cfg).agents.find((entry) => entry.id === "main");
+        const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
         if (expected === undefined) {
           expect(agent).not.toHaveProperty("defaultPermissionMode");
         } else {
@@ -4581,9 +4632,9 @@ describe("gateway session utils", () => {
       expected: "guarded",
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
-    await withStateDirEnv("openclaw-agent-permission-floor-", async () => {
+    await withAgentPermissionState(async () => {
       execApprovalsStore.saveExecApprovals(approvals);
-      const agent = listAgentsForGateway(cfg).agents.find((entry) => entry.id === "main");
+      const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {
         expect(agent).not.toHaveProperty("defaultPermissionMode");
@@ -4600,7 +4651,7 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway shares one approvals read across agent permission labels", async () => {
-    await withStateDirEnv("openclaw-agent-permission-roster-", async () => {
+    await withAgentPermissionState(async () => {
       const cfg: OpenClawConfig = {
         tools: { exec: { mode: "ask" } },
         agents: {
@@ -4614,7 +4665,7 @@ describe("gateway session utils", () => {
       const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovals");
       onTestFinished(() => loadApprovals.mockRestore());
       expect(
-        listAgentsForGateway(cfg).agents.map(({ id, defaultPermissionMode }) => [
+        (await listAgentsForGateway(cfg)).agents.map(({ id, defaultPermissionMode }) => [
           id,
           defaultPermissionMode,
         ]),
@@ -4627,7 +4678,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway includes effective workspace + model for default agent", () => {
+  test("listAgentsForGateway includes effective workspace + model for default agent", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4642,7 +4693,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     expectFields(result.agents[0], {
       id: "main",
       workspace: "/tmp/default-workspace",
@@ -4659,58 +4710,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway projects a profile-qualified default as canonical model identity", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.6-sol@openai:setup-fake",
-            fallbacks: ["anthropic/claude-sonnet-4-6@anthropic:backup"],
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-    const catalog = [
-      {
-        provider: "openai",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        reasoning: true,
-      },
-    ];
-
-    const result = listAgentsForGateway(cfg, catalog);
-    const defaults = getSessionDefaults(cfg, catalog);
-
-    expect(result.agents[0]?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    });
-    expect(result.agents[0]?.thinkingLevels).toEqual(defaults.thinkingLevels);
-    expect(result.agents[0]?.thinkingDefault).toBe(defaults.thinkingDefault);
-  });
-
-  test.each([
-    ["custom/vertex-ai_claude-haiku-4-5@20251001", "custom/vertex-ai_claude-haiku-4-5@20251001"],
-    [
-      "custom/vertex-ai_claude-haiku-4-5@20251001@custom:setup-fake",
-      "custom/vertex-ai_claude-haiku-4-5@20251001",
-    ],
-    ["lmstudio/gemma-4-31b-it@q8_0", "lmstudio/gemma-4-31b-it@q8_0"],
-    ["lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake", "lmstudio/gemma-4-31b-it@q8_0"],
-  ])("listAgentsForGateway preserves model-owned @ suffixes in %s", (primary, expected) => {
-    const cfg = {
-      agents: {
-        defaults: { model: { primary } },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-
-    expect(listAgentsForGateway(cfg).agents[0]?.model?.primary).toBe(expected);
-  });
-
-  test("listAgentsForGateway reports whether each workspace is a git checkout", () => {
+  test("listAgentsForGateway reports whether each workspace is a git checkout", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-workspace-git-"));
     const gitWorkspace = path.join(root, "git");
     const plainWorkspace = path.join(root, "plain");
@@ -4725,7 +4725,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
     try {
-      const result = listAgentsForGateway(cfg);
+      const result = await listAgentsForGateway(cfg);
 
       expect(result.agents.map(({ id, workspaceGit }) => ({ id, workspaceGit }))).toEqual([
         { id: "main", workspaceGit: true },
@@ -4736,7 +4736,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
+  test("listAgentsForGateway reports explicit plugin runtime metadata", async () => {
     const cfg = {
       session: { mainKey: "main" },
       models: {
@@ -4756,7 +4756,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     expectFields(result.agents[0], {
       id: "main",
     });
@@ -4768,7 +4768,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway respects per-agent fallback override (including explicit empty list)", () => {
+  test("listAgentsForGateway respects per-agent fallback override (including explicit empty list)", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4791,12 +4791,12 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     const ops = result.agents.find((agent) => agent.id === "ops");
     expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
   });
 
-  test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+  test("listAgentsForGateway reports per-agent thinking defaults from the agent model", async () => {
     const resolveDeepSeekThinkingProfile = vi.fn(() => ({
       levels: [
         { id: "off" as const },
@@ -4854,7 +4854,7 @@ describe("gateway session utils", () => {
       },
     } as OpenClawConfig;
 
-    const result = listAgentsForGateway(cfg);
+    const result = await listAgentsForGateway(cfg);
     const agent = result.agents.find((row) => row.id === "investment-master");
 
     expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
@@ -4871,7 +4871,7 @@ describe("gateway session utils", () => {
     expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
   });
 
-  test("listAgentsForGateway uses the model catalog for per-agent thinking metadata", () => {
+  test("listAgentsForGateway uses the model catalog for per-agent thinking metadata", async () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -4889,7 +4889,7 @@ describe("gateway session utils", () => {
     const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
     const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = listAgentsForGateway(cfg, disabledCatalog, {
+    const result = await listAgentsForGateway(cfg, disabledCatalog, {
       modelCatalogByAgentId: new Map([
         ["main", { entries: disabledCatalog }],
         ["work", { entries: enabledCatalog }],
@@ -4905,7 +4905,7 @@ describe("gateway session utils", () => {
   });
 
   describe("listAgentsForGateway resolved model projection", () => {
-    test("publishes one resolved identity for model, runtime, and thinking capabilities", () => {
+    test("publishes one resolved identity for model, runtime, and thinking capabilities", async () => {
       const cfg = {
         agents: {
           defaults: {
@@ -4932,7 +4932,7 @@ describe("gateway session utils", () => {
         },
       ];
 
-      const agent = listAgentsForGateway(cfg, catalog).agents[0];
+      const agent = (await listAgentsForGateway(cfg, catalog)).agents[0];
 
       expect(agent).toMatchObject({
         model: {
@@ -4976,7 +4976,7 @@ describe("session list selected model display", () => {
           estimatedCostUsd: 0,
         } as SessionEntry;
         store[sessionKey] = entry;
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           [sessionKey]: entry,
         });
         appendTranscriptMessages({
@@ -5030,7 +5030,7 @@ describe("session list selected model display", () => {
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
-      closeSessionSqliteDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -5051,7 +5051,7 @@ describe("session list selected model display", () => {
           model: "gpt-5.4",
         } as SessionEntry;
         store[sessionKey] = entry;
-        await seedSessionEntries(storePath, {
+        seedSessionEntries(storePath, {
           [sessionKey]: entry,
         });
         if (i === 0 || i === 99 || i === 100) {
@@ -5082,7 +5082,7 @@ describe("session list selected model display", () => {
       expect(result.sessions[100]?.derivedTitle).toBeUndefined();
       expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
     } finally {
-      closeSessionSqliteDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

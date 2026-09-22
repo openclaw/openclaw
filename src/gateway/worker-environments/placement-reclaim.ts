@@ -143,7 +143,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               const owned = placements.get(current.sessionId);
               const currentEnvironment = environments.get(current.environmentId);
               const pendingResult = placements
-                .listPendingWorkspaceResults()
+                .listPendingWorkspaceResults(reclaimClaim.sessionId)
                 .find(
                   (pending) =>
                     pending.sessionId === reclaimClaim.sessionId &&
@@ -252,7 +252,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 reauthorize?.();
                 placements.acceptWorkspaceResult(reclaimClaim);
                 const recordedStagedResultRef = placements
-                  .listPendingWorkspaceResults()
+                  .listPendingWorkspaceResults(reclaimClaim.sessionId)
                   .find(
                     (result) =>
                       result.sessionId === reclaimClaim.sessionId &&
@@ -364,7 +364,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
           ).catch(() => undefined);
           const pendingReclaimResult = placements
-            .listPendingWorkspaceResults()
+            .listPendingWorkspaceResults(reclaimClaim.sessionId)
             .find(
               (pending) =>
                 pending.sessionId === reclaimClaim.sessionId &&

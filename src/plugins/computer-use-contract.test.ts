@@ -331,7 +331,9 @@ describe("Computer Use provider registration", () => {
       );
       const snapshot = commands[0]!;
       const computer = commands[1]!;
+      expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
       await snapshot.handle(JSON.stringify({ executionId: firstId }));
+      expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
       const retiringFirst = computer.handle(
         JSON.stringify({ executionId: firstId, action: "__close_execution" }),
       );
@@ -361,6 +363,7 @@ describe("Computer Use provider registration", () => {
         });
         expect(openExecution).toHaveBeenCalledTimes(2);
         expect(close).toHaveBeenCalledTimes(2);
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
         expect(laterSettled).not.toHaveBeenCalled();
         expect(laterCloseSettled).not.toHaveBeenCalled();
         nextClose.resolve();
@@ -373,6 +376,10 @@ describe("Computer Use provider registration", () => {
         ]);
         expect(openExecution).toHaveBeenCalledTimes(3);
         expect(close).toHaveBeenCalledTimes(closeLater ? 3 : 2);
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([
+          !closeLater,
+          !closeLater,
+        ]);
       } finally {
         firstClose.resolve();
         nextClose.resolve();
@@ -380,6 +387,7 @@ describe("Computer Use provider registration", () => {
         await observedLater;
         await observedLaterClose;
         await snapshot.onDisconnect?.();
+        expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
       }
     },
   );
@@ -428,14 +436,17 @@ describe("Computer Use provider registration", () => {
     const closeParams = JSON.stringify({ executionId, action: "__close_execution" });
     const opening = snapshot.handle(params);
     const closingFailedOpen = computer.handle(closeParams);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
     const failedOpenResults = Promise.allSettled([opening, closingFailedOpen]);
     failedOpening.reject(openFailure);
     expect(await failedOpenResults).toEqual([
       { status: "rejected", reason: openFailure },
       { status: "rejected", reason: openFailure },
     ]);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
     await expect(snapshot.handle(params)).resolves.toBe("snapshot");
     await expect(computer.handle(closeParams)).rejects.toBe(closeFailure);
+    expect(commands.map((command) => command.hasActiveWork?.())).toEqual([true, true]);
     await expect(
       computer.handle(JSON.stringify({ executionId: otherId, action: "__close_execution" })),
     ).resolves.toBe('{"ok":true}');

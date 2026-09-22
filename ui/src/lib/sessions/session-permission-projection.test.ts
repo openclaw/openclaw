@@ -229,7 +229,7 @@ describe("permission projection across canonical session lists", () => {
       first = sessions.list({ agentId: "main" });
       permissionEvent({ ...initial, updatedAt: 3, permissionMode: "full" });
       await sessions.refreshList(managedScope);
-      expect(sessions.state.result?.sessions[0]?.permissionMode).toBe("full");
+      expect(sessions.state.result?.sessions[0]?.permissionMode).toBe("workspace");
       expect(sessions.listSnapshot(managedScope).result?.sessions[0]?.permissionMode).toBe(
         "workspace",
       );

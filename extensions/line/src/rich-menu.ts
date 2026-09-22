@@ -1,4 +1,3 @@
-// Line plugin module implements rich menu behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

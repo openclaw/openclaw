@@ -5,6 +5,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
@@ -47,8 +48,8 @@ it("records a Doctor refusal before reporting standalone finalization", async ()
     result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
   });
   expect(report.body).toContain("Reason code: doctor-failed");
-  expect(report.body).toContain(`Failed phase finalize:doctor: ${message}`);
-  expect(report.body).not.toContain("Failed phase finalize:doctor: exit unknown");
+  expect(report.body).toContain(`Failed phase finalize-doctor: ${message}`);
+  expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
 });
 
 it.each([
@@ -109,7 +110,7 @@ afterEach(() => {
 });
 
 it.each(["doctor", "targetConfigConvergence"] as const)(
-  "keeps default %s work and heartbeat alive beyond the former deadline",
+  "keeps default %s work owned without writing to its child's maintenance database",
   async (phase) => {
     const stopChildren = vi.fn();
     const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
@@ -121,7 +122,7 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
     }
     const work = createDeferredCore();
     const entered = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = withCliProcessScope(() =>
       lifecycle.run(phase, () => {
         entered.resolve();
@@ -129,14 +130,25 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
       }),
     );
     await entered.promise;
+    try {
+      const admitted = getUpdateRun(initial.runId);
+      expect(admitted?.origin.driver?.pid).toBe(process.pid);
 
-    await vi.advanceTimersByTimeAsync(240_000);
-    expect(stopChildren).not.toHaveBeenCalled();
-    expect(getUpdateRun(initial.runId)).toMatchObject({ status: "running" });
-    expect(getUpdateRun(initial.runId)?.updatedAtMs).toBeGreaterThan(initial.updatedAtMs);
-    work.resolve();
-    await expect(running).resolves.toBeUndefined();
-    expect(vi.getTimerCount()).toBe(timerCount);
+      await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
+      expect(stopChildren).not.toHaveBeenCalled();
+      const observed = getUpdateRun(initial.runId);
+      expect(observed).toEqual(admitted);
+      if (!observed) {
+        throw new Error("Finalization lost its update run.");
+      }
+      expect(inspectUpdateRunAbandonment(observed)).toBeUndefined();
+    } finally {
+      work.resolve();
+      await expect(running).resolves.toBeUndefined();
+    }
+    heartbeat.mockClear();
+    await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     lifecycle.complete(0);
     expect(getUpdateRun(initial.runId)?.status).toBe("succeeded");
   },
@@ -233,7 +245,7 @@ it.each([false, true])(
     }
     expect(initial.origin.driver?.pid).toBe(process.pid);
     const phase = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = lifecycle.run("plugins", () => phase.promise);
     const settled = fails
       ? expect(running).rejects.toThrow("plugin repair failed")
@@ -249,7 +261,8 @@ it.each([false, true])(
       phase.resolve();
     }
     await settled;
-    expect(vi.getTimerCount()).toBe(timerCount);
+    expect(heartbeat).toHaveBeenCalled();
+    heartbeat.mockClear();
     const finishedPhase = getUpdateRun(initial.runId);
     if (fails) {
       expect(finishedPhase?.steps).toContainEqual(
@@ -263,6 +276,7 @@ it.each([false, true])(
       );
     }
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     expect(getUpdateRun(initial.runId)).toEqual(finishedPhase);
     lifecycle.complete(fails ? 1 : 0);
   },
@@ -280,7 +294,7 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   vi.spyOn(ledger, "heartbeatUpdateRun").mockImplementation(() => {
     throw new Error("SQLITE_BUSY: database is locked");
   });
-  for (const phase of ["plugins", "targetConfigConvergence"] as const) {
+  for (const phase of ["plugins", "completionCache"] as const) {
     const work = createDeferredCore();
     const running = lifecycle.run(phase, () => work.promise);
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);

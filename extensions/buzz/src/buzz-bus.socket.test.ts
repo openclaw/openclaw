@@ -12,6 +12,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
@@ -347,7 +348,8 @@ it("revokes the active bot immediately on a signed role downgrade", async () => 
     await fixture.close();
   }
 });
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

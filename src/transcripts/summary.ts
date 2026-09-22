@@ -1,18 +1,11 @@
-// Builds transcript summaries and normalized transcript metadata.
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
-/**
- * Lightweight transcript summarization and markdown rendering.
- *
- * This is a deterministic heuristic summary used for captured/imported
- * transcripts when no model-backed summarizer is involved.
- */
-/** Summary artifact written alongside transcript sessions. */
 export type TranscriptsSummary = {
   sessionId: string;
   title: string;
@@ -84,17 +77,15 @@ function formatSpeakerLine(utterance: TranscriptUtterance): string {
   return speaker ? `${speaker}: ${text}` : text;
 }
 
-function formatTranscript(utterances: TranscriptUtterance[]): string[] {
-  return utterances.map(formatSpeakerLine).filter(Boolean);
-}
-
 /** Build a deterministic summary from transcript utterances. */
 export function summarizeTranscripts(params: {
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
 }): TranscriptsSummary {
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
-  const utterances = params.utterances.map(sanitizeUtterance);
+  const utterances = params.utterances
+    .map(sanitizeUtterance)
+    .filter((utterance) => !isTranscriptArtifactText(utterance.text));
   const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
   return {
     sessionId: params.session.sessionId,
@@ -105,7 +96,7 @@ export function summarizeTranscripts(params: {
       utterances.map((utterance) => utterance.speaker?.label ?? ""),
     ),
     source: "heuristic",
-    transcript: formatTranscript(utterances),
+    transcript: utterances.map(formatSpeakerLine).filter(Boolean),
     decisions: collectMatches(utterances, DECISION_PATTERNS),
     actionItems: collectMatches(utterances, ACTION_PATTERNS),
     risks: collectMatches(utterances, RISK_PATTERNS),

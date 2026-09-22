@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import type { SessionWorkAdmissionInterrupt } from "./session-work-admission-interruption.js";
 
 export type SessionWorkAdmissionLease = {
   createHandoff: () => string;
@@ -13,7 +14,7 @@ export type SessionWorkAdmissionLease = {
 export type HandoffSessionWorkAdmission = {
   handoffIds: Set<string>;
   identities: ReadonlySet<string>;
-  interrupt?: (reason?: Error) => void;
+  interrupt?: SessionWorkAdmissionInterrupt;
   interrupted: Error | undefined;
 };
 
@@ -54,7 +55,7 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   handoffId: string;
   scope: string;
   identities: Iterable<string | undefined>;
-  onInterrupt?: (reason?: Error) => void;
+  onInterrupt?: SessionWorkAdmissionInterrupt;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.handoffId.trim();
   if (!handoffId) {

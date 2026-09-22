@@ -50,8 +50,7 @@ function formatToolErrorWarningText(params: {
             : "timed out";
     const errorSuffix =
       params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-    const recoveryHint = params.includeDetails ? "" : ". Use /verbose full for complete output";
-    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}${recoveryHint}.`;
+    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}.`;
   }
 
   const includeError =

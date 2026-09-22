@@ -45,6 +45,32 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "screen-capture",
+      "title": "Screen capture",
+      "order": 10,
+      "properties": [
+        "captureEnabled",
+        "captureIntervalSeconds",
+        "nodeId",
+        "screenIndex",
+        "maxWidth"
+      ]
+    },
+    {
+      "id": "activity-analysis",
+      "title": "Activity analysis",
+      "order": 20,
+      "properties": ["analysisIntervalMinutes", "visionModel"]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "order": 30,
+      "properties": ["retentionDays"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

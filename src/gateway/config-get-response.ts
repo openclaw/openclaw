@@ -27,9 +27,10 @@ function createConfigGetResponse(
   return {
     ...redacted,
     hash: redacted.hash ? revisionProjector.projectRawHash(redacted.hash) : redacted.hash,
-    configRevisionHash: revisionProjector.projectResolvedHash(
-      hashRuntimeConfigValue(snapshot.sourceConfig),
-    ),
+    // Diagnostic snapshots have no resolved revision until config is valid.
+    configRevisionHash: snapshot.valid
+      ? revisionProjector.projectResolvedHash(hashRuntimeConfigValue(snapshot.sourceConfig))
+      : null,
     appliedConfigHash: appliedConfigHash
       ? revisionProjector.projectResolvedHash(appliedConfigHash)
       : null,

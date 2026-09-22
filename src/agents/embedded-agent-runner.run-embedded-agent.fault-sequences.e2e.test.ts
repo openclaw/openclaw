@@ -3,12 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ContextEngine } from "../context-engine/types.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
-import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { isFailoverError } from "./failover-error.js";
 import {
@@ -28,6 +33,10 @@ type ProviderFault =
   | { status: 402 }
   | { status: 413 }
   | { status: 429; window: "short" | "long" }
+  // A 429 whose message matches no usage-window keyword and carries the reset only
+  // in a Retry-After header of `retryAfterSeconds`, capped by retry.provider
+  // .maxRetryDelayMs. This is Anthropic's session-window shape (#148558/#143274).
+  | { status: 429; window: "header-floor"; retryAfterSeconds: number; maxRetryDelayMs: number }
   | { status: 500 }
   | { status: "context_overflow" };
 
@@ -190,6 +199,29 @@ function makeAttemptForFault(
         model: ref.model,
         stopReason: "stop",
         content: [{ type: "text", text: fault.text }],
+      }),
+    });
+  }
+  if (fault.status === 429 && fault.window === "header-floor") {
+    // Anthropic's session-window 429 arrives as an assistant error whose text
+    // avoids weekly/usage/quota wording; only errorBody.headers["retry-after"]
+    // reveals the multi-hour floor. buildAssistantFailoverSignal reads exactly
+    // that, so resolveRetryAfterMs returns the header seconds while the text
+    // guard stays quiet. providerRetryMaxDelayMs rides on the attempt as the
+    // real runtime attaches the prepared session setting.
+    return makeEmbeddedRunnerAttempt({
+      providerRetryMaxRetries: 3,
+      providerRetryMaxDelayMs: fault.maxRetryDelayMs,
+      lastAssistant: buildEmbeddedRunnerAssistant({
+        provider: ref.provider,
+        model: ref.model,
+        stopReason: "error",
+        errorMessage:
+          "This request would exceed your account's rate limit. Please try again later.",
+        errorType: "rate_limit_error",
+        // errorBody is the raw provider response body string, which is what the
+        // runtime stores; resolveRetryAfterMs parses it back to the same record.
+        errorBody: JSON.stringify({ headers: { "retry-after": String(fault.retryAfterSeconds) } }),
       }),
     });
   }
@@ -550,6 +582,50 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
+  it("fails over a header-only multi-hour 429 past retry.provider.maxRetryDelayMs instead of sleeping it", async () => {
+    // The regression: Anthropic's session-window 429 carries the reset only in
+    // Retry-After and matches no usage-window keyword, so the controller slept
+    // the full ~2.75h floor in-turn and the configured fallback never ran
+    // (#148558/#143274). With the cap wired through, the run fails over to the
+    // model fallback and completes, and the floor is never handed to the sleep.
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      writeProfiles(agentDir, { openai: 1, groq: true });
+      const observations: AttemptObservation[] = [];
+      installFaultScript(
+        [
+          { status: 429, window: "header-floor", retryAfterSeconds: 9897, maxRetryDelayMs: 30_000 },
+          { status: 200, text: "fallback after header floor" },
+        ],
+        observations,
+      );
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId: "header-floor-failover",
+        }),
+      );
+
+      // The single openai attempt failed over to the groq fallback: the floor was
+      // declined, not slept, and no same-model retry sat between them.
+      expect(observations.map(({ provider, model }) => [provider, model])).toEqual([
+        ["openai", "mock-1"],
+        ["groq", "mock-2"],
+      ]);
+      // Nothing slept the 9,897,000ms floor; the only sleeps are the backoff
+      // controller's between-candidate waits, never the provider floor.
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
+      expect(outcome.provider).toBe("groq");
+      expect(outcome.model).toBe("mock-2");
+      expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
+    });
+  });
+
   it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 1 });
@@ -610,6 +686,133 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(outcome.attempts).toEqual([]);
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    });
+  });
+
+  it("compacts a provider overflow after settled writes and continues their recorded results", async () => {
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      const { resolveLogicalTurnContextEngines } = await import("../context-engine/registry.js");
+      const {
+        appendSessionTranscriptMessageByIdentity: appendMessage,
+        readVisibleSessionTranscriptMessageEntries: readMessages,
+      } = await import("../plugin-sdk/session-transcript-runtime.js");
+      const runId = "provider-overflow-after-write";
+      const target = {
+        agentId: "test",
+        sessionId: `session:${runId}`,
+        sessionKey: `agent:test:${runId}`,
+        storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+      };
+      const user = { role: "user" as const, content: "hello", timestamp: 1 };
+      const write = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "write-once", name: "write", arguments: {} }],
+      });
+      const written = makeTextToolResult("write-once", "write", "The change is saved.", false, 3);
+      const overflow = buildEmbeddedRunnerAssistant({
+        stopReason: "error",
+        errorMessage:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+      });
+      const messages = [user, write, written, overflow];
+      const compact = vi.fn<ContextEngine["compact"]>(async ({ sessionTarget }) => {
+        expect(sessionTarget).toMatchObject({ sessionId: target.sessionId });
+        expect((await readMessages(target)).map((entry) => entry.message)).toEqual(messages);
+        return {
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "The requested change is saved; report the result.",
+            tokensBefore: 16_001,
+            tokensAfter: 4_000,
+          },
+        };
+      });
+      const engine: ContextEngine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        ingest: async () => ({ ingested: false }),
+        assemble: async ({ messages: context }) => ({ messages: context, estimatedTokens: 0 }),
+        compact,
+      };
+      const ref = { engine, registeredId: "legacy" };
+      vi.mocked(resolveLogicalTurnContextEngines).mockResolvedValueOnce({
+        configured: ref,
+        configuredId: "legacy",
+        fallback: ref,
+      });
+      writeProfiles(agentDir, { openai: 2, groq: true });
+      runEmbeddedAttemptMock
+        .mockImplementationOnce(async (rawParams) => {
+          const params = rawParams as EmbeddedRunAttemptParams;
+          for (const message of messages) {
+            await appendMessage({ ...target, message });
+          }
+          params.onUserMessagePersisted?.(user);
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: params.sessionId,
+            messagesSnapshot: messages,
+            lastAssistant: overflow,
+            currentAttemptCompletedAssistant: overflow,
+            toolMetas: [{ toolName: "write", toolCallId: "write-once", replaySafe: false }],
+            itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          });
+        })
+        .mockImplementationOnce(async (rawParams) => {
+          const params = rawParams as EmbeddedRunAttemptParams;
+          expect(params.prompt).not.toBe(user.content);
+          expect(params.suppressNextUserMessagePersistence).toBe(true);
+          expect(params.initialReplayState).toMatchObject({
+            replayInvalid: true,
+            hadPotentialSideEffects: true,
+          });
+          expect((await readMessages(target)).map((entry) => entry.message)).toEqual(messages);
+          const assistant = buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: "The change is saved." }],
+          });
+          await appendMessage({ ...target, message: assistant });
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: params.sessionId,
+            lastAssistant: assistant,
+            currentAttemptCompletedAssistant: assistant,
+            assistantTexts: ["The change is saved."],
+            assistantTranscriptOwned: true,
+          });
+        });
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId,
+        }),
+      );
+
+      expect(compact).toHaveBeenCalledOnce();
+      expect(runEmbeddedAttemptMock.mock.calls.map(([params]) => params)).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "mock-1",
+          authProfileId: "openai:p1",
+        }),
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "mock-1",
+          authProfileId: "openai:p1",
+        }),
+      ]);
+      expect(outcome.attempts).toEqual([]);
+      expect(outcome.result.meta.error).toBeUndefined();
+      expect(outcome.result.payloads).toEqual([
+        expect.objectContaining({ text: "The change is saved." }),
+      ]);
+      const transcript = await readMessages(target);
+      expect(transcript.filter(({ message }) => message.role === "user")).toHaveLength(1);
+      expect(transcript.filter(({ message }) => message.role === "toolResult")).toHaveLength(1);
+      expect(transcript.at(-1)?.message).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "The change is saved." }],
+      });
     });
   });
 

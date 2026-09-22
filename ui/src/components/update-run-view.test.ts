@@ -107,6 +107,50 @@ describe("update run projection", () => {
 });
 
 describe("update run view", () => {
+  it.each([
+    {
+      label: "missing identity",
+      observed: {},
+      state: "warn",
+      detail: "service identity unavailable",
+    },
+    {
+      label: "matching values without a verified identity",
+      observed: { runningVersion: "2026.9.2", runningBuildId: "new-build" },
+      state: "warn",
+      detail: "service identity unavailable",
+    },
+    {
+      label: "a different version",
+      observed: { runningVersion: "2026.9.1" },
+      state: "fail",
+      detail: "version mismatch",
+    },
+    {
+      label: "a different build",
+      observed: { runningVersion: "2026.9.2", runningBuildId: "old-build" },
+      state: "fail",
+      detail: "build mismatch",
+    },
+  ])(
+    "reports $label consistently in the verification badge and report",
+    async ({ observed, state, detail }) => {
+      const element = await mount(
+        run({
+          status: "failed",
+          phase: "finished",
+          reason: "restart-revision-unavailable",
+          after: { version: "2026.9.2", buildId: "new-build" },
+          verification: { versionMatch: false, ...observed },
+        }),
+      );
+      expect(element.querySelector('[data-oracle="version"]')?.getAttribute("data-state")).toBe(
+        state,
+      );
+      expect(element.querySelector('[aria-label="Update report"]')?.textContent).toContain(detail);
+    },
+  );
+
   it("keeps the view mounted across a restart and replaces progress with a visible success report", async () => {
     const element = await mount(run({ phase: "restarting" }));
     const container = element.querySelector(".update-run-view");

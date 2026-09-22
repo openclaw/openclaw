@@ -23,6 +23,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageMessageActions } from "./actions.js";
 import {
@@ -157,6 +158,8 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
       });
@@ -177,6 +180,8 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
         ...(ctx.onDeliveryResult
@@ -438,6 +443,36 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
     },
     security: imessageSecurityAdapter,
+    threading: {
+      resolveReplyTransport: ({
+        cfg,
+        accountId,
+        replyToId,
+        currentMessageId,
+        replyToCurrent,
+        replyToIsExplicit,
+        replyDelivery,
+      }) => {
+        const account = resolveIMessageAccount({ cfg, accountId });
+        if (account.config.actions?.reply === false) {
+          return { replyToId: null };
+        }
+        const existingReplyToId = normalizeOptionalString(replyToId);
+        const explicitCurrentReply = replyToIsExplicit === true && replyToCurrent === true;
+        // Queued replies carry the originating message separately from explicit reply targets.
+        const implicitReplyToId =
+          replyToCurrent === false ||
+          (replyDelivery?.replyToMode === "off" && !explicitCurrentReply)
+            ? undefined
+            : normalizeOptionalString(currentMessageId);
+        return {
+          replyToId: existingReplyToId ?? implicitReplyToId ?? null,
+          ...(!existingReplyToId && !explicitCurrentReply && implicitReplyToId
+            ? { replyToIdSource: "implicit" as const }
+            : {}),
+        };
+      },
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
@@ -475,7 +510,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       attachedResults: {
         channel: "imessage",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
+        sendText: async ({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          assertDirectAdapterHandoff,
+          onPlatformSendDispatch,
+        }) =>
           await (
             await loadIMessageChannelRuntime()
           ).sendIMessageOutbound({
@@ -485,6 +529,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            assertDirectAdapterHandoff,
+            onPlatformSendDispatch,
           }),
         sendMedia: async ({
           cfg,
@@ -499,6 +545,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           deps,
           replyToId,
           onDeliveryResult,
+          assertDirectAdapterHandoff,
+          onPlatformSendDispatch,
         }) =>
           await (
             await loadIMessageChannelRuntime()
@@ -514,6 +562,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            assertDirectAdapterHandoff,
+            onPlatformSendDispatch,
             ...(onDeliveryResult
               ? {
                   onDeliveryResult: async (result) => {

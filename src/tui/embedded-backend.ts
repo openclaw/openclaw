@@ -12,7 +12,6 @@ import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
@@ -33,11 +32,17 @@ import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
   readPreparedModelCatalog,
+  loadPreparedModelCatalogSnapshot,
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
+import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
@@ -55,7 +60,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   mergeAssistantText,
   resolveAssistantTextInput,
-  type AssistantTextSnapshot,
 } from "../gateway/agent-event-assistant-text.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
@@ -67,9 +71,11 @@ import {
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
-  enrichChatHistoryCompactionMarkers,
-  readChatHistoryPage,
-} from "../gateway/server-methods/chat-history-pages.js";
+  createChatHistoryActivityProjection,
+  createChatHistoryByteCounter,
+} from "../gateway/server-methods/chat-history-budget.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
+import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   replaceOversizedChatHistoryMessages,
@@ -77,14 +83,17 @@ import {
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
+import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
+import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lookup.js";
 import {
-  buildGatewaySessionInfo,
   getSessionDefaults,
   listAgentsForGateway,
-  listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGatewayCore,
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
@@ -106,17 +115,31 @@ import {
   setEmbeddedQuestionBroker,
 } from "../infra/embedded-question-broker.js";
 import { logInfo, logWarn } from "../logger.js";
-import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  isIncognitoSessionKey,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
-  applyQueueDropPolicy,
-  buildCollectPrompt,
-  previewQueueSummaryPrompt,
-  waitForQueueDebounce,
-} from "../utils/queue-helpers.js";
+  assistantChatMessage,
+  payloadText,
+  resolveDeltaPayload,
+  resolveTerminalChatState,
+} from "./embedded-chat-projection.js";
+import {
+  buildLocalQueuedPrompt,
+  createQueuedRunReadiness,
+  timeoutSecondsFromMs,
+  waitForLocalRunShutdown,
+  waitForQueuedLocalRun,
+  type LocalRunState,
+  type QueuedSessionRun,
+} from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
-import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
+import { createEmbeddedSessionReader } from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -125,56 +148,11 @@ import type {
   TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
-  TuiSessionList,
   TuiSessionCreateOptions,
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-
-const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
-  success: undefined,
-  timeout: "error",
-  cancellation: "aborted",
-  failure: "error",
-} as const;
-
-type LocalRunState = {
-  sessionKey: string;
-  agentId: string;
-  controller: AbortController;
-  buffer: string;
-  assistantScope?: AssistantTextSnapshot["scope"];
-  managedMediaUrls: Set<string>;
-  lastBroadcastText?: string;
-  isBtw: boolean;
-  question?: string;
-  finishing: boolean;
-  lifecycleEnded: boolean;
-  lifecycleStopReason?: string;
-  lifecycleYielded?: boolean;
-  toolErrorSummary?: string;
-  terminalState?: "provisional" | "final";
-  registered: boolean;
-  pendingQueue?: {
-    mode: "followup" | "collect";
-    messages: string[];
-    debounceMs: number;
-    lastEnqueuedAt: number;
-    dropPolicy: NonNullable<QueueSettings["dropPolicy"]>;
-    droppedCount: number;
-    summaryLines: string[];
-  };
-  queuedAfter?: QueuedSessionRun;
-  queuedRunReady: Promise<void>;
-  markQueuedRunReady: () => void;
-};
-
-type QueuedSessionRun = {
-  runId: string;
-  run: LocalRunState;
-  promise: Promise<void>;
-};
 
 type LocalPendingMessage = {
   run: LocalRunState;
@@ -217,131 +195,6 @@ function resolveBtwQuestion(message: string): string | undefined {
   return question ? question : undefined;
 }
 
-function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
-  const summary = previewQueueSummaryPrompt({
-    state: queue,
-    noun: "message",
-  });
-  const prompt =
-    queue.mode === "collect" && queue.messages.length > 1
-      ? buildCollectPrompt({
-          title: "[Queued messages while agent was busy]",
-          items: queue.messages,
-          renderItem: (message, index) => `---\nQueued #${index + 1}\n${message}`,
-        })
-      : (queue.messages[0] ?? "");
-  return [summary, prompt].filter(Boolean).join("\n\n");
-}
-
-function payloadText(parts: unknown): string {
-  if (!Array.isArray(parts)) {
-    return "";
-  }
-  return parts
-    .map((part) => {
-      if (!part || typeof part !== "object") {
-        return "";
-      }
-      const payload = part as { text?: unknown };
-      return typeof payload.text === "string" ? payload.text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
-function assistantChatMessage(text: string) {
-  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
-}
-
-function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    return undefined;
-  }
-  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
-}
-
-function resolveDeltaPayload(text: string, previousText: string | undefined) {
-  if (previousText === undefined) {
-    return { deltaText: text };
-  }
-  if (!text.startsWith(previousText)) {
-    return { deltaText: text, replace: true as const };
-  }
-  return { deltaText: text.slice(previousText.length) };
-}
-
-function createQueuedRunReadiness() {
-  let markReady!: () => void;
-  const promise = new Promise<void>((ready) => {
-    markReady = ready;
-  });
-  return { promise, markReady };
-}
-
-async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {
-  if (promises.length === 0) {
-    return true;
-  }
-  const timeoutMs = resolveLocalRunShutdownGraceMs();
-  if (timeoutMs <= 0) {
-    return false;
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let completed = false;
-  await Promise.race([
-    Promise.allSettled(promises).then(() => {
-      completed = true;
-    }),
-    new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, timeoutMs);
-      timeout.unref?.();
-    }),
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  return completed;
-}
-
-async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: string): Promise<void> {
-  await previousRun.run.queuedRunReady;
-  if (previousRun.run.controller.signal.aborted && previousRun.run.queuedAfter) {
-    // Preserve canceled-slot ancestry and the live run's bounded maintenance wait.
-    return await waitForQueuedLocalRun(previousRun.run.queuedAfter, runId);
-  }
-  if (!previousRun.run.finishing && !previousRun.run.lifecycleEnded) {
-    await previousRun.promise;
-    return;
-  }
-  const timeoutMs = resolveLocalRunShutdownGraceMs();
-  if (timeoutMs <= 0) {
-    throw new Error(
-      `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
-    );
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      previousRun.promise,
-      new Promise<void>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new Error(
-              `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
-            ),
-          );
-        }, timeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -364,8 +217,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private unsubscribePluginApprovals?: () => void;
   private unsubscribeQuestions?: () => void;
   private unsubscribeConfigWrites?: () => void;
-  // Resolves once the one-time session-key migration has run; store methods await it.
+  private sessionProjection?: Promise<SessionRowProjection>;
+  private unbindSessionProjection?: () => void;
+  // Store methods await migration and the shared resident session rows.
   private ready: Promise<void> = Promise.resolve();
+  private readonly sessionReader = createEmbeddedSessionReader({
+    ready: () => this.ready,
+    projection: () => this.sessionProjection,
+  });
 
   start() {
     if (this.unsubscribe) {
@@ -395,7 +254,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     this.preparedModelRuntime.publish(config);
     // Local mode shares the Gateway's session-store readiness checks.
-    this.ready = (async () => {
+    this.sessionProjection = (async () => {
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
       await runSessionStartupMigration({
@@ -403,7 +262,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
         env: process.env,
         log: embeddedSessionStartupMigrationLog,
       });
+      return createSessionRowProjection({ cfg: getRuntimeConfig(), getConfig: getRuntimeConfig });
     })();
+    this.ready = this.sessionProjection.then(() => {});
+    this.unbindSessionProjection = bindEmbeddedSessionRowProjection(this.sessionProjection);
     queueMicrotask(() => {
       this.onConnected?.();
     });
@@ -439,6 +301,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
     }
+    this.unbindSessionProjection?.();
+    this.unbindSessionProjection = undefined;
+    const projection = this.sessionProjection;
+    this.sessionProjection = undefined;
+    await projection?.catch(() => undefined).then((value) => value?.dispose());
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
@@ -453,6 +320,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.previousRuntimeLog = undefined;
     this.previousRuntimeError = undefined;
     setEmbeddedMode(false);
+    await this.preparedModelRuntime.waitUntilReady();
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -636,7 +504,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    if (!getSubagentSessionListReadSnapshotIdentity()) {
+      await prepareOptionalSubagentSessionListReadCache();
+    }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
+    const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
+      ...loadOptions,
+      includeStoreChildEntries: true,
+    });
     const {
       cfg,
       agentId: sessionAgentId,
@@ -645,10 +520,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       readSource,
       entry,
       canonicalKey,
-    } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
-      ...loadOptions,
-      includeStoreChildEntries: true,
-    });
+    } = selected;
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
@@ -675,13 +547,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageId: undefined,
     });
     const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
+    const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
+    const byteCounter = createChatHistoryByteCounter(activity);
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
+      byteCounter,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const messages = capped;
+    const messages = capArrayByJsonBytes(
+      replaced.messages,
+      maxHistoryBytes - byteCounter.framingBytes(replaced.messages),
+      byteCounter.messageBytes,
+    ).items;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.isBtw &&
@@ -710,6 +588,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       });
       thinkingLevel = resolveThinkingDefault({
         cfg,
+        agentId: sessionAgentId,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
         catalog,
@@ -717,50 +596,63 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
-    const sessionInfo = buildGatewaySessionInfo({
-      cfg,
-      storePath,
-      store,
-      readSource,
+    const projection = await this.sessionProjection;
+    if (projection) {
+      do {
+        await projection.ensureMaterialized();
+      } while (projection.needsMaterialization);
+    }
+    const target = {
       key: canonicalKey,
-      entry,
       agentId: sessionAgentId,
-    });
-    sessionInfo.thinkingLevel = thinkingLevel;
-    sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+      storePath: readSource?.path ?? storePath,
+    };
+    const current = projection?.describe(target);
+    const sessionInfo =
+      entry && (entry.incognito || isIncognitoSessionKey(canonicalKey))
+        ? buildGatewaySessionRow({
+            cfg,
+            storePath,
+            store,
+            key: canonicalKey,
+            entry,
+            agentId: sessionAgentId,
+            modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
+            lightweightListRow: true,
+            skipTranscriptUsageFallback: true,
+          })
+        : entry &&
+            current &&
+            current.entry.sessionId === sessionId &&
+            current.entry.lifecycleRevision === entry.lifecycleRevision
+          ? (projection?.snapshot(target).row ?? undefined)
+          : undefined;
+    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    if (sessionInfo) {
+      sessionInfo.thinkingLevel = thinkingLevel;
+      sessionInfo.verboseLevel = verboseLevel;
+    }
 
     return {
       sessionKey: opts.sessionKey,
       sessionId,
       messages,
       defaults,
-      sessionInfo,
+      activity: messages.flatMap((message) => activity.get(message) ?? []),
+      ...(sessionInfo ? { sessionInfo } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,
-      verboseLevel: sessionInfo.verboseLevel,
+      verboseLevel,
       runtimePluginsPrewarm,
       ...(inFlightRun ? { inFlightRun } : {}),
     };
   }
 
-  async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
-    await this.ready;
-    const cfg = getRuntimeConfig();
-    const { storePath, store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
-      agentId: opts?.agentId,
-      projection: "list",
-    });
-    return (await listSessionsFromStoreAsync({
-      cfg,
-      storePath,
-      store,
-      targetsBySessionKey,
-      opts: opts ?? {},
-    })) as TuiSessionList;
-  }
+  listSessions = this.sessionReader.listSessions;
+  describeSession = this.sessionReader.describeSession;
 
   async listAgents(): Promise<TuiAgentsList> {
-    return listAgentsForGateway(getRuntimeConfig()) as TuiAgentsList;
+    return (await listAgentsForGateway(getRuntimeConfig())) as TuiAgentsList;
   }
 
   async patchSession(
@@ -795,8 +687,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storeKey: primaryKey,
           agentId: target.agentId,
           patch: opts,
-          loadGatewayModelCatalog: () =>
-            readPreparedModelCatalog({ config: cfg, agentId: target.agentId, readOnly: true }),
+          loadGatewayModelCatalogSnapshot: () =>
+            loadPreparedModelCatalogSnapshot({
+              config: cfg,
+              agentId: target.agentId,
+              readOnly: true,
+            }),
         }),
     });
     if (!applied.ok) {
@@ -847,8 +743,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
-      loadGatewayModelCatalog: () =>
-        readPreparedModelCatalog({
+      loadGatewayModelCatalogSnapshot: () =>
+        loadPreparedModelCatalogSnapshot({
           config: cfg,
           agentId: resolveSessionAgentId({
             sessionKey: opts.key,
@@ -1196,7 +1092,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       suppressLeadFragments: true,
     });
     const text = projected.text.trim();
-    if (!text || projected.suppress) {
+    if (run.buffer && (!text || projected.suppress)) {
       return;
     }
     const deltaPayload = resolveDeltaPayload(text, run.lastBroadcastText);
@@ -1285,7 +1181,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         },
         abortSignal: run.controller.signal,
       });
-    const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+    const state = resolveTerminalChatState(outcome);
     if (!state) {
       return false;
     }

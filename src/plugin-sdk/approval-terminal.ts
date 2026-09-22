@@ -13,7 +13,7 @@ const TERMINAL_LABELS = {
   deny: "Denied",
   cancelled: "Cancelled",
   applied: "Applied",
-  "not-applied": "Not applied",
+  "not-applied": "Completion unconfirmed",
 };
 
 /** Label a recorded decision without implying that a system change was applied. */
@@ -32,7 +32,8 @@ function interpretApprovalTerminalOutcome(
     return "cancelled";
   }
   // Denied changes also publish not-applied. Preserve rich-label and prose precedence.
-  return precedence === "denial" && view.decision === "deny"
+  return view.decision === "deny" &&
+    (precedence === "denial" || view.applicationStatus === "not-applied")
     ? "deny"
     : (view.applicationStatus ?? view.decision);
 }
@@ -58,6 +59,6 @@ export function buildSystemAgentApprovalResolvedText(view: SystemAgentResolvedVi
       : outcome === "applied"
         ? `✅ OpenClaw change approved and applied: ${view.operationSummary}`
         : outcome === "not-applied"
-          ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+          ? "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying."
           : `✅ OpenClaw change approved. Applying: ${view.operationSummary}`;
 }

@@ -1,5 +1,7 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
@@ -109,7 +111,7 @@ function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, un
     return;
   }
   // Results can be replayed from history; read current truth without replacing pending UI intent.
-  void host.sessions.refreshReplacement(agentId);
+  void host.sessions.reconcileMutation(agentId);
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -138,6 +140,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     role: "assistant",
     toolCallId: entry.toolCallId,
     runId: entry.runId,
+    ...(entry.activity ? { activity: entry.activity } : {}),
     content,
     timestamp: entry.startedAt,
     // Running-state markers: only live tool-stream cards may show a spinner,
@@ -237,10 +240,10 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     // One visible compaction per run: older items and retry completions must
     // not replace a newer operation restored or received on the live stream.
     identity = `compaction:${payload.runId}`;
-  } else if (payload.stream === "item" && payload.data?.kind === "preamble") {
+  } else if (payload.stream === "item") {
     const itemId =
       toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
-    identity = `preamble:${payload.runId}:${itemId}`;
+    identity = `item:${payload.runId}:${itemId}`;
   } else {
     return true;
   }
@@ -509,6 +512,41 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handlePreambleProgress(host, payload)) {
+    return true;
+  }
+
+  const activityItem =
+    payload.stream === "item"
+      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
+      : undefined;
+  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+      return true;
+    }
+    const item = activityItem;
+    const toolCallId = item.toolCallId ?? item.itemId;
+    const identity = buildToolStreamIdentity(payload.runId, toolCallId);
+    let entry = host.toolStreamById.get(identity);
+    if (!entry) {
+      entry = {
+        toolCallId,
+        runId: payload.runId,
+        sessionKey,
+        name: item.name ?? item.title,
+        startedAt: item.startedAt ?? payload.ts,
+        receivedAt: Date.now(),
+        message: {},
+      };
+      host.toolStreamById.set(identity, entry);
+      host.toolStreamOrder.push(identity);
+    }
+    entry.activity = [
+      ...(entry.activity ?? []).filter((previous) => previous.itemId !== item.itemId),
+      item,
+    ];
+    entry.message = buildToolStreamMessage(entry);
+    trimToolStream(host);
+    scheduleToolStreamSync(host, item.phase === "end");
     return true;
   }
 

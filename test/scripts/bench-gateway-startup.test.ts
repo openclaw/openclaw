@@ -212,6 +212,21 @@ server.listen(port, "127.0.0.1", () => {
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+    expect(() => testing.parseOptions(["--installed-cpu-diagnostic"])).toThrow(
+      "--installed-cpu-diagnostic requires --installed-cohort",
+    );
+    for (const flag of ["--cpu-prof-dir", "--heap-prof-dir"]) {
+      expect(() =>
+        testing.parseOptions([
+          "--installed-cohort",
+          "input.json",
+          "--output",
+          "result.json",
+          flag,
+          "profiles",
+        ]),
+      ).toThrow(`${flag} is not supported with --installed-cohort`);
+    }
     expect(
       testing.parseOptions([
         "--case",
@@ -369,42 +384,66 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      {
-        completionMs: 50,
-        cpuCoreRatio: null,
-        cpuMs: null,
-        exitCode: null,
-        firstOutputMs: 1,
-        gatewayReadyLogLine: "[gateway] ready",
-        gatewayReadyLogMs: 40,
-        healthz: {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: 20,
-          ms: 20,
-          status: 200,
-          transitions: [],
-        },
-        httpListenLogLine: "[gateway] http server listening (0 plugins)",
-        httpListenLogMs: 10,
-        maxRssMb: null,
-        outputTail: "",
-        readyz: {
-          firstErrorKind: "http-503",
-          firstRecoveryMs: 30,
-          ms: 30,
-          status: 200,
-          transitions: [],
-        },
-        signal: null,
-        startupTrace: {},
+    const sample = {
+      completionMs: 50,
+      cpuCoreRatio: null,
+      cpuMs: null,
+      exitCode: null,
+      firstOutputMs: 1,
+      gatewayReadyLogLine: "[gateway] ready",
+      gatewayReadyLogMs: 40,
+      healthz: {
+        firstErrorKind: "econnrefused",
+        firstRecoveryMs: 20,
+        ms: 20,
+        status: 200,
+        transitions: [],
       },
-    ]);
+      httpListenLogLine: "[gateway] http server listening (0 plugins)",
+      httpListenLogMs: 10,
+      maxRssMb: null,
+      outputTail: "",
+      readyz: {
+        firstErrorKind: "http-503",
+        firstRecoveryMs: 30,
+        ms: 30,
+        status: 200,
+        transitions: [],
+      },
+      signal: null,
+      startupTrace: {
+        "sidecars.ready.total": 50,
+        "sidecars.ready": 5,
+        "plugins.load": 0,
+      },
+    };
+    const samples: Parameters<typeof testing.summarizeCase>[1] = [
+      sample,
+      {
+        ...sample,
+        startupTrace: {
+          "sidecars.ready": 15,
+          "sidecars.ready.total": 70,
+        },
+      },
+    ];
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, samples);
 
+    expect(result.samples).toBe(samples);
     expect(result.summary.completionMs?.p50).toBe(50);
     expect(result.summary.httpListenLogMs?.p50).toBe(10);
     expect(result.summary.gatewayReadyLogMs?.p50).toBe(40);
     expect("readyLogMs" in result.summary).toBe(false);
+    expect(Object.keys(result.summary.startupTrace)).toEqual([
+      "plugins.load",
+      "sidecars.ready",
+      "sidecars.ready.total",
+    ]);
+    expect(result.summary.startupTrace).toEqual({
+      "plugins.load": { avg: 0, max: 0, min: 0, p50: 0, p95: 0 },
+      "sidecars.ready": { avg: 10, max: 15, min: 5, p50: 10, p95: 15 },
+      "sidecars.ready.total": { avg: 60, max: 70, min: 50, p50: 60, p95: 70 },
+    });
   });
 
   it("flags samples that never produced readiness or process metrics", () => {
@@ -440,6 +479,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
+    expect(result.summary.startupTrace).toEqual({});
     expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",

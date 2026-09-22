@@ -488,7 +488,15 @@ class AndroidScreenshotFixtureRuntimeTest {
 
     ShadowSystemClock.advanceBy(Duration.ofSeconds(1))
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
-    assertEquals("A new runtime must not replace an older requester's record", first, question(firstRequester))
+    assertTrue(
+      "Expired records must stay out of the pending list",
+      Json.decodeFromString<QuestionListResult>(firstRequester("question.list", "{}")).questions.isEmpty(),
+    )
+    val terminal =
+      Json.decodeFromString<QuestionRecord>(
+        response(firstRequester, "question.get", """{"id":${JsonPrimitive(first.id)}}""").getValue("question").toString(),
+      )
+    assertEquals("A new runtime must not replace an older requester's record", first.copy(status = "expired"), terminal)
     assertEquals("The new runtime must keep its own stable record", second, question(secondRequester))
   }
 

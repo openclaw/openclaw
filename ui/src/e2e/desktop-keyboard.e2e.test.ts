@@ -235,10 +235,20 @@ suite.define(() => {
       await expect.poll(peer.keyEvents).toEqual([...expected, ...keyPresses([0x5a, 0xff08])]);
       await page.screenshot({ path: path.join(artifactDirectory, "connected-control.png") });
 
+      await page.keyboard.down("Shift");
+      const beforeHandoff = [...expected, ...keyPresses([0x5a, 0xff08])];
+      await expect.poll(peer.keyEvents).toEqual([...beforeHandoff, { down: true, keysym: 0xffe1 }]);
       await gateway.setMethodResponse("desktop.observe", { ...desktopObserve, control: false });
+      await gateway.deferNext("desktop.observe");
       await panel.getByRole("button", { name: "Switch to view only", exact: true }).click();
       await gateway.waitForRequest("desktop.observe", { after: 1 });
+      const released = [...beforeHandoff, ...keyPresses([0xffe1])];
+      await expect.poll(peer.keyEvents).toEqual(released);
+      expect(await peer.events()).not.toContain("closed:1");
+      await gateway.resolveDeferred("desktop.observe");
       await expect.poll(peer.events).toContain("authenticated:2");
+      await expect.poll(peer.events).toContain("closed:1");
+      await page.keyboard.up("Shift");
       await panel
         .getByRole("status", { name: "Connecting to desktop…", exact: true })
         .waitFor({ state: "hidden" });
@@ -247,6 +257,18 @@ suite.define(() => {
       );
       expect(await input.isDisabled()).toBe(true);
       await page.screenshot({ path: path.join(artifactDirectory, "connected-view-only.png") });
+      await peer.disconnect("view-only reconnect");
+      await panel.getByRole("button", { name: "Reconnect", exact: true }).click();
+      await expect.poll(peer.events).toContain("authenticated:3");
+      await expect.poll(peer.events).toContain("closed:2");
+      await panel
+        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .waitFor({ state: "hidden" });
+      expect(await panel.getByRole("button", { name: "Keyboard", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      expect(await input.isDisabled()).toBe(true);
+      expect(await peer.keyEvents()).toEqual(released);
     });
   });
 

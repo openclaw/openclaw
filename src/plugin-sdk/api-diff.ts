@@ -62,6 +62,13 @@ export type PluginSdkApiDiff = PluginSdkApiDiffPayload & {
   digest: string;
 };
 
+export function createPluginSdkApiDiff(payload: PluginSdkApiDiffPayload): PluginSdkApiDiff {
+  return {
+    ...payload,
+    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+  };
+}
+
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -359,10 +366,7 @@ export function diffPluginSdkApi(
     );
   }
 
-  return {
-    ...payload,
-    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
-  };
+  return createPluginSdkApiDiff(payload);
 }
 
 export function hasPluginSdkApiChanges(diff: PluginSdkApiDiff): boolean {

@@ -84,23 +84,6 @@ test("drains every pending Test Server update", async () => {
   await new Promise((resolve) => upstreamServer.close(resolve));
 });
 
-test("reports the drain HTTP status without leaking the upstream response", async () => {
-  const proxy = await startTelegramTestApiProxy({
-    fetchImpl: async () =>
-      new Response(JSON.stringify({ ok: false, description: "private bot identity and token" }), {
-        status: 409,
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  try {
-    await assert.rejects(proxy.drainUpdates("123:ABC"), {
-      message: "Telegram Test Bot API getUpdates failed while draining stale updates (HTTP 409).",
-    });
-  } finally {
-    await proxy.close();
-  }
-});
-
 test("holds one upstream-accepted method response until explicit release", async () => {
   const upstreamServer = http.createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
@@ -165,7 +148,7 @@ test("proxy close aborts the in-flight Test Server request", async () => {
   assert.equal(upstreamAborted, true);
 });
 
-test("lease revocation blocks every later Bot API request", async () => {
+test("lease revocation blocks every later Bot API request", async (t) => {
   const leaseError = new Error("lease revoked");
   let healthy = true;
   let revoke;
@@ -192,8 +175,13 @@ test("lease revocation blocks every later Bot API request", async () => {
     },
   });
 
-  const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`);
+  t.after(() => proxy.close());
+  // Revocation destroys existing sockets; the later request needs a fresh connection.
+  const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`, {
+    headers: { connection: "close" },
+  });
   assert.equal(before.status, 200);
+  assert.deepEqual(await before.json(), { ok: true });
   revoke();
   await new Promise((resolve) => setImmediate(resolve));
   const after = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
@@ -202,5 +190,4 @@ test("lease revocation blocks every later Bot API request", async () => {
   });
   assert.equal(after.status, 502);
   assert.equal(upstreamRequests, 1);
-  await proxy.close();
 });

@@ -1,5 +1,6 @@
 // Xiaomi tests cover index plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
@@ -13,7 +14,6 @@ import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
-import { createMiMoThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
@@ -69,7 +69,12 @@ async function getXiaomiTokenPlanProvider() {
 }
 
 function mimoReasoningModel(
-  id: "mimo-v2.5" | "mimo-v2.5-pro" | "mimo-v2.6-pro",
+  id:
+    | "mimo-v2.5"
+    | "mimo-v2.5-pro"
+    | "mimo-v2.6-flash"
+    | "mimo-v2.6-pro"
+    | "mimo-v2.6-pro-ultraspeed",
   provider: "xiaomi" | "xiaomi-token-plan" = "xiaomi",
 ): OpenAICompletionsModel {
   return {
@@ -130,20 +135,38 @@ function mimoReasoningToolReplayContext(provider = "xiaomi") {
   );
 }
 
-function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAICompletionsModel) {
-  return (
-    _streamModel: OpenAICompletionsModel,
-    streamContext: Context,
-    options?: { onPayload?: (payload: unknown, m: unknown) => unknown },
-  ) => {
+function createPayloadCapturingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+): StreamFn {
+  return (_streamModel, streamContext, options) => {
     capture.payload = buildOpenAICompletionsParams(model, streamContext, {
       reasoning: "high",
-    } as never);
+    });
     options?.onPayload?.(capture.payload, model);
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => stream.end());
     return stream;
   };
+}
+
+async function createRegisteredThinkingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+  thinkingLevel: "off" | "high",
+) {
+  const { providers } = await registerXiaomiPlugin();
+  const provider = requireRegisteredProvider(providers, model.provider);
+  return expectDefined(
+    provider.wrapStreamFn?.({
+      provider: model.provider,
+      modelId: model.id,
+      model,
+      streamFn: createPayloadCapturingStream(capture, model),
+      thinkingLevel,
+    }),
+    "Registered MiMo thinking stream",
+  );
 }
 
 function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
@@ -237,18 +260,46 @@ describe("xiaomi provider plugin", () => {
     expect(catalogProvider.baseUrl).toBe("https://api.xiaomimimo.com/v1");
 
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro-ultraspeed",
       "mimo-v2.5",
       "mimo-v2.5-pro",
     ]);
-    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5")?.input).toEqual([
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-flash")?.input).toEqual([
       "text",
       "image",
     ]);
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-flash")?.cost).toEqual({
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.0028,
+      cacheWrite: 0,
+    });
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-pro")?.cost).toEqual({
+      input: 0.435,
+      output: 0.87,
+      cacheRead: 0.0036,
+      cacheWrite: 0,
+    });
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-pro-ultraspeed")?.cost).toEqual({
+      input: 4.35,
+      output: 8.7,
+      cacheRead: 0.036,
+      cacheWrite: 0,
+    });
     expect(catalogProvider.models?.every((model) => model.reasoning)).toBe(true);
   });
 
-  it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
+  it("exposes Token Plan catalog rows only after a provider config selects a region", async () => {
+    const response = Response.json({
+      data: [
+        { id: "mimo-v2.6-pro" },
+        { id: "mimo-v2.6-flash" },
+        { id: "mimo-v2.5" },
+        { id: "mimo-v2.5-pro" },
+      ],
+    });
     const release = vi.fn(async () => undefined);
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
       response,
@@ -299,11 +350,12 @@ describe("xiaomi provider plugin", () => {
       expect(configured.provider.models?.map((model) => model.id)).toEqual([
         "mimo-v2.5",
         "mimo-v2.5-pro",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
       ]);
-      expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
-        "text",
-        "image",
-      ]);
+      expect(
+        configured.provider.models?.find((model) => model.id === "mimo-v2.6-flash")?.input,
+      ).toEqual(["text", "image"]);
       for (const model of configured.provider.models ?? []) {
         expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
       }
@@ -456,7 +508,13 @@ describe("xiaomi provider plugin", () => {
     );
     const expectedLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-    for (const modelId of ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]) {
+    for (const modelId of [
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro",
+      "mimo-v2.6-pro-ultraspeed",
+    ]) {
       const profile = resolveThinkingProfile({ provider: "xiaomi", modelId } as never);
       expect(profile?.levels.map((l) => l.id)).toEqual(expectedLevels);
       expect(profile?.defaultLevel).toBe("high");
@@ -477,6 +535,12 @@ describe("xiaomi provider plugin", () => {
       provider.isModernModelRef?.({ provider: "xiaomi", modelId: "mimo-v2.6-pro" } as never),
     ).toBe(true);
     expect(
+      provider.isModernModelRef?.({
+        provider: "xiaomi",
+        modelId: "mimo-v2.6-pro-ultraspeed",
+      } as never),
+    ).toBe(true);
+    expect(
       provider.isModernModelRef?.({ provider: "xiaomi", modelId: "custom-model" } as never),
     ).toBe(false);
   });
@@ -492,12 +556,7 @@ describe("xiaomi provider plugin", () => {
         stopReason: "toolUse",
       }),
     );
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "MiMo thinking wrapper for high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     const assistantMessage = readPayloadMessage(capture, 1);
@@ -514,12 +573,7 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5-pro", "xiaomi-token-plan");
     const context = mimoReasoningToolReplayContext("xiaomi-token-plan");
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "MiMo thinking wrapper for high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("enabled");
@@ -536,13 +590,8 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5");
     const context = mimoReasoningToolReplayContext();
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingNone = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "none" as never),
-      "MiMo thinking wrapper for none",
-    );
-    await wrapThinkingNone(model, context, {});
+    const wrapThinkingOff = await createRegisteredThinkingStream(capture, model, "off");
+    await wrapThinkingOff(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(

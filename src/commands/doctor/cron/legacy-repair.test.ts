@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
 import {
@@ -13,7 +14,11 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import type { CronJob } from "../../../cron/types.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -23,11 +28,15 @@ import {
 let tempRoot: string | undefined;
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
+  if (tempRoot) {
+    await closeOpenClawAgentDatabasesAsync(tempRoot);
+  }
+  await closeOpenClawStateDatabaseAsync();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
     tempRoot = undefined;
   }
+  vi.unstubAllEnvs();
 });
 
 it.each<{
@@ -136,6 +145,10 @@ it.each(["legacy JSON", "SQLite"])(
       delivery: { mode: "announce" },
       state: { consecutiveErrors: 2 },
     };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: current.sessionKey! },
+      { sessionId: "current-source", updatedAt: 1 },
+    );
     const store = { version: 1 as const, jobs: [current] };
     if (source === "legacy JSON") {
       await fs.mkdir(path.dirname(storePath), { recursive: true });

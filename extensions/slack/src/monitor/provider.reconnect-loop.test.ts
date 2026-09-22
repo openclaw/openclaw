@@ -7,8 +7,8 @@ const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
 
 describe("slack socket reconnect loop", () => {
-  beforeEach(() => {
-    resetSlackTestState();
+  beforeEach(async () => {
+    await resetSlackTestState();
     // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
     // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

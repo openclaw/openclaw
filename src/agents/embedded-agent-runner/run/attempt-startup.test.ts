@@ -35,13 +35,13 @@ vi.mock("../sandbox-skills.js", () => ({
   ),
   resolveSandboxSkillRuntimeInputs: vi.fn(() => ({
     skillsEligibility: undefined,
+    skillUsagePaths: [],
     skillsPromptWorkspaceDir: "/tmp/workspace",
     skillsSnapshot: undefined,
     skillsWorkspaceDir: "/tmp/workspace",
     workspaceOnly: false,
   })),
   mapSandboxSkillEntriesForPrompt: mocks.mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
 describe("prepareEmbeddedSkills", () => {

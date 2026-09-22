@@ -1,8 +1,3 @@
-/**
- * Structured logging for model fallback decisions. The log payload carries
- * sanitized error observations plus step fields that make fallback chains
- * auditable.
- */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
@@ -23,15 +18,7 @@ export function isModelFallbackDecisionLogEnabled(): boolean {
   return decisionLog.isEnabled("warn");
 }
 
-function buildErrorObservationFields(error?: string): {
-  errorPreview?: string;
-  errorHash?: string;
-  errorFingerprint?: string;
-  httpCode?: string;
-  providerErrorType?: string;
-  providerErrorMessagePreview?: string;
-  requestIdHash?: string;
-} {
+function buildErrorObservationFields(error?: string) {
   const observed = buildTextObservationFields(error);
   return {
     errorPreview: observed.textPreview,
@@ -58,7 +45,6 @@ type ObservedModelCandidate = ModelCandidate & {
   routeResolution?: ModelFallbackRouteResolution;
 };
 
-/** Structured fields that describe one fallback-chain transition. */
 export type ModelFallbackStepFields = {
   fallbackStepType: "fallback_step";
   fallbackStepFromModel: string;
@@ -69,7 +55,6 @@ export type ModelFallbackStepFields = {
   fallbackStepFinalOutcome: FallbackStepOutcome;
 };
 
-/** Input payload for logging one model fallback decision. */
 export type ModelFallbackDecisionParams = {
   decision:
     | "skip_candidate"
@@ -101,14 +86,6 @@ function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
 
-function readRouteOrigin(candidate: ObservedModelCandidate) {
-  return candidate.routeOrigin;
-}
-
-function readRouteResolution(candidate: ObservedModelCandidate) {
-  return candidate.routeResolution;
-}
-
 function isAuthDecisionLogCoalescingEligible(params: ModelFallbackDecisionParams): boolean {
   return (
     (params.decision === "candidate_failed" || params.decision === "skip_candidate") &&
@@ -128,8 +105,8 @@ function buildAuthDecisionLogCoalesceKey(
     params.decision,
     params.candidate.provider,
     params.candidate.model,
-    readRouteOrigin(params.candidate),
-    readRouteResolution(params.candidate),
+    params.candidate.routeOrigin,
+    params.candidate.routeResolution,
     params.attempt,
     params.total,
     params.reason,
@@ -139,8 +116,8 @@ function buildAuthDecisionLogCoalesceKey(
     observedError.providerErrorType,
     observedError.errorFingerprint ?? observedError.errorHash,
     params.nextCandidate ? formatModelRef(params.nextCandidate) : null,
-    params.nextCandidate ? readRouteOrigin(params.nextCandidate) : null,
-    params.nextCandidate ? readRouteResolution(params.nextCandidate) : null,
+    params.nextCandidate ? params.nextCandidate.routeOrigin : null,
+    params.nextCandidate ? params.nextCandidate.routeResolution : null,
     params.isPrimary,
     params.requestedModelMatched,
     params.fallbackConfigured,
@@ -211,55 +188,38 @@ function resolveAuthDecisionLogCoalescing(
   return { shouldLog: true, suppressedDuplicateCount };
 }
 
-function buildFallbackStepFields(params: {
-  decision: "skip_candidate" | "candidate_failed" | "candidate_succeeded";
-  candidate: ModelCandidate;
-  reason?: FailoverReason | null;
-  error?: string;
-  nextCandidate?: ModelCandidate;
-  attempt?: number;
-  previousAttempts?: FallbackAttempt[];
-}): ModelFallbackStepFields | undefined {
-  const lastPreviousAttempt = params.previousAttempts?.at(-1);
-  if (params.decision === "candidate_succeeded") {
-    // Success records the previous failed candidate as the source and the current
-    // candidate as the successful fallback destination.
-    if (!lastPreviousAttempt) {
-      return undefined;
-    }
-    return {
-      fallbackStepType: "fallback_step",
-      fallbackStepFromModel: `${lastPreviousAttempt.provider}/${lastPreviousAttempt.model}`,
-      fallbackStepToModel: formatModelRef(params.candidate),
-      ...(lastPreviousAttempt.reason
-        ? { fallbackStepFromFailureReason: lastPreviousAttempt.reason }
-        : {}),
-      ...(lastPreviousAttempt.error
-        ? { fallbackStepFromFailureDetail: lastPreviousAttempt.error }
-        : {}),
-      ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
-      fallbackStepFinalOutcome: "succeeded",
-    };
+function buildFallbackStepFields(
+  params: ModelFallbackDecisionParams,
+  detailText: string | undefined,
+): ModelFallbackStepFields | undefined {
+  if (params.decision === "probe_cooldown_candidate") {
+    return undefined;
   }
-
-  const observed = buildErrorObservationFields(params.error);
+  // Success links the previous failed attempt to the winning candidate.
+  const succeeded = params.decision === "candidate_succeeded";
+  const previous = succeeded ? params.previousAttempts?.at(-1) : undefined;
+  if (succeeded && !previous) {
+    return undefined;
+  }
+  const from = previous ?? params.candidate;
+  const to = succeeded ? params.candidate : params.nextCandidate;
+  const reason = succeeded ? previous?.reason : params.reason;
+  const detail = succeeded ? previous?.error : detailText;
   return {
     fallbackStepType: "fallback_step",
-    fallbackStepFromModel: formatModelRef(params.candidate),
-    ...(params.nextCandidate ? { fallbackStepToModel: formatModelRef(params.nextCandidate) } : {}),
-    ...(params.reason ? { fallbackStepFromFailureReason: params.reason } : {}),
-    ...((observed.providerErrorMessagePreview ?? observed.errorPreview)
-      ? {
-          fallbackStepFromFailureDetail:
-            observed.providerErrorMessagePreview ?? observed.errorPreview,
-        }
-      : {}),
+    fallbackStepFromModel: formatModelRef(from),
+    ...(to ? { fallbackStepToModel: formatModelRef(to) } : {}),
+    ...(reason ? { fallbackStepFromFailureReason: reason } : {}),
+    ...(detail ? { fallbackStepFromFailureDetail: detail } : {}),
     ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
-    fallbackStepFinalOutcome: params.nextCandidate ? "next_fallback" : "chain_exhausted",
+    fallbackStepFinalOutcome: succeeded
+      ? "succeeded"
+      : params.nextCandidate
+        ? "next_fallback"
+        : "chain_exhausted",
   };
 }
 
-/** Log one model fallback decision and return structured fallback-step fields. */
 export function logModelFallbackDecision(
   params: ModelFallbackDecisionParams,
 ): ModelFallbackStepFields | undefined {
@@ -269,20 +229,7 @@ export function logModelFallbackDecision(
   const reasonText = params.reason ?? "unknown";
   const observedError = buildErrorObservationFields(params.error);
   const detailText = observedError.providerErrorMessagePreview ?? observedError.errorPreview;
-  const fallbackStepFields =
-    params.decision === "skip_candidate" ||
-    params.decision === "candidate_failed" ||
-    params.decision === "candidate_succeeded"
-      ? buildFallbackStepFields({
-          decision: params.decision,
-          candidate: params.candidate,
-          reason: params.reason,
-          error: params.error,
-          nextCandidate: params.nextCandidate,
-          attempt: params.attempt,
-          previousAttempts: params.previousAttempts,
-        })
-      : undefined;
+  const fallbackStepFields = buildFallbackStepFields(params, detailText);
   const providerErrorTypeSuffix = observedError.providerErrorType
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
@@ -309,8 +256,8 @@ export function logModelFallbackDecision(
     requestedModel: params.requestedModel,
     candidateProvider: params.candidate.provider,
     candidateModel: params.candidate.model,
-    candidateRouteOrigin: readRouteOrigin(params.candidate),
-    candidateRouteResolution: readRouteResolution(params.candidate),
+    candidateRouteOrigin: params.candidate.routeOrigin,
+    candidateRouteResolution: params.candidate.routeResolution,
     attempt: params.attempt,
     total: params.total,
     reason: params.reason,
@@ -320,12 +267,8 @@ export function logModelFallbackDecision(
     ...fallbackStepFields,
     nextCandidateProvider: params.nextCandidate?.provider,
     nextCandidateModel: params.nextCandidate?.model,
-    nextCandidateRouteOrigin: params.nextCandidate
-      ? readRouteOrigin(params.nextCandidate)
-      : undefined,
-    nextCandidateRouteResolution: params.nextCandidate
-      ? readRouteResolution(params.nextCandidate)
-      : undefined,
+    nextCandidateRouteOrigin: params.nextCandidate?.routeOrigin,
+    nextCandidateRouteResolution: params.nextCandidate?.routeResolution,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
     fallbackConfigured: params.fallbackConfigured,
@@ -348,6 +291,7 @@ export function logModelFallbackDecision(
 }
 
 export type ModelFallbackChainStopReason =
+  | "provider_review_continuation"
   | "agent_run_terminal_timeout"
   | "idle_timeout_circuit_breaker"
   | "command_lane_task_timeout"
@@ -356,6 +300,8 @@ export type ModelFallbackChainStopReason =
   | "caller_signal_aborted"
   | "agent_run_direct_abort"
   | "agent_run_restart_abort"
+  | "agent_run_superseded_abort"
+  | "session_placement_settlement_closed"
   | "terminal_abort_wrapper";
 
 /** Record a local or terminal stop separately from provider-failure decisions. */

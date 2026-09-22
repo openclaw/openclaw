@@ -52,6 +52,8 @@ private data class CachedMessagePayload(
   val runId: String? = null,
   val steerTargetRunId: String? = null,
   val turnBoundary: Boolean = false,
+  val phase: String? = null,
+  val isError: Boolean = false,
 )
 
 /**
@@ -365,6 +367,8 @@ class RoomChatTranscriptCache internal constructor(
         runId = payload.runId,
         steerTargetRunId = payload.steerTargetRunId,
         turnBoundary = payload.turnBoundary,
+        phase = payload.phase,
+        isError = payload.isError,
       )
     }
   }
@@ -477,6 +481,8 @@ class RoomChatTranscriptCache internal constructor(
               runId = message.runId,
               steerTargetRunId = message.steerTargetRunId,
               turnBoundary = message.turnBoundary,
+              phase = message.phase,
+              isError = message.isError,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)

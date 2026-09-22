@@ -8,8 +8,31 @@ title: "Anthropic"
 
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
-- **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
+- **API key** - Anthropic API access with usage-based billing
 - **Claude CLI** - reuse an existing Claude Code login through the installed executable on the same host
+
+## Choose a model route
+
+The model picker can show **Anthropic** and **Claude CLI** separately. These are
+not interchangeable billing choices: `anthropic/*` is the canonical model
+identity and can run through either runtime; `claude-cli/*` selects the native
+Claude runtime explicitly.
+
+- **API / API · OpenClaw** uses the configured Anthropic API connection.
+- **Claude CLI / Claude CLI · native** runs through Claude Code, using its native
+  login or a selected saved account.
+- **Configured route** means the picker does not have a resolved runtime to show.
+  The provider name alone is not proof of API or subscription billing.
+  An Anthropic Default row also uses this label when it will clear a pinned session runtime:
+  the current session route does not describe the configured route being restored.
+
+The web picker shows route details on hover or keyboard focus. Telegram `/models`
+shows route guidance before selection and labels models when their runtime is
+known. Model IDs and explicit runtime choices remain unchanged.
+
+Check the selected account as well as the runtime. An API key explicitly selected
+for Claude CLI still uses separate API billing. A Claude CLI selection does not
+silently switch to the direct API if the executable cannot run.
 
 ## Usage and cost tracking
 
@@ -133,6 +156,11 @@ OpenClaw release:
         when their authenticated session and execution policy
         match. If that process ends or the gateway restarts, the next turn
         resumes the persisted Claude Code session.
+
+        An explicit Claude CLI model selection stays on that runtime across resumed
+        turns. If the executable cannot run, the selection fails instead of switching
+        to direct Anthropic API access. Selecting an API route or forwarding an API
+        key through an explicit account selection remains a separate billing choice.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -167,6 +195,13 @@ OpenClaw release:
     ```bash
     openclaw models auth login --provider anthropic --method setup-token
     ```
+
+    Direct Messages API requests using a setup token advertise a maintained
+    Claude Code client version, or the installed CLI version when newer.
+    Anthropic uses that identity to gate newer models. A missing, older, or
+    failed CLI probe uses OpenClaw's maintained version floor. Discovery is
+    shared with the CLI backend and cached until process restart; API-key
+    requests do not run the probe.
 
     ### Config example
 
@@ -701,8 +736,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     OpenClaw adds the `compact-2026-01-12` beta header and sends an Anthropic
     `context_management` compaction edit. When compaction occurs, OpenClaw
-    stores the newest summary as hidden provider replay state and sends it
-    first on the next matching request. The full transcript remains local;
+    assembles the streamed summary and stores it with the provider's opaque
+    compaction metadata as hidden replay state. Both survive session reopening
+    and are sent first on the next matching request. Summary text still passes
+    through transcript redaction; opaque metadata is preserved for replay.
+    The full transcript remains local;
     only the outbound history before the checkpoint is omitted.
     If Anthropic rejects a stored checkpoint, that turn reports the provider
     error and the following turn falls back to full local history.

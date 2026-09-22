@@ -15,6 +15,11 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
+Full reports reuse a private shared-state snapshot for ordinary reads within the
+report, preserving the live database and its WAL files. Each new report reads a
+fresh snapshot. Checks that need writable inspection state or independent database
+verification retain their own copies; `--only` checks prepare state on demand.
+
 ```bash
 openclaw doctor --json
 openclaw doctor --lint
@@ -45,6 +50,7 @@ JSON output is the scripting surface:
 
 ```json
 {
+  "schemaVersion": 1,
   "ok": false,
   "checksRun": 5,
   "checksSkipped": 0,
@@ -62,17 +68,45 @@ JSON output is the scripting surface:
 
 Explicit lint exit codes:
 
-| Code | Meaning                                                       |
-| ---- | ------------------------------------------------------------- |
-| `0`  | No findings at or above the selected severity threshold.      |
-| `1`  | At least one finding meets the selected threshold.            |
-| `2`  | Command/runtime failure before lint findings can be produced. |
+| Code | Meaning                                                  |
+| ---- | -------------------------------------------------------- |
+| `0`  | No findings at or above the selected severity threshold. |
+| `1`  | At least one finding meets the selected threshold.       |
+| `2`  | Command/runtime failure before health checks complete.   |
 
 `--severity-min` controls both which findings print and the exit threshold: `openclaw doctor --lint --severity-min error` can print nothing and exit `0` even when lower-severity `info`/`warning` findings exist.
 
 When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
 
-Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors or runtime failures before a payload can be produced remain nonzero.
+If a caller cancels state-lease acquisition before an inspection starts, Doctor records
+an informational diagnostic with `errorCode: OPENCLAW_STATE_LEASE_ABORTED`, the elapsed
+time, and the caller's signal as its cause. Below the selected threshold, this diagnostic
+appears in JSON `warnings` and human output without failing lint. It means the inspection
+was not performed. Cancellation after acquisition and other inspection failures remain errors.
+
+During updates, optional inspections and policy advisories are warnings, including intentional open DM policies. Required configuration, state, and startup checks remain blocking. The saved report retains every finding with an individually bounded reason; update history keeps severity counts, deciding errors, and an explicit omission count when its diagnostic bound is reached.
+
+Security findings retain their specific check identifier and remediation in update reports. Secret migration commands appear before long field lists so bounded diagnostics keep the `openclaw secrets configure` and `openclaw secrets apply` next steps.
+
+`PLAINTEXT_FOUND`, `REF_SHADOWED`, and `LEGACY_RESIDUE` are findings from the separate `openclaw secrets audit` command. They describe hardening or retained recovery material, not database corruption. Standalone `secrets audit --check` can exit nonzero for these findings; that result alone does not identify a failing candidate Doctor check. Use the candidate's recorded lint findings, not a truncated stderr tail, to identify the update failure.
+
+A configured Codex plugin that is missing or whose advertised health API cannot be
+verified produces an availability warning under `core/doctor/codex-session-routes`,
+with the plugin name and repair command. Untrusted installations are not imported
+to inspect their health API.
+The updater's `--severity-min error` pass exits `0` for these warnings, using the
+same warning policy as Gateway startup. Invalid configuration, unsafe state
+inspection, and errors reported by an actual health check retain their failures.
+Missing configured `plugins.load.paths` produce a warning under
+`core/doctor/final-config-validation`, with requirement
+`configured-plugin-path-unavailable` and the unavailable path in `source`.
+Permission, I/O, and other inspection failures instead use
+`configured-plugin-path-inspection-failed`, retain the filesystem `errorCode`
+and error message, and provide a recovery hint for the affected path.
+The updater retains the warning and continues. Doctor preserves settings whose
+plugin owner could not be inspected; see [Plugin repair warnings](/install/update-troubleshooting#plugin-repair-warnings).
+
+Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 

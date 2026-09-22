@@ -10,6 +10,8 @@ import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
+import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
@@ -50,6 +52,12 @@ afterEach(() => {
   if (${detachEarly}) wrapper.remove();
 });
 it("establishes native focus before file cleanup", () => {
+  const previous = document.body.appendChild(document.createElement("input"));
+  // Initialize selector focus tracking before dispatching native focus events.
+  previous.matches(":focus-visible");
+  previous.focus();
+  expect(previous.matches(":focus-visible")).toBe(true);
+  previous.remove();
   wrapper = document.createElement("div");
   document.body.append(wrapper);
   let parent: Element | ShadowRoot = wrapper;
@@ -77,6 +85,12 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   expect(document.body.childNodes).toHaveLength(0);
   expect(document.body.getAttributeNames()).toEqual([]);
   expect(document.activeElement).toBe(document.body);
+  const resetHasFocus = document.hasFocus();
+  const marker = document.body.appendChild(document.createElement("button"));
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  marker.focus();
+  expect(marker.matches(":focus-visible")).toBe(true);
+  expect(resetHasFocus).toBe(false);
   const style = document.getElementById("${prefix}");
   expect(style).not.toBeNull();
   style?.remove();
@@ -87,14 +101,41 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   return files;
 }
 
-function fixtureFiles(): Record<string, string> {
+function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
 import { queryObjects } from "node:v8";
 const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
-    "runner.ts": `export { default } from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};\n`,
+    "runner.ts": `import Runner from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};
+import { expect, vi, type RunnerTestFile } from "vitest";
+const resetModules = vi.resetModules;
+export default class FixtureRunner extends Runner {
+  override async onAfterRunFiles(files: RunnerTestFile[]) {
+    await super.onAfterRunFiles(files);
+    expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
+  }
+}
+`,
+    "00-cold-mock.test.ts": `import path from "node:path";
+import { expect, it, vi } from "vitest";
+const root = path.join(path.parse(process.cwd()).root, "__openclaw_runner_cold__");
+const readPackage = (file: string) => {
+  if (file === path.join(root, "package.json")) return '{"name":"openclaw"}';
+  throw new Error("ENOENT");
+};
+vi.mock(${sourcePath("infra/openclaw-root.fs.runtime.ts")}, () => ({
+  openClawRootFsSync: { readFileSync: readPackage },
+  openClawRootFs: { readFile: async (file: string) => readPackage(file) },
+}));
+it("applies the first file's mock before loading its production importer", async () => {
+  const { resolveOpenClawPackageRootSync, resolveOpenClawPackageRoot } =
+    await import(${sourcePath("infra/openclaw-root.ts")});
+  expect(resolveOpenClawPackageRootSync({ cwd: root })).toBe(root);
+  await expect(resolveOpenClawPackageRoot({ cwd: root })).resolves.toBe(root);
+});
+`,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
     "01-mid.ts": `import { flavor } from "./01-dep.js";
 export function describeFlavor(): string {
@@ -105,6 +146,7 @@ export function describeFlavor(): string {
     // file must still apply its mock after onAfterRunFiles cleanup.
     "01-a-crash.test.ts": `import "./01-mid.js";
 import { expect } from "vitest";
+await import(${sourcePath("logging/secret-redaction-registry.ts")});
 expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);
 await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 throw new Error("synthetic collect failure");
@@ -390,6 +432,7 @@ it("reloads the redirected mock after a real import", () => {
     ...mockResolutionFixtureFiles,
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -435,8 +478,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 48,
-    numPassedTests: 47,
+    numTotalTests: 53,
+    numPassedTests: 52,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -476,7 +519,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    const files = fixtureFiles();
+    const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
@@ -595,15 +638,31 @@ export default defineConfig({
       ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
       [
         "extra collection error",
-        ({ report }) => Object.assign(report.testResults[1]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              message: "other",
+            },
+          ),
       ],
       [
         "extra failed file",
-        ({ report }) => Object.assign(report.testResults[1]!, { status: "failed" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              status: "failed",
+            },
+          ),
       ],
       [
         "wrong collection error",
-        ({ report }) => Object.assign(report.testResults[0]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
+            { message: "other" },
+          ),
       ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
@@ -730,6 +789,130 @@ it("cleans every shared runner surface between files", (context) => {
   const run = verifyRunnerCleanup(context.signal);
   // Timeout rejects Vitest's wrapper before this promise settles. Join it again
   // at completion so cancellation and fixture writes cannot cross file cleanup.
+  context.onTestFinished(() => run);
+  return run;
+});
+
+async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
+  const fixtureRoots = path.join(repoRoot, ".artifacts", "gateway-worker-lifetimes");
+  await fs.mkdir(fixtureRoots, { recursive: true });
+  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
+  try {
+    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+    await fs.writeFile(path.join(root, "events.log"), "");
+    const files = gatewayWorkerLifetimeFixtureFiles(repoRoot);
+    for (const [name, content] of Object.entries(files)) {
+      await fs.writeFile(path.join(root, name), content);
+    }
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
+      `
+import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.gateway-core.config.ts"))};
+import { defineConfig } from "vitest/config";
+import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  }
+}
+// Use the actual Gateway execution policy, with fixture-only membership and no
+// ordinary setup hooks that could close A's database before runner cleanup.
+export default defineConfig({
+  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  resolve: gateway.resolve,
+  test: {
+    name: "gateway-worker-lifetimes",
+    pool: gateway.test.pool,
+    isolate: gateway.test.isolate,
+    runner: gateway.test.runner,
+    maxWorkers: gateway.test.maxWorkers,
+    fileParallelism: gateway.test.fileParallelism,
+    include: ["a-producer.test.ts", "b-observer.test.ts"],
+    sequence: { sequencer: AlphabeticalSequencer },
+  },
+});
+`,
+    );
+    const reportPath = path.join(root, "report.json");
+    let child!: ChildProcess;
+    const result = await runVitestShutdownCommand({
+      bin: resolveTestNodeExecPath(),
+      args: [
+        path.join(vitestPackageDir, "vitest.mjs"),
+        "run",
+        "--root",
+        root,
+        "--config",
+        path.join(root, "vitest.config.ts"),
+        "--configLoader",
+        "runner",
+        "--reporter=verbose",
+        "--reporter=json",
+        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
+        `--outputFile.json=${reportPath}`,
+      ],
+      cwd: repoRoot,
+      env: { ...childEnv(), OPENCLAW_VITEST_MAX_WORKERS: "1", GATEWAY_LIFETIME_PROBE_ROOT: root },
+      maxBytes: 16 * 1024 * 1024,
+      signal,
+      onReady(owned) {
+        child = owned;
+      },
+    });
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+    expect(child.killed).toBe(false);
+    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+    const expected = Object.keys(files)
+      .map((name) => `${canonicalRoot}/${name}`)
+      .toSorted();
+    const capture: VitestReportCapture = JSON.parse(
+      await fs.readFile(`${reportPath}.capture.json`, "utf8"),
+    );
+    expect(capture).toMatchObject({
+      pid: child.pid,
+      root: canonicalRoot,
+      processTimedOut: false,
+      ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
+    });
+    expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected);
+    expect(capture.projects).toEqual([
+      {
+        name: "gateway-worker-lifetimes",
+        namePrefix: "",
+        root: canonicalRoot,
+        config: `${canonicalRoot}/vitest.config.ts`,
+        pool: "threads",
+      },
+    ]);
+    const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
+    expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected);
+    expect(report).toMatchObject({
+      numTotalTests: 2,
+      numPassedTests: 2,
+      numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+    });
+    for (const file of report.testResults) {
+      expect(file.status).toBe("passed");
+      expect(file.message).toBe("");
+      expect(file.assertionResults).toHaveLength(1);
+      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message += `; retained fixture ${root}`;
+    }
+    throw error;
+  }
+}
+
+it("gives Gateway files separate workers after their resource drains", (context) => {
+  const run = verifyGatewayWorkerLifetimes(context.signal);
   context.onTestFinished(() => run);
   return run;
 });

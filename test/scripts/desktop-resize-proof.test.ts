@@ -1,8 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { once } from "node:events";
 import {
+  appendFile,
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import net from "node:net";
+import path from "node:path";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import {
+  type DesktopProofSourceStatus,
   desktopProofAssets,
   desktopProofCommit,
   desktopProofSource,
@@ -11,21 +26,63 @@ import {
   desktopResizeStages,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
+  readDesktopProofGatewayCloses,
   readDesktopProofPhase,
+  readDesktopProofSource,
+  readDesktopProofNodeStreamCloses,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
+import {
+  observeDesktopEndpointPackets,
+  observeDesktopProofRfbLifecycle,
+} from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
+});
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllGlobals());
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
 const assets = { "index-fixture.js": "e".repeat(64) };
+function sourceAdmissionFixture(status: string, tracked: string[]) {
+  const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
+  const replies: Record<string, string> = {
+    "rev-parse": `${head}\n`,
+    "cat-file": `tree ${tree}\nparent ${base}\n\nfixture\n`,
+    "ls-tree": `${tracked.join("\0")}\0`,
+    status,
+  };
+  return {
+    receipt,
+    replies,
+    read: () =>
+      readDesktopProofSource(
+        async (label, args) => {
+          receipt.phase = label;
+          const reply = replies[args[0]!];
+          if (reply === undefined) {
+            throw new Error("Git command failed with private details");
+          }
+          return Buffer.from(reply);
+        },
+        { checkout: head },
+        (value) => {
+          receipt.sourceStatus = value;
+        },
+      ),
+  };
+}
 const rawTestReport = (
   message = "AssertionError: private-token",
   metadata: Record<string, unknown> = {},
@@ -63,6 +120,7 @@ const viewerFailure = {
   socketCount: 2,
   latestReadyState: 1,
   socketCloses: [{ socketIndex: 0, code: 4000, wasClean: true, category: "takeover" }],
+  nodeStreamCloses: [{ trigger: "target-close", closeCode: 1005 }],
 };
 const proof = (carrier: "node" | "ssh" = "node") => ({
   carrier,
@@ -88,6 +146,416 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("binds real-client callbacks to the exact socket and preserves recovery callbacks after factory restoration", async () => {
+    type Options = Parameters<DesktopClient["connect"]>[0];
+    const sockets: Array<{ url: string }> = [];
+    const browser = {
+      desktopProofSockets: sockets,
+      location: { href: "https://fixture.invalid/" },
+    };
+    vi.stubGlobal("window", browser);
+    let observed: Options | undefined;
+    const result = Promise.resolve({} as Awaited<ReturnType<DesktopClient["connect"]>>);
+    const client = {
+      connect: vi.fn(function (this: unknown, options: Options) {
+        expect(this).toBe(client);
+        observed = options;
+        return result;
+      }),
+    };
+    const factory = vi.fn(function (this: unknown) {
+      expect(this).toBe(panel);
+      return client;
+    });
+    const panel = { desktopClientFactory: factory };
+    observeDesktopProofRfbLifecycle(panel as unknown as Element);
+    const snapshot = () =>
+      Reflect.get(browser, "desktopProofRfbLifecycle")() as {
+        events: Array<{
+          ordinal: number;
+          socketIndex: number | null;
+          phase: string;
+          connectedObserved: boolean;
+          clean: boolean | null;
+          securityStatus: number | null;
+        }>;
+        omitted: number;
+      };
+    const detail = { clean: false, reason: "private-reason" };
+    const callbacks: string[] = [];
+    const options: Options = {
+      target: {} as HTMLElement,
+      viewOnly: true,
+      isCurrent: () => true,
+      wsUrl: "/desktop/observe?token=private-token",
+      gatewayUrl: "wss://fixture.invalid/base",
+      onConnect() {
+        expect(this).toBe(options);
+        callbacks.push("connected");
+        expect(snapshot().events.at(-1)?.phase).toBe("connected");
+      },
+      onDisconnect(value) {
+        expect(this).toBe(options);
+        expect(value).toBe(detail);
+        callbacks.push("disconnected");
+      },
+      onSecurityFailure(value) {
+        expect(this).toBe(options);
+        expect(value).toEqual({ status: 2, reason: "private-reason" });
+        callbacks.push("security");
+      },
+    };
+    expect(panel.desktopClientFactory().connect(options)).toBe(result);
+    expect(panel.desktopClientFactory).toBe(factory);
+    expect(snapshot().events[0]?.socketIndex).toBeNull();
+    sockets.push({ url: "wss://fixture.invalid/desktop/observe?token=earlier" });
+    sockets.push({ url: "wss://fixture.invalid/desktop/observe?token=private-token" });
+    sockets.push({ url: "wss://fixture.invalid/desktop/observe?token=later" });
+    observed!.onConnect!();
+    observed!.onSecurityFailure!({ status: 2, reason: "private-reason" });
+    observed!.onDisconnect!(detail);
+    expect(callbacks).toEqual(["connected", "security", "disconnected"]);
+    expect(
+      snapshot().events.map((event) => [event.socketIndex, event.phase, event.connectedObserved]),
+    ).toEqual([
+      [1, "connecting", false],
+      [1, "connected", true],
+      [1, "security-failure", true],
+      [1, "disconnected", true],
+    ]);
+    expect(JSON.stringify(snapshot())).not.toMatch(/private|token|reason|url|fixture/u);
+    sockets.push(sockets[1]!);
+    expect(snapshot().events.every((event) => event.socketIndex === null)).toBe(true);
+    await result;
+  });
+
+  it("bounds RFB events without suppressing callback exceptions or inferring a completed handshake", async () => {
+    vi.stubGlobal("window", {
+      desktopProofSockets: [],
+      location: { href: "https://fixture.invalid" },
+    });
+    type Options = Parameters<DesktopClient["connect"]>[0];
+    let observed: Options | undefined;
+    const client = {
+      connect: (options: Options) => {
+        observed = options;
+        return Promise.resolve({} as Awaited<ReturnType<DesktopClient["connect"]>>);
+      },
+    };
+    const factory = () => client;
+    const panel = { desktopClientFactory: factory };
+    observeDesktopProofRfbLifecycle(panel as unknown as Element);
+    const failure = new Error("original callback failed");
+    const callback = vi.fn(() => {
+      throw failure;
+    });
+    await panel.desktopClientFactory().connect({
+      target: {} as HTMLElement,
+      viewOnly: true,
+      isCurrent: () => true,
+      wsUrl: "/desktop/observe?token=hidden",
+      onDisconnect: callback,
+    });
+    for (let index = 0; index < 10; index++) {
+      expect(() => observed!.onDisconnect!({ clean: false })).toThrow(failure);
+    }
+    const snapshot = Reflect.get(window, "desktopProofRfbLifecycle")();
+    expect(callback).toHaveBeenCalledTimes(10);
+    expect(snapshot.events).toHaveLength(8);
+    expect(snapshot.omitted).toBe(3);
+    expect(
+      snapshot.events.every((event: { connectedObserved: boolean }) => !event.connectedObserved),
+    ).toBe(true);
+  });
+
+  it.each(["upstream", "client", "fixture"] as const)(
+    "records the tap's first %s terminal event before cascading close",
+    async (side) => {
+      const server = net.createServer();
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing fixture address");
+      }
+      const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
+      const accepted = once(server, "connection");
+      const client = net.connect({ host: "127.0.0.1", port: tap.port });
+      const [upstream] = (await accepted) as [net.Socket];
+      try {
+        expect(tap.terminalSnapshot()).toEqual({ events: [], omitted: 0 });
+        if (side === "fixture") {
+          await tap.close();
+        } else {
+          (side === "upstream" ? upstream : client).end();
+        }
+        await vi.waitFor(() => expect(tap.terminalSnapshot().events).toHaveLength(1));
+        expect(tap.terminalSnapshot().events[0]).toMatchObject({
+          connectionIndex: 0,
+          side,
+          event: side === "fixture" ? "cleanup" : "end",
+        });
+        await tap.close();
+        expect(tap.terminalSnapshot().events).toHaveLength(1);
+      } finally {
+        client.destroy();
+        upstream.destroy();
+        await tap.close();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("projects bounded gateway owner facts and never publishes raw identity or stderr", async () => {
+    const file = path.join(dirs.make("desktop-gateway-log-"), "gateway.log");
+    const record = (message: string, metadata: unknown) =>
+      JSON.stringify({ "0": '{"subsystem":"gateway/desktop"}', "1": metadata, "2": message });
+    const lines = Array.from({ length: 10 }, () =>
+      record("desktop observer closed", {
+        trigger: "stream-close",
+        cleanupCode: 1000,
+        closeCode: 1000,
+        sourceKey: "private-worker",
+        streamId: "private-stream",
+        ownerEpoch: 3,
+      }),
+    );
+    lines.push(
+      record("desktop SSH tunnel exited", {
+        code: null,
+        signal: "SIGTERM",
+        stopRequested: true,
+        stderr: "private-error",
+      }),
+    );
+    await writeFile(file, lines.join("\n"));
+    const value = await readDesktopProofGatewayCloses(file);
+    expect(value?.observerCloses?.events).toHaveLength(8);
+    expect(value?.observerCloses?.omitted).toBe(2);
+    expect(value?.sshTunnelExits).toEqual({
+      events: [{ code: null, signal: "SIGTERM", stopRequested: true }],
+      omitted: 0,
+    });
+    expect(JSON.stringify(value)).not.toMatch(/private|sourceKey|streamId|ownerEpoch|stderr/u);
+    await writeFile(file, Buffer.alloc(1024 * 1024, 32));
+    expect(await readDesktopProofGatewayCloses(file)).toEqual({
+      observerCloses: { events: [], omitted: 0 },
+      sshTunnelExits: { events: [], omitted: 0 },
+    });
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    expect(await readDesktopProofGatewayCloses(file)).toBeNull();
+    expect(await readDesktopProofGatewayCloses(file + ".missing")).toBeNull();
+    const link = file + ".link";
+    await symlink(file, link);
+    expect(await readDesktopProofGatewayCloses(link)).toBeNull();
+  });
+
+  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
+    const server = net.createServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing fixture address");
+    }
+    // Reserve the upstream port until the tap binds so it cannot connect back to itself.
+    const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
+    const clients: net.Socket[] = [];
+    try {
+      expect(tap.port).not.toBe(address.port);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      for (let index = 0; index < 10; index++) {
+        const client = net.connect({ host: "127.0.0.1", port: tap.port });
+        client.on("error", () => {});
+        clients.push(client);
+        await vi.waitFor(() =>
+          expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+        );
+      }
+      expect(tap.terminalSnapshot()).toEqual({
+        events: Array.from({ length: 8 }, (_, index) => ({
+          connectionIndex: index + 2,
+          side: "upstream",
+          event: "error",
+          errorCategory: "refused",
+          hadError: null,
+        })),
+        omitted: 2,
+      });
+    } finally {
+      clients.forEach((client) => client.destroy());
+      await tap.close();
+    }
+  });
+
+  it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitted counts", () => {
+    const endpoint = {
+      connectionIndex: 2,
+      side: "upstream",
+      event: "error",
+      errorCategory: "reset",
+      hadError: null,
+    };
+    const rfb = {
+      ordinal: 4,
+      socketIndex: 2,
+      phase: "disconnected",
+      connectedObserved: false,
+      clean: false,
+      securityStatus: null,
+    };
+    const diagnostic = {
+      ...viewerFailure,
+      endpointCloses: { events: [{ ...endpoint, address: "private-host" }], omitted: 3 },
+      rfbLifecycle: { events: [{ ...rfb, url: "https://private.invalid/token" }], omitted: 1 },
+      gatewayCloses: {
+        observerCloses: { events: [], omitted: 0 },
+        sshTunnelExits: { events: [], omitted: 0 },
+      },
+    };
+    const project = (value: unknown) =>
+      desktopProofTestReport(rawTestReport(undefined, { desktopViewerResizeFailure: value }))
+        .files[0]?.assertions[0]?.viewerResize;
+    expect(project(diagnostic)).toMatchObject({
+      endpointCloses: { events: [endpoint], omitted: 3 },
+      rfbLifecycle: { events: [rfb], omitted: 1 },
+    });
+    expect(JSON.stringify(project(diagnostic))).not.toMatch(/private|token|address|url/u);
+    for (const override of [
+      { endpointCloses: { events: Array.from({ length: 9 }, () => endpoint), omitted: 0 } },
+      { endpointCloses: { events: [{ ...endpoint, side: "private-host" }], omitted: 0 } },
+      { rfbLifecycle: { events: [rfb], omitted: -1 } },
+      { rfbLifecycle: { events: [{ ...rfb, socketIndex: -1 }], omitted: 0 } },
+      { rfbLifecycle: { events: [{ ...rfb, phase: "private-error" }], omitted: 0 } },
+      {
+        gatewayCloses: {
+          observerCloses: {
+            events: [{ trigger: "private-error", cleanupCode: 1000, closeCode: 1000 }],
+            omitted: 0,
+          },
+          sshTunnelExits: null,
+        },
+      },
+    ]) {
+      expect(() => project({ ...diagnostic, ...override })).toThrow();
+    }
+    expect(
+      project({ ...viewerFailure, endpointCloses: null, rfbLifecycle: null, gatewayCloses: null }),
+    ).toMatchObject({ endpointCloses: null, rfbLifecycle: null, gatewayCloses: null });
+  });
+
+  it("retains node close categories from the existing JSON file logger", async () => {
+    const file = path.join(dirs.make("desktop-node-log-"), "node.log");
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `
+          import { flushLogger, setLoggerOverride } from "./src/logging/logger.ts";
+          import { createSubsystemLogger } from "./src/logging/subsystem.ts";
+          setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
+          const log = createSubsystemLogger("node-host/stream");
+          log.info("node stream closed", {
+            streamKind: "portal", trigger: "target-close", closeCode: 1000,
+          });
+          for (let index = 0; index < 10; index++) {
+            log.info("node stream closed", {
+              streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index,
+              privateDetail: "private-node-data",
+            });
+          }
+          await flushLogger();
+        `,
+        file,
+      ],
+      {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        env: { ...process.env, OPENCLAW_TEST_FILE_LOG: "1" },
+        timeout: 15_000,
+        stdio: "pipe",
+      },
+    );
+    const closes = await readDesktopProofNodeStreamCloses(file);
+    expect(closes).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({
+        trigger: "target-close",
+        closeCode: 1002 + index,
+      })),
+    );
+    expect(JSON.stringify(closes)).not.toMatch(/private|portal|streamKind/u);
+  });
+
+  it("leaves unavailable node diagnostics empty without replacing the test failure", async () => {
+    const root = dirs.make("desktop-node-log-bounds-");
+    const file = path.join(root, "node.log");
+    expect(await readDesktopProofNodeStreamCloses(file)).toBeNull();
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    expect(await readDesktopProofNodeStreamCloses(file)).toBeNull();
+    await writeFile(file, '{"partial":');
+    expect(await readDesktopProofNodeStreamCloses(file)).toEqual([]);
+    const link = path.join(root, "linked.log");
+    await symlink(file, link);
+    expect(await readDesktopProofNodeStreamCloses(link)).toBeNull();
+  });
+
+  it("accepts exactly 1 MiB of node diagnostics and retains the last eight closes", async () => {
+    const file = path.join(dirs.make("desktop-node-log-limit-"), "node.log");
+    const records = Array.from({ length: 10 }, (_, index) =>
+      JSON.stringify({
+        "0": '{"subsystem":"node-host/stream"}',
+        "1": { streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index },
+        "2": "node stream closed",
+      }),
+    ).join("\n");
+    await writeFile(file, records.padEnd(1024 * 1024, " "));
+    expect(await readDesktopProofNodeStreamCloses(file)).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({
+        trigger: "target-close",
+        closeCode: 1002 + index,
+      })),
+    );
+  });
+
+  it("bounds a node log that grows after admission and closes the read handle", async () => {
+    const file = path.join(dirs.make("desktop-node-log-growth-"), "node.log");
+    await writeFile(file, "{}\n");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const handle = await actual.open(file, "r");
+    const read = vi.spyOn(handle, "read");
+    const close = vi.spyOn(handle, "close");
+    vi.mocked(lstat).mockImplementationOnce(async () => {
+      const admitted = await actual.lstat(file);
+      await appendFile(file, Buffer.alloc(1024 * 1024, 32));
+      return admitted;
+    });
+    vi.mocked(open).mockResolvedValueOnce(handle);
+    try {
+      expect(await readDesktopProofNodeStreamCloses(file)).toBeNull();
+      expect(read).toHaveBeenCalled();
+      let actualBytes = 0;
+      for (const result of read.mock.results) {
+        if (result.type === "return") {
+          actualBytes += (await result.value).bytesRead;
+        }
+      }
+      expect(actualBytes).toBeLessThanOrEqual(1024 * 1024);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(lstat).mockImplementation(actual.lstat);
+      vi.mocked(open).mockImplementation(actual.open);
+      read.mockRestore();
+      close.mockRestore();
+      await handle.close();
+    }
+  });
+
   it("keeps the UI phase contract narrower than arbitrary reporter strings", () => {
     type Phase = Exclude<
       ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
@@ -299,6 +767,10 @@ describe("desktop proof identity and public evidence", () => {
                 reason: "control-taken:private-operator",
                 url: "https://example.invalid/private-token",
               })) ?? null,
+            nodeStreamCloses: diagnostics.nodeStreamCloses.map((event) => ({
+              ...event,
+              privateDetail: "private-node-data",
+            })),
             html: "private-dom",
             socketUrl: "https://example.invalid/private-token",
             error: "private-error",
@@ -320,6 +792,10 @@ describe("desktop proof identity and public evidence", () => {
     { latestReadyState: 4 },
     { socketCloses: undefined },
     { socketCloses: "private-token" },
+    { nodeStreamCloses: "private-token" },
+    { nodeStreamCloses: [{ trigger: "private-token", closeCode: 1000 }] },
+    { nodeStreamCloses: [{ trigger: "target-close", closeCode: 65_536 }] },
+    { nodeStreamCloses: Array.from({ length: 9 }, () => viewerFailure.nodeStreamCloses[0]) },
     { socketCloses: Array.from({ length: 9 }, () => viewerFailure.socketCloses[0]) },
     ...[
       { socketIndex: -1 },
@@ -482,7 +958,7 @@ describe("desktop proof identity and public evidence", () => {
     await expect(readDesktopProofTestReport(link)).rejects.toThrow("regular file");
     await writeFile(file, "{");
     await expect(readDesktopProofTestReport(file)).rejects.toThrow();
-    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    await writeFile(file, Buffer.alloc(8 * 1024 * 1024 + 1));
     await expect(readDesktopProofTestReport(file)).rejects.toThrow("bounded");
   });
 
@@ -552,6 +1028,156 @@ describe("desktop proof identity and public evidence", () => {
       ).rejects.toThrow(/bound/u);
     },
   );
+
+  it("records canonical dirty paths before refusing source admission at source-clean", async () => {
+    const tracked = ["src/edited.ts", "src/deleted.ts", 'src/space and "quote".ts'];
+    const status = [
+      ` M ${tracked[0]}\0`,
+      `D  ${tracked[1]}\0`,
+      `MM ${tracked[2]}\0`,
+      "A  staged-private.txt\0",
+      "?? untracked-private\n M src/edited.ts\0",
+    ].join("");
+    const fixture = sourceAdmissionFixture(status, tracked);
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt).toEqual({
+      phase: "source-clean",
+      sourceStatus: {
+        head,
+        bytes: Buffer.byteLength(status),
+        totalEntries: 5,
+        entries: [
+          { status: " M", path: tracked[0] },
+          { status: "D ", path: tracked[1] },
+          { status: "MM", path: tracked[2] },
+        ],
+        omittedEntries: 2,
+      },
+    });
+    expect(JSON.stringify(fixture.receipt)).not.toContain("private");
+  });
+
+  it("admits only empty status output, including when no dirty paths are publishable", async () => {
+    const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
+    await expect(fixture.read()).resolves.toMatchObject({ head, tree, parents: [base] });
+    expect(fixture.receipt.sourceStatus).toEqual({
+      head,
+      bytes: 0,
+      totalEntries: 0,
+      entries: [],
+      omittedEntries: 0,
+    });
+    fixture.replies.status = "?? private-only.txt\0";
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus).toMatchObject({
+      totalEntries: 1,
+      entries: [],
+      omittedEntries: 1,
+    });
+  });
+
+  it.each(["rev-parse", "cat-file", "ls-tree", "status"])(
+    "clears earlier source status before a failed %s recheck",
+    async (command) => {
+      const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
+      await fixture.read();
+      expect(fixture.receipt.sourceStatus).not.toBeNull();
+      delete fixture.replies[command];
+      await expect(fixture.read()).rejects.toThrow("Git command failed");
+      expect(fixture.receipt.sourceStatus).toBeNull();
+      expect(JSON.stringify(fixture.receipt)).not.toContain("private");
+    },
+  );
+
+  it("bounds published source entries and counts names omitted by privacy and size limits", async () => {
+    const tracked = Array.from({ length: 34 }, (_, index) => `src/file-${index}.ts`);
+    const fixture = sourceAdmissionFixture(
+      tracked.map((name) => ` M ${name}\0`).join("") + "?? private-last.txt\0",
+      tracked,
+    );
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus?.entries).toHaveLength(32);
+    expect(fixture.receipt.sourceStatus).toMatchObject({ totalEntries: 35, omittedEntries: 3 });
+    expect(JSON.stringify(fixture.receipt)).not.toMatch(/file-32|file-33|private/u);
+  });
+
+  it("does not decode paths beyond the status byte budget or publish unsafe canonical names", async () => {
+    const names = [
+      "src/\nprivate.ts",
+      "../private.ts",
+      "/private.ts",
+      "src/\\private.ts",
+      `src/${"é".repeat(255)}.ts`,
+      "src/late.ts",
+    ];
+    const status =
+      names
+        .slice(0, -1)
+        .map((name) => ` M ${name}\0`)
+        .join("") + `?? ${"private".repeat(10_000)}\0 M src/late.ts\0`;
+    const fixture = sourceAdmissionFixture(status, names);
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus).toMatchObject({
+      totalEntries: 7,
+      entries: [],
+      omittedEntries: 7,
+    });
+    expect(JSON.stringify(fixture.receipt)).not.toMatch(/private|late|é/u);
+  });
+
+  it("uses real NUL status without leaking either private additions or a rename destination", async () => {
+    const root = dirs.make("desktop-source-status-");
+    const git = (args: string[]) =>
+      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+        cwd: root,
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Test Author",
+          GIT_AUTHOR_EMAIL: "author@example.invalid",
+          GIT_COMMITTER_NAME: "Test Committer",
+          GIT_COMMITTER_EMAIL: "committer@example.invalid",
+          GIT_NO_LAZY_FETCH: "1",
+          GIT_NO_REPLACE_OBJECTS: "1",
+        },
+      });
+    git(["init", "--quiet"]);
+    await writeFile(path.join(root, "tracked.txt"), "tracked contents\n");
+    git(["add", "--", "tracked.txt"]);
+    const objectTree = git(["write-tree"]).toString().trim();
+    const checkout = git(["commit-tree", objectTree, "-m", "source fixture"]).toString().trim();
+    git(["update-ref", "HEAD", checkout]);
+    git(["config", "status.renames", "true"]);
+    const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
+    const check = () =>
+      readDesktopProofSource(
+        async (label, args) => {
+          receipt.phase = label;
+          return git(args);
+        },
+        { checkout },
+        (value) => {
+          receipt.sourceStatus = value;
+        },
+      );
+    await expect(check()).resolves.toMatchObject({ head: checkout, tree: objectTree });
+    await rename(path.join(root, "tracked.txt"), path.join(root, "renamed-private.txt"));
+    await writeFile(path.join(root, "staged-private.txt"), "private contents\n");
+    git(["add", "--all"]);
+    await writeFile(path.join(root, "untracked-private.txt"), "private contents\n");
+    await expect(check()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(receipt).toMatchObject({
+      phase: "source-clean",
+      sourceStatus: {
+        head: checkout,
+        totalEntries: 4,
+        entries: [{ status: "D ", path: "tracked.txt" }],
+        omittedEntries: 3,
+      },
+    });
+    expect(JSON.stringify(receipt)).not.toContain("private");
+  });
+
   it("distinguishes literal head proof from GitHub merge-tree proof", () => {
     expect(
       desktopProofSource({ head, tree, parents: [base] }, { checkout: head, head, base }).kind,

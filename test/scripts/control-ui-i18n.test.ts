@@ -34,6 +34,8 @@ import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-m
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
+import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -297,7 +299,7 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy transcript copy and shared search labels in the generator catalog", () => {
+  it("includes lazy task and transcript copy and shared search labels in the generator catalog", () => {
     const result = spawnSync(
       testNodeExecPath,
       [
@@ -316,9 +318,15 @@ describe("control-ui-i18n generated ownership", () => {
     expect(result.status, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenControlUiCatalog(catalog, "en");
-    const lazyCopy = flattenControlUiCatalog(registerTranscriptsEnglish.catalog, "transcripts");
-    for (const [key, value] of lazyCopy) {
-      expect(source.get(key), key).toBe(value);
+    for (const fragment of [
+      registerBackgroundTasksEnglish.catalog,
+      registerCodeBlocksEnglish.catalog,
+      registerTranscriptsEnglish.catalog,
+    ]) {
+      const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");
+      for (const [key, value] of lazyCopy) {
+        expect(source.get(key), key).toBe(value);
+      }
     }
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");

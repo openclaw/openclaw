@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements approval auth behavior.
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { normalizeWhatsAppTarget } from "./normalize.js";

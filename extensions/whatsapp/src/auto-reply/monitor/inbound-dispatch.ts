@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,

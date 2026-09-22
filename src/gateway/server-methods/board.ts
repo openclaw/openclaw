@@ -44,7 +44,7 @@ import {
   buildBoardWidgetFrameUrl,
   createBoardViewTicket,
 } from "../board-view-ticket.js";
-import { resolveBoardWidgetApproval } from "../board-widget-approval.js";
+import { createBoardWidgetApprovalResolver } from "../board-widget-approval.js";
 import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import {
   requireMcpAppInteraction,
@@ -96,6 +96,7 @@ export function createBoardHandlers(
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
   dependencies: BoardHandlerDependencies = {},
 ): GatewayRequestHandlers {
+  const resolveBoardWidgetApproval = createBoardWidgetApprovalResolver();
   const mcpApp: McpAppDependencies = {
     resolveActiveView: dependencies.resolveActiveView ?? resolveMcpAppActiveView,
     resolveAllowedToolNames: dependencies.resolveAllowedToolNames ?? resolveMcpAppAllowedToolNames,
@@ -258,6 +259,7 @@ export function createBoardHandlers(
           const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
           let content: BoardWidgetMaterializedPutParams["content"];
           let declared = requestDeclared;
+          let resolveMcpAppInteraction: (() => Promise<boolean>) | undefined;
           if (requestParams.content.kind === "canvas-doc") {
             const document = await readCanvasDocument(requestParams.content.docId);
             authority.assertActive();
@@ -282,22 +284,21 @@ export function createBoardHandlers(
                 "MCP App view is missing its originating tool call",
               );
             }
-            let interactive = false;
-            try {
-              await requireMcpAppInteraction(view);
-              interactive = true;
-            } catch {
-              // Reconstructed or revoked source leases may be pinned only as read-only content.
-            }
+            resolveMcpAppInteraction = async () => {
+              try {
+                await requireMcpAppInteraction(view);
+                return true;
+              } catch {
+                // Reconstructed or revoked sources can still be pinned read-only.
+                return false;
+              }
+            };
+            let interactive = await resolveMcpAppInteraction();
             authority.assertActive();
             const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
             authority.assertActive();
             if (interactive) {
-              try {
-                await requireMcpAppInteraction(view);
-              } catch {
-                interactive = false;
-              }
+              interactive = await resolveMcpAppInteraction();
               authority.assertActive();
             }
             content = {
@@ -398,6 +399,7 @@ export function createBoardHandlers(
           }
           const putWidget = () =>
             store.putWidget(boardParams, {
+              ...(resolveMcpAppInteraction ? { resolveMcpAppInteraction } : {}),
               assertCurrent: () => {
                 authority.assertActive();
                 identity?.assertSelected();
@@ -432,6 +434,7 @@ export function createBoardHandlers(
               cfg: context.getRuntimeConfig(),
               ...boardSession,
               name: snapshot.resolvedWidgetName,
+              content: materializedContent,
               declared: declared ?? {},
             });
             authority.assertActive();

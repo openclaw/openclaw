@@ -110,6 +110,7 @@ function buildNormalizedWizardSetup(params: {
   const modelAllowlist = buildNormalizedModelAllowlist(params.setup.modelAllowlist);
   return {
     ...(choiceId ? { choiceId } : {}),
+    ...(params.setup.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
     ...(choiceLabel ? { choiceLabel } : {}),
     ...(choiceHint ? { choiceHint } : {}),
     ...(typeof params.setup.assistantPriority === "number" &&
@@ -117,7 +118,8 @@ function buildNormalizedWizardSetup(params: {
       ? { assistantPriority: params.setup.assistantPriority }
       : {}),
     ...(params.setup.assistantVisibility === "manual-only" ||
-    params.setup.assistantVisibility === "visible"
+    params.setup.assistantVisibility === "visible" ||
+    params.setup.assistantVisibility === "detected-only"
       ? { assistantVisibility: params.setup.assistantVisibility }
       : {}),
     ...(params.setup.onboardingFeatured === true ? { onboardingFeatured: true } : {}),

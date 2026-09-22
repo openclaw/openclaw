@@ -39,6 +39,7 @@ Quick `/acp` flow from chat:
 <AccordionGroup>
   <Accordion title="Lifecycle details">
     - Spawn creates or resumes an ACP runtime session, records ACP metadata in the OpenClaw session store, and may create a background task when the run is parent-owned.
+    - A failed spawn waits for any already-started provisional session deletion to finish before returning, including when the cleanup request deadline expires.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery go through the parent task notifier rather than acting like a normal user-facing chat session.
     - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
     - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.

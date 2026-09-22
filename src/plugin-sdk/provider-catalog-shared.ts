@@ -13,6 +13,8 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
+export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
+
 export type {
   ProviderCatalogContext,
   ProviderCatalogOutcome,

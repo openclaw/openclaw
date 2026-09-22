@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as bundledSources from "./bundled-sources.js";
 import { attachPluginInstallOwnerMigrations } from "./install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -82,6 +83,7 @@ function installedIndex(params: {
 describe("plugin release cohort package reconciliation", () => {
   const tempDirs: string[] = [];
   afterEach(() => cleanupTrackedTempDirs(tempDirs));
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.resetAllMocks();
     collectMissingPluginInstallPayloadsMock.mockResolvedValue([]);
@@ -99,6 +101,7 @@ describe("plugin release cohort package reconciliation", () => {
   });
 
   it("keeps updates and payload verification active without initial install owners", async () => {
+    const sourceDiscovery = vi.spyOn(bundledSources, "resolveSourceCheckoutBundledPluginIds");
     const config = { plugins: { entries: { unrelated: { enabled: false } } } };
     const records = {
       introduced: {
@@ -145,7 +148,42 @@ describe("plugin release cohort package reconciliation", () => {
       remainingMissingPayloads: remaining,
     });
     expect(loadInstalledPluginIndexMock).not.toHaveBeenCalled();
+    expect(sourceDiscovery).not.toHaveBeenCalled();
   });
+
+  it.each(["global", "ambiguous-config"] as const)(
+    "refuses %s package ownership without guessing or changing its install",
+    async (kind) => {
+      const rootDir = "/plugins/ownerless";
+      const records = {
+        ownerless: { source: "npm", spec: "@example/ownerless", installPath: rootDir },
+      } satisfies Record<string, PluginInstallRecord>;
+      const plugin = {
+        ...pluginRecord({ pluginId: "ownerless", installOwner: "ownerless", rootDir }),
+        installOwner: undefined,
+        origin: kind === "global" ? ("global" as const) : ("config" as const),
+      };
+      if (kind === "ambiguous-config") {
+        recordInstalledPluginIndexInstallOwner(plugin, undefined, true);
+      }
+      const config = {
+        plugins: {
+          installs: records,
+          ...(kind === "ambiguous-config" ? { load: { paths: [rootDir] } } : {}),
+        },
+      };
+      loadInstalledPluginIndexMock.mockReturnValue(installedIndex({ records, plugin }));
+      const result = convergePluginReleaseCohort({ config, channel: "stable", timeoutMs: 60_000 });
+
+      await expect(result).rejects.toThrow(
+        kind === "global"
+          ? 'Plugin "ownerless" has no authoritative package-owner metadata. Package maintenance requires an unambiguous install record and its discovered package owner.'
+          : 'Plugin "ownerless" has ambiguous package ownership',
+      );
+      expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+      expect(config.plugins.installs).toEqual(records);
+    },
+  );
 
   it.each(["missing", "replaced", "replaced after sync introduces its owner"] as const)(
     "reconciles %s payloads against the new package metadata",
@@ -284,6 +322,12 @@ describe("plugin release cohort package reconciliation", () => {
       plugins: { ...config.plugins, installs: canonicalRecords },
     } satisfies OpenClawConfig;
     loadInstalledPluginIndexMock
+      .mockReturnValueOnce(
+        installedIndex({
+          records: legacyRecords,
+          plugin: pluginRecord({ pluginId: "qqbot", installOwner: "qqbot", rootDir: legacyRoot }),
+        }),
+      )
       .mockReturnValueOnce(
         installedIndex({
           records: legacyRecords,

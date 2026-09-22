@@ -12,6 +12,19 @@ For Linux-specific issues (especially snap Chromium), see
 For WSL2 Gateway + Windows Chrome split-host setups, see
 [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
+## Inspection times out but screenshots work
+
+Snapshots and page-text reads use a browser automation connection that can become
+stale even while tab listing and screenshots still work. OpenClaw reconnects once
+when that connection can no longer resolve the requested tab. Unresponsive sibling
+tabs share one target-inspection wait instead of adding a separate wait per tab.
+
+Retry the inspection once with the same profile and target ID. If it still fails,
+run `openclaw browser doctor` and inspect a screenshot before restarting the
+Gateway. A browser-rendered HTTP error, such as `403 Forbidden`, is evidence that
+the website denied access; it does not establish whether a profile or resource
+exists.
+
 ## Output directory errors
 
 If an output fails with `Invalid path: must stay within output directory`, set
@@ -56,7 +69,16 @@ Important behavior details:
 
 - Browser config defaults to a fail-closed SSRF policy object even when you do not configure `browser.ssrfPolicy`.
 - For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
+- After launching a local managed browser, readiness probes allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays. The readiness retry window is eight seconds; probes near its end use shorter timeouts.
+- Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness probes; canceling one caller waiting for a shared start does not stop that shared launch.
 - Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
+
+Resetting or deleting a local managed profile stops a verified browser left by an
+earlier Gateway runtime before moving its data. If a live profile owner cannot be
+verified or stopped, OpenClaw preserves the profile data and reports the reason.
+Close the browser using that profile and check its Chromium lock before retrying.
+Locks naming another hostname remain unverified, including after a machine rename;
+starting the browser also preserves that locked profile's preferences.
 
 Security guidance:
 

@@ -22,6 +22,13 @@ export type SandboxFsStat = {
 
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
+  /**
+   * Backend-owned runtime roots and their local policy projections, in mount
+   * precedence order for equal roots. These do not grant access: bridge methods
+   * still enforce visibility, read-only rules and physical path safety.
+   * Omit only for pre-descriptor SDK implementations; an empty list admits nothing.
+   */
+  readonly pathMappings?: readonly { readonly hostRoot: string; readonly containerRoot: string }[];
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   /**
    * Resolves the canonical mutation destination before caller authorization.
@@ -64,6 +71,23 @@ export type SandboxFsBridge = {
     signal?: AbortSignal;
     maxBytes?: number;
   }): Promise<Buffer>;
+  /**
+   * Returns the canonical runtime path pinned by the successful read itself.
+   * This identifies directory aliases, not inode equivalence across renames.
+   * Consumers that filter protected sources must require this capability;
+   * a separate path lookup cannot establish the source of the returned bytes.
+   */
+  readFileWithSource?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    maxBytes?: number;
+  }): Promise<{
+    data: Buffer;
+    canonicalPath: string;
+    /** Canonical POSIX path within the workspace mount; absent for other mounts. */
+    workspaceRelativePath?: string;
+  }>;
   /** Streams a regular file within the sandbox when the backend supports native copying. */
   copyFile?(params: {
     sourcePath: string;

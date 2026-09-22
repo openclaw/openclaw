@@ -189,6 +189,8 @@ corresponding reference list; off-by-one mistakes fail with a clear error.
 Use an empty string to leave a slot unset. For xAI, set every image role to
 `reference_image` to use its `reference_images` generation mode; omit the
 role or use `first_frame` for single-image image-to-video.
+Repeated references keep their positions, so the same image can supply both
+`first_frame` and `last_frame` for a looping clip.
 </Note>
 
 ### Style controls

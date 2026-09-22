@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -23,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {

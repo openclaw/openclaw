@@ -546,51 +546,39 @@ describe("level directive preserves message text after an invalid level", () => 
 
 describe("native directive commands own their complete argument boundary", () => {
   it.each([
-    {
-      command: "think" as const,
-      body: "/think about my deployment plan",
-      rawKey: "rawThinkLevel" as const,
-      invalidArgument: "about",
-      trailingArguments: "my deployment plan",
-    },
-    {
-      command: "verbose" as const,
-      body: "/verbose explain quantum computing",
-      rawKey: "rawVerboseLevel" as const,
-      invalidArgument: "explain",
-      trailingArguments: "quantum computing",
-    },
-    {
-      command: "trace" as const,
-      body: "/trace banana please",
-      rawKey: "rawTraceLevel" as const,
-      invalidArgument: "banana",
-      trailingArguments: "please",
-    },
-    {
-      command: "fast" as const,
-      body: "/fast bananas please",
-      rawKey: "rawFastMode" as const,
-      invalidArgument: "bananas",
-      trailingArguments: "please",
-    },
-    {
-      command: "reasoning" as const,
-      body: "/reasoning nonsense please",
-      rawKey: "rawReasoningLevel" as const,
-      invalidArgument: "nonsense",
-      trailingArguments: "please",
-    },
-    {
-      command: "elevated" as const,
-      body: "/elevated perhaps explain",
-      rawKey: "rawElevatedLevel" as const,
-      invalidArgument: "perhaps",
-      trailingArguments: "explain",
-    },
+    [
+      "think" as const,
+      "/think about my deployment plan",
+      "rawThinkLevel" as const,
+      "about",
+      "my deployment plan",
+    ],
+    [
+      "verbose" as const,
+      "/verbose explain quantum computing",
+      "rawVerboseLevel" as const,
+      "explain",
+      "quantum computing",
+    ],
+    ["trace" as const, "/trace banana please", "rawTraceLevel" as const, "banana", "please"],
+    ["fast" as const, "/fast bananas please", "rawFastMode" as const, "bananas", "please"],
+    [
+      "reasoning" as const,
+      "/reasoning nonsense please",
+      "rawReasoningLevel" as const,
+      "nonsense",
+      "please",
+    ],
+    [
+      "elevated" as const,
+      "/elevated perhaps explain",
+      "rawElevatedLevel" as const,
+      "perhaps",
+      "explain",
+    ],
   ])(
-    "preserves the invalid first argument for native /$command",
-    ({ body, command, invalidArgument, rawKey, trailingArguments }) => {
+    "preserves the invalid first argument for native /%s",
+    (command, body, rawKey, invalidArgument, trailingArguments) => {
       const parsed = parseInlineSessionDirectives(body, {
         command: { kind: "native", name: command },
       });

@@ -182,7 +182,15 @@ export function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): bool
 }
 
 export function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
-  return shouldSynthesizeToolProgressForItem(item);
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "webSearch":
+    case "mcpToolCall":
+      return true;
+    default:
+      return false;
+  }
 }
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {

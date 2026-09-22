@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { resolveStateDir } from "../paths.js";
+import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 export type SessionStorePathScope = {

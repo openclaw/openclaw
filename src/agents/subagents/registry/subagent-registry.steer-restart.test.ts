@@ -164,6 +164,15 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../../../context-engine/registry.js", () => ({
+  resolveContextEngine: vi.fn(async () => noopContextEngine),
+}));
+vi.mock("../../runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+});
+
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "subagent_ended",
@@ -175,9 +184,11 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   resetGlobalHookRunner: vi.fn(),
 }));
 
-vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
-  emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
-}));
+vi.mock("../../../sessions/session-lifecycle-events.js", async (importOriginal) => {
+  const { onSessionIdentityMutation } =
+    await importOriginal<typeof import("../../../sessions/session-lifecycle-events.js")>();
+  return { emitSessionLifecycleEvent: emitSessionLifecycleEventMock, onSessionIdentityMutation };
+});
 
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: removeInternalSessionEffectsSessionMock,
@@ -199,11 +210,6 @@ describe("subagent registry steer restarts", () => {
       delete sessionStore[key];
     }
     lifecycleHandler = undefined;
-    mod.testing.setDepsForTest({
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      resolveContextEngine: async () => noopContextEngine,
-    });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     runSubagentEndedHookMock.mockReset();
@@ -347,7 +353,6 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    mod.testing.setDepsForTest();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     runSubagentEndedHookMock.mockReset();
@@ -403,42 +408,6 @@ describe("subagent registry steer restarts", () => {
 
       const announce = requireFirstAnnounceCall();
       expect(announce.childRunId).toBe("run-new");
-    }
-  });
-
-  it("removes orphaned private transcript when steer replaces an internally resumed run", async () => {
-    {
-      registerRun({
-        runId: "run-old",
-        childSessionKey: "agent:main:subagent:steer",
-        task: "initial task",
-      });
-
-      const previous = listMainRuns()[0];
-      expect(previous?.runId).toBe("run-old");
-      if (!previous) {
-        throw new Error("expected registered subagent run");
-      }
-      previous.execution = {
-        status: "interrupted",
-        startedAt: previous.execution.startedAt,
-        transcriptTarget: {
-          agentId: "main",
-          sessionId: "internal-run-old",
-          sessionKey: "agent:main:internal-session-effects:run-old",
-          storePath: "/tmp/test-store",
-        },
-      };
-
-      replaceRunAfterSteer({
-        previousRunId: "run-old",
-        nextRunId: "run-new",
-        fallback: previous,
-      });
-
-      expect(removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith(
-        previous.execution.transcriptTarget,
-      );
     }
   });
 

@@ -33,26 +33,18 @@ describe("parseSteerInput", () => {
   });
 
   it.each([
-    {
-      tokens: ["--session", " primary ", "one", "two"],
-      sessionToken: "primary",
-      instruction: "one two",
-    },
-    {
-      tokens: ["--session= primary ", "one", "two"],
-      sessionToken: "primary",
-      instruction: "one two",
-    },
-    { tokens: ["--session=--literal", "one"], sessionToken: "--literal", instruction: "one" },
-    { tokens: ["--session=—target", "one"], sessionToken: "—target", instruction: "one" },
-    {
-      tokens: ["one", "--session", "first", "two", "--session=second", "—literal"],
-      sessionToken: "second",
-      instruction: "one two —literal",
-    },
+    [["--session", " primary ", "one", "two"], "primary", "one two"],
+    [["--session= primary ", "one", "two"], "primary", "one two"],
+    [["--session=--literal", "one"], "--literal", "one"],
+    [["--session=—target", "one"], "—target", "one"],
+    [
+      ["one", "--session", "first", "two", "--session=second", "—literal"],
+      "second",
+      "one two —literal",
+    ],
   ])(
-    "consumes session values without changing instructions: $tokens",
-    ({ tokens, sessionToken, instruction }) => {
+    "consumes session values without changing instructions: %s",
+    (tokens, sessionToken, instruction) => {
       expect(parseSteerInput(tokens)).toEqual({
         ok: true,
         value: { sessionToken, instruction },

@@ -193,13 +193,14 @@ describe("orphan SQLite sidecar admission", () => {
     }
   });
 
-  it("uses a unique suffix instead of overwriting an existing quarantine", () => {
+  it("preserves a same-size quarantine with different contents and copies to a unique suffix", () => {
     const { databasePath, env } = prepareCase("state");
     const sourcePath = `${databasePath}-wal`;
     const epochMs = 1_786_738_000_000;
     const existingQuarantinePath = `${sourcePath}.orphaned-${epochMs}`;
     const newQuarantinePath = `${existingQuarantinePath}-1`;
-    const existingContents = Buffer.from("previously quarantined WAL");
+    const existingContents = Buffer.from(walFixture.withFrames);
+    existingContents.writeUInt8(existingContents.readUInt8(32) ^ 0xff, 32);
     fs.writeFileSync(sourcePath, walFixture.withFrames);
     fs.writeFileSync(existingQuarantinePath, existingContents);
     vi.spyOn(Date, "now").mockReturnValue(epochMs);
@@ -215,25 +216,39 @@ describe("orphan SQLite sidecar admission", () => {
     );
   });
 
-  it("leaves the live sidecar untouched and reuses an identical preserved copy", () => {
-    const { databasePath } = prepareCase("state");
-    const sourcePath = `${databasePath}-wal`;
-    fs.writeFileSync(sourcePath, walFixture.withFrames);
+  for (const sourceKind of ["file", "symlink"] as const) {
+    it.skipIf(sourceKind === "symlink" && process.platform === "win32")(
+      `leaves the live ${sourceKind} sidecar untouched and reuses an identical preserved copy`,
+      () => {
+        const { databasePath } = prepareCase("state");
+        const sourcePath = `${databasePath}-wal`;
+        const targetPath = sourceKind === "symlink" ? `${databasePath}-wal-target` : sourcePath;
+        fs.writeFileSync(targetPath, walFixture.withFrames);
+        if (sourceKind === "symlink") {
+          fs.symlinkSync(targetPath, sourcePath);
+        }
 
-    quarantineOrphanedSqliteSidecars(databasePath);
-    const quarantinePaths = listQuarantinePaths(sourcePath);
+        quarantineOrphanedSqliteSidecars(databasePath);
+        const quarantinePaths = listQuarantinePaths(sourcePath);
 
-    expect(quarantinePaths).toHaveLength(1);
-    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
-    expect(fs.readFileSync(quarantinePaths[0] ?? "")).toEqual(walFixture.withFrames);
-    loggerMocks.warn.mockClear();
+        expect(quarantinePaths).toHaveLength(1);
+        expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+        expect(fs.readFileSync(quarantinePaths[0] ?? "")).toEqual(walFixture.withFrames);
+        loggerMocks.warn.mockClear();
 
-    quarantineOrphanedSqliteSidecars(databasePath);
+        quarantineOrphanedSqliteSidecars(databasePath);
 
-    expect(listQuarantinePaths(sourcePath)).toEqual(quarantinePaths);
-    expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
-    expect(loggerMocks.warn).not.toHaveBeenCalled();
-  });
+        expect(listQuarantinePaths(sourcePath)).toEqual(quarantinePaths);
+        expect(fs.readFileSync(sourcePath)).toEqual(walFixture.withFrames);
+        expect(fs.readFileSync(targetPath)).toEqual(walFixture.withFrames);
+        expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(sourceKind === "symlink");
+        if (sourceKind === "symlink") {
+          expect(fs.readlinkSync(sourcePath)).toBe(targetPath);
+        }
+        expect(loggerMocks.warn).not.toHaveBeenCalled();
+      },
+    );
+  }
 
   it("fails closed with the typed error when quarantine copy fails", () => {
     const { databasePath, env } = prepareCase("state");

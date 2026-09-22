@@ -10,12 +10,20 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   buildScriptEvidenceSummary,
+  captureQaEvidenceRuntimeIdentity,
+  captureQaEvidenceSourceIdentity as readSourceIdentity,
+  createQaEvidenceInvocation,
   QA_EVIDENCE_FILENAME,
+  QA_FRONTIER_PROVIDER_IDS,
   validateQaEvidenceSummaryJson,
+  type QaEvidenceIdentity,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
-} from "../extensions/qa-lab/api.js";
+} from "../extensions/qa-lab/test-api.js";
+import type { CodeModeExecutorId } from "../src/agents/code-mode-executor-types.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { mergeDeep } from "../src/infra/deep-merge.js";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
 import {
@@ -26,6 +34,19 @@ import type {
   GatewayMatrixEvidence,
   GatewayMatrixWorkload,
 } from "./lib/code-mode-matrix-gateway.ts";
+import {
+  MATRIX_PERFORMANCE_TASKS,
+  isMatrixPerformanceTask,
+  type MatrixPerformanceTask,
+} from "./lib/code-mode-matrix-performance-fixtures.ts";
+import {
+  classifyCodeModeMatrixProviderFailure,
+  matrixModelConfig,
+  matrixProviderEnv,
+  matrixProviderAuthSelection,
+  type MatrixProviderFailureCategory,
+} from "./lib/code-mode-matrix-provider.ts";
+import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 
 export { validateQaEvidenceSummaryJson };
@@ -37,6 +58,14 @@ const DEFAULT_REPETITIONS = 3;
 const DEFAULT_TIMEOUT_SECONDS = 180;
 const MAX_REPETITIONS = 10;
 const MAX_DIAGNOSTIC_CHARS = 8_000;
+const STRICT_SOURCE_IDENTITY_OPTIONS = { gitTimeoutMs: 60_000 };
+const DEFAULT_ADMISSION = {
+  concurrency: 2,
+  maxCells: 36,
+  maxTokens: 1_000_000,
+  maxKnownCostUsd: 25,
+  maxWallSeconds: 3_600,
+};
 
 export type CodeModeMatrixMode = "direct" | "auto" | "code";
 const MATRIX_TASKS = [
@@ -46,12 +75,14 @@ const MATRIX_TASKS = [
   "parallel-independent-reads",
   "dependent-chain",
   ...GATEWAY_MATRIX_TASKS,
+  ...MATRIX_PERFORMANCE_TASKS,
 ] as const;
 export type CodeModeMatrixTask = (typeof MATRIX_TASKS)[number];
 
 export type CodeModeMatrixOptions = {
   allowFailures: boolean;
   dryRun: boolean;
+  gatewayExecutor?: CodeModeExecutorId;
   keepState: boolean;
   models: string[];
   modes: CodeModeMatrixMode[];
@@ -63,6 +94,12 @@ export type CodeModeMatrixOptions = {
   tasks: CodeModeMatrixTask[];
   thinking: string;
   timeoutSeconds: number;
+  concurrency?: number;
+  maxCells?: number;
+  maxTokens?: number;
+  maxKnownCostUsd?: number;
+  maxWallSeconds?: number;
+  schedulePath?: string;
 };
 
 export type MatrixCell = {
@@ -85,6 +122,7 @@ export type MatrixRuntimeEntrypoint = {
 };
 
 type CellFailureCategory =
+  | MatrixProviderFailureCategory
   | "activation"
   | "agent_error"
   | "answer_mismatch"
@@ -92,13 +130,11 @@ type CellFailureCategory =
   | "harness_error"
   | "interview_mismatch"
   | "model_mismatch"
-  | "provider_auth"
-  | "provider_billing"
-  | "provider_transport"
   | "timeout"
   | "tool_execution";
 
 export type CodeModeMatrixCellResult = {
+  accounting?: MatrixUsageAccounting;
   assistantTurns?: number;
   bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
   buildSha256: string;
@@ -106,6 +142,8 @@ export type CodeModeMatrixCellResult = {
   costUsd?: number;
   diagnostics?: string;
   elapsedMs: number;
+  evidenceOccurrenceId?: string;
+  executor?: CodeModeExecutorId;
   error?: AgentExecEnvelope["error"];
   expected: string;
   failureCategory: CellFailureCategory | null;
@@ -117,7 +155,7 @@ export type CodeModeMatrixCellResult = {
   observedModel: string | null;
   observedProvider: string | null;
   oracle: {
-    answer: boolean;
+    answer: boolean | null;
     effect: boolean;
     engagement: boolean;
     identity: boolean;
@@ -140,6 +178,7 @@ export type RunCellParams = {
   abortSignal?: AbortSignal;
   buildSha256: string;
   cell: MatrixCell;
+  executor?: CodeModeExecutorId;
   gitSha: string;
   keepState: boolean;
   outputDir: string;
@@ -167,18 +206,25 @@ type SourceIdentity = {
 };
 
 function usage() {
-  return `Usage: pnpm qa:code-mode-models -- --model <provider/model> [options]
+  return `Usage: pnpm qa:code-mode-models --model <provider/model> [options]
 
 Runs repeated Code Mode acceptance cells through the normal embedded agent path.
 
 Options:
   --model <provider/model>  Model reference; repeat for multiple models
   --mode <mode>             direct | auto | code; repeat to select modes
+  --executor <executor>     node | quickjs for Gateway tasks only (default: node)
   --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
                             (default: read, dependent-read-write)
   --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
   --timeout <seconds>       Per-run agent deadline (default: ${DEFAULT_TIMEOUT_SECONDS})
-  --thinking <level>        Agent thinking level (default: off)
+  --thinking <level>        Agent thinking level (default: low)
+  --concurrency <n>         Concurrent root cells per wave, 1–3 (default: 2)
+  --schedule <path>         JSON array of {model,task,repetition,firstMode} paired waves
+  --max-cells <n>           Admit complete waves up to this count (default: 36)
+  --max-tokens <n>          Stop new waves at observed token total (default: 1000000)
+  --max-known-cost-usd <n>  Stop new waves at known cost (default: 25)
+  --max-wall-seconds <n>    Stop new waves after elapsed time (default: 3600)
   --output-dir <path>       Repo-relative artifact directory
   --runtime-dir <path>      Use a clean, already-built checkout without rebuilding it
   --baseline-results <path> Compare matching cells from an earlier results.jsonl
@@ -188,6 +234,8 @@ Options:
   -h, --help                Show this help
 
 Provider credentials are read from the environment and are never written to artifacts.
+Token, known-cost, and wall limits stop admission; already admitted waves settle.
+Missing usage and prices remain unknown. These limits are not hard spending caps.
 `;
 }
 
@@ -225,7 +273,13 @@ function parseTask(raw: string): CodeModeMatrixTask {
   throw new Error(`--task must be one of ${MATRIX_TASKS.join(", ")}; got ${JSON.stringify(raw)}`);
 }
 
-function isGatewayTask(task: CodeModeMatrixTask): task is GatewayMatrixTask {
+function isGatewayTask(
+  task: CodeModeMatrixTask,
+): task is GatewayMatrixTask | MatrixPerformanceTask {
+  return isMatrixPerformanceTask(task) || isGatewayContractTask(task);
+}
+
+function isGatewayContractTask(task: CodeModeMatrixTask): task is GatewayMatrixTask {
   return GATEWAY_MATRIX_TASKS.some((candidate) => candidate === task);
 }
 
@@ -238,13 +292,16 @@ export function parseCodeModeMatrixOptions(
   const tasks: CodeModeMatrixTask[] = [];
   let allowFailures = false;
   let dryRun = false;
+  let gatewayExecutor: CodeModeExecutorId = "node";
   let keepState = false;
   let outputDir: string | undefined;
   let runtimeDir: string | undefined;
   let baselineResults: string | undefined;
   let repetitions = DEFAULT_REPETITIONS;
-  let thinking = "off";
+  let thinking = "low";
   let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
+  const admission = { ...DEFAULT_ADMISSION };
+  let schedulePath: string | undefined;
   const seen = new Set<string>();
   const recordOnce = (flag: string) => {
     if (seen.has(flag)) {
@@ -254,7 +311,7 @@ export function parseCodeModeMatrixOptions(
   };
 
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+    const arg = argv[index] ?? "";
     if (arg === "--model") {
       const value = requireOptionArgument(argv, index, arg).trim();
       if (!value.includes("/")) {
@@ -266,8 +323,46 @@ export function parseCodeModeMatrixOptions(
       index += 1;
       continue;
     }
+    const admissionKeys: Record<string, keyof typeof admission> = {
+      "--concurrency": "concurrency",
+      "--max-cells": "maxCells",
+      "--max-tokens": "maxTokens",
+      "--max-known-cost-usd": "maxKnownCostUsd",
+      "--max-wall-seconds": "maxWallSeconds",
+    };
+    const admissionKey = admissionKeys[arg];
+    if (admissionKey) {
+      recordOnce(arg);
+      const raw = requireOptionArgument(argv, index, arg);
+      const value =
+        admissionKey === "maxKnownCostUsd"
+          ? Number(raw)
+          : parseIntegerOption(raw, arg, admissionKey === "concurrency" ? 3 : undefined);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`${arg} must be a positive number`);
+      }
+      admission[admissionKey] = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--schedule") {
+      recordOnce(arg);
+      schedulePath = path.resolve(cwd, requireOptionArgument(argv, index, arg));
+      index += 1;
+      continue;
+    }
     if (arg === "--mode") {
       collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--executor") {
+      recordOnce(arg);
+      const value = requireOptionArgument(argv, index, arg);
+      if (value !== "node" && value !== "quickjs") {
+        throw new Error(`--executor must be node or quickjs; got ${JSON.stringify(value)}`);
+      }
+      gatewayExecutor = value;
       index += 1;
       continue;
     }
@@ -339,13 +434,31 @@ export function parseCodeModeMatrixOptions(
   if (models.length === 0) {
     throw new Error("At least one --model <provider/model> is required");
   }
-  if (tasks.some(isGatewayTask)) {
+  if (
+    seen.has("--executor") &&
+    (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))
+  ) {
+    throw new Error("--executor requires only Gateway-backed tasks.");
+  }
+  if (tasks.some(isGatewayContractTask)) {
     if (modes.length !== 1 || modes[0] !== "code") {
       throw new Error("Gateway interview tasks require --mode code.");
     }
-    if (models.some((model) => !model.startsWith("openai/"))) {
-      throw new Error("Gateway interview tasks currently require explicit OpenAI models.");
-    }
+  }
+  if (
+    tasks.some(isGatewayTask) &&
+    models.some(
+      (model) => !QA_FRONTIER_PROVIDER_IDS.some((provider) => model.startsWith(`${provider}/`)),
+    )
+  ) {
+    throw new Error("Gateway tasks require explicit OpenAI, Anthropic, or Google models.");
+  }
+  if (
+    tasks.some(isMatrixPerformanceTask) &&
+    modes.length > 0 &&
+    (modes.length !== 2 || !modes.includes("direct") || !modes.includes("code"))
+  ) {
+    throw new Error("Performance tasks require both explicit direct/code treatment arms.");
   }
   if (baselineResults && (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))) {
     throw new Error(
@@ -354,15 +467,23 @@ export function parseCodeModeMatrixOptions(
   }
   return {
     allowFailures,
+    ...admission,
     dryRun,
+    gatewayExecutor,
     keepState,
     models,
-    modes: modes.length > 0 ? modes : ["direct", "auto", "code"],
+    modes:
+      modes.length > 0
+        ? modes
+        : tasks.some(isMatrixPerformanceTask)
+          ? ["direct", "code"]
+          : ["direct", "auto", "code"],
     outputDir,
     repetitions,
     repoRoot: path.resolve(cwd),
     ...(runtimeDir ? { runtimeDir } : {}),
     ...(baselineResults ? { baselineResults } : {}),
+    ...(schedulePath ? { schedulePath } : {}),
     tasks: tasks.length > 0 ? tasks : ["read", "dependent-read-write"],
     thinking,
     timeoutSeconds,
@@ -579,23 +700,92 @@ export async function reserveCodeModeMatrixOutputDir(
   }
 }
 
-function buildCells(options: CodeModeMatrixOptions): MatrixCell[] {
-  return options.models.flatMap((model) =>
-    options.modes.flatMap((mode) =>
-      options.tasks.flatMap((task) =>
-        Array.from({ length: options.repetitions }, (_, index) => {
-          const repetition = index + 1;
-          return {
-            id: `${modelCellPrefix(model)}-${mode}-${task}-${repetition}`,
-            mode,
-            model,
-            repetition,
-            task,
-          };
-        }),
+type MatrixScheduleEntry = {
+  model: string;
+  task: CodeModeMatrixTask;
+  repetition: number;
+  firstMode: "direct" | "code";
+};
+
+async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCell[][]> {
+  let schedule: MatrixScheduleEntry[];
+  if (options.schedulePath) {
+    const value: unknown = JSON.parse(await fs.readFile(options.schedulePath, "utf8"));
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("--schedule must contain a nonempty JSON array of paired waves.");
+    }
+    if (
+      options.modes.length !== 2 ||
+      !options.modes.includes("direct") ||
+      !options.modes.includes("code")
+    ) {
+      throw new Error("--schedule requires exactly --mode direct and --mode code.");
+    }
+    schedule = value.map((row: unknown): MatrixScheduleEntry => {
+      if (
+        !row ||
+        typeof row !== "object" ||
+        !("model" in row) ||
+        !("task" in row) ||
+        !("repetition" in row) ||
+        typeof row.model !== "string" ||
+        !options.models.includes(row.model) ||
+        typeof row.task !== "string" ||
+        !options.tasks.some((task) => task === row.task) ||
+        typeof row.repetition !== "number" ||
+        !Number.isInteger(row.repetition) ||
+        row.repetition < 1 ||
+        row.repetition > options.repetitions ||
+        !("firstMode" in row) ||
+        (row.firstMode !== "direct" && row.firstMode !== "code")
+      ) {
+        throw new Error(
+          "Each schedule wave must select an admitted model, task, repetition, and direct/code firstMode.",
+        );
+      }
+      return {
+        model: row.model,
+        task: parseTask(row.task),
+        repetition: row.repetition,
+        firstMode: row.firstMode,
+      };
+    });
+  } else {
+    schedule = options.models.flatMap((model, modelIndex) =>
+      options.tasks.flatMap((task, taskIndex) =>
+        Array.from({ length: options.repetitions }, (_, index) => ({
+          model,
+          task,
+          repetition: index + 1,
+          firstMode:
+            (modelIndex + taskIndex + index) % 2 === 0 ? ("direct" as const) : ("code" as const),
+        })),
       ),
-    ),
-  );
+    );
+  }
+  const seen = new Set<string>();
+  return schedule.map(({ model, task, repetition, firstMode }) => {
+    const key = `${model}\0${task}\0${repetition}`;
+    if (seen.has(key)) {
+      throw new Error(`Duplicate scheduled wave: ${model} ${task} ${repetition}`);
+    }
+    seen.add(key);
+    const modes: CodeModeMatrixMode[] =
+      options.modes.includes("direct") && options.modes.includes("code")
+        ? [
+            firstMode,
+            firstMode === "direct" ? ("code" as const) : ("direct" as const),
+            ...options.modes.filter((mode) => mode === "auto"),
+          ]
+        : options.modes;
+    return modes.map((mode) => ({
+      id: `${modelCellPrefix(model)}-${mode}-${task}-${repetition}`,
+      mode,
+      model,
+      repetition,
+      task,
+    }));
+  });
 }
 
 export function modelCellPrefix(model: string): string {
@@ -608,7 +798,7 @@ function verificationCode(cell: MatrixCell): string {
 }
 
 function taskFixture(cell: MatrixCell): MatrixTaskFixture & { files: Record<string, string> } {
-  const expected = verificationCode(cell);
+  const expected = verificationCode({ ...cell, id: `${cell.task}-${cell.repetition}` });
   const facts = { "facts.txt": `project=openclaw\nverification_code=${expected}\n` };
   if (cell.task === "read") {
     return {
@@ -695,57 +885,11 @@ async function prepareTaskFixture(workspace: string, cell: MatrixCell): Promise<
   return fixture;
 }
 
-async function readGitSha(repoRoot: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  return stdout.trim();
-}
-
-async function readSourceIdentity(repoRoot: string): Promise<SourceIdentity> {
-  const gitSha = await readGitSha(repoRoot);
-  const [{ stdout: patch }, { stdout: untrackedOutput }] = await Promise.all([
-    execFileAsync("git", ["diff", "--binary", "HEAD", "--", "."], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-    }),
-    execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    }),
-  ]);
-  const untracked = untrackedOutput.split("\0").filter(Boolean).toSorted();
-  const sourceDirty = patch.length > 0 || untracked.length > 0;
-  if (!sourceDirty) {
-    return { gitSha, sourceDirty: false, sourcePatchSha256: null };
-  }
-
-  const hash = createHash("sha256").update(patch);
-  for (const relativePath of untracked) {
-    const filePath = path.join(repoRoot, relativePath);
-    const stat = await fs.lstat(filePath);
-    hash.update(`\0${relativePath}\0${stat.mode}\0`);
-    if (stat.isSymbolicLink()) {
-      hash.update(await fs.readlink(filePath));
-    } else if (stat.isFile()) {
-      hash.update(await fs.readFile(filePath));
-    }
-  }
-  return {
-    gitSha,
-    sourceDirty: true,
-    sourcePatchSha256: hash.digest("hex"),
-  };
-}
-
 async function hashDirectory(root: string): Promise<string> {
   const hash = createHash("sha256");
   const visit = async (directory: string): Promise<void> => {
     const entries = (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
-      a.name.localeCompare(b.name),
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     );
     for (const entry of entries) {
       const filePath = path.join(directory, entry.name);
@@ -768,7 +912,9 @@ async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
   const artifacts = [{ label: "dist", root: path.join(repoRoot, "dist") }];
   const packagesRoot = path.join(repoRoot, "packages");
   const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true });
-  for (const entry of packageEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of packageEntries.toSorted((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  )) {
     if (!entry.isDirectory()) {
       continue;
     }
@@ -817,25 +963,6 @@ function expectedEngagement(mode: CodeModeMatrixMode, engaged: boolean | undefin
   return engaged === (mode === "code");
 }
 
-function classifyProviderFailure(text: string): CellFailureCategory | null {
-  if (
-    /\b402\b|billing|credits? (?:depleted|exhausted|insufficient)|payment required/iu.test(text)
-  ) {
-    return "provider_billing";
-  }
-  if (/\b401\b|\b403\b|unauthorized|forbidden|invalid (?:api )?key|authentication/iu.test(text)) {
-    return "provider_auth";
-  }
-  if (
-    /connection refused|connect timeout|fetch failed|network|socket|stream.*(?:closed|ended)|http 5\d\d/iu.test(
-      text,
-    )
-  ) {
-    return "provider_transport";
-  }
-  return null;
-}
-
 export function classifyCodeModeMatrixCell(params: {
   diagnostics: string;
   effectPassed: boolean;
@@ -871,7 +998,7 @@ export function classifyCodeModeMatrixCell(params: {
     return { failureCategory: "timeout", oracle, passed: false };
   }
   if (!params.envelope.ok) {
-    const providerFailure = classifyProviderFailure(
+    const providerFailure = classifyCodeModeMatrixProviderFailure(
       `${params.envelope.error?.message ?? ""}\n${params.diagnostics}`,
     );
     if (providerFailure) {
@@ -1028,17 +1155,17 @@ export function buildCodeModeMatrixAgentEnv(
   runtimeCwd: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
+  const provider = model.slice(0, model.indexOf("/"));
+  const config: OpenClawConfig = {
+    plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+  };
   const env: NodeJS.ProcessEnv = {
-    ...baseEnv,
+    PATH: baseEnv.PATH,
+    SystemRoot: baseEnv.SystemRoot,
+    ...matrixProviderEnv(model, config, baseEnv),
     NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(runtimeCwd, "dist", "extensions"),
   };
-  // The local Ollama provider uses a non-secret opt-in marker. Keep cloud and
-  // custom credentials caller-owned, but make the local acceptance path work.
-  if (model.startsWith("ollama/") && !env.OLLAMA_API_KEY) {
-    env.OLLAMA_API_KEY = "ollama-local";
-  }
-  delete env.NODE_COMPILE_CACHE;
   return env;
 }
 
@@ -1056,6 +1183,20 @@ async function executeAgentExec(params: {
   if (!runtime) {
     throw new Error("matrix runtime entrypoint was not prepared");
   }
+  const provider = params.matrix.cell.model.split("/")[0]!;
+  const home = path.join(params.stateDir, "home");
+  const tmp = path.join(params.stateDir, "tmp");
+  await Promise.all([fs.mkdir(home, { recursive: true }), fs.mkdir(tmp, { recursive: true })]);
+  const config = mergeDeep(
+    {
+      agents: { entries: { main: {} } },
+      plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+      tools: { codeMode: { executor: "node" } },
+    },
+    { agents: matrixModelConfig(params.matrix.cell.model, params.matrix.thinking) },
+  );
+  const configPath = path.join(params.stateDir, "matrix-config.json");
+  await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const args = [
     ...runtime.args,
     "agent",
@@ -1069,7 +1210,8 @@ async function executeAgentExec(params: {
     params.matrix.cell.model,
     "--code-mode",
     params.matrix.cell.mode,
-    "--local-model-lean",
+    "--config",
+    configPath,
     "--thinking",
     params.matrix.thinking,
     "--timeout",
@@ -1077,7 +1219,16 @@ async function executeAgentExec(params: {
     "--json",
   ];
   try {
-    const env = buildCodeModeMatrixAgentEnv(params.matrix.cell.model, runtime.cwd);
+    const env: NodeJS.ProcessEnv = {
+      ...buildCodeModeMatrixAgentEnv(params.matrix.cell.model, runtime.cwd),
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: params.stateDir,
+      TMPDIR: tmp,
+      TEMP: tmp,
+      TMP: tmp,
+    };
     const { stdout, stderr } = await execFileAsync(process.execPath, args, {
       cwd: runtime.cwd,
       encoding: "utf8",
@@ -1229,7 +1380,7 @@ function harnessFailureResult(
     elapsedMs,
     error: { kind: "harness_error", message },
     expected: isGatewayTask(cell.task) ? "Gateway task result" : taskFixture(cell).expected,
-    failureCategory: "harness_error",
+    failureCategory: classifyCodeModeMatrixProviderFailure(message) ?? "harness_error",
     final: "",
     gitSha: provenance.gitSha,
     id: cell.id,
@@ -1238,7 +1389,7 @@ function harnessFailureResult(
     observedModel: null,
     observedProvider: null,
     oracle: {
-      answer: false,
+      answer: isMatrixPerformanceTask(cell.task) ? null : false,
       effect: false,
       engagement: false,
       identity: false,
@@ -1458,16 +1609,32 @@ export async function runCodeModeModelMatrix(
           sourceDirty: false,
           sourcePatchSha256: null,
         }
-      : await readSourceIdentity(runtimeRepoRoot);
+      : await readSourceIdentity(runtimeRepoRoot, STRICT_SOURCE_IDENTITY_OPTIONS);
   if (options.runtimeDir && sourceIdentity.sourceDirty) {
     throw new Error("--runtime-dir must identify a clean committed checkout.");
   }
-  const cells = buildCells(options);
+  const waves = await buildCellWaves(options);
+  const cells = waves.flat();
+  const admission = {
+    concurrency: options.concurrency ?? DEFAULT_ADMISSION.concurrency,
+    maxCells: options.maxCells ?? DEFAULT_ADMISSION.maxCells,
+    maxTokens: options.maxTokens ?? DEFAULT_ADMISSION.maxTokens,
+    maxKnownCostUsd: options.maxKnownCostUsd ?? DEFAULT_ADMISSION.maxKnownCostUsd,
+    maxWallSeconds: options.maxWallSeconds ?? DEFAULT_ADMISSION.maxWallSeconds,
+  };
+  if (
+    !Number.isInteger(admission.concurrency) ||
+    admission.concurrency < 1 ||
+    admission.concurrency > 3
+  ) {
+    throw new Error("concurrency must be an integer from 1 to 3");
+  }
   await assertOutputOutsideGitMetadata(options.repoRoot, outputDir);
   if (!options.dryRun && !options.runtimeDir) {
     await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
   }
   if (!options.dryRun && options.runtimeDir) {
+    // Current source can be clean after reverting edits that produced the retained artifacts.
     for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
       const value: unknown = JSON.parse(
         await fs.readFile(path.join(runtimeRepoRoot, "dist", stamp), "utf8"),
@@ -1476,10 +1643,12 @@ export async function runCodeModeModelMatrix(
         !value ||
         typeof value !== "object" ||
         !("head" in value) ||
-        value.head !== sourceIdentity.gitSha
+        value.head !== sourceIdentity.gitSha ||
+        !("inputsClean" in value) ||
+        value.inputsClean !== true
       ) {
         throw new Error(
-          `Frozen runtime ${stamp} does not match its committed source; rebuild it first.`,
+          `Frozen runtime ${stamp} must match its clean committed source and record clean build inputs. Choose a revision with provenance-capable stamp writers and run pnpm build; rebuilding older source without those writers cannot satisfy this check.`,
         );
       }
     }
@@ -1494,35 +1663,64 @@ export async function runCodeModeModelMatrix(
   const buildSha256 = options.dryRun
     ? null
     : await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(runtimeRepoRoot);
+  const launch: QaEvidenceIdentity = {
+    source: {
+      ref: sourceIdentity.gitSha,
+      integrity: `git:${sourceIdentity.gitSha}${sourceIdentity.sourcePatchSha256 ? `+sha256:${sourceIdentity.sourcePatchSha256}` : ""}`,
+    },
+    runtime: captureQaEvidenceRuntimeIdentity(),
+    package: null,
+    protocol: null,
+    accountRef: null,
+    proofClass: null,
+  };
+  const invocation = createQaEvidenceInvocation({
+    scenarios: cells.map((cell) => ({ id: cell.id, execution: { kind: "script" } })),
+    channel: null,
+    launch,
+  });
+  const writeEvidence = async (generatedAt: string) =>
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      invocation.snapshot({ generatedAt, evidenceMode: "full" }),
+    );
   const manifest = {
     schemaVersion: MATRIX_SCHEMA_VERSION,
     generatedAt: now.toISOString(),
     source: SOURCE_PATH,
-    ...(options.runtimeDir ? { harness: await readSourceIdentity(options.repoRoot) } : {}),
+    ...(options.runtimeDir
+      ? { harness: await readSourceIdentity(options.repoRoot, STRICT_SOURCE_IDENTITY_OPTIONS) }
+      : {}),
     ...(options.runtimeDir ? { runtimeDir: runtimeRepoRoot } : {}),
     ...sourceIdentity,
     buildSha256,
     models: options.models,
+    authentication: options.models.map((model) => ({
+      model,
+      ...matrixProviderAuthSelection(model),
+    })),
     modes: options.modes,
+    ...(options.tasks.some(isGatewayTask)
+      ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+      : {}),
     tasks: options.tasks,
     repetitions: options.repetitions,
     timeoutSeconds: options.timeoutSeconds,
     thinking: options.thinking,
     keepState: options.keepState,
     cells: cells.map((cell) => cell.id),
+    waves: waves.map((wave) => wave.map((cell) => cell.id)),
+    admission,
+    admissionContract:
+      "Whole waves are admitted. Token, known-cost, and wall limits are soft; already admitted cells settle. Missing usage and price evidence are not zero.",
   };
   await writeJson(path.join(outputDir, "manifest.json"), manifest);
+  // Persist the complete schedule before any cell starts. An interrupted or dry
+  // run retains null selections instead of inventing successful observations.
+  await writeEvidence(now.toISOString());
   if (options.dryRun) {
     const summary = { status: "dry-run", total: cells.length };
     await writeJson(path.join(outputDir, "summary.json"), summary);
-    await writeJson(
-      path.join(outputDir, QA_EVIDENCE_FILENAME),
-      buildCodeModeMatrixEvidence({
-        generatedAt: now.toISOString(),
-        repoRoot: options.repoRoot,
-        results: [],
-      }),
-    );
     return { exitCode: 0, outputDir, summary };
   }
 
@@ -1541,7 +1739,35 @@ export async function runCodeModeModelMatrix(
     const resultsPath = path.join(outputDir, "results.jsonl");
     await fs.writeFile(resultsPath, "", "utf8");
     const executeCell = deps.runCell ?? runMatrixCell;
-    for (const cell of cells) {
+    const executionStartedAt = Date.now();
+    let admittedCells = 0;
+    let stopReason: string | null = null;
+    const stoppedProviders = new Map<string, string>();
+    const stoppedModels = new Map<string, string>();
+    const unstarted: Array<{ id: string; reason: string }> = [];
+    let persistence = Promise.resolve();
+    const observedBudget = () => ({
+      tokens: results.reduce(
+        (total, result) =>
+          total + (result.accounting?.knownTotalTokens ?? result.usage?.total ?? 0),
+        0,
+      ),
+      knownCostUsd: results.reduce(
+        (total, result) => total + (result.accounting?.knownCostUsd ?? result.costUsd ?? 0),
+        0,
+      ),
+      missingTokenCells: results.filter((result) =>
+        result.accounting ? !result.accounting.complete : result.usage?.total === undefined,
+      ).length,
+      missingCostCells: results.filter((result) =>
+        result.accounting ? !result.accounting.costComplete : result.costUsd === undefined,
+      ).length,
+      wallSeconds: (Date.now() - executionStartedAt) / 1_000,
+    });
+    const stoppedReason = (cell: MatrixCell) =>
+      stoppedModels.get(cell.model) ?? stoppedProviders.get(cell.model.split("/")[0]!);
+    const runCell = async (cell: MatrixCell) => {
+      const index = cells.indexOf(cell);
       abortController.signal.throwIfAborted();
       const workload = isGatewayTask(cell.task)
         ? (await import("./lib/code-mode-matrix-gateway.ts")).createGatewayMatrixWorkload(
@@ -1549,8 +1775,12 @@ export async function runCodeModeModelMatrix(
             cell.repetition,
             options.thinking,
             options.timeoutSeconds,
+            options.gatewayExecutor ?? "node",
           )
         : undefined;
+      // Repetitions are independent scheduled cells, not retries whose eventual
+      // success could hide an earlier failure.
+      const occurrenceId = invocation.begin(index, null);
       let result: CodeModeMatrixCellResult;
       const cellStartedAt = Date.now();
       try {
@@ -1558,6 +1788,7 @@ export async function runCodeModeModelMatrix(
           abortSignal: abortController.signal,
           buildSha256: buildSha256 ?? "dry-run",
           cell,
+          ...(workload ? { executor: workload.settings.executor } : {}),
           gitSha: sourceIdentity.gitSha,
           keepState: options.keepState,
           outputDir,
@@ -1581,19 +1812,127 @@ export async function runCodeModeModelMatrix(
       }
       if (workload) {
         result.workload = workload;
+        result.executor = workload.settings.executor;
       }
-      results.push(result);
-      await fs.appendFile(
-        resultsPath,
-        `${JSON.stringify(redactJsonValueForDevToolLog(result))}\n`,
-        "utf8",
+      if (
+        result.failureCategory === "provider_auth" ||
+        result.failureCategory === "provider_billing"
+      ) {
+        stoppedProviders.set(cell.model.split("/")[0]!, result.failureCategory);
+      } else if (result.failureCategory === "model_unavailable") {
+        stoppedModels.set(cell.model, result.failureCategory);
+      }
+      const persist = async () => {
+        result.evidenceOccurrenceId = occurrenceId;
+        const artifactPath = path.posix.join("observations", `${occurrenceId}.json`);
+        const artifactBytes = `${JSON.stringify(redactJsonValueForDevToolLog({ result, launch, buildSha256 }), null, 2)}\n`;
+        await fs.mkdir(path.join(outputDir, "observations"), { recursive: true });
+        await fs.writeFile(path.join(outputDir, artifactPath), artifactBytes, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        const artifact = {
+          kind: "matrix-observation",
+          path: artifactPath,
+          source: "code-mode-model-matrix",
+          sha256: createHash("sha256").update(artifactBytes).digest("hex"),
+        };
+        // The envelope observes provider/model responses, not a target runtime's
+        // package, protocol, account, or proof class. Keep this receipt prepared-only.
+        invocation.complete(occurrenceId, {
+          status: evidenceStatus(result),
+          entries: buildCodeModeMatrixEvidence({
+            generatedAt: result.timestamp,
+            repoRoot: options.repoRoot,
+            results: [result],
+          }).entries.map((entry) =>
+            Object.assign({}, entry, {
+              execution: entry.execution
+                ? {
+                    ...entry.execution,
+                    artifacts: [
+                      ...entry.execution.artifacts,
+                      {
+                        kind: artifact.kind,
+                        path: artifact.path,
+                        source: artifact.source,
+                      },
+                    ],
+                  }
+                : undefined,
+            }),
+          ),
+          receipts: [
+            { id: `${occurrenceId}:prepared`, phase: "prepared", identity: launch, artifact },
+          ],
+        });
+        invocation.select(index, occurrenceId);
+        results.push(result);
+        await fs.appendFile(
+          resultsPath,
+          `${JSON.stringify(redactJsonValueForDevToolLog(result))}\n`,
+          "utf8",
+        );
+        await writeEvidence(result.timestamp);
+        console.log(
+          `[code-mode-matrix-result] ${JSON.stringify(redactJsonValueForDevToolLog(result))}`,
+        );
+        const label = result.passed ? "PASS" : `FAIL ${result.failureCategory ?? "unknown"}`;
+        console.log(`[code-mode-matrix] ${label} ${result.id} ${result.elapsedMs}ms`);
+      };
+      const written = persistence.then(persist);
+      persistence = written.catch(() => {});
+      await written;
+    };
+    for (const wave of waves) {
+      abortController.signal.throwIfAborted();
+      const budget = observedBudget();
+      const stopped = stoppedReason(wave[0]!);
+      stopReason ??=
+        admittedCells + wave.length > admission.maxCells
+          ? "max_cells"
+          : budget.tokens >= admission.maxTokens
+            ? "max_tokens"
+            : budget.knownCostUsd >= admission.maxKnownCostUsd
+              ? "max_known_cost_usd"
+              : budget.wallSeconds >= admission.maxWallSeconds
+                ? "max_wall_seconds"
+                : null;
+      if (stopReason || stopped) {
+        unstarted.push(...wave.map((cell) => ({ id: cell.id, reason: stopReason ?? stopped! })));
+        continue;
+      }
+      admittedCells += wave.length;
+      let next = 0;
+      const workers = Array.from(
+        { length: Math.min(admission.concurrency, wave.length) },
+        async () => {
+          while (next < wave.length) {
+            const cell = wave[next++]!;
+            await runCell(cell);
+          }
+        },
       );
-      const label = result.passed ? "PASS" : `FAIL ${result.failureCategory ?? "unknown"}`;
-      console.log(`[code-mode-matrix] ${label} ${result.id} ${result.elapsedMs}ms`);
+      const outcomes = await Promise.allSettled(workers);
+      const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+      if (rejected?.status === "rejected") {
+        throw rejected.reason;
+      }
+      if (
+        !options.dryRun &&
+        (await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(runtimeRepoRoot)) !== buildSha256
+      ) {
+        throw new Error(
+          "Runtime build changed during the benchmark; per-cell evidence is retained but cannot establish a fixed-build comparison.",
+        );
+      }
     }
     abortController.signal.throwIfAborted();
     if (options.runtimeDir && !deps.runCell) {
-      const finalIdentity = await readSourceIdentity(runtimeRepoRoot);
+      const finalIdentity = await readSourceIdentity(
+        runtimeRepoRoot,
+        STRICT_SOURCE_IDENTITY_OPTIONS,
+      );
       if (finalIdentity.sourceDirty || finalIdentity.gitSha !== sourceIdentity.gitSha) {
         throw new Error(
           "Frozen runtime changed during the benchmark; per-cell evidence is retained but cannot establish a fixed-source comparison.",
@@ -1608,6 +1947,9 @@ export async function runCodeModeModelMatrix(
     const summary = {
       schemaVersion: MATRIX_SCHEMA_VERSION,
       finishedAt: new Date().toISOString(),
+      ...(options.tasks.some(isGatewayTask)
+        ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+        : {}),
       ...sourceIdentity,
       buildSha256,
       counts: {
@@ -1624,8 +1966,34 @@ export async function runCodeModeModelMatrix(
         ? { gatewayOutcomes: summarizeGatewayMatrixOutcomes(results) }
         : {}),
       groups,
+      admission: {
+        ...admission,
+        admittedCells,
+        plannedCells: cells.length,
+        completedCells: results.length,
+        stoppedProviders: Object.fromEntries(stoppedProviders),
+        stoppedModels: Object.fromEntries(stoppedModels),
+        stopReason,
+        unstarted,
+        observed: observedBudget(),
+        overshoot: {
+          tokens: Math.max(0, observedBudget().tokens - admission.maxTokens),
+          knownCostUsd: Math.max(0, observedBudget().knownCostUsd - admission.maxKnownCostUsd),
+          wallSeconds: Math.max(0, observedBudget().wallSeconds - admission.maxWallSeconds),
+          contract:
+            "Admission limits are soft. An admitted wave finishes before another starts, including its queued arm at concurrency 1. Missing usage/prices make observed totals lower bounds, not hard spend limits.",
+        },
+      },
     };
     await writeJson(path.join(outputDir, "summary.json"), summary);
+    const performanceResults = results.filter((result) => isMatrixPerformanceTask(result.task));
+    if (performanceResults.length > 0) {
+      const { compareCodeModeMatrixModes } = await import("./lib/code-mode-matrix-comparison.ts");
+      await writeJson(
+        path.join(outputDir, "mode-comparison.json"),
+        compareCodeModeMatrixModes(performanceResults),
+      );
+    }
     if (options.baselineResults) {
       const { compareCodeModeMatrixResultsFile } =
         await import("./lib/code-mode-matrix-comparison.ts");
@@ -1634,16 +2002,9 @@ export async function runCodeModeModelMatrix(
         await compareCodeModeMatrixResultsFile(options.baselineResults, results),
       );
     }
-    await writeJson(
-      path.join(outputDir, QA_EVIDENCE_FILENAME),
-      buildCodeModeMatrixEvidence({
-        generatedAt: summary.finishedAt,
-        repoRoot: options.repoRoot,
-        results,
-      }),
-    );
+    await writeEvidence(summary.finishedAt);
     return {
-      exitCode: failed > 0 && !options.allowFailures ? 1 : 0,
+      exitCode: (failed > 0 || unstarted.length > 0) && !options.allowFailures ? 1 : 0,
       outputDir,
       summary,
     };

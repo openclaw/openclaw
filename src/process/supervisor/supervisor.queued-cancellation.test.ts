@@ -10,7 +10,12 @@ const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({
@@ -123,6 +128,7 @@ describe("process supervisor queued cancellation", () => {
       );
       const replacementRunId = `cancel-queued-${mode}-replacement`;
       const resolveArgs = vi.fn(() => ["must-not-resolve"]);
+      let captureCurrent = true;
       const replacementPromise = supervisor.spawn(
         Object.assign(
           createSpawnInput({
@@ -132,6 +138,11 @@ describe("process supervisor queued cancellation", () => {
             replaceExistingScope: true,
           }),
           mode === "child" ? { resolveArgs } : {},
+          {
+            onCancel: () => {
+              captureCurrent = false;
+            },
+          },
         ),
       );
 
@@ -139,6 +150,7 @@ describe("process supervisor queued cancellation", () => {
       expect(createPtyAdapterMock).not.toHaveBeenCalled();
 
       supervisor.cancel(replacementRunId, "manual-cancel");
+      expect(captureCurrent).toBe(false);
       firstStartup.resolve(first);
       const [firstRun, replacementRun] = await Promise.all([firstRunPromise, replacementPromise]);
 

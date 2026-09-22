@@ -31,9 +31,10 @@ With Tailscale Serve, your browser must have access to the same tailnet. If no
 managed HTTPS address is available, enable Serve and retry, or use the CLI flow
 below. The callback does not sign you in to the Control UI.
 
-The Control UI uses hosted completion when opened at the managed HTTPS address.
-When opened through localhost or another address, it keeps manual redirect
-completion so browsers outside the tailnet can still finish setup.
+The Control UI receives the return automatically at the managed HTTPS address
+or when opened directly on the local Gateway's loopback address and port.
+Other addresses use manual redirect completion. If pasted input is incomplete
+or invalid, correct it in the same sign-in attempt and submit again.
 
 <Tabs>
   <Tab title="OAuth">
@@ -116,6 +117,11 @@ empty response stays empty:
 Any other `openrouter/<provider>/<model>` ref, including
 `openrouter/openrouter/fusion` (see [Fusion router](#fusion-router)), resolves
 dynamically against OpenRouter's live model catalog.
+
+Discovered models use OpenRouter's advertised tool support. When a model's
+`supported_parameters` list omits `tools`, OpenClaw sends requests without tool
+definitions or tool choice. Models without that metadata keep the default tool
+behavior.
 
 ## Image generation
 
@@ -412,11 +418,20 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Thinking / reasoning injection">
-    On supported non-`auto` routes, OpenClaw maps the selected thinking level
+    OpenClaw uses the selected model's advertised reasoning efforts for its
+    thinking choices and request payloads. Models that require reasoning omit
+    the off choice. Agent turns and standalone completions share these controls
+    and reasoning-replay rules. On supported non-`auto` routes, OpenClaw maps the selected thinking level
     to OpenRouter proxy reasoning payloads. `openrouter/auto` and unsupported
     model hints skip that injection. Stale `openrouter/hunter-alpha` refs also
     skip it, because OpenRouter could return final answer text in reasoning
     fields on that retired route.
+
+    Models without an effort selector show on/off controls, or **always on**
+    when reasoning is mandatory. These models receive binary reasoning controls
+    without a scalar effort. Omitting a thinking request leaves their native
+    reasoning default unchanged; configured reasoning budgets are preserved.
+
   </Accordion>
 
   <Accordion title="DeepSeek V4 reasoning replay">
@@ -425,7 +440,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     replayed assistant turns, keeping thinking/tool conversations in DeepSeek
     V4's required follow-up shape. OpenClaw sends OpenRouter-supported
     `reasoning.effort` values for these routes: `xhigh`/`max` map to `xhigh`,
-    every other non-off level maps to `high`.
+    every other non-off level maps to `high`. `/think off` explicitly sends
+    `reasoning.effort: "none"` and removes reasoning replay fields instead of
+    falling back to the provider's reasoning default.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">

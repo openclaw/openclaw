@@ -1,4 +1,3 @@
-// Feishu plugin module implements conversation id behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString as normalizeText,

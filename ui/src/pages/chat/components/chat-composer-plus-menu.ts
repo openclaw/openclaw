@@ -1,15 +1,15 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
-import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   countSessionToolOverrides,
   nextBooleanToolOverrides,
@@ -20,11 +20,11 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import {
   handleChatAttachmentMenuSelection,
   renderChatAttachmentMenuOptions,
   renderChatAttachmentMenuTrigger,
-  type ChatAttachmentControlsProps,
 } from "./chat-attachments.ts";
 import {
   handleComposerLibrarySelection,

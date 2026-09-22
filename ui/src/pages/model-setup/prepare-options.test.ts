@@ -3,7 +3,7 @@ import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import {
   findPreparedModelCandidate,
   listModelSetupPrepareOptions,
-  providerAutoSetupKind,
+  preparedModelActivation,
 } from "./prepare-options.ts";
 
 function detection(
@@ -23,32 +23,49 @@ function detection(
 }
 
 describe("model setup prepare options", () => {
-  it("encodes provider choice ids in setup kinds", () => {
-    const choiceId = "vendor/local:v1%beta?x#y";
-    const kind = "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y";
-    expect(providerAutoSetupKind(choiceId)).toBe(kind);
-    const candidate: SystemAgentSetupDetectResult["candidates"][number] = {
-      kind,
-      brandId: "vendor",
-      label: "Vendor Local",
-      detail: "available locally",
-      modelRef: "vendor/model",
-      recommended: false,
-      credentials: true,
-    };
-    const result = detection(
-      [candidate],
-      [{ id: choiceId, brandId: "vendor", label: "Vendor Local" }],
-    );
+  it.each([undefined, "utility"] as const)(
+    "encodes prepared activation for target %s",
+    (modelTarget) => {
+      const choiceId = "vendor/local:v1%beta?x#y";
+      const kind = "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y";
+      const option = { id: choiceId, brandId: "vendor", label: "Vendor Local", modelTarget };
+      const activation = preparedModelActivation(option, "vendor/model");
+      expect(activation).toEqual(
+        modelTarget
+          ? { kind, modelRef: "vendor/model", modelTarget: "utility" }
+          : { kind, modelRef: "vendor/model" },
+      );
+      const candidate: SystemAgentSetupDetectResult["candidates"][number] = {
+        kind,
+        brandId: "vendor",
+        label: "Vendor Local",
+        detail: "available locally",
+        modelRef: "vendor/model",
+        recommended: false,
+        credentials: true,
+      };
+      const result = detection([candidate], [option]);
 
-    expect(listModelSetupPrepareOptions(result)).toEqual([]);
-    expect(findPreparedModelCandidate(result, choiceId)).toEqual(candidate);
-  });
+      expect(listModelSetupPrepareOptions(result)).toEqual([]);
+      expect(findPreparedModelCandidate(result, choiceId)).toEqual(candidate);
+    },
+  );
 
   it("does not treat raw reserved choice ids as canonical kinds", () => {
-    expect(providerAutoSetupKind("local/provider%beta")).not.toBe(
-      "provider-auto:local/provider%beta",
+    const result = detection(
+      [
+        {
+          kind: "provider-auto:local/provider%beta",
+          label: "Local Provider",
+          detail: "available locally",
+          modelRef: "local/model",
+          recommended: false,
+          credentials: true,
+        },
+      ],
+      [],
     );
+    expect(findPreparedModelCandidate(result, "local/provider%beta")).toBeUndefined();
   });
 
   it("uses provider identity to hide a usable aliased provider", () => {

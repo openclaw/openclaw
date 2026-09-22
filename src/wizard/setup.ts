@@ -7,7 +7,7 @@ import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -42,6 +42,8 @@ import {
   requestTelemetryConsent,
   resolveQuickstartGatewayDefaults,
   writeWizardConfigFile,
+  createWizardInferenceConfigTarget,
+  type WizardConfigWriteOptions,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
@@ -88,7 +90,7 @@ async function runSetupWizardOnce(
   // openclaw#84692.
   const commitSetupConfigFile = async (
     config: OpenClawConfig,
-    optsLocal: { allowConfigSizeDrop?: boolean; baseSnapshot?: ConfigFileSnapshot } = {},
+    optsLocal: WizardConfigWriteOptions = {},
   ) => {
     const committed = await writeWizardConfigFile(config, {
       ...optsLocal,
@@ -114,7 +116,7 @@ async function runSetupWizardOnce(
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;
@@ -241,7 +243,9 @@ async function runSetupWizardOnce(
         async commitConfigFile(cfg, expectedConfig) {
           const latest = await readSetupConfigFileSnapshot();
           if (!latest.valid) {
-            throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+            throw new Error(
+              "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+            );
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
@@ -277,7 +281,9 @@ async function runSetupWizardOnce(
     acknowledgeMigrationPromotion = migrationOutcome.acknowledgePromotion;
     const migratedSnapshot = await readSetupConfigFileSnapshot();
     if (!migratedSnapshot.valid) {
-      throw new Error("Migration produced an invalid OpenClaw config. Run `openclaw doctor`.");
+      throw new Error(
+        "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
+      );
     }
     currentSetupSnapshot = migratedSnapshot;
     baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
@@ -570,13 +576,7 @@ async function runSetupWizardOnce(
     usedImportFlow,
     keepExistingModelConfig,
     importedInferenceVerified,
-    writeConfig: async (config, verifiedSnapshot) =>
-      (
-        await commitSetupConfigFile(config, {
-          allowConfigSizeDrop: false,
-          baseSnapshot: verifiedSnapshot,
-        })
-      ).nextConfig,
+    configTarget: createWizardInferenceConfigTarget(commitSetupConfigFile),
   });
   nextConfig = modelAuth.config;
   const liveModelVerified = modelAuth.verified;
@@ -659,7 +659,7 @@ async function runSetupWizardOnce(
     });
   }
 
-  let commitAppRecommendationResult: (() => void) | undefined;
+  let commitAppRecommendationResult: (() => Promise<void>) | undefined;
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({
@@ -697,7 +697,7 @@ async function runSetupWizardOnce(
   });
   nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
-  commitAppRecommendationResult?.();
+  await commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

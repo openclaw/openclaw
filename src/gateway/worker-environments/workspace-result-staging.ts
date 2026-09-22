@@ -3,7 +3,8 @@ import path from "node:path";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, runExec } from "../../process/exec.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -15,16 +16,17 @@ import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js"
 import {
   prepareWorkspaceStageInput,
   loadStagedWorkspaceManifest,
-  readStagedWorkspaceManifestEntry,
+  readStagedWorkspaceManifestEntries,
 } from "./workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
-import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
+import { localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
+  assertWorkspaceMatchesManifest,
   inspectAcceptedWorkerWorkspace,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
@@ -169,19 +171,29 @@ async function stageWorkerWorkspaceResult(params: {
 }): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
-  const input = await prepareWorkspaceStageInput(params);
-  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) =>
-    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
-      baseEnv,
-      input,
-      timeoutMs: PATCH_TIMEOUT_MS,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-    }),
+  const temporary = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
   );
-  if (imported.termination !== "exit" || imported.code !== 0) {
-    throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
+  try {
+    const inputPath = path.join(temporary, "fast-import");
+    await prepareWorkspaceStageInput({ ...params, inputPath });
+    const input = await fs.open(inputPath, "r");
+    try {
+      await withWorkspaceResultRefMutation(root, (baseEnv) =>
+        runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
+          baseEnv,
+          stdinFileDescriptor: input.fd,
+          timeoutMs: PATCH_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        }),
+      );
+    } finally {
+      await input.close();
+    }
+    return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
   }
-  return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
 }
 
 async function materializeStagedEntry(params: {
@@ -200,21 +212,13 @@ async function materializeStagedEntry(params: {
   }
   await fs.writeFile(target, params.content, { mode: params.entry.mode, flag: "wx" });
   await fs.chmod(target, params.entry.mode);
-  if (!(await absoluteEntryMatches(target, params.entry))) {
-    throw new Error(`Cloud workspace staged payload is invalid: ${params.entry.path}`);
-  }
 }
 
 export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
   const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(root, stagedResultRef);
-  const readEntry = (entry: WorkerWorkspaceManifestEntry) => {
-    const object = objectsByPath.get(entry.path);
-    if (!object) {
-      throw new Error(`Cloud workspace result has no payload for ${entry.path}`);
-    }
-    return readStagedWorkspaceManifestEntry({ root, object, entry });
-  };
-  return { ...snapshot, readEntry };
+  const readEntries = () =>
+    readStagedWorkspaceManifestEntries({ root, objectsByPath, entries: snapshot.changedEntries });
+  return { ...snapshot, readEntries };
 }
 
 export async function withStagedWorkerWorkspaceResult<T>(
@@ -237,10 +241,26 @@ async function withMaterializedWorkerWorkspaceResult<T>(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-checkpoint-payload-"),
   );
   try {
-    for (const entry of snapshot.changedEntries) {
-      const content = await snapshot.readEntry(entry);
-      await materializeStagedEntry({ root: stagingRoot, entry, content });
+    let writes: Array<() => Promise<void>> = [];
+    const flush = async () => {
+      const result = await runTasksWithConcurrency({ tasks: writes, limit: 4, errorMode: "stop" });
+      writes = [];
+      if (result.hasError) {
+        throw result.firstError;
+      }
+    };
+    for await (const { entry, content } of snapshot.readEntries()) {
+      writes.push(() => materializeStagedEntry({ root: stagingRoot, entry, content }));
+      if (writes.length === 4) {
+        await flush();
+      }
     }
+    await flush();
+    await assertWorkspaceMatchesManifest({
+      root: stagingRoot,
+      manifest: snapshot.current,
+      entries: snapshot.changedEntries,
+    });
     return await use({ ...snapshot, stagingRoot });
   } finally {
     await runBestEffortCleanup({

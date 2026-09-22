@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -16,6 +17,44 @@ import { BrowserPanelController } from "./browser-panel-controller.ts";
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController superseded tab snapshots", () => {
+  it("reads page geometry while the screenshot body is downloading", async () => {
+    stubScreenshotMedia();
+    const body = createDeferred<Blob>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, blob: () => body.promise })),
+    );
+    const url = "https://example.test/page";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "tab-a", url };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(url);
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", url);
+    const previousView = controller.view;
+    const capture = controller.refreshView("tab-a");
+    try {
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "browser.request",
+          expect.objectContaining({ path: "/act" }),
+        ),
+      );
+      expect(controller.view).toBe(previousView);
+      expect(controller.loading).toBe(true);
+    } finally {
+      body.resolve(new Blob(["fresh screenshot"], { type: "image/png" }));
+      await capture;
+    }
+    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
+    expect(controller.view?.metrics).toEqual(createBrowserPanelTestMetrics(url).result);
+    expect(controller.loading).toBe(false);
+  });
+
   it.each([true, false])(
     "never reselects a closed active tab when refreshing the remaining tabs fails (fallback: %s)",
     async (hasFallback) => {

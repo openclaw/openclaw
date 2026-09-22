@@ -84,6 +84,10 @@ describe("check-deadcode-exports", () => {
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/vitest/vitest*.config.ts!",
+        "scripts/crabbox-wrapper.mjs!",
+        "scripts/crabbox-wrapper.mts!",
+        "scripts/check-openclaw-package-tarball.mjs!",
+        "scripts/check-openclaw-package-tarball.mts!",
       ]),
     );
     expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
@@ -153,6 +157,8 @@ describe("check-deadcode-exports", () => {
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
         "scripts/check-openclaw-package-tarball.mts!",
+        "scripts/crabbox-wrapper.mjs!",
+        "scripts/crabbox-wrapper.mts!",
         "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",

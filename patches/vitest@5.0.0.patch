@@ -94,7 +94,7 @@ index dd5788b88d076ea855bfe28090bbc9944d0588a5..6c5617a66154a2ecc40024979ff58bd5
  						const resolvedMock = moduleRunner.mocker.getDependencyMockByUrl(id);
  						if (resolvedMock?.type === "manual" || resolvedMock?.type === "redirect") return {
 diff --git a/dist/chunks/index.B89dZ0-N.js b/dist/chunks/index.B89dZ0-N.js
-index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f05781803 100644
+index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..e1638cd8676c4c5b611c15916fcd67495282cab6 100644
 --- a/dist/chunks/index.B89dZ0-N.js
 +++ b/dist/chunks/index.B89dZ0-N.js
 @@ -6599,6 +6599,7 @@ class FileSystemModuleCache {
@@ -176,8 +176,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
 +				}
  			}
 -			return;
-+			this.lockfileHash = currentLockfileHash;
- 		}
+-		}
 -		// if lockfile didn't change, don't do anything
 -		if (metadata.lockfileHash === currentLockfileHash) return;
 -		// lockfile changed, let's clear all caches
@@ -187,6 +186,8 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
 -			environment: y.yellow("[vitest]")
 -		});
 -		debugFs$1?.(`fs cache was cleared because lockfile has changed`);
++			this.lockfileHash = currentLockfileHash;
++		}
  	}
  }
  /**
@@ -201,7 +202,70 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		const moduleId = moduleGraphModule.id;
  		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
  		// undefined means there is no key in memory
-@@ -10875,7 +10885,8 @@ class PoolRunner {
+@@ -10686,6 +10696,7 @@
+ 	RunnerState["STARTING"] = "starting";
+ 	RunnerState["STARTED"] = "started";
+ 	RunnerState["START_FAILURE"] = "start_failure";
++	RunnerState["EXITED"] = "exited";
+ 	RunnerState["STOPPING"] = "stopping";
+ 	RunnerState["STOPPED"] = "stopped";
+ 	return RunnerState;
+@@ -10743,7 +10754,7 @@
+ 		}), {
+ 			eventNames: ["onCancel"],
+ 			post: (request) => {
+-				if (this._state !== RunnerState.STOPPING && this._state !== RunnerState.STOPPED) this.postMessage(request);
++				if (this._state !== RunnerState.STOPPING && this._state !== RunnerState.STOPPED && this._state !== RunnerState.EXITED) this.postMessage(request);
+ 			},
+ 			on: (callback) => this._eventEmitter.on("rpc", callback),
+ 			timeout: -1
+@@ -10761,7 +10772,7 @@
+ 	postMessage(message) {
+ 		// Only send messages when runner is active (not fully stopped)
+ 		// Allow sending during STOPPING state for the 'stop' message itself
+-		if (this._state !== RunnerState.STOPPED) return this.worker.send(message);
++		if (this._state !== RunnerState.STOPPED && this._state !== RunnerState.EXITED) return this.worker.send(message);
+ 	}
+ 	startTracesSpan(name) {
+ 		const traces = this._traces;
+@@ -10793,7 +10804,7 @@
+ 		// Wait for any ongoing operation to complete
+ 		if (this._operationLock) await this._operationLock;
+ 		if (this._state === RunnerState.STARTED || this._state === RunnerState.STARTING) return;
+-		if (this._state === RunnerState.STOPPED) throw new Error("[vitest-pool-runner]: Cannot start a stopped runner");
++		if (this._state === RunnerState.STOPPED || this._state === RunnerState.EXITED) throw new Error("[vitest-pool-runner]: Cannot start a stopped runner");
+ 		// Create operation lock to prevent concurrent start/stop
+ 		this._operationLock = createDefer();
+ 		let startSpan;
+@@ -10833,14 +10844,14 @@
+ 				}
+ 			});
+ 			await startPromise;
+-			this._state = RunnerState.STARTED;
++			if (this._state !== RunnerState.EXITED) this._state = RunnerState.STARTED;
+ 			// record how long it took to spawn this worker, load its bundle and set up the
+ 			// environment, so the reporter can surface the cost of `isolate: true`
+ 			const { state } = this.project.vitest;
+ 			state.startupTime += performance.now() - startedAt;
+ 			state.workersSpawned += 1;
+ 		} catch (error) {
+-			this._state = RunnerState.START_FAILURE;
++			if (this._state !== RunnerState.EXITED) this._state = RunnerState.START_FAILURE;
+ 			startSpan?.recordException(error);
+ 			throw error;
+ 		} finally {
+@@ -10852,7 +10863,9 @@
+ 	async stop(options) {
+ 		// Wait for any ongoing operation to complete
+ 		if (this._operationLock) await this._operationLock;
+-		if (this._state === RunnerState.STOPPED || this._state === RunnerState.STOPPING) return;
++		if (this._state === RunnerState.STOPPED) return;
++		if (this._state === RunnerState.STOPPING) return this.waitForTerminated();
++		const exited = this._state === RunnerState.EXITED;
+ 		this._otel?.span.setAttribute("vitest.worker.files", this._otel.files);
+ 		if (this._state === RunnerState.IDLE) {
+ 			this._otel?.span.end();
+@@ -10875,12 +10888,13 @@
  							stopSpan.recordException(response.error);
  							this.project.vitest.state.catchError(response.error, "Teardown Error");
  						}
@@ -211,7 +275,14 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  						this.off("message", onStop);
  					}
  				};
-@@ -10890,21 +10901,21 @@ class PoolRunner {
+-				// Don't wait for graceful exit's response when force exiting
+-				if (options?.force) return onStop({
++				// A dead worker cannot acknowledge stop; still join its transport cleanup.
++				if (options?.force || exited) return onStop({
+ 					type: "stopped",
+ 					__vitest_worker_response__: true
+ 				});
+@@ -10890,21 +10904,21 @@ class PoolRunner {
  					__vitest_worker_request__: true,
  					otelCarrier: this.getOTELCarrier()
  				});
@@ -221,33 +292,44 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
 +				// Deadline/error paths must also terminate and join the worker.
 +				await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
  			});
--			this._eventEmitter.removeAllListeners();
--			this._offCancel();
--			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
++			this._state = RunnerState.STOPPED;
++		} catch (error) {
++			// Ensure failed graceful shutdown cannot report a successful test run.
++			this.project.vitest.state.catchError(error, "Teardown Error");
++			this._state = RunnerState.STOPPED;
++			throw error;
++		} finally {
+ 			this._eventEmitter.removeAllListeners();
+ 			this._offCancel();
+ 			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
 -			// Stop the worker process (this sets _fork/_thread to undefined)
 -			// Worker's event listeners (error, message) are implicitly removed when worker terminates
 -			await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
- 			this._state = RunnerState.STOPPED;
- 		} catch (error) {
+-			this._state = RunnerState.STOPPED;
+-		} catch (error) {
 -			// Ensure we transition to stopped state even on error
-+			// Ensure failed graceful shutdown cannot report a successful test run.
-+			this.project.vitest.state.catchError(error, "Teardown Error");
- 			this._state = RunnerState.STOPPED;
- 			throw error;
- 		} finally {
-+			this._eventEmitter.removeAllListeners();
-+			this._offCancel();
-+			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+-			this._state = RunnerState.STOPPED;
+-			throw error;
+-		} finally {
  			this._lastTestFiles = [];
  			this._operationLock.resolve();
  			this._operationLock = null;
-@@ -11044,10 +11055,22 @@ class ForksPoolWorker {
+@@ -10936,7 +10950,8 @@
+ 		const errorDetails = hasCode || signal ? `with ${hasCode ? `exit code ${code} ` : ""}${signal ? `signal ${signal} ` : ""}` : "";
+ 		const testFileDetails = this._lastTestFiles.length ? ` while running test file${this._lastTestFiles.length === 1 ? "" : "s"} ${this._lastTestFiles.join(", ")}` : "";
+ 		const error = /* @__PURE__ */ new Error(`Worker exited unexpectedly ${errorDetails}during ${this._state} state${testFileDetails}`);
+-		this._state = RunnerState.STOPPED;
++		// Process exit is terminal for reuse, but stop still owns cleanup and settlement.
++		this._state = RunnerState.EXITED;
+ 		this._eventEmitter.emit("error", error);
+ 	};
+ 	waitForStart() {
+@@ -11044,10 +11059,22 @@ class ForksPoolWorker {
  			this._fork.stderr.pipe(this.stderr, { end: false });
  		}
  	}
--	async stop() {
 +	waitForExit() {
- 		const fork = this.fork;
++		const fork = this.fork;
 +		return new Promise((resolve, reject) => {
 +			const onExit = (code, signal) => {
 +				if (code === 0 && signal == null) resolve();
@@ -257,7 +339,8 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
 +			else fork.once("exit", onExit);
 +		});
 +	}
-+	async stop() {
+ 	async stop() {
+-		const fork = this.fork;
 +		const fork = this._fork;
 +		if (!fork) return;
  		const waitForExit = new Promise((resolve) => {
@@ -266,7 +349,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			else fork.once("exit", resolve);
  		});
  		/*
-@@ -11056,10 +11079,12 @@ class ForksPoolWorker {
+@@ -11056,10 +11083,12 @@ class ForksPoolWorker {
  		* - https://github.com/jestjs/jest/blob/25a8785584c9d54a05887001ee7f498d489a5441/packages/jest-worker/src/workers/ChildProcessWorker.ts#L463-L477
  		* - https://github.com/tinylibs/tinypool/blob/40b4b3eb926dabfbfd3d0a7e3d1222d4dd1c0d2d/src/runtime/process-worker.ts#L56
  		*/
@@ -283,7 +366,16 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		if (fork.stdout) {
  			await streamFlushed(fork.stdout);
  			fork.stdout.unpipe(this.stdout);
-@@ -11485,7 +11510,7 @@ class Pool {
+@@ -11477,7 +11506,7 @@
+ 			await resolver.promise.catch((error) => span?.recordException(error)).finally(() => span?.end());
+ 			const index = this.activeTasks.indexOf(activeTask);
+ 			if (index !== -1) this.activeTasks.splice(index, 1);
+-			if (!task.isolate && !runner.isTerminated && !isMemoryLimitReached && this.queue[0]?.task.isolate === false && isEqualRunner(runner, this.queue[0].task)) {
++			if (!task.isolate && runner.isStarted && !resolver.isRejected && !isMemoryLimitReached && this.queue[0]?.task.isolate === false && isEqualRunner(runner, this.queue[0].task)) {
+ 				this.sharedRunners.push(runner);
+ 				return this.schedule();
+ 			}
+@@ -11485,7 +11514,7 @@ class Pool {
  			// Runner termination can also already start from task cancellation.
  			if (!runner.isTerminated) {
  				const id = setTimeout(() => this.logger.error(`[vitest-pool]: Timeout terminating ${task.worker} worker for test files ${formatFiles(task)}.`), this.options.teardownTimeout);
@@ -292,7 +384,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			}
  			this.freeWorkerId(poolId);
  		} 
-@@ -11727,6 +11752,8 @@ function createPool(ctx) {
+@@ -11727,6 +11756,8 @@ function createPool(ctx) {
  			const groupResults = await Promise.allSettled(promises);
  			results.push(...groupResults);
  		}
@@ -301,7 +393,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
  		if (errors.length > 0) throw new AggregateError(errors, "Errors occurred while running tests. For more information, see serialized error.");
  	}
-@@ -12005,6 +12032,7 @@ class TestProject {
+@@ -12005,6 +12036,7 @@ class TestProject {
  	config;
  	viteConfig;
  	vite;
@@ -309,7 +401,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  	hash;
  	/** @internal */ typechecker;
  	/** @internal */ _resolver;
-@@ -12018,13 +12046,18 @@ class TestProject {
+@@ -12018,13 +12050,18 @@ class TestProject {
  	typecheckFilesList = null;
  	_globalSetups;
  	_provided = {};
@@ -329,7 +421,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		this.hash = generateHash(this.config.root + this.config.name);
  		this._provideObject(projectConfig.provide);
  	}
-@@ -12307,8 +12340,8 @@ class TestProject {
+@@ -12307,8 +12344,8 @@ class TestProject {
  		}
  	}
  	/** @internal */
@@ -340,7 +432,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		project.runner = vitest.runner;
  		project._resolver = vitest._resolver;
  		project._fetcher = vitest._fetcher;
-@@ -12325,8 +12358,8 @@ class TestProject {
+@@ -12325,8 +12362,8 @@ class TestProject {
  	*
  	* @internal
  	*/
@@ -351,7 +443,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		sibling.runner = parent.runner;
  		sibling._resolver = parent._resolver;
  		sibling._fetcher = parent._fetcher;
-@@ -12442,7 +12475,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
+@@ -12442,7 +12479,8 @@ async function resolveProjectEntries(harness, globalViteConfig, globalConfig, de
  		debug?.(`no projects declared, the root config is the only project`);
  		baseEntries = [{
  			viteConfig: globalViteConfig,
@@ -361,7 +453,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		}];
  	}
  	// Ensure project names are unique across declared projects (and any
-@@ -12545,6 +12579,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -12545,6 +12583,28 @@ async function resolveDeclaredProjectEntries(context, definitions) {
  	const fileProjects = [...configFiles, ...nonConfigDirectories];
  	const promises = [];
  	projectConfigs.forEach((options, index) => {
@@ -390,7 +482,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		const ownServerReason = getOwnServerReason(context, options);
  		if (ownServerReason === void 0) {
  			debug?.(`inline project ${inlineProjectLabel(options, index)} shares the Vite server of ${parentViteConfig.configFile ?? parentConfig.root}`);
-@@ -12574,10 +12630,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
+@@ -12574,10 +12634,12 @@ async function resolveDeclaredProjectEntries(context, definitions) {
  		// resolved pair: the root (or the container) also runs as a regular project
  		if (parentViteConfig.configFile === path) {
  			debug?.(`project at ${path} is the declaring config itself, reusing its resolved config`);
@@ -404,7 +496,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			}));
  			continue;
  		}
-@@ -12610,7 +12668,7 @@ async function flattenContainerEntries(context, entries) {
+@@ -12610,7 +12672,7 @@ async function flattenContainerEntries(context, entries) {
  		// inline projects cannot declare `projects`; the declaring config's own
  		// entry (emitted when it references its own config file) is kept as-is —
  		// its `projects` are the definitions currently being resolved
@@ -413,7 +505,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			result.push(entry);
  			continue;
  		}
-@@ -12820,18 +12878,21 @@ function resolveSharedServerEntry(context, options, index) {
+@@ -12820,18 +12882,21 @@ function resolveSharedServerEntry(context, options, index) {
  			moduleRunnerOptions: parentConfig._moduleRunnerOptions
  		}
  	});
@@ -437,7 +529,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  	const captures = {};
  	// only inline entries (keyed by their index) extend another config;
  	// file-based projects own all of their values
-@@ -12865,7 +12926,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -12865,7 +12930,7 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
  	for (const key in parentViteConfig.env) projectViteConfig.env[key] ??= parentViteConfig.env[key];
  	const mergedOptions = projectViteConfig.test ?? {};
  	// resolved after `viteResolveConfig` so a plugin can still set `test.name`
@@ -446,7 +538,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  	const projectConfig = resolveTestConfig(harness.logger, mergedOptions, projectViteConfig, parentConfig);
  	projectViteConfig.test = projectConfig;
  	if (inheritsParentConfig && options.extends === void 0 && configFile) warnDuplicateInheritedPlugins(harness.logger, projectConfig, projectViteConfig, parentViteConfig, configFile, rootConfig.root);
-@@ -12883,6 +12944,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
+@@ -12883,6 +12948,8 @@ async function resolveSingleProjectEntry(context, options, workspacePath) {
  		viteConfig: projectViteConfig,
  		projectConfig,
  		inline: isInlineEntry,
@@ -455,7 +547,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		ancestors: context.ancestors.length ? [...context.ancestors] : void 0
  	};
  }
-@@ -12975,6 +13038,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
+@@ -12975,6 +13042,7 @@ function expandBrowserInstancesInEntries(globalConfig, entries, names) {
  			result.push({
  				viteConfig,
  				projectConfig: clonedConfig,
@@ -463,7 +555,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  				ancestors: entry.ancestors
  			});
  		});
-@@ -13036,6 +13100,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
+@@ -13036,6 +13104,7 @@ function expandBenchmarksInEntries(entries, names, benchmarkOnly) {
  		result.push({
  			viteConfig: entry.viteConfig,
  			projectConfig: benchmarkConfig,
@@ -471,7 +563,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			ancestors: entry.ancestors,
  			sharedServer: entry.sharedServer
  		});
-@@ -13182,7 +13247,7 @@ function resolveDirectoryConfig(directory) {
+@@ -13182,7 +13251,7 @@ function resolveDirectoryConfig(directory) {
  	if (configFile) return resolve(directory, configFile);
  	return null;
  }
@@ -480,7 +572,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  	let { label, color } = typeof name === "string" ? { label: name } : {
  		label: "",
  		...name
-@@ -13196,7 +13261,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
+@@ -13196,7 +13265,7 @@ function resolveProjectName(name, workspacePath, containerLabel) {
  	}
  	// Projects declared by a container config are namespaced by the container's
  	// name: the "unit" project of an "app" container is named "app (unit)".
@@ -489,7 +581,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  	return {
  		label,
  		color
-@@ -13226,7 +13291,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13226,7 +13295,7 @@ async function attachProjectsFromEntries(vitest, entries) {
  	}
  	const projects = [];
  	for (const entry of entries) {
@@ -498,7 +590,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		const primary = primaryByViteConfig.get(viteConfig);
  		if (primary) {
  			if (hidden) continue;
-@@ -13239,14 +13304,14 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13239,14 +13308,14 @@ async function attachProjectsFromEntries(vitest, entries) {
  			// a shared-server project reuses only the Vite server
  			if (entry.sharedServer) {
  				debug?.(`project ${projectLabel(projectConfig.name)} reuses the Vite server of ${projectLabel(primary.name)} with its own module runner`);
@@ -515,7 +607,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  			// Browser-instance siblings share the primary's single (browser) Vite
  			// server; each gets its own `ProjectBrowser` view onto it.
  			if (primary._parentBrowser) sibling.browser = primary._parentBrowser.spawn(sibling);
-@@ -13259,7 +13324,7 @@ async function attachProjectsFromEntries(vitest, entries) {
+@@ -13259,7 +13328,7 @@ async function attachProjectsFromEntries(vitest, entries) {
  		debug?.(`creating a Vite server for project ${projectLabel(projectConfig.name)}`);
  		const children = childrenByViteConfig.get(viteConfig) ?? [];
  		const { server, parent } = await createClusterServer(vitest, viteConfig, projectConfig, children);
@@ -524,7 +616,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		// a shared entry can create the container's server on first use,
  		// but the server still belongs to the declaring config
  		project._sharedViteServer = !!entry.sharedServer;
-@@ -20618,6 +20683,7 @@ class Vitest {
+@@ -20618,6 +20687,7 @@ class Vitest {
  		// populate will merge all configs into every project,
  		// we don't want that when just listing tags
  		if (!resolved.listTags) populateProjectsTags(this.coreWorkspaceProject, this.projects);
@@ -532,7 +624,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		this.reporters = await createReporters(resolved.reporters, this);
  		// API setup (watch mode only). Must run after the reporters array is built
  		// above, since `setup()` appends the UI/API WebSocket reporter to it. For a
-@@ -20634,7 +20700,6 @@ class Vitest {
+@@ -20634,7 +20704,6 @@ class Vitest {
  				setup(this, browserServer);
  			}
  		}
@@ -540,7 +632,7 @@ index 50abf4fbed1dc8670b7941ee466a7c8443840c5f..3cc3794a08088868bf8fc9482d65166f
  		await Promise.all([...this._onSetServer.map((fn) => fn()), this._traces.waitInit()]);
  	}
  	/** @internal */
-@@ -20675,7 +20740,7 @@ class Vitest {
+@@ -20675,7 +20744,7 @@ class Vitest {
  		if (this.coverageProvider?.onFileTransform) this.clearAllCachePaths();
  	}
  	clearAllCachePaths() {

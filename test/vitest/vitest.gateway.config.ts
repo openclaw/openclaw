@@ -1,4 +1,7 @@
+import { defineConfig } from "vitest/config";
+import { createGatewayDatabaseWorkersVitestConfig } from "./vitest.gateway-database-workers.config.ts";
 import {
+  gatewayDatabaseWorkerTestFiles,
   gatewayMethodsIsolatedTestFiles,
   gatewayPluginTestFiles,
   gatewayServerIsolatedTestFiles,
@@ -8,6 +11,7 @@ import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const gatewayProjectConfigs = [
+  "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
@@ -21,6 +25,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
     dir: ".",
     env,
     exclude: [
+      ...gatewayDatabaseWorkerTestFiles,
       "src/gateway/gateway.test.ts",
       "src/gateway/server.startup-matrix-migration.integration.test.ts",
       ...gatewayMethodsIsolatedTestFiles,
@@ -30,10 +35,29 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
   });
 }
 
-function createGatewayProjectShardVitestConfig() {
-  return createProjectShardVitestConfig(gatewayProjectConfigs);
+export function createGatewayProjectShardVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  const aggregate = createProjectShardVitestConfig(gatewayProjectConfigs);
+  if (env.OPENCLAW_GATEWAY_PROJECT_SHARDS !== "0") {
+    return aggregate;
+  }
+  const ordinary = createGatewayVitestConfig(env);
+  return defineConfig({
+    ...aggregate,
+    test: {
+      ...aggregate.test,
+      projects: [
+        {
+          ...ordinary,
+          extends: false,
+          // Unsharded Gateway tests still need the process-main-thread SQLite broker.
+          test: { ...ordinary.test, pool: "forks" },
+        },
+        { ...createGatewayDatabaseWorkersVitestConfig(env), extends: false },
+      ],
+    },
+  });
 }
 
-export default process.env.OPENCLAW_GATEWAY_PROJECT_SHARDS === "0"
-  ? createGatewayVitestConfig()
-  : createGatewayProjectShardVitestConfig();
+export default createGatewayProjectShardVitestConfig();

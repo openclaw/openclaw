@@ -17,13 +17,13 @@ import {
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
   getLanguageFromPath,
   highlightCode,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
+import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
@@ -489,9 +489,10 @@ export function createReadToolDefinition(
                 ? "[Current model does not support images. The image will be omitted from this request.]"
                 : undefined;
             if (mimeType) {
-              const base64 = buffer.toString("base64");
+              // Backends may reuse their Buffer while image preparation awaits processing.
+              const imageBytes = Buffer.from(buffer);
               const processed = await processImage(
-                { type: "image", data: base64, mimeType },
+                { data: imageBytes, mimeType },
                 { autoResizeImages },
               );
               if (!processed.ok) {

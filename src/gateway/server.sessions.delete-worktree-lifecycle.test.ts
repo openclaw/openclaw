@@ -213,7 +213,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();
-  const createWorktree = vi.spyOn(managedWorktrees, "create");
+  const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
   try {
     for (const owner of [{ agentId: "main" }, { key: "agent:main:dashboard:unconfigured-owner" }]) {
       const created = await directSessionReq<{

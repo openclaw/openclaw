@@ -1,4 +1,4 @@
-// Kilocode tests cover provider models plugin behavior.
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -97,14 +97,6 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const release = vi.fn(async () => {});
 
@@ -138,7 +130,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     "preserves the public advisory builder for HTTP %s with no rows",
     async (status) => {
       await withFetchPathTest(
-        vi.fn(async () => jsonResponse({ data: [] }, { status })),
+        vi.fn(async () => jsonResponse({ data: [] }, status)),
         async () => {
           await expect(buildKilocodeProviderWithDiscovery()).resolves.toEqual(
             buildKilocodeProvider(),

@@ -1,4 +1,3 @@
-// Msteams plugin module implements token behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";

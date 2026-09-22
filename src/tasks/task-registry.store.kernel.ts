@@ -12,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -19,6 +20,8 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { ensureTaskExecutionOwnerSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists, tableHasColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { filterCurrentTaskRunBackings } from "./task-backing-records.js";
+import { readTaskFlowViewRecordInDatabase } from "./task-flow-registry.store.kernel.js";
 import {
   compareTasksForRunIdLookup,
   getTaskRelatedSessionIndexKeys,
@@ -495,7 +498,18 @@ export function findTaskRecordByRunIdForViewInDatabase(
   const read = (queries.viewRunId ??= prepareSqliteQuerySync<string, TaskRegistryRow>(
     db,
     (parameter) =>
-      taskViewQuery(db)
+      getTaskRegistryKysely(db)
+        .selectFrom("task_runs")
+        .select(TASK_VIEW_SELECT_COLUMNS)
+        .select((expression) =>
+          expression
+            .case()
+            .when("runtime", "=", "acp")
+            .then(expression.ref("detail_json"))
+            .else(null)
+            .end()
+            .as("detail_json"),
+        )
         .where(
           "run_id",
           "=",
@@ -503,8 +517,17 @@ export function findTaskRecordByRunIdForViewInDatabase(
         )
         .orderBy("task_id", "asc"),
   ));
-  const records = read(runId).rows.map(rowToTaskRecord);
-  return records.toSorted(compareTasksForRunIdLookup)[0];
+  const records = filterCurrentTaskRunBackings(
+    read(runId).rows.map(rowToTaskRecord),
+    (flowId) => readTaskFlowViewRecordInDatabase(db, flowId)?.syncMode === "task_mirrored",
+  );
+  const selected = records.toSorted(compareTasksForRunIdLookup)[0];
+  if (!selected) {
+    return undefined;
+  }
+  // Backing markers are selection inputs, never part of the public task view.
+  const { detail: _detail, ...view } = selected;
+  return view;
 }
 
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
@@ -578,38 +601,48 @@ export function readTaskRegistrySnapshot({
   });
 }
 
-/** The caller holds shared writer custody across this snapshot and its mutation. */
+/** Capture overlapping task and delivery selectors in one committed read transaction. */
 export function readTaskRegistryMutationSnapshotInDatabase(
   db: DatabaseSync,
-  scope: TaskRegistryMutationScope,
+  scope: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
 ): TaskRegistryStoreSnapshot {
+  const scopes = "taskId" in scope ? [scope] : scope;
+  const taskIds = [...new Set(scopes.map((entry) => entry.taskId))];
+  const runIds = [...new Set(scopes.flatMap((entry) => entry.runId?.trim() || []))];
+  const childSessionKeys = [
+    ...new Set(scopes.flatMap((entry) => entry.childSessionKey?.trim() || [])),
+  ];
   return runSqliteDeferredTransactionSync(db, () => {
     const kysely = getTaskRegistryKysely(db);
-    const selected = kysely
-      .selectFrom("task_runs")
-      .where((eb) =>
-        eb.or([
-          eb("task_id", "=", scope.taskId),
-          eb(eb.fn<string>("trim", [eb.ref("run_id")]), "=", scope.runId?.trim() || null),
-          eb(
-            eb.fn<string>("trim", [eb.ref("child_session_key")]),
-            "=",
-            scope.childSessionKey?.trim() || null,
-          ),
-        ]),
-      );
+    const selected = kysely.selectFrom("task_runs").where((eb) => {
+      // Bound sets keep the parameter count fixed even for large refreshes.
+      const matches = [eb("task_runs.task_id", "in", sqliteStringSet(taskIds))];
+      if (runIds.length) {
+        matches.push(eb("run_id", "in", sqliteStringSet(runIds)));
+      }
+      if (childSessionKeys.length) {
+        matches.push(eb("child_session_key", "in", sqliteStringSet(childSessionKeys)));
+      }
+      return eb.or(matches);
+    });
     const taskRows = executeSqliteQuerySync(
       db,
-      selected.selectAll().orderBy("created_at", "asc").orderBy("task_id", "asc"),
+      selected
+        .leftJoin("task_delivery_state", "task_delivery_state.task_id", "task_runs.task_id")
+        .selectAll("task_runs")
+        .select([
+          "task_delivery_state.task_id as delivery_task_id",
+          "requester_origin_json",
+          "last_notified_event_at",
+        ])
+        .orderBy("created_at", "asc")
+        .orderBy("task_runs.task_id", "asc"),
     ).rows;
-    const deliveryRows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("task_delivery_state")
-        .select(TASK_DELIVERY_STATE_SELECT_COLUMNS)
-        .where("task_id", "in", selected.select("task_id"))
-        .orderBy("task_id", "asc"),
-    ).rows;
+    const deliveryRows = taskRows
+      .filter((row) => row.delivery_task_id !== null)
+      .toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left.task_id), Buffer.from(right.task_id)),
+      );
     return {
       tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
       deliveryStates: new Map(
@@ -697,4 +730,24 @@ export function upsertTaskDeliveryStateInDatabase(
   state: TaskDeliveryState,
 ): void {
   replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
+}
+
+/** Retained task rows own their sessions even when their payload/status cannot be decoded. */
+export function hasTaskSessionOwnerInDatabase(db: DatabaseSync, sessionKey: string): boolean {
+  return (
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+        .selectFrom("task_runs")
+        .select("task_id")
+        .where((eb) =>
+          eb.or([
+            eb("child_session_key", "=", sessionKey),
+            eb("requester_session_key", "=", sessionKey),
+            eb("owner_key", "=", sessionKey),
+          ]),
+        )
+        .limit(1),
+    ).rows.length > 0
+  );
 }

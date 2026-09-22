@@ -39,6 +39,7 @@ export class DiscordVoiceRecording {
   private bytes = 0;
   private chunked = false;
   private capture: VoiceSessionEntry["transcripts"];
+  private recordingEpoch = 0n;
   private startedAt = 0;
   private speaker: Promise<{ label: string }> | undefined;
   private overflow: Error | undefined;
@@ -75,11 +76,14 @@ export class DiscordVoiceRecording {
       this.params.onExcluded();
       return;
     }
-    this.chunked ||= receipt.capture !== undefined;
-    if (receipt.capture !== this.capture) {
+    // Revoked recording receipts still delimit their original segments, but
+    // cannot acquire a replacement recording sink during delayed processing.
+    this.chunked ||= receipt.recordingEpoch !== 0n;
+    if (receipt.capture !== this.capture || receipt.recordingEpoch !== this.recordingEpoch) {
       await this.flush();
     }
     this.capture = receipt.capture;
+    this.recordingEpoch = receipt.recordingEpoch;
     if (!this.capture?.isCurrent() && !this.params.canConverse()) {
       this.params.onExcluded();
       return;
@@ -142,7 +146,7 @@ export class DiscordVoiceRecording {
     const releaseBudget = reserveRecordingWav(bytes + VOICE_WAV_HEADER_BYTES);
     let wav: Awaited<ReturnType<typeof writeVoiceWavFile>>;
     try {
-      wav = await writeVoiceWavFile(Buffer.concat(chunks, bytes));
+      wav = await writeVoiceWavFile(chunks);
     } catch (error) {
       releaseBudget();
       throw error;

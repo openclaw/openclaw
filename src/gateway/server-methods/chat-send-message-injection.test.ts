@@ -48,7 +48,7 @@ vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: vi.fn(() => null),
   updateSessionEntry: vi.fn(async () => undefined),
-  recordSessionParticipant: vi.fn(),
+  recordSessionParticipant: vi.fn(async () => null),
 }));
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: vi.fn(),
@@ -61,7 +61,8 @@ vi.mock("./chat-broadcast.js", () => ({
   broadcastChatFinal: vi.fn(),
   broadcastChatError: vi.fn(),
 }));
-vi.mock("../agent-turn/agent-job.js", () => ({
+vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   setGatewayDedupeEntry: vi.fn(),
 }));
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
@@ -475,13 +476,8 @@ describe("createChatSendMessageInjectionStarter", () => {
         clientRunId: "active-run",
       },
       turn: {
-        discardUnreferencedMedia: async () => {},
-        accountId: undefined,
         ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
-        managedMediaApplyMode: "replace-empty",
-        queuedFollowupOwnerKey: undefined,
-        pluginBoundMediaPromise: Promise.resolve([]),
         replyOptionImages: params?.replyOptionImages ?? [],
         replyOptionMedia: [],
       },

@@ -18,7 +18,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {

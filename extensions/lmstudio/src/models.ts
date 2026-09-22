@@ -1,4 +1,3 @@
-// Lmstudio plugin module implements models behavior.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -127,13 +126,12 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
   );
 }
 
-function buildLmstudioReasoningCompat(
-  allowedOptions: readonly string[],
+export function resolveLmstudioReasoningCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
 ): ModelDefinitionConfig["compat"] | undefined {
-  const supportedReasoningEfforts = resolveLmstudioTransportReasoningEfforts(allowedOptions);
-  if (supportedReasoningEfforts.length === 0) {
-    return undefined;
-  }
+  const supportedReasoningEfforts = resolveLmstudioTransportReasoningEfforts(
+    normalizeReasoningOptions(entry.capabilities?.reasoning?.allowed_options),
+  );
   if (!supportedReasoningEfforts.some((option) => option !== "none")) {
     return undefined;
   }
@@ -142,20 +140,6 @@ function buildLmstudioReasoningCompat(
     supportedReasoningEfforts,
     reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
   };
-}
-
-export function resolveLmstudioReasoningCompat(
-  entry: Pick<LmstudioModelWire, "capabilities">,
-): ModelDefinitionConfig["compat"] | undefined {
-  const reasoning = entry.capabilities?.reasoning;
-  if (reasoning === undefined || reasoning === null) {
-    return undefined;
-  }
-  const allowedOptions = normalizeReasoningOptions(reasoning.allowed_options);
-  if (allowedOptions.length === 0) {
-    return undefined;
-  }
-  return buildLmstudioReasoningCompat(allowedOptions);
 }
 
 /**

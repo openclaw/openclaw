@@ -7,6 +7,39 @@ import {
 import type { PluginCompatRecord } from "./types.js";
 
 export const PLUGIN_COMPAT_RECORDS = [
+  {
+    code: "conversation-binding-sync-mutations",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-09-20",
+    deprecated: "2026-09-20",
+    warningStarts: "2026-09-20",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await getSessionBindingService().inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Async dispatch retains an explicit synchronous fallback for legacy external adapters; remaining bind/unbind and other storage operations are separate migration work.",
+    docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
+    surfaces: [
+      "SessionBindingService.touch",
+      "SessionBindingService.resolveByConversation",
+      "SessionBindingAdapter.touch",
+      "SessionBindingAdapter.resolveByConversation",
+      "resolveRuntimeConversationBindingRoute",
+      "ChannelConversationBindingSupport.setIdleTimeoutBySessionKey",
+      "ChannelConversationBindingSupport.setMaxAgeBySessionKey",
+      "api.runtime.channel.threadBindings.setIdleTimeoutBySessionKey",
+      "api.runtime.channel.threadBindings.setMaxAgeBySessionKey",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations on synchronous methods; resolver migration is recorded here and in docs while its broad barrel remains deprecated; no runtime warnings",
+    ],
+    tests: [
+      "src/infra/outbound/session-binding-service.test.ts",
+      "src/channels/plugins/binding-routing.test.ts",
+      "src/channels/plugins/conversation-bindings.test.ts",
+    ],
+    releaseNote:
+      "Plugins can expose explicitly awaited binding mutations and pure ownership inspection; synchronous public methods remain supported while callers and persistence owners migrate.",
+  },
   ...PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
@@ -54,6 +87,8 @@ export const PLUGIN_COMPAT_RECORDS = [
       "api.runtime.state.openSyncKeyedStore",
       "PluginStateSyncKeyedStore",
       "createPluginStateSyncKeyedStore",
+      "PluginStateKeyedStore.update",
+      "PluginStateKeyedStore.deleteIf",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations and state-store migration documentation",

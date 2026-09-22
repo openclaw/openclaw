@@ -1,5 +1,4 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-/** Records attempt replay safety and terminal side-effect evidence. */
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,

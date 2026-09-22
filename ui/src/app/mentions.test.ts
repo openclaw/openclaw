@@ -68,6 +68,48 @@ afterEach(() => {
 });
 
 describe("application mention Inbox", () => {
+  it.each(["none", "pending", "completed"] as const)(
+    "holds automatic snapshots and queued revisions behind chat, preserving explicit refresh (%s)",
+    async (explicit) => {
+      const bootstrap = createConnectionBootstrapCoordinator();
+      bootstrap.setForegroundRoute("agent:main:pending");
+      const response = deferred<MentionsListResult>();
+      const request = vi.fn<RequestFn>(() => response.promise);
+      const harness = gatewayForMentions(request);
+      const gatewayClient = harness.gateway.snapshot.client;
+      const capability = createCapability(harness.gateway, { connectionBootstrap: bootstrap });
+      bootstrap.synchronize({ client: gatewayClient, connected: true });
+      try {
+        harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+        harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
+        await flushMicrotasks();
+        expect(request).not.toHaveBeenCalled();
+        let manual: Promise<void> | undefined;
+        if (explicit !== "none") {
+          manual = capability.refresh();
+          await flushMicrotasks();
+          if (explicit === "completed") {
+            response.resolve(result(3));
+            await manual;
+            expect(capability.snapshot.items).toEqual([mention]);
+          }
+        }
+        bootstrap.setForegroundPane(
+          {},
+          { sessionKey: "agent:main:pending", client: gatewayClient, ready: true },
+        );
+        response.resolve(result(3));
+        await manual;
+        await vi.waitFor(() => expect(capability.snapshot.phase).toBe("ready"));
+        await flushMicrotasks();
+        expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
+      } finally {
+        response.resolve(result(3));
+        bootstrap.reset();
+      }
+    },
+  );
+
   it("does not call older Gateways without an advertised mention Inbox", async () => {
     const request = vi.fn<RequestFn>(() => Promise.resolve(result(1)));
     const harness = gatewayForMentions(request);

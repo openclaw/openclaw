@@ -82,55 +82,27 @@ describe("openai completions params", () => {
     });
 
     it.each([
-      {
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsPromptCacheKey: false },
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/api.openai.com/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://api.openai.com.proxy.example/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/v1",
-        compat: { supportsPromptCacheKey: true },
-        key: "session-123",
-        lifetime: "24h",
-      },
-      {
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsLongCacheRetention: false },
-        key: "session-123",
-        lifetime: undefined,
-      },
-    ])(
-      "respects endpoint and compat policy: $baseUrl $compat",
-      ({ baseUrl, compat, key, lifetime }) => {
-        const params = build(
-          { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
-          { messages: [] },
-          { sessionId: "session-123", cacheRetention: "long" },
-        );
-        expect(params.prompt_cache_key).toBe(key);
-        expect(params.prompt_cache_retention).toBe(lifetime);
-        expect(params.prompt_cache_options).toBeUndefined();
-      },
-    );
+      ["https://api.openai.com/v1", { supportsPromptCacheKey: false }, undefined, undefined],
+      ["https://proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/api.openai.com/v1", undefined, undefined, undefined],
+      ["https://api.openai.com.proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/v1", { supportsPromptCacheKey: true }, "session-123", "24h"],
+      [
+        "https://api.openai.com/v1",
+        { supportsLongCacheRetention: false },
+        "session-123",
+        undefined,
+      ],
+    ])("respects endpoint and compat policy: %s %s", (baseUrl, compat, key, lifetime) => {
+      const params = build(
+        { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
+        { messages: [] },
+        { sessionId: "session-123", cacheRetention: "long" },
+      );
+      expect(params.prompt_cache_key).toBe(key);
+      expect(params.prompt_cache_retention).toBe(lifetime);
+      expect(params.prompt_cache_options).toBeUndefined();
+    });
   });
 
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {

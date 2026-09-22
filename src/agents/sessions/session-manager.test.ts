@@ -1,10 +1,13 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import * as configEnv from "../../config/config-env-vars.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -18,6 +21,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
@@ -26,7 +31,14 @@ import {
   type SessionMessageEntry,
 } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 
 function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
   const target = parseSqliteSessionFileMarker(marker);
@@ -37,6 +49,71 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
+  it.each(["native", "windows"])(
+    "commits ordered metadata with a %s environment without host transcript writes",
+    async (environment) => {
+      const dir = tempDirs.make("openclaw-session-metadata-worker-");
+      const target = {
+        agentId: "main",
+        sessionId: "metadata-worker",
+        sessionKey: "agent:main:metadata-worker",
+        storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      const manager = SessionManager.open(target, dir);
+      // Preserve the implementation so each observed call uses its actual database receiver.
+      // oxlint-disable-next-line typescript/unbound-method
+      const nativePrepare = DatabaseSync.prototype.prepare;
+      const hostWrites: string[] = [];
+      const prepare = vi
+        .spyOn(DatabaseSync.prototype, "prepare")
+        .mockImplementation(function (this: DatabaseSync, sql) {
+          const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
+          if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
+            hostWrites.push(mutation);
+          }
+          return nativePrepare.call(this, sql);
+        });
+      const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+      const clone =
+        environment === "windows"
+          ? vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
+              const { OPENCLAW_STATE_DIR, ...rest } = env;
+              const captured = withMockedPlatform("win32", () =>
+                cloneEnv({
+                  ...rest,
+                  OpenClaw_State_Dir: OPENCLAW_STATE_DIR,
+                }),
+              );
+              expect(() => serialize(captured)).toThrow("could not be cloned");
+              return captured;
+            })
+          : undefined;
+      let ids: string[];
+      try {
+        ids = await Promise.all([
+          manager.appendModelChange("test-provider", "test-model"),
+          manager.appendThinkingLevelChange("high"),
+        ]);
+      } finally {
+        prepare.mockRestore();
+        clone?.mockRestore();
+      }
+      expect(hostWrites).toEqual([]);
+      expect(manager.getEntries()).toMatchObject([
+        {
+          type: "model_change",
+          id: ids[0],
+          parentId: null,
+          provider: "test-provider",
+          modelId: "test-model",
+        },
+        { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
+      ]);
+      expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
+      expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+    },
+  );
+
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
@@ -78,8 +155,8 @@ describe("SessionManager.open", () => {
       stopReason: "stop",
       timestamp: Date.now(),
     });
-    const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
-    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingChangeId = await sessionManager.appendThinkingLevelChange("high");
+    const modelChangeId = await sessionManager.appendModelChange("openai", "gpt-5.5");
     const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
     const resetId = sessionManager.appendResetBoundary("new", assistantId);
     expect(sessionManager.getBoundaryCount()).toBe(2);
@@ -180,7 +257,7 @@ describe("SessionManager.open", () => {
     expect(() => currentManager.setSessionTarget(scope)).toThrow(
       "require doctor/import migration before runtime use",
     );
-    currentManager.appendModelChange("test-provider", "test-model");
+    await currentManager.appendModelChange("test-provider", "test-model");
     await expect(loadTranscriptEvents(currentScope)).resolves.toEqual([
       expect.objectContaining({
         type: "session",
@@ -267,7 +344,7 @@ describe("SessionManager.open", () => {
     });
 
     const manager = SessionManager.open(scope, dir);
-    manager.appendModelChange("test-provider", "test-model");
+    await manager.appendModelChange("test-provider", "test-model");
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({
@@ -356,11 +433,13 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toEqual(before);
   });
 
-  it("rejects invalid entries before mutating in-memory state", () => {
+  it("rejects invalid entries before mutating in-memory state", async () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();
 
-    expect(() => manager.appendModelChange("", "")).toThrow("Invalid session transcript entry");
+    await expect(manager.appendModelChange("", "")).rejects.toThrow(
+      "Invalid session transcript entry",
+    );
     expect(manager.getEntries()).toEqual(entriesBefore);
     expect(manager.getLeafId()).toBeNull();
     expect(manager.getAppendParentId()).toBeNull();
@@ -783,15 +862,15 @@ describe("SessionManager.open", () => {
       expectedSessionIdHash: redactIdentifier(sessionId),
       sessionKeyHash: redactIdentifier(sessionKey),
     };
-    const captureError = (run: () => unknown): unknown => {
+    const captureError = async (run: () => unknown): Promise<unknown> => {
       try {
-        run();
+        await run();
       } catch (error) {
         return error;
       }
       throw new Error("expected rebound transcript persistence to fail");
     };
-    const compactionError = captureError(() =>
+    const compactionError = await captureError(() =>
       sessionManager.appendCompaction("late summary", assistant.messageId, 42),
     );
     expect(compactionError).toMatchObject({ cause: expectedCause });
@@ -802,8 +881,10 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    const eventError = captureError(() => sessionManager.appendModelChange("openai", "gpt-5.5"));
-    const messageError = captureError(() =>
+    const eventError = await captureError(() =>
+      sessionManager.appendModelChange("openai", "gpt-5.5"),
+    );
+    const messageError = await captureError(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
     );
     for (const error of [eventError, messageError]) {

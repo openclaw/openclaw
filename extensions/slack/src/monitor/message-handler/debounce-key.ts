@@ -1,4 +1,3 @@
-// Slack plugin module implements debounce key behavior.
 import type { SlackMessageEvent } from "../../types.js";
 
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {

@@ -51,21 +51,9 @@ vi.mock("./whatsapp/adapter.runtime.js", () => {
 import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistrations } from "./cli.js";
 
 const STANDARD_LANES = [
-  {
-    commandName: "discord",
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
-    label: "Discord",
-  },
-  {
-    commandName: "slack",
-    description: "Run the Slack live QA lane against a private bot-to-bot channel harness",
-    label: "Slack",
-  },
-  {
-    commandName: "whatsapp",
-    description: "Run the WhatsApp live QA lane against two pre-linked Web sessions",
-    label: "WhatsApp",
-  },
+  { commandName: "discord" },
+  { commandName: "slack" },
+  { commandName: "whatsapp" },
 ] as const;
 
 function requireRegistration(commandName: string) {
@@ -133,77 +121,27 @@ describe("live transport QA contributions", () => {
     },
   );
 
-  it.each(STANDARD_LANES)(
-    "preserves the actual $commandName Commander contract",
-    ({ commandName, description, label }) => {
-      const { command } = registerCommand(commandName);
+  it("maps the Discord Crabline driver", async () => {
+    const qa = new Command();
+    requireRegistration("discord").register(qa);
 
-      expect(command.description()).toBe(description);
-      expect(
-        command.options.map((option) => ({
-          defaultValue: option.defaultValue,
-          description: option.description,
-          flags: option.flags,
-        })),
-      ).toEqual([
-        {
-          defaultValue: undefined,
-          description: "Repository root to target when running from a neutral cwd",
-          flags: "--repo-root <path>",
-        },
-        {
-          defaultValue: undefined,
-          description: `${label} QA artifact directory`,
-          flags: "--output-dir <path>",
-        },
-        {
-          defaultValue: "live-frontier",
-          description: "Provider mode: mock-openai, aimock, live-frontier",
-          flags: "--provider-mode <mode>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Primary provider/model ref",
-          flags: "--model <ref>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Alternate provider/model ref",
-          flags: "--alt-model <ref>",
-        },
-        {
-          defaultValue: [],
-          description: `Run only the named ${label} QA scenario (repeatable)`,
-          flags: "--scenario <id>",
-        },
-        {
-          defaultValue: undefined,
-          description: "Enable provider fast mode where supported",
-          flags: "--fast",
-        },
-        {
-          defaultValue: false,
-          description: "Write artifacts without setting a failing exit code when scenarios fail",
-          flags: "--allow-failures",
-        },
-        {
-          defaultValue: "sut",
-          description: `Temporary ${label} account id inside the QA gateway config`,
-          flags: "--sut-account <id>",
-        },
-        {
-          defaultValue: undefined,
-          description: `Credential source for ${label} QA: env or convex (default: env)`,
-          flags: "--credential-source <source>",
-        },
-        {
-          defaultValue: undefined,
-          description:
-            "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
-          flags: "--credential-role <role>",
-        },
-      ]);
-      expect(command.helpInformation()).toContain(`Usage: qa ${commandName} [options]`);
+    await qa.parseAsync(["node", "openclaw", "discord", "--channel-driver", "crabline"]);
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "discord",
+      options: expect.objectContaining({ channelDriver: "crabline" }),
+    });
+  });
+
+  it.each(["slack", "whatsapp"] as const)(
+    "does not expose an unsupported Crabline driver on the %s command",
+    async (commandName) => {
+      const { qa } = registerCommand(commandName);
+
+      await expect(
+        qa.parseAsync(["node", "openclaw", commandName, "--channel-driver", "crabline"]),
+      ).rejects.toMatchObject({ code: "commander.unknownOption" });
+      expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
     },
   );
 
@@ -313,9 +251,24 @@ describe("live transport QA contributions", () => {
 
     await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", "telegram-canary"]);
 
-    expect(runTelegram).toHaveBeenCalledWith(
-      expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
-    );
+    expect(runTelegram).toHaveBeenCalledWith({
+      allowFailures: false,
+      alternateModel: undefined,
+      concurrency: undefined,
+      credentialFile: undefined,
+      credentialRole: undefined,
+      credentialSource: undefined,
+      failFast: undefined,
+      fastMode: undefined,
+      listScenarios: false,
+      outputDir: undefined,
+      primaryModel: undefined,
+      profile: undefined,
+      providerMode: "live-frontier",
+      repoRoot: undefined,
+      scenarioIds: ["telegram-canary"],
+      sutAccountId: "sut",
+    });
   });
 
   it.each(["discord", "slack", "telegram", "whatsapp"])(

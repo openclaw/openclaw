@@ -5,6 +5,7 @@ import {
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isSafeToRetrySendError, isTelegramBadRequestError } from "./network-errors.js";
+import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
 // A missing chat/thread invalidates the route for every remaining chunk.
 // Draining would only repeat the same bad target instead of preserving content.
@@ -52,6 +53,24 @@ export function mergeTelegramPartialDeliveryError(
     ...(receipt ? { receipt } : {}),
     visibleReplySent: true,
   });
+}
+
+export async function failPromptContextSequence(
+  sequence: TelegramPromptContextProjectionSequence,
+  error: unknown,
+): Promise<never> {
+  try {
+    await sequence.fail();
+  } catch (projectionError) {
+    const failure = new AggregateError(
+      [error, projectionError],
+      "Telegram delivery and prompt context cleanup failed",
+    );
+    throw isChannelPartialDeliveryError(error)
+      ? mergeTelegramPartialDeliveryError(failure, error.deliveryResult)
+      : failure;
+  }
+  throw error;
 }
 
 export function isTelegramSkippableChunkSendError(error: unknown): boolean {

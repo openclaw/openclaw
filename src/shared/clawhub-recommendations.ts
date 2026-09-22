@@ -41,6 +41,7 @@ const recommendationSchema = z
       .strict(),
   ])
   .refine((entry) => entry.kind !== "skill" || entry.id === entry.skillRef);
+let recommendationsSchema: z.ZodArray<typeof recommendationSchema> | undefined;
 
 /** Gateway-authored catalog identity and install facts; models supply only a search query. */
 export type ClawHubRecommendation = z.infer<typeof recommendationSchema>;
@@ -53,9 +54,9 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
 export function readClawHubRecommendations(
   channelData: Record<string, unknown> | undefined,
 ): ClawHubRecommendation[] {
-  const result = z
-    .array(recommendationSchema)
-    .max(CLAWHUB_RECOMMENDATION_LIMIT)
-    .safeParse(channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]);
+  recommendationsSchema ??= z.array(recommendationSchema).max(CLAWHUB_RECOMMENDATION_LIMIT);
+  const result = recommendationsSchema.safeParse(
+    channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY],
+  );
   return result.success ? result.data : [];
 }

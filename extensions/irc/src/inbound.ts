@@ -3,10 +3,7 @@ import {
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { channelIngressRoutes } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
@@ -136,7 +133,7 @@ export async function handleIrcInbound(params: {
   message: IrcInboundMessage;
   account: ResolvedIrcAccount;
   config: CoreConfig;
-  runtime: RuntimeEnv;
+  runtime: Pick<RuntimeEnv, "error" | "log">;
   connectedNick?: string;
   turnAdoptionLifecycle?: IrcIngressLifecycle;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
@@ -233,57 +230,59 @@ export async function handleIrcInbound(params: {
       id: peerId,
     },
   });
-  const access = await createChannelIngressResolver({
-    channelId: CHANNEL_ID,
-    accountId: account.accountId,
-    identity: ircIngressIdentity,
-    cfg: config as OpenClawConfig,
-    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-  }).message({
-    subject: createIrcIngressSubject(message),
-    conversation: {
-      kind: message.isGroup ? "group" : "direct",
-      id: message.target,
-    },
-    contextBinding: {
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      ...(message.messageId ? { messageId: message.messageId } : {}),
-      inboundEventKind: "user_request",
-    },
-    route: routeDescriptorsForIrcGroup({
-      isGroup: message.isGroup,
-      groupPolicy,
-      groupAllowed: groupMatch.allowed,
-      hasConfiguredGroups: groupMatch.hasConfiguredGroups,
-      groupEnabled:
-        groupMatch.groupConfig?.enabled !== false && groupMatch.wildcardConfig?.enabled !== false,
-      routeGroupAllowFrom,
-    }),
-    mentionFacts: message.isGroup
-      ? {
-          canDetectMention: true,
-          wasMentioned,
-          hasAnyMention: wasMentioned,
-        }
-      : undefined,
-    dmPolicy,
-    groupPolicy: accessGroupPolicy,
-    policy: {
-      groupAllowFromFallbackToAllowFrom: false,
-      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
-      activation: {
-        requireMention: message.isGroup && requireMention,
-        allowTextCommands,
+  const access = await core.channel.inbound.ingress
+    .createResolver({
+      channelId: CHANNEL_ID,
+      accountId: account.accountId,
+      identity: ircIngressIdentity,
+      cfg: config as OpenClawConfig,
+      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+    })
+    .message({
+      subject: createIrcIngressSubject(message),
+      conversation: {
+        kind: message.isGroup ? "group" : "direct",
+        id: message.target,
       },
-    },
-    allowFrom: account.config.allowFrom,
-    groupAllowFrom: account.config.groupAllowFrom,
-    command: {
-      allowTextCommands,
-      hasControlCommand,
-    },
-  });
+      contextBinding: {
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        ...(message.messageId ? { messageId: message.messageId } : {}),
+        inboundEventKind: "user_request",
+      },
+      route: routeDescriptorsForIrcGroup({
+        isGroup: message.isGroup,
+        groupPolicy,
+        groupAllowed: groupMatch.allowed,
+        hasConfiguredGroups: groupMatch.hasConfiguredGroups,
+        groupEnabled:
+          groupMatch.groupConfig?.enabled !== false && groupMatch.wildcardConfig?.enabled !== false,
+        routeGroupAllowFrom,
+      }),
+      mentionFacts: message.isGroup
+        ? {
+            canDetectMention: true,
+            wasMentioned,
+            hasAnyMention: wasMentioned,
+          }
+        : undefined,
+      dmPolicy,
+      groupPolicy: accessGroupPolicy,
+      policy: {
+        groupAllowFromFallbackToAllowFrom: false,
+        mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+        activation: {
+          requireMention: message.isGroup && requireMention,
+          allowTextCommands,
+        },
+      },
+      allowFrom: account.config.allowFrom,
+      groupAllowFrom: account.config.groupAllowFrom,
+      command: {
+        allowTextCommands,
+        hasControlCommand,
+      },
+    });
   const commandAuthorized = access.commandAccess.authorized;
 
   if (access.ingress.admission === "pairing-required") {

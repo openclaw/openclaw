@@ -278,7 +278,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
       env: undefined,
       invokeDeadlineMs: 30_000,
       invokeWaitMs: 35_000,
-      runTimeoutSec: 30,
+      runTimeoutMs: 30_000,
       supportsSystemRunPrepare: true,
     },
   };

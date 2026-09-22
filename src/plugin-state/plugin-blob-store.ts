@@ -4,14 +4,6 @@ import {
   MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
   MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN,
   MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN,
-  pluginBlobClear,
-  pluginBlobDelete,
-  pluginBlobDeleteExpiredKey,
-  pluginBlobDeleteExpired,
-  pluginBlobEntries,
-  pluginBlobLookup,
-  pluginBlobRegister,
-  pluginBlobRegisterIfAbsent,
 } from "./plugin-blob-store.sqlite.js";
 import type {
   OpenBlobStoreOptions,
@@ -20,6 +12,16 @@ import type {
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
+import {
+  clearPluginBlobsInWorker,
+  lookupPluginBlobInWorker,
+  listPluginBlobsInWorker,
+  deletePluginBlobInWorker,
+  deleteExpiredPluginBlobKeyInWorker,
+  deleteExpiredPluginBlobsInWorker,
+  registerPluginBlobInWorker,
+  registerPluginBlobIfAbsentInWorker,
+} from "./plugin-blob-worker-client.js";
 import {
   createPluginStoreOptionPolicy,
   serializePluginStoreJson,
@@ -142,7 +144,8 @@ function prepareBlob(params: {
   const ttlMs = validateTtl(params.opts?.ttlMs, "register") ?? params.defaultTtlMs;
   return {
     key,
-    bytes: Uint8Array.from(params.bytes),
+    // Registration reserves broker capacity before copying, still before its first await.
+    bytes: params.bytes,
     metadataJson,
     ...(ttlMs !== undefined ? { ttlMs } : {}),
   };
@@ -208,7 +211,7 @@ function createPluginBlobStoreInternal<TMetadata>(
         defaultTtlMs,
         opts,
       });
-      pluginBlobRegister(writeParams(blob));
+      await registerPluginBlobInWorker(writeParams(blob));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
       const blob = prepareBlob({
@@ -219,10 +222,10 @@ function createPluginBlobStoreInternal<TMetadata>(
         defaultTtlMs,
         opts,
       });
-      return pluginBlobRegisterIfAbsent(writeParams(blob));
+      return registerPluginBlobIfAbsentInWorker(writeParams(blob));
     },
     async lookup(key) {
-      return pluginBlobLookup<TMetadata>({
+      return lookupPluginBlobInWorker<TMetadata>({
         pluginId,
         namespace,
         key: validateKey(key, "lookup"),
@@ -230,10 +233,10 @@ function createPluginBlobStoreInternal<TMetadata>(
       });
     },
     async entries() {
-      return pluginBlobEntries<TMetadata>({ pluginId, namespace, ...(env ? { env } : {}) });
+      return listPluginBlobsInWorker<TMetadata>({ pluginId, namespace, ...(env ? { env } : {}) });
     },
     async delete(key) {
-      return pluginBlobDelete({
+      return deletePluginBlobInWorker({
         pluginId,
         namespace,
         key: validateKey(key, "delete"),
@@ -241,7 +244,7 @@ function createPluginBlobStoreInternal<TMetadata>(
       });
     },
     async deleteExpiredKey(key) {
-      return pluginBlobDeleteExpiredKey<TMetadata>({
+      return deleteExpiredPluginBlobKeyInWorker<TMetadata>({
         pluginId,
         namespace,
         key: validateKey(key, "sweep"),
@@ -249,14 +252,14 @@ function createPluginBlobStoreInternal<TMetadata>(
       });
     },
     async deleteExpired() {
-      return pluginBlobDeleteExpired<TMetadata>({
+      return deleteExpiredPluginBlobsInWorker<TMetadata>({
         pluginId,
         namespace,
         ...(env ? { env } : {}),
       });
     },
     async clear() {
-      pluginBlobClear({ pluginId, namespace, ...(env ? { env } : {}) });
+      await clearPluginBlobsInWorker({ pluginId, namespace, ...(env ? { env } : {}) });
     },
   };
 }

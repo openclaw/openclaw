@@ -21,7 +21,7 @@ import {
 } from "./realtime-quicksilver-instructions.js";
 import { buildOpenAIQuicksilverContextAppend } from "./realtime-quicksilver-protocol.js";
 import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { OpenAIQuicksilverTranscript } from "./realtime-quicksilver-transcript.js";
 import {
   boundOpenAIQuicksilverDelegationResult,

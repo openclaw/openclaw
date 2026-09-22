@@ -185,6 +185,7 @@ function resolveConfiguredRuntime(params: {
 export type CliRuntimeAuthDirectories = {
   agentDir: string;
   inheritedAuthDir?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type RuntimeAuthAliasParams = {
@@ -239,6 +240,7 @@ function resolveCliRuntimeFromAuthProfile(
   },
 ): string | undefined {
   const configuredProfiles = params.cfg?.auth?.profiles ?? {};
+  const env = params.preparedAuthDirectories?.env ?? process.env;
   // Login and auth-order commands own the credential store, not config metadata.
   // Reuse its published snapshot without reopening SQLite on a request path.
   const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
@@ -246,9 +248,10 @@ function resolveCliRuntimeFromAuthProfile(
       (params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined),
     resolveLegacyInheritedAuthDir(
       params.cfg ?? {},
-      process.env,
-      params.preparedAuthDirectories?.inheritedAuthDir,
+      env,
+      () => params.preparedAuthDirectories?.inheritedAuthDir,
     ),
+    env,
   );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();

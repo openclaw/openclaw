@@ -16,11 +16,11 @@ const TELEMETRY_REASON_LABELS = {
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",
   "update-disabled": "update checks are disabled",
-} satisfies Record<ReturnType<typeof resolveTelemetryStatus>["reason"], string>;
+} satisfies Record<Awaited<ReturnType<typeof resolveTelemetryStatus>>["reason"], string>;
 
 async function showTelemetry(options: { json?: boolean }): Promise<void> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
-  const telemetry = resolveTelemetryStatus(config);
+  const telemetry = await resolveTelemetryStatus(config);
   const request =
     telemetry.reason === "update-disabled" || telemetry.reason === "automated-environment"
       ? null
@@ -28,7 +28,7 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
           method: telemetry.enabled ? "POST" : "GET",
           userAgent: buildTelemetryUserAgent("gateway"),
           ...(telemetry.enabled
-            ? { payload: buildTelemetryPayload(config, { surface: "gateway" }) }
+            ? { payload: await buildTelemetryPayload(config, { surface: "gateway" }) }
             : {}),
         };
 

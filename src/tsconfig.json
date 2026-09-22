@@ -1,0 +1,23 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true
+  },
+  // Keep lint's source graph separate from UI and plugins, including shared ambient types.
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "**/*.test-support.cjs",
+    "../packages/**/*.d.ts",
+    "../packages/**/*.d.mts",
+    "../packages/**/*.d.cts",
+    "../ui/**/*.d.ts",
+    "../ui/**/*.d.mts",
+    "../ui/**/*.d.cts",
+    "../extensions/**/*.d.ts",
+    "../extensions/**/*.d.mts",
+    "../extensions/**/*.d.cts"
+  ]
+}

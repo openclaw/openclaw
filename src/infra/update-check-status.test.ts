@@ -49,6 +49,7 @@ async function createNpmInstallRoot(base: string): Promise<string> {
   );
   await fs.mkdir(root, { recursive: true });
   await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
   await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n");
   if (process.platform === "win32") {
     await fs.writeFile(
@@ -66,6 +67,47 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
+  it.each([
+    {
+      remoteUrl: "https://github.com/example/openclaw.git",
+      expected: "https://github.com/example/openclaw",
+    },
+    {
+      remoteUrl: "git@github.com:example/openclaw.git",
+      expected: "https://github.com/example/openclaw",
+    },
+    {
+      remoteUrl: "https://example-user:example-password@github.com/example/openclaw.git",
+      expected: "https://github.com/example/openclaw",
+    },
+    { remoteUrl: "https://gitlab.com/example/openclaw.git", expected: undefined },
+    { remoteUrl: "/local/example/openclaw", expected: undefined },
+    { remoteUrl: "repos/openclaw", expected: undefined },
+    { remoteUrl: "local/project.git", expected: undefined },
+  ])(
+    "reports a credential-free GitHub repository for $remoteUrl",
+    async ({ remoteUrl, expected }) => {
+      await withTestDir({ prefix: "openclaw-update-repository-" }, async (root) => {
+        await initGitRepo(root);
+        await commitGit(root, "initial");
+        await runGit(root, "remote", "add", "origin", "https://github.com/other/unrelated.git");
+        await runGit(root, "remote", "add", "upstream", remoteUrl);
+        await runGit(root, "update-ref", "refs/remotes/upstream/main", "HEAD");
+        await runGit(root, "branch", "--set-upstream-to=upstream/main", "main");
+        const status = await checkUpdateStatus({ root, includeRegistry: false, fetchGit: false });
+        expect(status.git?.repositoryUrl).toBe(expected);
+        await runGit(root, "checkout", "--detach");
+        const detached = await checkUpdateStatus({
+          root,
+          includeRegistry: false,
+          fetchGit: false,
+          useDetachedDevUpstream: true,
+        });
+        expect(detached.git?.repositoryUrl).toBe(expected);
+      });
+    },
+  );
+
   it.each([
     { scope: "install kind", commands: 1 },
     { scope: "identity", commands: 2 },
@@ -649,7 +691,7 @@ describe("checkUpdateStatus", () => {
     await withTestDir({ prefix: "openclaw-update-check-registry-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "npm@10.0.0" }),
         "utf8",
       );
       await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
@@ -660,6 +702,7 @@ describe("checkUpdateStatus", () => {
         root,
         includeRegistry: false,
         fetchGit: false,
+        timeoutMs: 1000,
         resolveRegistryChannel,
       });
 

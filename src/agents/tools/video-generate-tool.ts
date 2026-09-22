@@ -7,6 +7,8 @@ import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.j
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
@@ -82,7 +84,7 @@ const VideoGenerateToolProperties = {
   imageRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`image` + `images` roles by index after de-dupe. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
+        "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
     }),
   ),
   video: Type.Optional(
@@ -98,7 +100,7 @@ const VideoGenerateToolProperties = {
   videoRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`video` + `videos` roles by index after de-dupe. Value: reference_video; empty string leaves unset.",
+        "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
     }),
   ),
   audioRef: Type.Optional(
@@ -114,7 +116,7 @@ const VideoGenerateToolProperties = {
   audioRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`audioRef` + `audioRefs` roles by index after de-dupe. Value: reference_audio; empty string leaves unset.",
+        "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
     }),
   ),
   model: Type.Optional(
@@ -246,6 +248,10 @@ function shouldExposeVideoReferenceAudioParams(params: {
     modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+  let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
+  let isInstalledPluginEnabled:
+    | ReturnType<typeof createInstalledPluginEnabledPredicate>
+    | undefined;
 
   for (const plugin of snapshot.plugins) {
     if (
@@ -254,6 +260,11 @@ function shouldExposeVideoReferenceAudioParams(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        normalizedConfig: params.cfg.plugins
+          ? (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins))
+          : undefined,
+        isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
+          createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg)),
       })
     ) {
       continue;
@@ -524,6 +535,8 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             expectedKind: "image",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
             workspaceDir: options?.workspaceDir,
+            cwd: options?.cwd,
+            fsPolicy: options?.fsPolicy,
             sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,
@@ -534,6 +547,8 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             expectedKind: "video",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "video"),
             workspaceDir: options?.workspaceDir,
+            cwd: options?.cwd,
+            fsPolicy: options?.fsPolicy,
             sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,
@@ -544,6 +559,8 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             expectedKind: "audio",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "audio"),
             workspaceDir: options?.workspaceDir,
+            cwd: options?.cwd,
+            fsPolicy: options?.fsPolicy,
             sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,

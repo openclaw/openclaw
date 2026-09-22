@@ -1,4 +1,3 @@
-// Slack plugin module implements messages behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

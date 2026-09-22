@@ -10,12 +10,19 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { RuntimeToolSchemaDiagnostic } from "../tool-schema-projection.js";
+import {
+  clearToolSearchCatalog,
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "../tool-search-catalog.js";
 import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
@@ -62,7 +69,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         workspaceDir: "/tmp/openclaw-runtime-plan-tools",
         model,
       }),
-    ).toBe(normalized);
+    ).toEqual(normalized);
     expect(normalize).toHaveBeenCalledWith(tools, {
       workspaceDir: "/tmp/openclaw-runtime-plan-tools",
       modelApi: "openai-responses",
@@ -165,7 +172,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         provider: "openai",
         modelApi: null,
       }),
-    ).toBe(tools);
+    ).toEqual(tools);
     expect(normalize).toHaveBeenCalledWith(tools, {
       workspaceDir: undefined,
       modelApi: undefined,
@@ -258,6 +265,76 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     expect(result[0]).toBe(normalized);
     expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(metadata);
   });
+
+  it.each([
+    ["plan", "unchanged"],
+    ["provider", "unchanged"],
+    ["provider", "cloned"],
+  ] as const)(
+    "owns the assembly array after %s normalization (%s) while retaining plugin tool admission",
+    async (route, mode) => {
+      const instance = new PluginInstance("normalizer-fixture");
+      const catalogRef = createToolSearchCatalogRef();
+      try {
+        const output = { content: [{ type: "text" as const, text: "fixture note" }], details: {} };
+        const tool: AgentTool = {
+          ...createParameterFreeTool("fixture__lookup_note"),
+          label: "Fixture lookup",
+          parameters: Type.Object({}),
+          execute: vi.fn(async () => output),
+        };
+        const metadata: Parameters<typeof setPluginToolMeta>[1] = {
+          pluginId: "bundle-mcp",
+          optional: false,
+          mcp: {
+            serverName: "fixture",
+            safeServerName: "fixture",
+            toolName: "lookup_note",
+            operation: "tool",
+          },
+        };
+        setPluginToolMeta(tool, metadata);
+        // Even a pass-through provider hook returns an instance-owned collection view.
+        const normalize = instance.wrap((tools: AgentTool[]) =>
+          mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
+        );
+        mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) => normalize(tools));
+        const runtimePlan =
+          route === "plan"
+            ? ({ tools: { normalize, logDiagnostics: vi.fn() } } as unknown as AgentRuntimePlan)
+            : undefined;
+        const normalized = normalizeAgentRuntimeTools({
+          runtimePlan,
+          tools: [tool],
+          provider: "openai",
+        });
+        const normalizedTool = expectDefined(normalized[0], "normalized tool");
+        const wrapped = normalized
+          .map((entry) => wrapToolWithBeforeToolCallHook(entry))
+          .map((entry) => wrapToolWithAbortSignal(entry, new AbortController().signal));
+        const wrappedTool = expectDefined(wrapped[0], "wrapped tool");
+
+        expect(getPluginToolMeta(normalizedTool)).toBe(metadata);
+        expect(getPluginToolMeta(wrappedTool)).toBe(metadata);
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: wrapped });
+        expect(catalogRef.current?.entries).toMatchObject([
+          { name: tool.name, source: "mcp", sourceName: "fixture", mcp: metadata.mcp },
+        ]);
+        await expect(normalizedTool.execute("current-call", {})).resolves.toBe(output);
+        await expect(wrappedTool.execute("wrapped-call", {})).resolves.toBe(output);
+        await instance.dispose();
+        expect(() => normalizedTool.execute("retired-call", {})).toThrow(
+          "Plugin normalizer-fixture was reloaded or disabled",
+        );
+        await expect(wrappedTool.execute("retired-wrapped-call", {})).rejects.toThrow(
+          "Plugin normalizer-fixture was reloaded or disabled",
+        );
+      } finally {
+        clearToolSearchCatalog({ catalogRef });
+        await instance.dispose();
+      }
+    },
+  );
 
   it.each([true, false, undefined])(
     "preserves output schemas and channel-progress visibility (%s) across runtime clones",

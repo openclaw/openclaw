@@ -53,6 +53,7 @@ it.each(["off", "all"] as const)(
           throw new Error(request.error);
         }
         const respond = vi.fn();
+        const controller = new AbortController();
         const result = await prepareChatSendAttachments({
           request: request.value,
           session: {
@@ -63,7 +64,8 @@ it.each(["off", "all"] as const)(
             clientRunId: `media-${agentId}`,
           },
           admission: {
-            activeRunAbort: { controller: new AbortController() },
+            activeRunAbort: { controller },
+            assertWorkAdmissionCurrent: () => controller.signal.throwIfAborted(),
             cleanupAdmittedRun() {},
           },
           context: { logGateway: createSubsystemLogger("test/media-owner") },

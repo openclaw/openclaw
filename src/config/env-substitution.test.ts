@@ -120,6 +120,36 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  it("retains sparse arrays, literal keys, escaping and depth-first callback order", () => {
+    const items: unknown[] = [];
+    items.length = 3;
+    items[1] = { missing: "${FIRST}", resolved: "${LATER}", escaped: "$${LATER}" };
+    const env = { LATER: "before-callback" };
+    const warnings: EnvSubstitutionWarning[] = [];
+    const result = resolveConfigEnvVars({ items, tail: "${LAST}", "${KEY}": "literal-key" }, env, {
+      onMissing: (warning) => {
+        warnings.push(warning);
+        env.LATER = "after-callback";
+      },
+    });
+    const expectedItems: unknown[] = [];
+    expectedItems.length = 3;
+    expectedItems[1] = {
+      missing: "${FIRST}",
+      resolved: "after-callback",
+      escaped: "${LATER}",
+    };
+    expect(result).toStrictEqual({
+      items: expectedItems,
+      tail: "${LAST}",
+      "${KEY}": "literal-key",
+    });
+    expect(warnings).toEqual([
+      { varName: "FIRST", configPath: "items[1].missing" },
+      { varName: "LAST", configPath: "tail" },
+    ]);
+  });
+
   describe("missing env var handling", () => {
     it("throws MissingEnvVarError with var name and config path details", () => {
       const scenarios: MissingEnvScenario[] = [
@@ -181,11 +211,11 @@ describe("resolveConfigEnvVars", () => {
           configPath: 'plugins.entries.fixture.config.headers["0"]',
         },
         {
-          name: "existing non-plugin root record paths stay unchanged",
+          name: "dotted non-plugin record key is one quoted segment",
           config: { "root.key": "${MISSING}" },
           env: {},
           varName: "MISSING",
-          configPath: "root.key",
+          configPath: '["root.key"]',
         },
         {
           name: "plugin config array indices remain canonical",
@@ -383,7 +413,7 @@ describe("resolveConfigEnvVars", () => {
         ['plugins.entries.foo.config.headers["X.Trace"]', "DOTTED_HEADER"],
         ["plugins.entries.foo.config.headers.X.Trace", "NESTED_HEADER"],
         ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
-        ["models.providers.alpha:beta.headers.X.Trace", "CORE_HEADER"],
+        ['models.providers.alpha:beta.headers["X.Trace"]', "CORE_HEADER"],
       ]);
       expect([...resolvedEnvSecretRefs]).toEqual([["resolved", "RESOLVED_SECRET"]]);
       for (const [configPath, id] of pendingEnvSecretRefs) {

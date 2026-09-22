@@ -4,8 +4,8 @@
  * Derives canonical ids from generated bundled channel metadata with runtime catalog fallback.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
+import { GENERATED_BUNDLED_CHANNEL_IDS } from "./bundled-channel-ids.generated.js";
 
 /**
  * Canonical chat channel id used by core routing, plugin config, and channel catalogs.
@@ -20,7 +20,7 @@ type BundledChatChannelEntry = {
 };
 
 function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
-  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
+  return GENERATED_BUNDLED_CHANNEL_IDS.filter((entry) => entry.configurable !== false)
     .map((entry) => ({
       id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
       aliases: entry.aliases ?? [],

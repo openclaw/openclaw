@@ -8,10 +8,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
-import {
-  readSessionChangedEvent,
-  type SessionChangedResult,
-} from "../../lib/sessions/reconcile.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   resolveUiConversationIdentity,
   areUiSessionKeysEquivalent,
@@ -21,8 +18,9 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import type { SessionChangedRowResult } from "../../lib/sessions/session-row-reconcile.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
-import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
+import { invalidateChatBranches, loadChatBranches } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -51,8 +49,10 @@ import {
 } from "./components/chat-session-workspace.ts";
 import {
   getChatSessionProjection,
+  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  retireChatSubmissionDisplay,
 } from "./history-merge.ts";
 import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
 import {
@@ -100,27 +100,11 @@ function globalSessionEventMatchesChat(
     : true;
 }
 
-function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionChangedResult {
-  const selectedAgentId = resolveChatAgentId(state);
-  const reconciled = state.sessions.reconcileChanged(payload, {
-    resultAgentId: state.sessionsResultAgentId ?? selectedAgentId,
-    selectedGlobalAgentId: selectedAgentId,
-    archivedFilter: state.sessionsArchivedFilter,
-  });
-  if (reconciled.applied) {
-    state.sessionsResult = state.sessions.state.result;
-    state.sessionsResultAgentId = state.sessions.state.agentId;
-    state.sessionsError = state.sessions.state.error;
-    reconcileChatRunAfterSessionStatePublication(state);
-  }
-  return reconciled;
-}
-
 function finishSessionMessageRunReconcile(
   state: ChatPageHost,
   sessionKey: string,
   runId: string | null,
-  row: SessionChangedResult["row"] | undefined,
+  row: SessionChangedRowResult["row"] | undefined,
   presentation: ChatPanePresentation,
 ): boolean {
   const cleared = row
@@ -146,6 +130,7 @@ function handleSessionMessageEvent(
   state: ChatPageHost,
   payload: unknown,
   presentation: ChatPanePresentation,
+  result: SessionChangedRowResult,
 ) {
   const event = readSessionChangedEvent(payload);
   if (!event || !globalSessionEventMatchesChat(state, event)) {
@@ -155,6 +140,7 @@ function handleSessionMessageEvent(
   const isUserMessage =
     readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
+    invalidateChatBranches(state);
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
@@ -168,7 +154,9 @@ function handleSessionMessageEvent(
   }
   const runIdBeforeApply = state.chatRunId;
   rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
-  const result = reconcileSessionEvent(state, payload);
+  if (result.applied) {
+    reconcileChatRunAfterSessionStatePublication(state);
+  }
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
     state.pendingSessionMessageReloadSessionKey = event.key;
@@ -357,6 +345,7 @@ function handleSessionsChangedEvent(
   state: ChatPageHost,
   payload: unknown,
   presentation: ChatPanePresentation,
+  result: SessionChangedRowResult,
 ) {
   const presented = presentation();
   const runIdBeforeApply = state.chatRunId;
@@ -370,6 +359,12 @@ function handleSessionsChangedEvent(
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  if (matchesChat && (resetsSession || source?.reason === "new")) {
+    const initial = state.chatSubmissions?.readInitial(state.sessionKey, state.client ?? null);
+    if (initial) {
+      retireChatSubmissionDisplay(state, new Set([initial.pendingRunId]));
+    }
+  }
   const changesBranchTopology =
     matchesChat && typeof source?.reason === "string" && BRANCH_TOPOLOGY_REASONS.has(source.reason);
   if (resetsSelectedSession || changesBranchTopology) {
@@ -382,7 +377,7 @@ function handleSessionsChangedEvent(
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
   if (changesBranchTopology) {
-    retireChatBranchRequests(state);
+    invalidateChatBranches(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;
@@ -394,7 +389,27 @@ function handleSessionsChangedEvent(
   if (event && matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
-  const result = reconcileSessionEvent(state, payload);
+  if (result.applied) {
+    reconcileChatRunAfterSessionStatePublication(state);
+  }
+  const modelRunId = event?.clientRunId ?? event?.runId;
+  if (
+    matchesChat &&
+    source?.phase === "model" &&
+    modelRunId &&
+    result.admittedRow &&
+    (state.chatSending
+      ? state.chatQueue.some(
+          (item) =>
+            item.sendState === "sending" &&
+            (item.queueMode === "steer" && state.chatRunId
+              ? state.chatRunId === modelRunId
+              : item.sendRunId === modelRunId),
+        )
+      : !state.chatRunId || state.chatRunId === modelRunId)
+  ) {
+    observeChatRunModel(state, modelRunId, result.admittedRow);
+  }
   if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
     void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
       state.requestUpdate?.(),
@@ -408,6 +423,7 @@ function handleSessionsChangedEvent(
     source.messageId === undefined &&
     source.messageSeq === undefined
   ) {
+    invalidateChatBranches(state);
     // Legacy multi-message writes cannot prove individual message cursors.
     // One scoped authoritative snapshot recovers them without ending a run.
     void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
@@ -513,6 +529,7 @@ export function handlePageGatewayEvent(
   state: ChatPageHost,
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
+  sessionResult: SessionChangedRowResult = { applied: false },
 ): void {
   if (event.event === "models.snapshot") {
     applyChatModelCatalogSnapshot(state);
@@ -687,7 +704,12 @@ export function handlePageGatewayEvent(
     return;
   }
   if (event.event === "session.message") {
-    const scopedChange = handleSessionMessageEvent(state, event.payload, isPresented);
+    const scopedChange = handleSessionMessageEvent(
+      state,
+      event.payload,
+      isPresented,
+      sessionResult,
+    );
     void resumeStoredChatOutboxes(state, event);
     if (scopedChange) {
       requestChatPageUpdate(state, "animation-frame");
@@ -695,7 +717,12 @@ export function handlePageGatewayEvent(
     return;
   }
   if (event.event === "sessions.changed") {
-    const scopedChange = handleSessionsChangedEvent(state, event.payload, isPresented);
+    const scopedChange = handleSessionsChangedEvent(
+      state,
+      event.payload,
+      isPresented,
+      sessionResult,
+    );
     void resumeStoredChatOutboxes(state, event);
     if (scopedChange) {
       requestChatPageUpdate(state, "animation-frame");

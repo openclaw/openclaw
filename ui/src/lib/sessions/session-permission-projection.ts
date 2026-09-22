@@ -11,6 +11,7 @@ export type SessionPermissionClaim = {
 
 type PermissionProjectionRoster = {
   readonly requestRevision: number;
+  rowRevision: (row: GatewaySessionRow) => number;
   inheritRow: (row: GatewaySessionRow, source: GatewaySessionRow) => GatewaySessionRow;
   publishedRow: (
     matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
@@ -50,13 +51,20 @@ export function createSessionPermissionProjection(
   ): SessionPermissionClaim => {
     const identity = permissionIdentity(key, agentId);
     const expectedId = expectedSessionId?.trim() || undefined;
-    const sessionId =
-      expectedId ??
-      getRoster().publishedRow(
-        (row, ownerAgentId) =>
-          permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
-      )?.sessionId;
+    const roster = getRoster();
+    const published = roster.publishedRow(
+      (row, ownerAgentId) => permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
+    );
+    const sessionId = expectedId ?? published?.sessionId;
     const projection = createProjection(identity, sessionId);
+    if (!projection.fact && published && published.sessionId === sessionId) {
+      // An unchanged read during the write must not look like a competing permission edit.
+      projection.fact = {
+        permissionMode: published.permissionMode,
+        updatedAt: published.updatedAt,
+        revision: roster.rowRevision(published),
+      };
+    }
     const initialFact = projection.fact;
     const ownsClaim = () => permissionProjections.get(identity) === projection;
     let confirmed = false;
@@ -125,11 +133,20 @@ export function createSessionPermissionProjection(
     if (!fact || newer || (!older && revision > fact.revision)) {
       // Retain the watermark: another older managed/list request may still finish.
       if (observe) {
-        projection.fact = {
-          permissionMode: row.permissionMode,
-          updatedAt: row.updatedAt,
-          revision: Math.max(revision, fact?.revision ?? 0),
-        };
+        if (
+          fact &&
+          fact.permissionMode === row.permissionMode &&
+          fact.updatedAt === row.updatedAt
+        ) {
+          // An identical read refreshes observations without superseding the confirmed mutation.
+          fact.revision = revision;
+        } else {
+          projection.fact = {
+            permissionMode: row.permissionMode,
+            updatedAt: row.updatedAt,
+            revision: Math.max(revision, fact?.revision ?? 0),
+          };
+        }
       }
       return row;
     }
@@ -202,8 +219,21 @@ export function createSessionPermissionProjection(
 
   return {
     claim: claimPermissionProjection,
+    capture: (key: string, agentId?: string | null) => {
+      const identity = permissionIdentity(key, agentId);
+      const projection = permissionProjections.get(identity);
+      const fact = projection?.fact;
+      const revision = fact?.revision;
+      return () =>
+        projection !== undefined &&
+        permissionProjections.get(identity) === projection &&
+        projection.fact === fact &&
+        projection.fact?.revision === revision;
+    },
     reconcileList: (result: SessionsListResult | null, revision: number, agentId?: string) =>
       projectPermissionList(result, () => revision, agentId, true),
+    reconcileRow: (row: GatewaySessionRow, revision: number, agentId?: string | null) =>
+      projectPermissionRow(row, () => revision, agentId, true),
     apply: (
       result: SessionsListResult | null,
       readRevision: (row: GatewaySessionRow) => number,

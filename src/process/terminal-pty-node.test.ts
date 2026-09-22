@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -20,6 +20,7 @@ const handles: TerminalPtyHandle[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const handle of handles.splice(0)) {
     handle.kill();
   }
@@ -70,7 +71,10 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     },
   );
 
-  it("preserves terminal input, resize ordering, and final output before exit", async () => {
+  it("preserves terminal input, resize ordering, and final output with a non-Node shim first on PATH", async () => {
+    const directory = tempDirs.make("openclaw-pty-node-shim-");
+    fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
     const handle = await spawnNodeTerminalPty({
       file: "/bin/sh",
       args: [

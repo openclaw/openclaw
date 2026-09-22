@@ -1,449 +1,148 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
+import { matchPluginCommand, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createChannelPartialDeliveryError,
-  createDeferred,
-  dispatchReplyResult,
-  dispatchChannelInboundTurnMock,
-  executorTestMocks,
-  firstMockArg,
-  registerAndResolveStatusHandler,
-  requireRecord,
-  requireValue,
-  resetSessionMetaMocks,
-} from "./bot-native-command-executors.test-support.js";
-import type { DispatchReplyWithBufferedBlockDispatcherParams } from "./bot-native-command-executors.test-support.js";
-import { createTelegramPrivateCommandContext } from "./bot-native-commands.fixture-test-support.js";
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
+import {
+  apiCalls,
+  chat,
+  commandMessage,
+  createBot,
+  from,
+  harness,
+  photo,
+} from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 
-type DeliverRepliesParams = Parameters<typeof import("./bot/delivery.js").deliverReplies>[0];
-
-const { deliveryMocks, replyMocks, sessionMocks } = executorTestMocks;
-
-describe("Telegram native command dispatch delivery", () => {
-  beforeEach(resetSessionMetaMocks);
-
-  it("awaits routed session metadata persistence before command dispatch", async () => {
-    const deferred = createDeferred<void>();
-    sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
-
-    const cfg: OpenClawConfig = {};
-    const { handler } = registerAndResolveStatusHandler({ cfg });
-    const runPromise = handler(createTelegramPrivateCommandContext());
-
-    await vi.waitFor(() => {
-      expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
-    });
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-
-    deferred.resolve();
-    await runPromise;
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-
-    const dispatcherOptions = requireRecord(
-      requireRecord(
-        firstMockArg(
-          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-          "dispatchReplyWithBufferedBlockDispatcher",
-        ),
-        "dispatch reply params",
-      ).dispatcherOptions,
-      "dispatcher options",
-    );
-    expect(dispatcherOptions.beforeDeliver).toBeTypeOf("function");
-  });
-
-  it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
-        await dispatcherOptions.deliver(
-          {
-            text: "Mode: foreground\nRun: /approve 7f423fdc allow-once (or allow-always / deny).",
-          },
-          { kind: "final" },
-        );
-        return dispatchReplyResult;
-      },
-    );
-
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {
-        channels: {
-          telegram: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["12345"],
-              target: "dm",
-            },
-          },
+describe("Telegram typed command delivery", () => {
+  it("replies to the selected photo quote for a native command", async () => {
+    harness.replySpy.mockResolvedValue({ text: "Checked the photo.", replyToId: "30101" });
+    const bot = createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          streaming: { mode: "off" },
+          replyToMode: "first",
         },
       },
     });
-    await handler(createTelegramPrivateCommandContext());
-
-    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
-      | DeliverRepliesParams
-      | undefined;
-    const deliveredPayload = deliveredCall?.replies?.[0];
-    if (!deliveredPayload) {
-      throw new Error("expected approval reply payload to be delivered");
-    }
-    expect(deliveredPayload?.["text"]).toContain("/approve 7f423fdc allow-once");
-    expect(deliveredPayload?.["channelData"]).toBeUndefined();
-  });
-
-  it("suppresses local structured exec approval replies for native commands", async () => {
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
-        await dispatcherOptions.deliver(
-          {
-            text: "Approval required.\n\n```txt\n/approve 7f423fdc allow-once\n```",
-            channelData: {
-              execApproval: {
-                approvalId: "7f423fdc-1111-2222-3333-444444444444",
-                approvalSlug: "7f423fdc",
-                allowedDecisions: ["allow-once", "allow-always", "deny"],
-              },
-            },
-          },
-          { kind: "tool" },
-        );
-        return dispatchReplyResult;
-      },
-    );
-
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {
-        channels: {
-          telegram: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["12345"],
-              target: "dm",
-            },
-          },
+    await bot.handleUpdate({
+      update_id: 3001,
+      message: {
+        ...commandMessage("/btw check this pls"),
+        message_id: 30101,
+        reply_to_message: {
+          message_id: 100,
+          date: 1736380790,
+          chat,
+          from,
+          photo,
+          caption: "Photo to check",
+          reply_to_message: undefined,
         },
+        quote: { text: "Photo to check", position: 0 },
       },
     });
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("does not emit the empty fallback when reply-payload hooks cancel a native reply", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("does not emit the empty fallback for a message-tool-only native reply", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "honors native send-policy denial when fallback delivery fails=%s",
-    async (deliveryFailed) => {
-      dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-        plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
-        if (deliveryFailed) {
-          plan.delivery.onError?.(new Error("Final delivery failed"), { kind: "final" });
-        }
-        return {
-          admission: { kind: "dispatch" },
-          dispatched: true,
-          ctxPayload: plan.ctxPayload,
-          routeSessionKey: plan.route.sessionKey,
-          dispatchResult: {
-            queuedFinal: false,
-            counts: { block: 0, final: 0, tool: 0 },
-            sendPolicyDenied: true,
-          },
-        };
-      });
-      const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-      await handler(createTelegramPrivateCommandContext());
-
-      expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-    },
-  );
-
-  it("retains the native fallback when message-tool-only delivery also fails", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
-      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
-        kind: "final",
-      });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
       expect.objectContaining({
-        replies: [{ text: "No response generated. Please try again." }],
+        chat_id: String(chat.id),
+        text: "Checked the photo.",
+        reply_parameters: expect.objectContaining({ message_id: 100, quote: "Photo to check" }),
       }),
     );
   });
 
-  it("emits the fallback when a non-final suppression precedes a final failure", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled tool reply" },
-        { kind: "tool" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+  it("sends native command errors without a notification", async () => {
+    harness.replySpy.mockResolvedValue({ text: "Request failed.", isError: true });
+    const bot = createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          streaming: { mode: "off" },
+          silentErrorReplies: true,
         },
-      );
-      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
-        kind: "final",
-      });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
+      },
     });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [{ text: "No response generated. Please try again." }],
-      }),
+    await bot.handleUpdate({
+      update_id: 3002,
+      message: { ...commandMessage("/status"), message_id: 30102 },
+    });
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({ text: "Request failed.", disable_notification: true }),
     );
   });
 
-  it("emits the fallback when a suppressed block reply precedes a final failure", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled block reply" },
-        { kind: "block" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "empty_after_reply_payload_sending_hook" },
+  it("keeps structured native approval prompts with the approval monitor", async () => {
+    harness.replySpy.mockResolvedValue({
+      text: "Approval required.",
+      channelData: {
+        execApproval: {
+          approvalId: "7f423fdc-1111-2222-3333-444444444444",
+          approvalSlug: "7f423fdc",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
         },
-      );
-      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
-        kind: "final",
-      });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
+      },
     });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
+    const bot = createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          streaming: { mode: "off" },
+          execApprovals: { enabled: true, approvers: [String(from.id)], target: "dm" },
+        },
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 3003,
+      message: { ...commandMessage("/status"), message_id: 30103 },
+    });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
   });
 
-  it("emits the fallback when a final failure precedes a later suppressed final", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
-        kind: "final",
-      });
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled final reply" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a suppressed final after a non-final delivery failure", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.delivery.onError?.(new Error("Telegram tool delivery failed"), {
-        kind: "tool",
-      });
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled final reply" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("does not emit the fallback after a partially delivered final", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.delivery.onError?.(
-        createChannelPartialDeliveryError(new Error("Telegram final delivery failed"), {
-          visibleReplySent: true,
+  it("preserves the builtin catalog choice when a plugin registers fast", async () => {
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    try {
+      expect(
+        registerPluginCommand("fast-controls", {
+          name: "fast",
+          description: "Fast controls",
+          acceptsArgs: true,
+          handler: async () => ({ text: "Plugin fast reply" }),
         }),
-        { kind: "final" },
-      );
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("retains the empty fallback for a true non-silent metadata-only native reply", async () => {
-    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
-      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-        },
-      };
-    });
-    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
-
-    await handler(createTelegramPrivateCommandContext());
-
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [{ text: "No response generated. Please try again." }],
-      }),
-    );
-  });
-
-  it("sends native command error replies silently when silentErrorReplies is enabled", async () => {
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
-        await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
-        return dispatchReplyResult;
-      },
-    );
-
-    const { handler } = registerAndResolveStatusHandler({
-      cfg: {
-        channels: {
-          telegram: {
-            silentErrorReplies: true,
-          },
-        },
-      },
-      telegramCfg: { silentErrorReplies: true },
-    });
-    await handler(createTelegramPrivateCommandContext());
-
-    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
-      | DeliverRepliesParams
-      | undefined;
-    const deliveryParams = requireValue(deliveredCall, "silent error delivery params");
-    expect(deliveryParams.silent).toBe(true);
-    expect(deliveryParams.replies).toHaveLength(1);
-    expect(deliveryParams.replies[0]?.isError).toBe(true);
+      ).toEqual({ ok: true });
+      expect(matchPluginCommand("/fast on", { channel: "telegram" })).toMatchObject({
+        command: { name: "fast", pluginId: "fast-controls" },
+        args: "on",
+      });
+      const bot = createBot();
+      await bot.handleUpdate({ update_id: 3004, message: commandMessage("/fast on") });
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandTurn: { kind: "native", body: "/fast on" },
+      });
+      expect(harness.replySpy.mock.calls[0]?.[1]).toMatchObject({
+        [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+      });
+    } finally {
+      if (previousRegistry) {
+        setActivePluginRegistry(previousRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    }
   });
 });

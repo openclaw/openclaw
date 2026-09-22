@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -77,7 +78,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
+        runtimeCapabilityProfile: resolveConversationCapabilityProfile({}),
         toolsEnabled: true,
         toolsRaw,
       },
@@ -88,7 +89,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     { allow: ["chrome*"], expected: ["chrome__click"] },
     { allow: ["ch*me*"], expected: ["chrome__click"] },
     { allow: [" CHROME* "], expected: ["chrome__click"] },
-    { allow: ["*click"], expected: ["chrome__click", "other__click"] },
+    { allow: ["*click"], expected: ["chrome__click", "other__click"], discoverLsp: true },
+    {
+      allow: attachToolAllowlistIntersection([], [["chrome*"], ["*click"]]),
+      expected: ["chrome__click"],
+    },
     { allow: ["chrome__*"], expected: ["chrome__click"] },
     { allow: ["chrome*."], expected: [] },
     { allow: ["exec*"], expected: [], discover: false },
@@ -113,7 +118,37 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       testCase.discover === false ? 0 : 1,
     );
     expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(testCase.expected);
-    expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+    expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledTimes(testCase.discoverLsp ? 1 : 0);
+  });
+
+  it.each([
+    { allow: ["bundle-lsp"], expected: ["lsp_hover_typescript", "lsp_definition_typescript"] },
+    { allow: ["group:plugins"], expected: ["lsp_hover_typescript", "lsp_definition_typescript"] },
+    { allow: ["*hover*"], expected: ["lsp_hover_typescript"] },
+    { allow: [" LSP* "], expected: ["lsp_hover_typescript", "lsp_definition_typescript"] },
+    {
+      allow: attachToolAllowlistIntersection([], [["lsp_*"], ["*hover*"]]),
+      expected: ["lsp_hover_typescript"],
+    },
+    { allow: ["read*"], expected: [], discover: false },
+    { allow: [], expected: [], discover: false },
+  ])("discovers LSP for $allow without widening final tools", async (testCase) => {
+    const input = createInput([], []);
+    input.attempt.toolsAllow = testCase.allow;
+    input.preparedToolBase.effectiveToolsAllow = testCase.allow;
+    const lspTools = ["lsp_hover_typescript", "lsp_definition_typescript"].map((name) => {
+      const tool = createStubTool(name);
+      setPluginToolMeta(tool, { pluginId: "bundle-lsp", optional: false });
+      return tool;
+    });
+    mocks.createBundleLspToolRuntime.mockResolvedValue({ tools: lspTools, dispose: vi.fn() });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledTimes(
+      testCase.discover === false ? 0 : 1,
+    );
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(testCase.expected);
   });
 
   it.each([

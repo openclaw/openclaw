@@ -15,7 +15,7 @@ OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessCon
 ## Distribution
 
 - Package: `@openclaw/mxc-sandbox`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/mxc-sandbox`
 
 ## Surface
 

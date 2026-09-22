@@ -11,11 +11,11 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { applyTargetToParams } from "./channel-target.js";
 import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
+  applyTargetToParams,
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";

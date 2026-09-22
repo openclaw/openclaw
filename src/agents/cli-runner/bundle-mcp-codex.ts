@@ -289,10 +289,11 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     agentAccountId: run.agentAccountId,
     messageChannel: run.messageChannel,
     toolOverrides: scopedToolOverrides,
+    toolDenylist: capabilityProfile.policy.explicitToolDenylist,
   });
-  let preparedNativeMcpPolicy: PreparedNativeMcpPolicy;
+  let retainedServerNames: ReadonlySet<string> | undefined;
   try {
-    preparedNativeMcpPolicy = await prepareNativeMcpPolicy({
+    const preparedNativeMcpPolicy = await prepareNativeMcpPolicy({
       runtime: acquisition.runtime,
       config: run.config,
       workspaceDir: run.workspaceDir,
@@ -300,15 +301,17 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
       runtimeToolsAllow: run.toolsAllow,
       warn: params.warn ?? (() => {}),
     });
+    const prepared = await buildCodexUserMcpServersThreadConfigPatchForRuntime(projectionConfig, {
+      agentId,
+      agentDir: run.agentDir,
+      allowLiteralOAuthProjection: params.allowLiteralOAuthProjection,
+      onServerUnavailable: params.onServerUnavailable,
+      toolOverrides: scopedToolOverrides,
+      preparedNativeMcpPolicy,
+    });
+    retainedServerNames = new Set(Object.keys(prepared?.mcp_servers ?? {}));
+    return prepared;
   } finally {
-    await releaseSessionMcpRuntime(acquisition);
+    await releaseSessionMcpRuntime(acquisition, retainedServerNames);
   }
-  return await buildCodexUserMcpServersThreadConfigPatchForRuntime(projectionConfig, {
-    agentId,
-    agentDir: run.agentDir,
-    allowLiteralOAuthProjection: params.allowLiteralOAuthProjection,
-    onServerUnavailable: params.onServerUnavailable,
-    toolOverrides: scopedToolOverrides,
-    preparedNativeMcpPolicy,
-  });
 }

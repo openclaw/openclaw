@@ -21,9 +21,10 @@ class ChatModelPickerTest {
         Json
           .parseToJsonElement(
             """[
-      {"id":"standard","name":"Standard","provider":"openai","supportsFastMode":false,"input":["audio","document"],"supportsTools":false,"agentRuntime":{"id":"openclaw","source":"model"}},
-      {"id":"priority","name":"Priority","provider":"openai","supportsFastMode":true},
-      {"id":"quick","name":"Quick","provider":"fixture","supportsFastMode":true}
+      {"id":"standard","name":"Standard","provider":"openai","manualSelectionAllowed":false,"supportsFastMode":false,"input":["audio","document"],"supportsTools":false,"agentRuntime":{"id":"openclaw","source":"model"}},
+      {"id":"priority","name":"Priority","provider":"openai","manualSelectionAllowed":false,"supportsFastMode":true},
+      {"id":"quick","name":"Quick","provider":"fixture","manualSelectionAllowed":true,"supportsFastMode":true},
+      {"id":"legacy","name":"Legacy","provider":"fixture"}
     ]""",
           ).jsonArray,
       )
@@ -37,6 +38,15 @@ class ChatModelPickerTest {
     assertFalse(catalog.first().supportsVision)
     assertEquals(false, catalog.first().supportsTools)
     assertEquals("OpenClaw", catalog.first().runtimeName)
+    assertEquals(ChatModelPickerAction.Disabled, chatModelPickerAction(catalog[0]))
+    assertEquals(ChatModelPickerAction.Disabled, chatModelPickerAction(catalog[1]))
+    assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(catalog[2]))
+    assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(catalog[3]))
+    val sections = chatModelPickerSections(catalog, listOf("openai/standard"), listOf("openai/priority"))
+    assertTrue(sections.pinned.isEmpty())
+    assertTrue(sections.recent.isEmpty())
+    assertEquals(listOf("fixture/quick", "fixture/legacy"), sections.remaining.map { it.providerQualifiedRef() })
+    assertFalse(chatModelSendBlocked(true, "openai/standard", catalog))
   }
 
   @Test

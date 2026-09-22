@@ -393,6 +393,33 @@ internal class WearViewModel(
 ) : AndroidViewModel(application) {
   private val app = application as WearApplication
   private val repository = app.gatewayRepository
+
+  suspend fun readReply(
+    target: WearReplyTarget,
+    offset: Int,
+    revision: String?,
+  ): ai.openclaw.wear.shared.WearReplyTextPage {
+    val generation = phoneRouteGeneration
+
+    fun current(): Boolean {
+      val state = mutableState.value
+      return generation == phoneRouteGeneration && state.connected && state.phoneNodeId == target.phoneNodeId && state.selectedSession?.key == target.sessionKey &&
+        (state.selectedSession.agentId ?: state.activeAgentId) == target.agentId &&
+        (target.attemptId == null || state.realtimeTalk.attemptId == target.attemptId)
+    }
+    if (!current()) {
+      return ai.openclaw.wear.shared
+        .WearReplyTextPage(ai.openclaw.wear.shared.WearReplyTextStatus.Changed)
+    }
+    val page = repository.replyText(target, offset, revision)
+    return if (current()) {
+      page
+    } else {
+      ai.openclaw.wear.shared
+        .WearReplyTextPage(ai.openclaw.wear.shared.WearReplyTextStatus.Changed)
+    }
+  }
+
   private val realtimeTalkClient = WearRealtimeTalkClient(app, repository)
   private val mutableState = MutableStateFlow(WearUiState())
   private val eventSequenceTracker = WearEventSequenceTracker()
@@ -1115,6 +1142,7 @@ internal class WearViewModel(
             it.copy(
               loading = false,
               connected = status.connected,
+              failure = status.failure,
               phoneNodeId = status.phoneNodeId,
               agents = agentList.agents,
               activeAgentId =
@@ -2056,6 +2084,7 @@ internal fun applyWearGatewayControlStatus(
 ): WearUiState =
   state.copy(
     connected = status.connected,
+    failure = status.failure,
     phoneNodeId = status.phoneNodeId,
     activeAgentId = status.activeAgentId ?: state.activeAgentId,
     selectedModelRef =

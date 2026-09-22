@@ -302,6 +302,16 @@ describe("meeting node host audio output", () => {
     vi.resetAllMocks();
   });
 
+  it("retains update ownership between RPCs and through child stream cleanup", async () => {
+    const bridge = await startAudioBridge({ inputAutoClose: false });
+    expect(bridge.host.hasActiveWork()).toBe(true);
+
+    await invokeBridge(bridge, "stop");
+    expect(bridge.host.hasActiveWork()).toBe(true);
+    bridge.inputProcess.emit("close", null, "SIGTERM");
+    expect(bridge.host.hasActiveWork()).toBe(false);
+  });
+
   it("copies retained input buffers", async () => {
     const bridge = await startAudioBridge();
     const source = Buffer.from([1, 2, 3]);
@@ -591,7 +601,7 @@ describe("meeting node host audio output", () => {
   });
 
   it("terminates output when input process construction throws", async () => {
-    const outputProcess = createProcess({ stdin: createStdin(true) });
+    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
     const spawnError = new Error("input spawn failed");
     childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
       throw spawnError;
@@ -602,6 +612,9 @@ describe("meeting node host audio output", () => {
       spawnError,
     );
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(host.hasActiveWork()).toBe(true);
+    outputProcess.emit("close", null, "SIGTERM");
+    expect(host.hasActiveWork()).toBe(false);
   });
 
   it("deletes a hidden audio session after browser launch fails", async () => {

@@ -11,7 +11,8 @@ import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
+import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -46,6 +47,7 @@ export function buildPendingInputItems(
   browserInputs: readonly ChatQueueItem[] = [],
   workspaceSyncPendingRunIds: readonly string[] = [],
   workerSetupPending = false,
+  messageRecovery?: ChatMessageRecovery,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -53,7 +55,10 @@ export function buildPendingInputItems(
     return items;
   }
   for (const input of inputs) {
-    if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
+    if (
+      searchQuery?.trim() &&
+      !messageMatchesSearchQuery(input.message, searchQuery, messageRecovery)
+    ) {
       continue;
     }
     // Custody keeps submission correlation outside the message; use it for
@@ -86,7 +91,10 @@ export function buildPendingInputItems(
         input.state === "interrupted" &&
           input.runId &&
           browserInputs.some(
-            (item) => item.sendRunId === input.runId && item.sendState !== "failed",
+            (item) =>
+              item.sendRunId === input.runId &&
+              item.sendState !== "failed" &&
+              item.sendState !== "held",
           )
           ? "chat.pendingInputs.resuming"
           : input.state === "cancelled"
@@ -138,7 +146,7 @@ function reconcilePendingInputPage(
   page: ChatPendingInputsPage | undefined,
   receipts?: ChatInputReceipts,
 ): ChatPendingInputsPage {
-  const { page: displayPage } = reconcileChatInputCustody(state, page, receipts);
+  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
   const settled = new Set([
     ...(receipts ?? [])
       .filter((receipt) => receipt.state === "consumed")
@@ -156,6 +164,12 @@ function reconcilePendingInputPage(
       (!item.sessionId || item.sessionId === state.currentSessionId)
     ) {
       removeQueuedMessage(state, item.id);
+    } else if (
+      item.sendRunId &&
+      acceptedRunIds.has(item.sendRunId) &&
+      (!item.sessionId || item.sendState === "unconfirmed")
+    ) {
+      confirmQueuedMessageCustody(state, item, state.currentSessionId ?? undefined);
     }
   }
   return displayPage;

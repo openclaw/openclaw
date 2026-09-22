@@ -5,6 +5,7 @@ import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
+  listAgentEntriesWithSource,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -17,10 +18,34 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveCliModelEntry } from "../media-understanding/resolve.js";
 import { isRecord } from "../utils.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 const configLog = createSubsystemLogger("config");
+
+export function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
+  const models = cfg.tools?.media?.models;
+  if (!Array.isArray(models)) {
+    return;
+  }
+  const warnings: string[] = [];
+  models.forEach((entry, index) => {
+    if (!entry || (entry.type ?? (entry.command ? "cli" : "provider")) !== "cli") {
+      return;
+    }
+    const resolved = resolveCliModelEntry(entry);
+    if (!resolved.ok) {
+      const field = resolved.error.reason === "cli-missing-command" ? "command" : "args";
+      warnings.push(
+        `- tools.media.models[${index}].${field}: Invalid CLI media model. ${resolved.error.message} Doctor cannot choose a command or attachment arguments; edit this entry.`,
+      );
+    }
+  });
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Doctor warnings");
+  }
+}
 
 export function noteDoctorConfigPreflightIssues(
   snapshot: ConfigFileSnapshot,
@@ -300,12 +325,16 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const warnings: string[] = [];
-  for (const agent of listAgentEntries(cfg)) {
-    if (!isImplicitFallbackClobber(agent.model)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }
+    const id = agent.id?.trim() || (source.kind === "list" ? String(source.index) : source.key);
     const primary = resolvePrimaryStringValue(agent.model);
-    const location = `agents.entries.${agent.id}.model`;
+    const location =
+      source.kind === "entries"
+        ? `agents.entries.${source.key}.model`
+        : `agents.list[${source.index}].model (id=${id})`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
     const shape =

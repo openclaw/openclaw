@@ -10,7 +10,6 @@ import {
   type SessionMcpRuntimeManagerOpts,
   type SessionMcpConfigPublication,
 } from "./agent-bundle-mcp-manager-lifecycle.js";
-import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
@@ -49,9 +48,22 @@ export function createSessionMcpRuntimeManager(
   const store = createSessionMcpRuntimeManagerStore(opts, createSessionMcpRuntimeLazy);
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
-  const leaseRuntime = (runtime: SessionMcpRuntime): SessionMcpRuntimeLease => ({
+  const leaseRuntime = (
+    runtime: SessionMcpRuntime,
+    runtimeKey: string,
+  ): SessionMcpRuntimeLease => ({
     runtime,
     releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    async retireUnusedServers(retainedServerNames) {
+      const owner = sessionMcpRuntimeOwners.get(runtime);
+      if (store.runtimesBySessionId.get(runtimeKey) !== runtime || !owner?.isCurrent()) {
+        return;
+      }
+      await owner.retireUnusedServers(retainedServerNames);
+      if (!owner.hasServers()) {
+        await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
+      }
+    },
   });
   const acquireCurrent = <T extends SessionMcpRuntimeLease | undefined>(
     scope: "full" | "requester",
@@ -113,27 +125,12 @@ export function createSessionMcpRuntimeManager(
     const fullConfig = loadSessionMcpConfig({ ...params, logDiagnostics: false });
     const partition = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
     // Full-set names stay stable when only some requester connections resolve.
-    const safeServerNamesByServer = assignSafeServerNames(
-      Object.keys(fullConfig.loaded.mcpServers),
-    );
-    const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
-      ...params,
-      loaded: fullConfig.loaded,
-      logDiagnostics: false,
-      redactConnectionServerNames: new Set(partition.requesterScopedServerNames),
-      safeServerNamesByServer,
-    }).fingerprint;
-    lifecycle.reconcileAdvertisedScopedCatalogConfig(
-      params.sessionId,
-      advertisedCatalogConfigFingerprint,
-      params.requester !== undefined && partition.requesterScopedServerNames.length > 0,
-    );
+    const { safeServerNamesByServer } = fullConfig;
     return {
       fullConfig,
       ...partition,
       safeServerNamesByServer,
       requester: params.requester,
-      advertisedCatalogConfigFingerprint,
     };
   };
   const materializeRequesterScopedRuntime = async (
@@ -170,7 +167,7 @@ export function createSessionMcpRuntimeManager(
         ...(messageChannel ? { messageChannel } : {}),
       },
     });
-    return runtime ? leaseRuntime(runtime) : undefined;
+    return runtime ? leaseRuntime(runtime, params.runtimeKey) : undefined;
   };
 
   const manager: SessionMcpRuntimeManager = {
@@ -200,6 +197,7 @@ export function createSessionMcpRuntimeManager(
             excludeServerNames: new Set(requesterScopedServerNames),
             safeServerNamesByServer,
           }),
+          params.sessionId,
         );
         leases.push(staticLease);
         if (requesterScopedServerNames.length === 0) {
@@ -236,6 +234,15 @@ export function createSessionMcpRuntimeManager(
                   parts,
                 }),
           releaseLease: () => leases.forEach((lease) => lease.releaseLease()),
+          async retireUnusedServers(retainedServerNames) {
+            const outcomes = await Promise.allSettled(
+              leases.map(async (lease) => await lease.retireUnusedServers?.(retainedServerNames)),
+            );
+            const failed = outcomes.find((outcome) => outcome.status === "rejected");
+            if (failed) {
+              throw failed.reason;
+            }
+          },
         };
       } catch (error) {
         leases.forEach((lease) => lease.releaseLease());
@@ -253,8 +260,21 @@ export function createSessionMcpRuntimeManager(
         resolverRequesterServerNames,
         safeServerNamesByServer,
         requester,
-        advertisedCatalogConfigFingerprint,
       } = prepareAcquisition(params);
+      // Native acquisition can project only static servers. Requester discovery
+      // owns its advertised catalog; lease release/reload own server retirement.
+      const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
+        ...params,
+        loaded: fullConfig.loaded,
+        logDiagnostics: false,
+        redactConnectionServerNames: new Set(requesterScopedServerNames),
+        safeServerNamesByServer,
+      }).fingerprint;
+      lifecycle.reconcileAdvertisedScopedCatalogConfig(
+        params.sessionId,
+        advertisedCatalogConfigFingerprint,
+        requester !== undefined && requesterScopedServerNames.length > 0,
+      );
       if (!requester) {
         return undefined;
       }
@@ -316,10 +336,16 @@ export function createSessionMcpRuntimeManager(
       return true;
     },
     async completeDeferredRetirement(sessionId, runtime) {
-      if (
-        !store.deferredRetirementSessionIds.has(sessionId) ||
-        (runtime !== undefined && runtime.sessionId !== sessionId)
-      ) {
+      if (runtime !== undefined && runtime.sessionId !== sessionId) {
+        return false;
+      }
+      if (!store.deferredRetirementSessionIds.has(sessionId)) {
+        for (const runtimeKey of lifecycle.runtimeKeysForSessionId(sessionId)) {
+          const current = store.runtimesBySessionId.get(runtimeKey);
+          if (current && sessionMcpRuntimeOwners.get(current)?.hasServers() === false) {
+            await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, current);
+          }
+        }
         return false;
       }
       if (

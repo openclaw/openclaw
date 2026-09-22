@@ -4,21 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardNotificationSubscription,
 } from "./persistence-types.js";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 
-const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
 const sqliteStatements = vi.hoisted(() => ({ count: 0 }));
 
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
     ...actual,
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {

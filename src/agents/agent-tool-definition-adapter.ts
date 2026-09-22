@@ -38,6 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
@@ -60,10 +61,12 @@ type ClientToolCallRecorder =
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
+  operatorHint?: string;
 } {
+  const operatorHint = readToolOperatorHint(err);
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    return { message, stack: err.stack, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
 }
@@ -100,8 +103,7 @@ function serializeToolParams(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
-function formatToolParamPreview(label: string, value: unknown): string {
-  const serialized = serializeToolParams(value);
+function formatToolParamPreview(label: string, serialized: string): string {
   const redacted = redactToolDetail(serialized);
   const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
   return `${label}=${preview}`;
@@ -195,11 +197,11 @@ function describeToolFailureInputs(params: {
 }): string {
   const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
   const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
-  const parts = [formatToolParamPreview("raw_params", rawParams)];
   const rawSerialized = serializeToolParams(rawParams);
+  const parts = [formatToolParamPreview("raw_params", rawSerialized)];
   const effectiveSerialized = serializeToolParams(effectiveParams);
   if (effectiveSerialized !== rawSerialized) {
-    parts.push(formatToolParamPreview("effective_params", effectiveParams));
+    parts.push(formatToolParamPreview("effective_params", effectiveSerialized));
   }
   return parts.join(" ");
 }
@@ -269,7 +271,12 @@ async function executeAdaptedToolOperation(params: {
       rawParams: params.rawParams,
       effectiveParams: params.getEffectiveParams(),
     });
-    logError(`[tools] ${params.normalizedToolName} failed: ${described.message} ${inputPreview}`);
+    const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
+    // Operator-only: the hint names containment configuration and stays out of the
+    // model-visible result below.
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
+    );
     return buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,

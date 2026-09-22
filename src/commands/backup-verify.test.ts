@@ -1436,6 +1436,91 @@ describe("backupVerifyCommand", () => {
   });
 
   it.each([
+    {
+      name: "POSIX state and agent roots",
+      platform: "linux",
+      includeAgentPayloads: true,
+      stateDir: "/tmp/.openclaw",
+      agentRoots: [{ agentId: "main", sourcePath: "/tmp/agent" }],
+    },
+    {
+      name: "Windows drive state and agent roots",
+      platform: "win32",
+      includeAgentPayloads: true,
+      stateDir: String.raw`C:\OpenClaw\state`,
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`D:\OpenClaw\agent` }],
+    },
+    {
+      name: "UNC state root",
+      platform: "win32",
+      includeAgentPayloads: true,
+      stateDir: String.raw`\\server\share\OpenClaw`,
+      agentRoots: [],
+    },
+    {
+      name: "UNC agent root",
+      platform: "win32",
+      includeAgentPayloads: true,
+      stateDir: String.raw`C:\OpenClaw\state`,
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\server\share\agent` }],
+    },
+    {
+      name: "UNC share root",
+      platform: "win32",
+      includeAgentPayloads: true,
+      stateDir: "\\\\server\\share\\",
+      agentRoots: [],
+    },
+    {
+      name: "case-distinct absent POSIX agent roots",
+      platform: "linux",
+      includeAgentPayloads: false,
+      stateDir: "/tmp/.openclaw",
+      agentRoots: [
+        { agentId: "main", sourcePath: "/tmp/Agent" },
+        { agentId: "other", sourcePath: "/tmp/agent" },
+      ],
+    },
+  ])("verifies $name without consulting source paths on the verifier host", async (fixture) => {
+    const stateAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, fixture.stateDir);
+    const manifest = createBackupManifest(stateAssetRoot, TEST_ARCHIVE_ROOT, fixture.stateDir);
+    manifest.platform = fixture.platform;
+    manifest.paths = { stateDir: fixture.stateDir, agentRoots: fixture.agentRoots };
+    const archivedAgentRoots = fixture.includeAgentPayloads ? fixture.agentRoots : [];
+    for (const { sourcePath } of archivedAgentRoots) {
+      manifest.assets.push({
+        kind: "agent",
+        sourcePath,
+        archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, sourcePath),
+      });
+    }
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-source-roots-",
+        manifestAssetArchivePath: stateAssetRoot,
+        manifest,
+        payloads: [
+          {
+            fileName: "state.txt",
+            contents: "state\n",
+            archivePath: `${stateAssetRoot}/state.txt`,
+          },
+          ...archivedAgentRoots.map(({ sourcePath }, index) => ({
+            fileName: `agent-${index}.txt`,
+            contents: `agent ${index}\n`,
+            archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, sourcePath)}/agent.txt`,
+          })),
+        ],
+      },
+      async (archivePath) => {
+        await expect(
+          backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+        ).resolves.toMatchObject({ ok: true, assetCount: manifest.assets.length });
+      },
+    );
+  });
+
+  it.each([
     { name: "non-array roots", agentRoots: {}, error: /agentRoots must be an array/u },
     {
       name: "an extra ownership field",
@@ -1456,6 +1541,75 @@ describe("backupVerifyCommand", () => {
       name: "a noncanonical agent path",
       agentRoots: [{ agentId: "main", sourcePath: "/tmp/agent/../other" }],
       error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a drive-relative agent path",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`C:agent` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a root-relative Windows agent path",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\agent` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a noncanonical UNC agent path",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\server\share\agent\..\other` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a mixed-separator UNC agent path",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\server\share/agent` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "an agent path containing NUL",
+      agentRoots: [{ agentId: "main", sourcePath: "/tmp/agent\0suffix" }],
+      error: /invalid sourcePath/u,
+    },
+    {
+      name: "extended drive namespace metadata",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\?\C:\OpenClaw\agent` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "extended UNC namespace metadata",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\?\UNC\server\share\agent` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a Windows device namespace",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\.\pipe\openclaw` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "a Windows reserved-device namespace",
+      agentRoots: [{ agentId: "main", sourcePath: String.raw`\\?\COM1` }],
+      error: /must be absolute and normalized/u,
+    },
+    {
+      name: "case-insensitive Windows drive ownership",
+      agentRoots: [
+        { agentId: "main", sourcePath: String.raw`C:\OpenClaw\Agent` },
+        { agentId: "other", sourcePath: String.raw`c:\openclaw\agent` },
+      ],
+      error: /duplicate agent root ownership/u,
+    },
+    {
+      name: "case-insensitive UNC ownership",
+      agentRoots: [
+        { agentId: "main", sourcePath: String.raw`\\Server\Share\Agent` },
+        { agentId: "other", sourcePath: String.raw`\\server\share\agent` },
+      ],
+      error: /duplicate agent root ownership/u,
+    },
+    {
+      name: "duplicate POSIX source ownership",
+      agentRoots: [
+        { agentId: "main", sourcePath: "/tmp/agent" },
+        { agentId: "other", sourcePath: "/tmp/agent" },
+      ],
+      error: /duplicate agent root ownership/u,
     },
     {
       name: "duplicate agent ownership",

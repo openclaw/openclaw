@@ -206,6 +206,7 @@ export async function bindSpawnedAcpSession(params: {
   }
 
   try {
+    commandParams.command.assertOwnerCurrent?.();
     const binding = await bindingService.bind({
       targetSessionKey: params.sessionKey,
       targetKind: "session",

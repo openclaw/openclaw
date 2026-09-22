@@ -208,37 +208,35 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
   });
 
   it.each([
-    ["gpt-5.4", "max", "xhigh"],
-    ["gpt-5.4", "ultra", "xhigh"],
-    ["gpt-5.6-terra", "max", "max"],
-    ["gpt-5.6-terra", "ultra", "max"],
-    ["gpt-5.4", "off", undefined],
-  ] as const)("maps %s reasoning %s to %s", async (id, reasoning, expected) => {
-    const model: Model =
-      id === "gpt-5.4"
-        ? baseModel
-        : {
-            ...baseModel,
-            id,
-            name: id,
-            contextWindow: 372_000,
-            maxTokens: 128_000,
-            thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-          };
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
-      context,
-      options: { reasoning },
-    });
-    expect(completionRequests()).toEqual([
-      {
+    ["openai", "gpt-5.4", "max", "max"],
+    ["openai", "gpt-5.4", "off", "off"],
+    ["kimi", "k3", "max", "max"],
+    ["kimi", "k3", "off", "off"],
+    ["anthropic", "claude-opus-4-7", "max", "max"],
+    ["anthropic", "claude-opus-4-7", "off", "off"],
+    ["google", "gemini-3-pro-preview", "off", "off"],
+    ["openai", "gpt-5.4", "ultra", "max"],
+    ["openai", "gpt-5.4", "adaptive", "medium"],
+    ["openai", "gpt-5.4", undefined, undefined],
+  ] as const)(
+    "preserves %s/%s reasoning %s for its transport",
+    async (provider, id, reasoning, expected) => {
+      const model: Model = { ...baseModel, provider, id, name: id };
+      await completeWithPreparedSimpleCompletionModel({
         model,
+        auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
         context,
-        options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
-      },
-    ]);
-  });
+        options: { reasoning },
+      });
+      expect(completionRequests()).toEqual([
+        {
+          model,
+          context,
+          options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
+        },
+      ]);
+    },
+  );
 
   it.each([undefined, "default", "priority"] as const)(
     "passes service tier %s to simple completions",

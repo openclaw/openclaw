@@ -1,4 +1,7 @@
 /** Cancellation binds session incarnations and retains exact durable dispatch fences. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,12 +20,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { observeSessionWorkAdmissionDrain } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -118,7 +119,6 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
-    const interruptAdmissions = sessionLifecycle.interruptSessionWorkAdmissions;
     const mutateSession = sessionLifecycle.runExclusiveSessionLifecycleMutation;
     let holdEndedMutation = !completed;
     const mutation = vi
@@ -138,19 +138,15 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         }
         return await mutateSession(params);
       });
-    const drain = vi
-      .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
-      .mockImplementation(async (params) => {
-        const released = await interruptAdmissions(params);
-        if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
-          expect(released).toBe(true);
-          // Keep the captured kill scope pending after the real drain. A cold
-          // sibling reset must not consume the active admission's deadline.
-          entered.resolve();
-          await resume.promise;
-        }
-        return released;
-      });
+    const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
+      if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
+        expect(released).toBe(true);
+        // Keep the captured kill scope pending after the real drain. A cold
+        // sibling reset must not consume the active admission's deadline.
+        entered.resolve();
+        await resume.promise;
+      }
+    });
     const abort = abortParent();
     const dispatch = vi.fn(async () => {});
     const interrupted = vi.fn();
@@ -246,7 +242,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       try {
         await abort.pending;
       } finally {
-        drain.mockRestore();
+        restoreDrain();
         mutation.mockRestore();
         releaseSwarmRun("capacity");
         releaseSwarmRun("grandchild");

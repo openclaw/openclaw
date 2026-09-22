@@ -1,5 +1,5 @@
 import path from "node:path";
-import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -279,18 +279,25 @@ function buildSnippet(raw: string, query: string): string {
   const queryTokens = buildQueryTokens(queryLower);
   const searchable = buildSearchableBody(raw);
   const lines = searchable.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  const matchingLine =
-    lines.find((line) =>
-      lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
-    ) ??
-    lines
-      .map((line) => ({
-        line,
-        hits: queryTokens.filter((token) => normalizeLowercaseStringOrEmpty(line).includes(token))
-          .length,
-      }))
-      .toSorted((left, right) => right.hits - left.hits)
-      .find((candidate) => candidate.hits > 0)?.line;
+  let matchingLine = lines.find((line) =>
+    lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
+  );
+  if (matchingLine === undefined && queryTokens.length > 0) {
+    let bestHits = 0;
+    for (const line of lines) {
+      const lineLower = normalizeLowercaseStringOrEmpty(line);
+      let hits = 0;
+      for (const token of queryTokens) {
+        if (lineLower.includes(token)) {
+          hits += 1;
+        }
+      }
+      if (hits > bestHits) {
+        bestHits = hits;
+        matchingLine = line;
+      }
+    }
+  }
   return matchingLine?.trim() || lines.find((line) => line.trim() !== "---")?.trim() || "";
 }
 

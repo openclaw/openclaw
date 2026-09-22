@@ -131,9 +131,3 @@ fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
   return parsed.code to message
 }
-
-/** Normalizes user/session keys while preserving main as the canonical session id. */
-fun normalizeMainKey(raw: String?): String? {
-  val trimmed = raw?.trim().orEmpty()
-  return if (trimmed.isEmpty()) null else trimmed
-}

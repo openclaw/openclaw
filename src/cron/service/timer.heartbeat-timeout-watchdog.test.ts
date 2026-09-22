@@ -57,18 +57,22 @@ describe("cron heartbeat watchdog", () => {
         vi.setSystemTime(scheduledAt);
         const heartbeatStarted = createDeferred();
         const releaseHeartbeat = createDeferred();
-        const runHeartbeat = async () => {
+        const runHeartbeat: NonNullable<CronServiceDeps["requestHeartbeatAndWait"]> = async (
+          _wake,
+          { onQueued, onAttemptStarted },
+        ) => {
+          onQueued?.();
+          onAttemptStarted?.();
           heartbeatStarted.resolve();
           await releaseHeartbeat.promise;
-          return { status: "ran" as const, durationMs: 1 };
+          return { status: "ran", durationMs: 1 };
         };
         const state = createCronRegressionState({
           storePath: store.storePath,
           nowMs: () => Date.now(),
           defaultAgentId: "main",
           resolveHeartbeatTimeoutMs: vi.fn(() => undefined),
-          requestHeartbeatAndWait:
-            vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(runHeartbeat),
+          requestHeartbeatAndWait: vi.fn(runHeartbeat),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
 

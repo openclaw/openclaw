@@ -1,18 +1,22 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import { pathForRoute } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { AgentRosterElement } from "../lib/agents/roster-element.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { renderSessionListFrame, renderSessionSection } from "./app-sidebar-session-list-render.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
-import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
+import {
+  renderChildSessionLoadError,
+  type SessionListHost,
+} from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
@@ -97,7 +101,19 @@ class SidebarAgentRoster extends AgentRosterElement {
               const sections = this.sections.filter((section) =>
                 section.id.startsWith(`agent:${card.id}:`),
               );
-              const summaryRows = collapsed ? sections.flatMap((section) => section.rows) : [];
+              const mainKey = this.host.selectedAgentMainSessionKey(card.id);
+              const mainRow = this.host.mainSessionRow(card.id);
+              const home = mainRow ? this.host.projectHomeSession(mainRow, card.id) : null;
+              const homeLoadKeys = home?.childLoadParentKeys?.length
+                ? home.childLoadParentKeys
+                : [mainRow?.key ?? mainKey];
+              const active =
+                isSessionRouteId(this.host.activeRouteId) &&
+                areUiSessionKeysEquivalent(this.host.getRouteSessionKey(), mainKey);
+              const summaryRows = [
+                ...(home ? [home] : []),
+                ...(collapsed ? sections.flatMap((section) => section.rows) : []),
+              ];
               return html`<section
                 class="sidebar-agent-roster__group"
                 data-agent-group=${card.id}
@@ -120,6 +136,7 @@ class SidebarAgentRoster extends AgentRosterElement {
                     class="sidebar-agent-roster__row"
                     data-agent-id=${card.id}
                     href=${card.target.href}
+                    aria-current=${active ? "page" : nothing}
                     title=${t("agentsHome.openChat")}
                     @click=${(event: MouseEvent) => {
                       if (shouldHandleNavigationClick(event)) {
@@ -135,11 +152,13 @@ class SidebarAgentRoster extends AgentRosterElement {
                   </a>
                   <span class="sidebar-agent-roster__signals">
                     ${
-                      collapsed
+                      summaryRows.length > 0
                         ? renderTeamSessionSlots(
                             summaryRows,
-                            true,
-                            summaryRows.length,
+                            collapsed,
+                            collapsed
+                              ? sections.reduce((count, section) => count + section.rows.length, 0)
+                              : 0,
                             summaryRows.reduce(
                               (count, row) => count + (row.workspaceConflictCount ?? 0),
                               0,
@@ -218,13 +237,14 @@ class SidebarAgentRoster extends AgentRosterElement {
                 ${
                   collapsed
                     ? nothing
-                    : sections.map((section) =>
+                    : html`${homeLoadKeys.map((key) => renderChildSessionLoadError(this.host, key))}
+                      ${sections.map((section) =>
                         renderSessionSection({
                           host: this.host,
                           section,
                           personHeaders: undefined,
                         }),
-                      )
+                      )}`
                 }
               </section>`;
             },

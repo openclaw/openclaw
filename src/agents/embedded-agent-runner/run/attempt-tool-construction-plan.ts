@@ -48,7 +48,7 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
-function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
+function hasWildcardToolAllowlist(toolsAllow: readonly string[]): boolean {
   return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
@@ -62,6 +62,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   toolsAllow?: string[],
   options?: {
     toolMeta?: (tool: T) => { pluginId: string } | undefined;
+    toolAliases?: (tool: T) => readonly string[];
   },
 ): T[] {
   if (!toolsAllow) {
@@ -85,7 +86,9 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
     const matches = createRuntimeToolMatcher(policy?.allow);
-    return currentTools.filter((tool) => matches(tool.name));
+    return currentTools.filter(
+      (tool) => matches(tool.name) || options?.toolAliases?.(tool).some(matches),
+    );
   }, tools);
 }
 
@@ -94,32 +97,33 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
  * undefined allowlists already cover every required tool.
  */
 export function mergeForcedEmbeddedAttemptToolsAllow(
-  toolsAllow: string[] | undefined,
+  toolsAllow: readonly string[] | undefined,
   params: { forceMessageTool?: boolean; forceToolNames?: readonly string[] },
 ): string[] | undefined {
-  if (toolsAllow === undefined || hasWildcardToolAllowlist(toolsAllow)) {
-    return toolsAllow;
+  if (toolsAllow === undefined) {
+    return undefined;
   }
   const required = [
     ...(params.forceMessageTool ? ["message"] : []),
     ...(params.forceToolNames ?? []),
   ];
-  if (required.length === 0) {
-    return toolsAllow;
-  }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolPolicyName(entry)));
-  const missing = required.filter((name) => !normalized.has(normalizeToolPolicyName(name)));
-  if (missing.length === 0) {
-    return toolsAllow;
-  }
+  const merge = (allow: readonly string[]) => {
+    const normalized = new Set(allow.map(normalizeToolPolicyName));
+    return [
+      ...allow,
+      ...required.filter((name) => {
+        const key = normalizeToolPolicyName(name);
+        if (normalized.has("*") || normalized.has(key)) {
+          return false;
+        }
+        normalized.add(key);
+        return true;
+      }),
+    ];
+  };
   const restrictions = readToolAllowlistIntersection(toolsAllow);
-  const merged = [...toolsAllow, ...missing];
-  return restrictions
-    ? attachToolAllowlistIntersection(
-        merged,
-        restrictions.map((restriction) => restriction.concat(missing)),
-      )
-    : merged;
+  const merged = merge(toolsAllow);
+  return restrictions ? attachToolAllowlistIntersection(merged, restrictions.map(merge)) : merged;
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(
@@ -240,13 +244,12 @@ function shouldCreateBundleRuntimeForAttempt(
   if (!params.toolsAllow) {
     return true;
   }
-  if (params.toolsAllow.length === 0) {
-    return false;
-  }
-  if (hasWildcardToolAllowlist(params.toolsAllow)) {
-    return true;
-  }
-  return matchesAllowlist(params.toolsAllow.map(normalizeToolPolicyName));
+  const restrictions = readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow];
+  return restrictions.every(
+    (allow) =>
+      allow.length > 0 &&
+      (hasWildcardToolAllowlist(allow) || matchesAllowlist(allow.map(normalizeToolPolicyName))),
+  );
 }
 
 /**
@@ -277,9 +280,7 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
 }
 
 /**
- * Decides whether the bundled LSP runtime is needed for this attempt. LSP tools
- * are enabled by default/wildcard and by allowlist entries with the `lsp_`
- * prefix.
+ * Discovers LSP tools for plugin grants or patterns that can match their namespace.
  */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
@@ -287,6 +288,12 @@ export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsAllow?: string[];
 }): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (names) =>
-    names.some((name) => name.startsWith("lsp_")),
+    names.some(
+      (name) =>
+        name === "bundle-lsp" ||
+        name === "group:plugins" ||
+        name.startsWith("lsp_") ||
+        mayMatchGlobWithPrefix(name, "lsp_"),
+    ),
   );
 }

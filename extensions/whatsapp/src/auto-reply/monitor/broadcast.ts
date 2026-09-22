@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements broadcast behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadConfig, runGroupThread } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

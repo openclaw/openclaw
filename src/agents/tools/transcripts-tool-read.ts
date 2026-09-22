@@ -7,7 +7,7 @@ import {
   resolveSourceProvider,
   type TranscriptsRuntimeContext,
 } from "../../transcripts/capture.js";
-import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
+import { projectTranscriptSession, projectTranscriptNotes } from "../../transcripts/read.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { toolText } from "./transcripts-tool-result.js";
@@ -80,7 +80,7 @@ export async function showPastTranscript(params: ReadParams) {
   if (!entry) {
     throw new Error(`transcripts session not found: ${selection.selector}`);
   }
-  const notes = await readTranscriptNotes(store, selection.session);
+  const notes = projectTranscriptNotes(await store.readNotes(selection.session));
   const current = await isTranscriptSelectionCurrent(selection, store);
   ctx.assertCallerActive?.();
   if (!current || !isTranscriptSelectionOwned(selection)) {

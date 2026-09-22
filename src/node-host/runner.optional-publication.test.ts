@@ -132,7 +132,7 @@ async function withReadyNodeHost(
     aborted: false,
     elapsedMs: 0,
   });
-  const processOnceSpy = vi.spyOn(process, "once");
+  const processOnSpy = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
   let running: Promise<void> | undefined;
   try {
@@ -144,18 +144,18 @@ async function withReadyNodeHost(
     }
     await runTest({ client, options: mocks.capturedGatewayClientOptions.at(-1) });
   } finally {
-    const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     try {
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   }
 }

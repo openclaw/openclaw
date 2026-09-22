@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
@@ -52,6 +53,26 @@ function assistantHistory(text: string) {
 }
 
 describe("chat pane history issuance across Gateway connection transitions", () => {
+  it("does not request the optional header platform while initial history is pending", async () => {
+    const history = createDeferred<ReturnType<typeof assistantHistory>>();
+    const request = vi.fn((method: string) =>
+      method === "chat.startup" ? history.promise : Promise.resolve({}),
+    );
+    const { pane, state, snapshot } = createCanonicalRoutePane(request);
+    pane.sessionKey = state.sessionKey;
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
+    const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
+    pane.context.gateway.snapshot.hello = hello;
+    try {
+      pane.applyGatewaySnapshot({ ...snapshot, hello });
+      expect(request.mock.calls.some(([method]) => method === "chat.startup")).toBe(true);
+      expect(request.mock.calls.filter(([method]) => method === "system.info")).toEqual([]);
+    } finally {
+      history.resolve(assistantHistory("Selected transcript"));
+      await history.promise;
+    }
+  });
+
   it("issues a disconnected history request once when connection redirects the route", async () => {
     const request = vi.fn().mockResolvedValue(assistantHistory("Recovered transcript"));
     const { pane, state, snapshot } = createCanonicalRoutePane(request);

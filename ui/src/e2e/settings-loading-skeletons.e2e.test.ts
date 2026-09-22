@@ -94,7 +94,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       await gateway.deferNext("models.authStatus");
       await gateway.deferNext("models.authStatus");
-      const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+      const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.locator('wa-dropdown-item[aria-label="Reviewer"]').click();
       await expect

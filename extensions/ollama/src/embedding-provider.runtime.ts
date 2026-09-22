@@ -257,7 +257,7 @@ async function resolveOllamaEmbeddingResolvedKeys(
       configString: await resolveConfiguredOllamaEmbeddingSecret({
         config: options.config,
         value: providerValue,
-        path: `models.providers.${providerConfig.providerId}.apiKey`,
+        path: `models.providers[${JSON.stringify(providerConfig.providerId)}].apiKey`,
       }),
       declared: hasConfiguredSecretInput(providerValue),
       resolvedSecretRef: Boolean(coerceSecretRef(providerValue, options.config.secrets?.defaults)),
@@ -353,7 +353,7 @@ async function resolveOllamaEmbeddingClient(
       const resolvedValue = await resolveConfiguredOllamaEmbeddingSecret({
         config: options.config,
         value: headerValue,
-        path: `models.providers.${providerConfig.providerId}.headers.${headerName}`,
+        path: `models.providers[${JSON.stringify(providerConfig.providerId)}].headers[${JSON.stringify(headerName)}]`,
       });
       if (resolvedValue) {
         headerOverrides[headerName] = resolvedValue;

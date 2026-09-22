@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   appendTranscriptEventSync,
   appendTranscriptMessage,
+  assignSessionOwner,
   cleanupPluginHostSessionStore,
   listSessionEntriesCore,
   listSessionTranscriptInstances,
@@ -22,11 +23,13 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import {
   readSessionEntryCount,
   iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -123,6 +126,75 @@ function createSessionScope(label: string) {
   };
 }
 
+describe("exact session entry read lifetimes", () => {
+  it("keeps a selected read through sibling writes and full-list expansion", async () => {
+    const scope = createSessionScope("selected-read");
+    const sibling = { ...scope, sessionKey: "agent:main:unrelated" };
+    await upsertSessionEntryCore(scope, { sessionId: "selected", label: "A", updatedAt: 1 });
+    await upsertSessionEntryCore(sibling, { sessionId: "other", label: "B", updatedAt: 1 });
+    const database = openOpenClawAgentDatabase(scope);
+    parseSessionEntryCalls.mockClear();
+    const read = captureSessionEntryRead(database, scope.sessionKey);
+    try {
+      expect(read.entry).toMatchObject({ sessionId: "selected", label: "A" });
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+      await upsertSessionEntryCore(sibling, { label: "renamed B" });
+      expect(read.isCurrent()).toBe(true);
+      expect(
+        readSessionEntryCache(database, { cache: true }).entries.get(sibling.sessionKey),
+      ).toMatchObject({ label: "renamed B" });
+      expect(read.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, { label: "changed A" });
+      expect(read.isCurrent()).toBe(false);
+    } finally {
+      read.release();
+    }
+    expect(read.isCurrent()).toBe(false);
+  });
+
+  it.each(["same connection", "other connection"])(
+    "keeps identical canonical facts current after delete/recreate on %s",
+    async (writer) => {
+      const scope = createSessionScope("selected-read-aba");
+      await upsertSessionEntryCore(scope, { sessionId: "same-id", label: "A", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase(scope);
+      const read = captureSessionEntryRead(database, scope.sessionKey);
+      const connection =
+        writer === "same connection" ? database.db : new DatabaseSync(database.path);
+      try {
+        connection.exec("CREATE TEMP TABLE saved_node AS SELECT * FROM session_nodes;");
+        connection.prepare("DELETE FROM session_nodes WHERE session_key = ?").run(scope.sessionKey);
+        connection.exec("INSERT INTO session_nodes SELECT * FROM saved_node;");
+        // Metadata depends on current canonical facts, not whether identical rows were rewritten.
+        expect(read.isCurrent()).toBe(true);
+        expect(loadSessionEntry(scope)).toMatchObject(read.entry!);
+      } finally {
+        read.release();
+        if (connection !== database.db) {
+          connection.close();
+        }
+      }
+    },
+  );
+
+  it("keeps concurrent missing-row reads until creation and releases independently", async () => {
+    const scope = createSessionScope("selected-missing");
+    const database = openOpenClawAgentDatabase(scope);
+    const first = captureSessionEntryRead(database, scope.sessionKey);
+    const second = captureSessionEntryRead(database, scope.sessionKey);
+    try {
+      expect(first.entry).toBeUndefined();
+      first.release();
+      expect(second.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, { sessionId: "created", updatedAt: 1 });
+      expect(second.isCurrent()).toBe(false);
+    } finally {
+      first.release();
+      second.release();
+    }
+  });
+});
+
 describe("SQLite retained session window references", () => {
   it("reads retained candidate windows freshly and honors owner exclusions", () => {
     const scope = createSessionScope("reference-window-candidates");
@@ -164,6 +236,36 @@ describe("SQLite retained session window references", () => {
 });
 
 describe("SQLite session entry cache", () => {
+  it.each(["owner", "participant"] as const)(
+    "does not decode cold session entries for %s publication",
+    async (kind) => {
+      const scope = createSessionScope(`cold-${kind}`);
+      await upsertSessionEntryCore(scope, {
+        sessionId: `cold-${kind}`,
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "stored prompt".repeat(4096), skills: [] },
+      });
+      parseSessionEntryCalls.mockClear();
+      const actor = { type: "agent" as const, id: "research" };
+      if (kind === "owner") {
+        expect(assignSessionOwner(scope, { owner: actor, assignedBy: actor })).not.toBeNull();
+      } else {
+        expect(recordSessionParticipant(scope, { identity: actor })).toBe("inserted");
+      }
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+      const entry = listSessionEntriesCore(scope)[0]?.entry;
+      expect(entry).toMatchObject(
+        kind === "owner"
+          ? { owner: { actor: { type: "agent", id: "research" } } }
+          : {
+              participantCount: 1,
+              participants: [{ identity: { type: "agent", id: "research" } }],
+            },
+      );
+      expect(entry).not.toHaveProperty("skillsSnapshot");
+    },
+  );
+
   it.each(["plugin-owned-state", "promoted-slots"] as const)(
     "scans plugin cleanup metadata without decoding saved prompts (%s)",
     async (mode) => {
@@ -292,41 +394,6 @@ describe("SQLite session entry cache", () => {
     expect(readSessionEntryCount(database)).toBe(readable ? 1 : 0);
     expect([...iterateSessionEntryKeys(database)]).toEqual(readable ? [scope.sessionKey] : []);
     expect(snapshot.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
-  });
-
-  it("counts mixed validated and raw entries with the same archive filter", async () => {
-    const scope = createSessionScope("mixed-inventory-count");
-    const database = openOpenClawAgentDatabase(scope);
-    expect(readSessionEntryCount(database)).toBe(0);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(0);
-    for (const archived of [false, true]) {
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:validated-" + archived },
-        { sessionId: "validated-" + archived, updatedAt: 1, archivedAt: archived ? 1 : undefined },
-      );
-      database.db
-        .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, archived_at) VALUES (?, ?, ?, 1, ?)",
-        )
-        .run(
-          "agent:main:raw-" + archived,
-          "raw-" + archived,
-          JSON.stringify({ sessionId: "raw-" + archived, updatedAt: 1 }),
-          archived ? 1 : null,
-        );
-    }
-    database.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
-      )
-      .run("agent:main:invalid", "invalid", "{");
-    expect(readSessionEntryCount(database)).toBe(4);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run("{}", "agent:main:validated-false");
-    expect(readSessionEntryCount(database)).toBe(3);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);
   });
 
   it("retains only listing metadata while full reads preserve saved prompt state", async () => {

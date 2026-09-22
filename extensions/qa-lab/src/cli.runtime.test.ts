@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { readQaScenarioById, type QaScenarioPack } from "./scenario-catalog.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
 
@@ -255,7 +256,7 @@ function executionCellsForSuiteParams(params?: QaSuiteRunParams) {
   return expandQaScenarioExecutionCells({
     scenarios,
     channelDriver: params?.channelDriver ?? "qa-channel",
-    channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+    channel: params?.channelId,
     defaultChannel:
       params?.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     supportsChannel:
@@ -553,7 +554,6 @@ describe("qa cli runtime", () => {
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: undefined,
       fastMode: undefined,
@@ -978,7 +978,7 @@ describe("qa cli runtime", () => {
             observedCells: expandQaScenarioExecutionCells({
               scenarios: [readQaScenarioById("telegram-commands-command")],
               channelDriver: params?.channelDriver ?? "qa-channel",
-              channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+              channel: params?.channelId,
               defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
               supportsChannel: isCrablineServerChannel,
               expandChannels: true,
@@ -1012,10 +1012,7 @@ describe("qa cli runtime", () => {
           fastMode: true,
           concurrency: 2,
         });
-        expect(suiteArgs.channelDriverSelection).toMatchObject({
-          channel: "telegram",
-          channelDriver: "crabline",
-        });
+        expect(suiteArgs.channelId).toBe("telegram");
         expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
         const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
@@ -1089,7 +1086,7 @@ describe("qa cli runtime", () => {
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("live");
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
   });
 
   it("keeps portable channel scenarios in driver-selected profile runs", async () => {
@@ -1124,7 +1121,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       channelDriver: "live",
     });
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
@@ -1247,7 +1244,7 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs).toMatchObject({
       channelDriver: "crabline",
-      channelDriverSelection: { channel: "matrix", channelDriver: "crabline" },
+      channelId: "matrix",
       scenarioIds: ["matrix-restart-resume"],
     });
   });
@@ -1309,7 +1306,6 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -1379,7 +1375,7 @@ describe("qa cli runtime", () => {
     const [crablineArgs, liveArgs] = runQaSuite.mock.calls.map(([args]) => args);
     expect(crablineArgs).toMatchObject({
       channelDriver: "crabline",
-      channelDriverSelection: { channel: "telegram" },
+      channelId: "telegram",
       scenarioIds: ["telegram-help-command"],
     });
     expect(liveArgs).toMatchObject({
@@ -1412,7 +1408,7 @@ describe("qa cli runtime", () => {
       2,
       expect.objectContaining({
         channelDriver: "crabline",
-        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        channelId: "telegram",
         scenarioIds: [],
       }),
     );
@@ -1476,12 +1472,7 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/multipass-telegram"),
       transportId: "qa-channel",
       channelDriver: "crabline",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channelId: "telegram",
       evidenceMode: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
@@ -1502,7 +1493,6 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         channelDriver: "crabline",
-        channelDriverSelection: undefined,
         scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
       }),
     );
@@ -1515,7 +1505,7 @@ describe("qa cli runtime", () => {
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
     expect(suiteArgs.scenarioIds).toEqual(
       expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
     );
@@ -1541,7 +1531,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
-  it("passes Crabline channel-driver selection through to the multipass runner", async () => {
+  it("passes the generic channel driver and channel through to the multipass runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
@@ -1554,12 +1544,8 @@ describe("qa cli runtime", () => {
 
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
-        channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          channel: "telegram",
-          channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
+        channelDriver: "crabline",
+        channelId: "telegram",
       }),
     );
     expect(runQaSuite).not.toHaveBeenCalled();
@@ -1578,7 +1564,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -1625,7 +1610,6 @@ describe("qa cli runtime", () => {
         outputDir: undefined,
         transportId: "qa-channel",
         channelDriver: undefined,
-        channelDriverSelection: undefined,
         providerMode: "mock-openai",
         primaryModel: undefined,
         alternateModel: undefined,
@@ -1704,7 +1688,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -2597,57 +2580,29 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("writes a runtime-axis parity report from one summary", async () => {
+  it.each([
+    { status: "pass", runtimeErrorClass: "tool-error" },
+    { status: "skip", details: "known-harness-gap fixture: unavailable" },
+  ])("writes a runtime-axis parity report preserving $status", async (cellOutcome) => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-"));
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
 
     try {
+      const summary = makeRuntimeParitySummary();
+      const scenario = summary.scenarios[1];
+      if (!scenario?.runtimeParity) {
+        throw new Error("runtime parity fixture missing");
+      }
+      scenario.status = "fail";
+      Object.assign(scenario.runtimeParity.cells.codex, cellOutcome);
       await fs.writeFile(
         path.join(repoRoot, "runtime-summary.json"),
         JSON.stringify({
-          scenarios: [
-            {
-              name: "Approval turn tool followthrough",
-              status: "fail",
-              steps: [],
-              runtimeParity: {
-                scenarioId: "approval-turn-tool-followthrough",
-                drift: "tool-call-shape",
-                driftDetails: "tool call 1 differs",
-                cells: {
-                  openclaw: {
-                    runtime: "openclaw",
-                    status: "pass",
-                    transcriptBytes: '{"role":"assistant"}\n',
-                    toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
-                    finalText: "done",
-                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                    wallClockMs: 10,
-                    bootStateLines: [],
-                  },
-                  codex: {
-                    runtime: "codex",
-                    status: "pass",
-                    transcriptBytes: '{"role":"assistant"}\n',
-                    toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
-                    finalText: "done",
-                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                    wallClockMs: 10,
-                    runtimeErrorClass: "tool-error",
-                    bootStateLines: [],
-                  },
-                },
-              },
-            },
-          ],
+          ...summary,
+          scenarios: [scenario],
           counts: { total: 1, passed: 1, failed: 0 },
-          run: {
-            status: "completed",
-            providerMode: "mock-openai",
-            primaryModel: "openai/gpt-5.6-luna",
-            runtimePair: ["openclaw", "codex"],
-          },
+          run: { ...summary.run, status: "completed" },
         }),
         "utf8",
       );
@@ -2656,8 +2611,17 @@ describe("qa cli runtime", () => {
         repoRoot,
         runtimeAxis: true,
         summary: "runtime-summary.json",
+        outputDir: "report",
       });
 
+      const reportDir = path.join(repoRoot, "report");
+      const report = JSON.parse(
+        await fs.readFile(path.join(reportDir, "qa-runtime-parity-summary.json"), "utf8"),
+      );
+      expect(report.scenarios[0].codexStatus).toBe(cellOutcome.status);
+      expect(
+        await fs.readFile(path.join(reportDir, "qa-runtime-parity-report.md"), "utf8"),
+      ).toContain(`- codex: ${cellOutcome.status} (`);
       expect(process.exitCode).toBe(0);
       expect(stdoutWrite).toHaveBeenCalledWith(
         expect.stringContaining("QA runtime parity report:"),
@@ -3329,7 +3293,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",

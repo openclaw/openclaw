@@ -53,7 +53,17 @@ export const DesktopLaunchParamsSchema = closedObject({
   app: WorkerDesktopAppIdSchema,
 });
 
+export const DesktopReleaseParamsSchema = closedObject({
+  wsPath: NonEmptyString,
+});
+
+export const DesktopReleaseResultSchema = closedObject({
+  released: Type.Boolean(),
+});
+
 export type DesktopSource = Static<typeof DesktopSourceSchema>;
 export type DesktopObserveParams = Static<typeof DesktopObserveParamsSchema>;
 export type DesktopObserveResult = Static<typeof DesktopObserveResultSchema>;
 export type DesktopLaunchParams = Static<typeof DesktopLaunchParamsSchema>;
+export type DesktopReleaseParams = Static<typeof DesktopReleaseParamsSchema>;
+export type DesktopReleaseResult = Static<typeof DesktopReleaseResultSchema>;

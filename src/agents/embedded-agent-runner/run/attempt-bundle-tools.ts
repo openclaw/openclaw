@@ -1,12 +1,13 @@
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
-import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -98,6 +99,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cfg: params.attempt.config,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: params.attempt.toolOverrides,
+    toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
@@ -110,12 +112,16 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         if (configuredNames.length === 0) {
           return [];
         }
-        const { loaded } = loadSessionMcpConfig({ ...mcpConfig, logDiagnostics: false });
+        const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+          ...mcpConfig,
+          logDiagnostics: false,
+        });
         // Use the complete merged declaration order: bundled peers can own a
         // collision suffix before a configured server. This does not connect MCP.
-        const safeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
         return configuredNames.flatMap((name) => {
-          const safeName = safeNames.get(name);
+          const safeName = Object.hasOwn(loaded.mcpServers, name)
+            ? safeServerNamesByServer.get(name)
+            : undefined;
           return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
         });
       },
@@ -157,6 +163,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       ? await createBundleLspToolRuntime({
           workspaceDir: params.setup.effectiveWorkspace,
           cfg: params.attempt.config,
+          abortSignal: params.attempt.abortSignal,
           manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
@@ -200,8 +207,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
       bundleMcpRuntime.restrictAppTools(allowedAppTools);
     }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools;
+    const normalizedBundledTools = (
+      filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools
+    ).map((tool) => wrapToolWithBeforeToolCallHook(tool, params.preparedToolBase.toolHookContext));
     const projectTools = (coreTools: typeof toolsRaw) => {
       const projectedTools = filterLocalModelLeanTools({
         tools: [...coreTools, ...normalizedBundledTools].map((tool) =>

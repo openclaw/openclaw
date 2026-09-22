@@ -3,7 +3,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import {
   loadOrCreateDeviceIdentity,

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   getActiveMemorySearchManager: getActiveMemorySearchManagerMock,
 }));
 
-vi.mock("@openclaw/memory-core/api.js", { spy: true });
+vi.mock("@openclaw/memory-core/session-search-visibility-api.js", { spy: true });
 
 vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
   resolveSessionAgentIdStrict: resolveSessionAgentIdMock,
@@ -725,7 +725,32 @@ describe("searchMemoryWiki", () => {
     expect(routeResults[0]?.path).toBe("entities/brad.md");
   });
 
-  it("uses body text instead of frontmatter for fallback snippets", async () => {
+  it.each([
+    {
+      name: "body text instead of frontmatter for an unmatched query",
+      query: "frontmatter-only-alias",
+      body: "# Alias Carrier\n\nReadable agent card summary.\n",
+      expected: "# Alias Carrier",
+    },
+    {
+      name: "the first line with the most partial token matches",
+      query: "cobalt quartz amber",
+      body: "# Alias Carrier\nCobalt alone.\n  COBALT quartz first 🤖 é  \nQuartz cobalt second.\n",
+      expected: "COBALT quartz first 🤖 é",
+    },
+    {
+      name: "the first all-token line before partial matches or a later exact phrase",
+      query: "cobalt quartz amber",
+      body: "# Alias Carrier\nCobalt quartz partial.\nAmber quartz cobalt first.\nCobalt quartz amber later.\n",
+      expected: "Amber quartz cobalt first.",
+    },
+    {
+      name: "body text when the query has no searchable tokens",
+      query: "🦞",
+      body: "# Alias Carrier\n\nReadable agent card summary.\n",
+      expected: "# Alias Carrier",
+    },
+  ])("uses $name for snippets", async ({ query, body, expected }) => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
@@ -736,22 +761,22 @@ describe("searchMemoryWiki", () => {
           pageType: "entity",
           id: "entity.alias",
           title: "Alias Carrier",
-          aliases: ["frontmatter-only-alias"],
+          aliases: [query],
           sourceIds: ["source.maintainers"],
         },
-        body: "# Alias Carrier\n\nReadable agent card summary.\n",
+        body,
       }),
       "utf8",
     );
 
     const results = await searchMemoryWiki({
       config,
-      query: "frontmatter-only-alias",
+      query,
       maxResults: 10,
     });
 
     expect(results.map((result) => result.path)).toEqual(["entities/alias.md"]);
-    expect(results[0]?.snippet).toBe("# Alias Carrier");
+    expect(results[0]?.snippet).toBe(expected);
   });
 
   it.each([

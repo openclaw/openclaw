@@ -50,6 +50,7 @@ class DebugPage extends OpenClawLightDomElement {
       void this.loadLiveDiagnostics();
     },
     false,
+    "visible",
   );
   private callEpoch = 0;
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
@@ -60,7 +61,7 @@ class DebugPage extends OpenClawLightDomElement {
     args: () =>
       [
         this.gateway.connected ? this.gateway.client : null,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
       ] as const,
     task: ([client, agentId], { signal }) =>
       client ? loadGatewayDiagnostics(client, agentId, signal) : initialState,
@@ -137,7 +138,7 @@ class DebugPage extends OpenClawLightDomElement {
       },
     )
     .watch(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection, notify) => selection.subscribe(notify),
       (selection) => {
         const agentId = selection.state.selectedId;
@@ -192,8 +193,8 @@ class DebugPage extends OpenClawLightDomElement {
     void this.liveTask.run([null]);
     this.diagnosticsTaskActiveClient = client;
     this.diagnosticsNeedsRefresh = false;
-    this.diagnosticsAgentId = this.context.agentSelection.state.selectedId;
-    return this.diagnosticsTask.run([client, this.context.agentSelection.state.selectedId]);
+    this.diagnosticsAgentId = this.context.settingsAgentSelection.state.selectedId;
+    return this.diagnosticsTask.run([client, this.context.settingsAgentSelection.state.selectedId]);
   }
 
   private loadLiveDiagnostics(): Promise<void> {

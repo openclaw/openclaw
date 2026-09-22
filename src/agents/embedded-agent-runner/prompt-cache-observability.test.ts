@@ -356,7 +356,7 @@ describe("prompt cache observability", () => {
     expect(second.changes).toBeNull();
   });
 
-  it("ignores dynamic system prompt suffix changes after the cache boundary", () => {
+  it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
     beginPromptCacheObservation({
@@ -380,7 +380,18 @@ describe("prompt cache observability", () => {
       tools: [{ name: "read" }],
     });
 
-    expect(next.changes).toBeNull();
+    // The stable prefix digest is unchanged; only the suffix moved, which a
+    // prefix-literal cache (OpenAI Responses `instructions`) still re-caches.
+    expect(next.changes).toEqual([
+      { code: "systemPromptSuffix", detail: "system prompt suffix digest changed" },
+    ]);
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000, input: 12_000 } }),
+    ).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 2_000,
+      changes: [{ code: "systemPromptSuffix", detail: "system prompt suffix digest changed" }],
+    });
   });
 
   it("reports visible schema changes even when tool names and count are unchanged", () => {

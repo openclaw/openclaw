@@ -11,6 +11,7 @@ import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
 } from "../../state/openclaw-agent-db.js";
@@ -572,6 +573,7 @@ describe("SDK installation ownership", () => {
             "legacy SDK target",
           );
           existing.session.dispose();
+          await closeOpenClawAgentDatabasesAsync();
           closeOpenClawAgentDatabasesForTest();
           expect(inspectOpenClawAgentDatabaseOwner(original.storePath)).toEqual({
             status: "owned",
@@ -607,6 +609,9 @@ describe("SDK installation ownership", () => {
               doctorOnlyStateMigrations: true,
               legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
             });
+            expect(
+              result.stepReceipts.find((entry) => entry.outcome === "refused"),
+            ).toBeUndefined();
             const receipt = result.stepReceipts.find((entry) => entry.id === "agent-dir");
             if (configuredOwner === "worker") {
               expect(receipt).toMatchObject({
@@ -624,7 +629,6 @@ describe("SDK installation ownership", () => {
                 expect.arrayContaining([expect.stringContaining("Keep using the existing store")]),
               );
               expect(snapshotFiles(legacyDir)).toEqual(before);
-              expect(result.stepReceipts.some((entry) => entry.outcome === "refused")).toBe(false);
             } else {
               expect(receipt).toMatchObject({
                 outcome: "deferred",
@@ -639,13 +643,13 @@ describe("SDK installation ownership", () => {
                 ],
               });
               expect(snapshotFiles(legacyDir)).toEqual(before);
-              expect(result.stepReceipts.some((entry) => entry.outcome === "refused")).toBe(false);
             }
             await expect(
               access(
                 path.join(state.agentDir(configuredOwner), ".legacy-agent-dir-migration.json"),
               ),
             ).rejects.toMatchObject({ code: "ENOENT" });
+            await closeOpenClawAgentDatabasesAsync();
             closeOpenClawAgentDatabasesForTest();
           }
 

@@ -1,4 +1,3 @@
-// Slack plugin module implements outbound adapter behavior.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -242,6 +241,9 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
       ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
       ...(params.onPlatformSendDispatch
         ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+        : {}),
+      ...(params.assertDirectAdapterHandoff
+        ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
         : {}),
       ...(params.onDeliveryResult
         ? {

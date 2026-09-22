@@ -37,7 +37,7 @@ function presentation(
     row,
     startupPending: false,
     workspaceResultReconciling: false,
-    onRestart: vi.fn(),
+    onRecover: vi.fn(),
     onReclaim: vi.fn(),
     ...overrides,
   });
@@ -47,9 +47,9 @@ describe("chat placement composer presentation", () => {
   it.each([
     ["active", "ready", undefined],
     ["reclaimed", "ready", undefined],
-    ["provisioning", "busy", "Provisioning environment…"],
-    ["syncing", "busy", "Preparing workspace…"],
-    ["starting", "busy", "Starting…"],
+    ["provisioning", "setup", undefined],
+    ["syncing", "setup", undefined],
+    ["starting", "setup", undefined],
     ["draining", "busy", "Finishing session move…"],
     ["reconciling", "busy", "Finishing session move…"],
   ] as const)("projects %s placement into a %s composer", (state, kind, busyMessage) => {
@@ -115,13 +115,59 @@ describe("chat placement composer presentation", () => {
     expect(result.busyMessage).toBe("Finishing session move…");
   });
 
+  it.each(["local", undefined] as const)(
+    "blocks a repository-only session with %s placement and offers worker dispatch",
+    (placementState) => {
+      const onRecover = vi.fn();
+      const row: GatewaySessionRow = {
+        key: "agent:main:repository",
+        kind: "direct",
+        updatedAt: 0,
+        repositoryWorkspaceId: "repository-workspace-1",
+        ...(placementState
+          ? {
+              placement: {
+                state: placementState,
+                generation: 1,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                stateChangedAtMs: 1,
+              },
+            }
+          : {}),
+      };
+
+      const result = presentation(row, { onRecover });
+
+      expect(result.state).toEqual({ kind: "dispatch-required" });
+      expect(result.blocksSend).toBe(true);
+      expect(result.disabledBanner).toMatchObject({
+        title: "Repository worker required",
+        actionLabel: "Choose worker…",
+      });
+      result.disabledBanner?.onAction();
+      expect(onRecover).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves automatic redispatch for a reclaimed repository session", () => {
+    const row = placementSession("reclaimed");
+    row.repositoryWorkspaceId = "repository-workspace-1";
+
+    const result = presentation(row);
+
+    expect(result.state).toEqual({ kind: "ready" });
+    expect(result.blocksSend).toBe(false);
+    expect(result.disabledBanner).toBeUndefined();
+  });
+
   it.each(["restart", "stop-first"] as const)(
     "projects failed %s recovery into an actionable composer banner",
     (recoveryAction) => {
-      const onRestart = vi.fn();
+      const onRecover = vi.fn();
       const onReclaim = vi.fn();
       const result = presentation(placementSession("failed", recoveryAction), {
-        onRestart,
+        onRecover,
         onReclaim,
       });
 
@@ -132,7 +178,7 @@ describe("chat placement composer presentation", () => {
         recoveryAction === "restart" ? "Restart session…" : "Stop cloud worker…",
       );
       result.disabledBanner?.onAction();
-      expect(recoveryAction === "restart" ? onRestart : onReclaim).toHaveBeenCalledOnce();
+      expect(recoveryAction === "restart" ? onRecover : onReclaim).toHaveBeenCalledOnce();
     },
   );
 

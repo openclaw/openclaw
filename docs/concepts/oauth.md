@@ -38,6 +38,12 @@ same entry point:
 openclaw models auth login --provider <id>
 ```
 
+In the Control UI, open **Settings → Models → Connect provider** to save a
+supported account without requesting a model reply. **Connect provider** in
+Model Setup opens the same picker and connection flow. Choose **Test & use** when
+you want to verify a model and select it. Plugins that only support full setup
+keep their separate setup action.
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a new refresh token on every login/refresh.

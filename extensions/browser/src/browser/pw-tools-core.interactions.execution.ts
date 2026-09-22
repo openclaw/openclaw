@@ -29,6 +29,7 @@ import {
   evaluateViaPlaywright,
   fillFormViaPlaywright,
   hoverViaPlaywright,
+  insertTextViaPlaywright,
   pressKeyViaPlaywright,
   scrollIntoViewViaPlaywright,
   selectOptionViaPlaywright,
@@ -105,6 +106,9 @@ async function executeSingleAction(
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
       });
+      break;
+    case "insertText":
+      await insertTextViaPlaywright({ ...interaction, text: action.text });
       break;
     case "press":
       await pressKeyViaPlaywright({

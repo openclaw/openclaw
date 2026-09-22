@@ -39,6 +39,11 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
+import {
+  providerRequiresSignedThinking,
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
+} from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -54,12 +59,7 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import {
-  providerRequiresSignedThinking,
-  resolveTranscriptPolicy,
-  shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
-} from "../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,

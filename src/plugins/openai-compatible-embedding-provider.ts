@@ -21,6 +21,7 @@ import type { ModelProviderLocalServiceConfig } from "../config/types.models.js"
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -203,7 +204,7 @@ async function resolveConfiguredProviderApiKey(params: {
 }): Promise<string | undefined> {
   const apiKey = resolveSecretString({
     value: params.configuredProvider?.apiKey,
-    path: `models.providers.${params.providerId}.apiKey`,
+    path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,
   });
   if (!apiKey) {
     return undefined;

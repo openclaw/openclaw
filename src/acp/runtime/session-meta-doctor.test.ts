@@ -11,6 +11,7 @@ import {
   type PluginDoctorContractModule,
 } from "../../plugins/doctor-contract-module.js";
 import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
 
@@ -67,7 +68,14 @@ it("inspects without creating state and conditionally updates only the proven cu
       repairAuthority: { assertCurrent, assertOwnedInTransaction: assertCurrent },
     });
     const update = { claim, runtimeSessionName: "owned-work", acpxRecordId: "owned-record-work" };
-    repair.updateAcpSessionIdentity!(update);
+    const changes: unknown[] = [];
+    const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
+    try {
+      repair.updateAcpSessionIdentity!(update);
+    } finally {
+      unsubscribe();
+    }
+    expect(changes).toEqual([{ agentId: "work", sessionKey: "global" }]);
     expect(readAcpSessionMeta({ cfg, env, agentId: "work", sessionKey: "global" })).toEqual({
       ...claim.meta,
       runtimeSessionName: "owned-work",
@@ -115,9 +123,7 @@ it.each(["global", "shared-project"])(
           overrides: {
             fixture: [
               process.execPath,
-              fileURLToPath(
-                new URL("../../../extensions/acpx/test/fixtures/owner-agent.mjs", import.meta.url),
-              ),
+              fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
               peer,
             ].join(" "),
           },

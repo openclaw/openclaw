@@ -1,10 +1,12 @@
 import {
   AGENT_RUN_ABORTED_STOP_REASON,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import {
   type FailoverError,
   findErrorProperty,
@@ -76,7 +78,9 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {
-  return hasAgentRunAbortCode(value, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE);
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE),
+  );
 }
 
 export function throwAgentRunRestartAbortReason(value: unknown): void {
@@ -85,11 +89,30 @@ export function throwAgentRunRestartAbortReason(value: unknown): void {
   }
 }
 
+const SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE =
+  "SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED";
+
+/** Mark loss of the turn's settlement lifetime without asserting a successor exists. */
+export function createSessionPlacementSettlementClosedAbortError(): Error {
+  return Object.assign(new Error("session placement turn settlement is closed"), {
+    name: "AbortError",
+    code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
+  });
+}
+
+/** Recognize the owner's typed marker through error wrappers, never display text. */
+export function isSessionPlacementSettlementClosedError(value: unknown): boolean {
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE),
+  );
+}
+
 export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefined): {
   aborted?: true;
   stopReason?:
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
+    | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
     | "timeout";
 } {
   if (!signal?.aborted) {
@@ -97,9 +120,11 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   }
   const stopReason = isAgentRunRestartAbortReason(signal.reason)
     ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : isSignalTimeoutReason(signal.reason)
-      ? "timeout"
-      : AGENT_RUN_ABORTED_STOP_REASON;
+    : isAgentRunSupersededAbortReason(signal.reason)
+      ? AGENT_RUN_SUPERSEDED_STOP_REASON
+      : isSignalTimeoutReason(signal.reason)
+        ? "timeout"
+        : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -142,6 +167,7 @@ export function resolveAgentRunErrorLifecycleFields(
   stopReason?:
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
+    | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
     | "timeout";
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
@@ -156,6 +182,9 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   if (isAgentRunRestartAbortReason(error)) {
     return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
+  }
+  if (isAgentRunSupersededAbortReason(error)) {
+    return { aborted: true, stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON };
   }
   const timeout = resolveRunErrorTimeout(error);
   return timeout ? { stopReason: "timeout", ...timeout } : {};

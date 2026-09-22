@@ -63,11 +63,17 @@ final class StatusMenuSessions: NSObject {
         }
     }
 
-    func configureApprovalItem(_ item: NSMenuItem, request: ExecApprovalQueueItem) {
+    func configureApprovalItem(
+        _ item: NSMenuItem,
+        request: ExecApprovalQueueItem,
+        approvalQueue: ExecApprovalQueueStore)
+    {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusApprovalCard(request: request, approvalQueue: approvalQueue))
     }
 
     func cancelPreviewTasks() {

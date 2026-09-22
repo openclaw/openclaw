@@ -32,7 +32,11 @@ import {
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { en } from "../i18n/locales/en.ts";
 
-const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const childProcessMocks = vi.hoisted(() => {
+  // Shared Node browser fixtures can load Vite before this file registers its mocks.
+  vi.resetModules();
+  return { execFileSync: vi.fn() };
+});
 const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
 const viteMocks = vi.hoisted(() => ({ runnerImport: vi.fn() }));
 

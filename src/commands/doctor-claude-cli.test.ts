@@ -1,22 +1,31 @@
 // Doctor Claude CLI tests cover CLI discovery, version checks, and repair guidance.
+import childProcess from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const resolveCliBackendConfigMock = vi.hoisted(() => vi.fn());
 const resolveModelAgentRuntimeMetadataMock = vi.hoisted(() =>
-  vi.fn((_params: { agentId: string }) => ({ id: "openclaw", source: "implicit" })),
+  vi
+    .fn<typeof import("../agents/agent-runtime-metadata.js").resolveModelAgentRuntimeMetadata>()
+    .mockReturnValue({ id: "openclaw", source: "implicit" }),
 );
 
-vi.mock("../agents/cli-backends.js", () => ({
+vi.mock("../agents/cli-backends.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-backends.js")>()),
   resolveCliBackendConfig: resolveCliBackendConfigMock,
 }));
 
-vi.mock("../agents/agent-runtime-metadata.js", () => ({
+vi.mock("../agents/agent-runtime-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-runtime-metadata.js")>()),
   resolveModelAgentRuntimeMetadata: resolveModelAgentRuntimeMetadataMock,
 }));
 
@@ -58,6 +67,8 @@ describe("noteClaudeCliHealth", () => {
       .mockReset()
       .mockReturnValue({ id: "openclaw", source: "implicit" });
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    clearHealthChecksForTest();
   });
 
   it("probes the executable resolved by the owning backend", async () => {
@@ -327,4 +338,118 @@ describe("noteClaudeCliHealth", () => {
       expect(body).not.toContain(`Agent zeta workspace: ${zetaWorkspace}`);
     });
   });
+
+  // Registered CLI entry; routed by test/vitest/vitest.commands.config.ts.
+  it.each(["cyclic project", "blocked workspace", "readable", "missing"])(
+    "doctor --lint --only core/doctor/claude-cli reports a %s directory at final output",
+    async (scenario) => {
+      clearHealthChecksForTest();
+      await withTempHome(async ({ homeDir, workspaceDir }) => {
+        const configPath = path.join(homeDir, "openclaw.json");
+        let configuredWorkspace = workspaceDir;
+        if (scenario === "blocked workspace") {
+          const parent = path.join(workspaceDir, "parent");
+          fs.writeFileSync(parent, "not a directory");
+          configuredWorkspace = path.join(parent, "child");
+        } else if (scenario === "missing") {
+          configuredWorkspace = path.join(workspaceDir, "missing");
+        }
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({
+          workspaceDir: configuredWorkspace,
+          homeDir,
+        });
+        fs.mkdirSync(path.dirname(projectDir), { recursive: true });
+        if (scenario === "cyclic project") {
+          fs.symlinkSync(projectDir, projectDir, process.platform === "win32" ? "junction" : "dir");
+        } else if (scenario === "readable") {
+          fs.mkdirSync(projectDir);
+        }
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                model: "anthropic/fixture",
+                models: { "anthropic/fixture": { agentRuntime: { id: "claude-cli" } } },
+                workspace: configuredWorkspace,
+              },
+              entries: { main: {} },
+            },
+          }),
+        );
+        const actualRuntime = await vi.importActual<
+          typeof import("../agents/agent-runtime-metadata.js")
+        >("../agents/agent-runtime-metadata.js");
+        resolveModelAgentRuntimeMetadataMock.mockImplementation(
+          actualRuntime.resolveModelAgentRuntimeMetadata,
+        );
+        resolveCliBackendConfigMock.mockReturnValue({
+          id: "claude-cli",
+          config: { command: process.execPath },
+        });
+        const spawnSync = childProcess.spawnSync;
+        vi.spyOn(childProcess, "spawnSync").mockImplementation((...args) => {
+          if (
+            args[0] === process.execPath &&
+            args[1]?.[0] === "auth" &&
+            args[1]?.[1] === "status" &&
+            args[1]?.[2] === "--json"
+          ) {
+            return {
+              pid: 1,
+              status: 0,
+              signal: null,
+              stdout: '{"loggedIn":true}',
+              stderr: "",
+              output: [null, '{"loggedIn":true}', ""],
+            };
+          }
+          return spawnSync(...args);
+        });
+        syncBuiltinESMExports();
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        await withEnvAsync(
+          {
+            HOME: homeDir,
+            OPENCLAW_HOME: homeDir,
+            OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
+            OPENCLAW_CONFIG_PATH: configPath,
+          },
+          async () => {
+            const { runDoctorLintCli } = await import("./doctor-lint.js");
+            const exitCode = await runDoctorLintCli(createTestRuntime(), {
+              json: true,
+              onlyIds: ["core/doctor/claude-cli"],
+            });
+            const output: unknown = JSON.parse(
+              stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
+            );
+            const broken = scenario === "cyclic project" || scenario === "blocked workspace";
+            expect(exitCode).toBe(broken ? 1 : 0);
+            expect(output).toMatchObject({
+              ok: !broken,
+              checksRun: 1,
+              findings: broken
+                ? [
+                    {
+                      checkId: "core/doctor/claude-cli",
+                      severity: "warning",
+                      message:
+                        scenario === "cyclic project"
+                          ? `Claude project dir: $OPENCLAW_HOME${projectDir.slice(homeDir.length)} is not readable by this user.`
+                          : `Workspace: ${configuredWorkspace} is not readable by this user.`,
+                      fixHint:
+                        scenario === "cyclic project"
+                          ? "- Fix: make the Claude project dir readable, or remove the broken path and let Claude recreate it."
+                          : "- Fix: make the workspace a readable, writable directory for the gateway user.",
+                    },
+                  ]
+                : [],
+            });
+          },
+        );
+      });
+    },
+  );
 });

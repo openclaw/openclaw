@@ -1,5 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubGitHubSkillArchive,
@@ -25,30 +28,26 @@ import {
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
-import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
-  resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
 import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import {
   formatClawHubSkillRef,
   normalizeGitHubCommitSegment,
   normalizeOptionalStringValue,
-  readClawHubSkillsLockfile,
-  writeClawHubSkillOrigin,
-  writeClawHubSkillsLockfile,
+  assertClawHubSkillInstallState,
+  readInstalledClawHubSkillFiles,
+  recordClawHubSkillInstall,
   type ClawHubSkillDownloadedArtifactLock,
-  type ClawHubSkillFileLock,
   type ClawHubSkillVerificationLock,
 } from "./clawhub-store.js";
-import { digestClawHubSkillTree } from "./skill-tree-digest.js";
+import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
 
 export type Logger = {
   info?: (message: string) => void;
@@ -72,7 +71,7 @@ export type ClawHubInstallParams = {
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   clawManaged?: boolean;
-  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
+  expectedClawHubState?: ClawHubSkillFileState | null;
 };
 
 export type InstallClawHubSkillResult =
@@ -84,7 +83,14 @@ export type InstallClawHubSkillResult =
       detail?: ClawHubSkillDetail;
       warning?: string;
     }
-  | { ok: false; error: string; code?: ClawHubTrustErrorCode; version?: string; warning?: string };
+  | {
+      ok: false;
+      error: string;
+      code?: ClawHubTrustErrorCode;
+      version?: string;
+      warning?: string;
+      replacementBlocked?: string;
+    };
 
 export function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string;
 export function normalizeExpectedArtifactIntegrity(expectedIntegrity: undefined): undefined;
@@ -283,19 +289,6 @@ async function fetchInstallVerificationLock(params: {
   }
 }
 
-async function readInstalledSkillFileLock(
-  skillDir: string,
-): Promise<ClawHubSkillFileLock | undefined> {
-  for (const marker of CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS) {
-    try {
-      return { path: marker, sha256: sha256Hex(await fs.readFile(path.join(skillDir, marker))) };
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
 function resolveGitHubSkillSourceDir(repoRoot: string, sourcePath: string): string {
   return path.join(repoRoot, ...normalizeGitHubSourcePath(sourcePath).split("/"));
 }
@@ -312,7 +305,7 @@ async function installArchiveResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
+  expectedClawHubState?: ClawHubSkillFileState | null;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -326,7 +319,7 @@ async function installArchiveResolution(params: {
         extractedRoot: rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
-        onAfterBackup: params.onAfterBackup,
+        expectedClawHubState: params.expectedClawHubState,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -362,7 +355,7 @@ async function installGitHubResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
+  expectedClawHubState?: ClawHubSkillFileState | null;
 }) {
   // Preserve the repository root for sourcePath selection. Root markers validate
   // the selected skill directory afterward, so nested paths are not applied twice.
@@ -377,7 +370,7 @@ async function installGitHubResolution(params: {
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
         mode: params.force ? "update" : "install",
         logger: params.logger,
-        onAfterBackup: params.onAfterBackup,
+        expectedClawHubState: params.expectedClawHubState,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -465,17 +458,18 @@ export async function performClawHubSkillInstall(
 ): Promise<InstallClawHubSkillResult> {
   try {
     normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
-    const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
-    const registry = resolveClawHubBaseUrl(params.baseUrl);
-    if (!params.force && (await pathExists(targetDir))) {
-      return {
-        ok: false,
-        error: `Skill already exists at ${targetDir}. Re-run with force/update.`,
-      };
+    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+    if (access && !access.clawHubSkills) {
+      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
     }
-    // Reject damaged tracking before installing files; reread at the write boundary
-    // so skills tracked during the download keep their metadata.
-    await readClawHubSkillsLockfile(params.workspaceDir);
+    const files = access?.clawHubSkills;
+    const registry = resolveClawHubBaseUrl(params.baseUrl);
+    await (files?.assertClawHubSkillInstallState ?? assertClawHubSkillInstallState)({
+      workspaceDir: params.workspaceDir,
+      slug: params.slug,
+      force: params.force,
+    });
 
     let version: string;
     let detail: ClawHubSkillDetail | undefined;
@@ -593,7 +587,7 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
-              onAfterBackup: params.onAfterBackup,
+              expectedClawHubState: params.expectedClawHubState,
             })
           : await installArchiveResolution({
               workspaceDir: params.workspaceDir,
@@ -611,19 +605,26 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
-              onAfterBackup: params.onAfterBackup,
+              expectedClawHubState: params.expectedClawHubState,
             });
       if (!install.ok) {
-        return { ok: false, error: install.error };
+        return {
+          ok: false,
+          error: install.error,
+          ...("replacementBlocked" in install && typeof install.replacementBlocked === "string"
+            ? { replacementBlocked: install.replacementBlocked }
+            : {}),
+        };
       }
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
-      const fileTreeSha256 = await digestClawHubSkillTree(install.targetDir);
       const verificationVersion =
         resolution?.installKind === "github" && !params.version ? undefined : version;
-      const [skillFile, verification] = await Promise.all([
-        readInstalledSkillFileLock(install.targetDir),
+      const [{ skillFile, fileTreeSha256 }, verification] = await Promise.all([
+        (files?.readInstalledClawHubSkillFiles ?? readInstalledClawHubSkillFiles)({
+          skillDir: install.targetDir,
+        }),
         fetchInstallVerificationLock({
           slug: params.slug,
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
@@ -647,21 +648,18 @@ export async function performClawHubSkillInstall(
         ...(skillFile ? { skillFile } : {}),
         fileTreeSha256,
       };
-      await writeClawHubSkillOrigin(install.targetDir, {
-        version: 1,
-        registry,
-        slug: params.slug,
-        ...trackedMetadata,
-        installedVersion: version,
+      await (files?.recordClawHubSkillInstall ?? recordClawHubSkillInstall)({
+        workspaceDir: params.workspaceDir,
+        skillDir: install.targetDir,
+        origin: {
+          version: 1,
+          registry,
+          slug: params.slug,
+          ...trackedMetadata,
+          installedVersion: version,
+        },
+        verification,
       });
-      const lock = await readClawHubSkillsLockfile(params.workspaceDir);
-      lock.skills[params.slug] = {
-        version,
-        registry,
-        ...trackedMetadata,
-        ...(verification ? { verification } : {}),
-      };
-      await writeClawHubSkillsLockfile(params.workspaceDir, lock);
       if (!params.clawManaged) {
         markClawPackageIndependentlyOwned({
           kind: "skill",

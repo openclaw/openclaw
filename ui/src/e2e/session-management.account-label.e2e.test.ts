@@ -83,7 +83,7 @@ suite.define(() => {
         .toEqual(["Alice · cards"]);
 
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       const field = page
         .locator('openclaw-modal-dialog[label="Rename session"]')
@@ -156,7 +156,7 @@ suite.define(() => {
             await page.locator(".chat-pane__session-title-button").click();
           } else {
             await row.hover();
-            await row.getByRole("button", { name: "Open session menu" }).click();
+            await row.click({ button: "right" });
             await page.getByRole("menuitem", { name: "Rename…" }).click();
           }
         };

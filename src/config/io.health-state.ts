@@ -190,6 +190,7 @@ type ConfigHealthStateStore = Disposable & {
 export function captureConfigHealthStateStore(
   deps: ConfigHealthStateDeps,
   configPath: string,
+  assertAdmissionCurrent?: () => void,
 ): ConfigHealthStateStore {
   const env = resolveConfigHealthStateEnv(deps);
   const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -203,6 +204,7 @@ export function captureConfigHealthStateStore(
     captured = { error };
   }
   const captureScope = (continuation = false): ConfigHealthStateStore => {
+    assertAdmissionCurrent?.();
     const observation: HealthObservation = {
       databasePath,
       configPath,
@@ -215,6 +217,7 @@ export function captureConfigHealthStateStore(
       observations.add(observation);
     }
     const isCurrent = () => {
+      assertAdmissionCurrent?.();
       if ("context" in captured) {
         captured.context.admission.assertCurrent();
       }

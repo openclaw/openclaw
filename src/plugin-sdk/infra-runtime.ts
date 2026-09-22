@@ -278,20 +278,20 @@ export {
 } from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
 export {
-  consumeSelectedSystemEventEntries,
-  consumeSystemEventEntries,
-  drainSystemEventEntries,
-  drainSystemEvents,
-  enqueueSystemEvent,
-  enqueueSystemEventEntry,
-  hasSystemEvents,
-  isSystemEventContextChanged,
-  peekSystemEventEntries,
-  peekSystemEvents,
+  consumeSelectedSystemEventEntriesFromSdk as consumeSelectedSystemEventEntries,
+  consumeSelectedSystemEventEntriesFromSdk as consumeSystemEventEntries,
+  drainSystemEventEntriesFromSdk as drainSystemEventEntries,
+  drainSystemEventsFromSdk as drainSystemEvents,
+  enqueueSystemEventFromSdk as enqueueSystemEvent,
+  enqueueSystemEventEntryFromSdk as enqueueSystemEventEntry,
+  hasSystemEventsFromSdk as hasSystemEvents,
+  isSystemEventContextChangedFromSdk as isSystemEventContextChanged,
+  peekSystemEventEntriesFromSdk as peekSystemEventEntries,
+  peekSystemEventsFromSdk as peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
-} from "../infra/system-events.js";
+} from "../plugins/runtime/system-events.js";
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";

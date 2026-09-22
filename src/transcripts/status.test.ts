@@ -17,16 +17,21 @@ import {
 } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -47,9 +52,13 @@ describe("transcript library capture health", () => {
     };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const configured = [
@@ -80,9 +89,13 @@ describe("transcript library capture health", () => {
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "canonical-captions",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const result = await readTranscriptLibraryStatus(store, {
@@ -120,10 +133,14 @@ describe("transcript library capture health", () => {
       activeSubscription: false,
     });
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
     });
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({

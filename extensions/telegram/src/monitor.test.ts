@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   readOffset: vi.fn(async () => 41 as number | null),
   writeOffset: vi.fn(async (_params: unknown) => {}),
   deleteOffset: vi.fn(async () => {}),
-  startWebhook: vi.fn(async (_params: unknown) => ({ stop: vi.fn() })),
+  startWebhook: vi.fn(async (_params: unknown) => ({ stop: vi.fn(async () => {}) })),
   closeTransport: vi.fn(async () => {}),
 }));
 
@@ -192,13 +192,22 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("waits for account shutdown after starting the webhook", async () => {
+    const finishStop = createDeferred<void>();
+    const stop = vi.fn(() => finishStop.promise);
+    mocks.startWebhook.mockResolvedValueOnce({ stop });
     const settled = vi.fn();
     const monitor = startMonitor({ useWebhook: true, webhookSecret: "test-secret" });
     void monitor.task.then(settled);
     await vi.waitFor(() => expect(mocks.startWebhook).toHaveBeenCalledOnce());
     expect(settled).not.toHaveBeenCalled();
     monitor.abort.abort();
-    await monitor.task;
+    try {
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      finishStop.resolve();
+      await monitor.task;
+    }
     expect(settled).toHaveBeenCalledOnce();
   });
 });

@@ -1,16 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  allowsPluginModelNormalization,
-  findConfiguredModelProvider,
-} from "../configured-provider-model.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../model-ref-shared.js";
+import { allowsPluginModelNormalization } from "../configured-provider-model.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   buildModelAliasIndex,
   normalizeModelRef,
-  normalizeProviderId,
   resolveModelRefFromString,
 } from "../model-selection.js";
+import { normalizeProviderModelIdWithRuntime } from "../provider-model-normalization.runtime.js";
 
 export function normalizeAgentCommandModelRef(
   cfg: OpenClawConfig,
@@ -22,24 +18,6 @@ export function normalizeAgentCommandModelRef(
     ...modelManifestContext,
     allowPluginNormalization: allowsPluginModelNormalization({ cfg, provider, model }),
   });
-}
-
-export function normalizeAgentCommandDefaultModelRef(
-  cfg: OpenClawConfig,
-  provider: string,
-  model: string,
-  modelManifestContext: ModelManifestNormalizationContext,
-) {
-  const normalizedProvider = normalizeProviderId(provider);
-  if (findConfiguredModelProvider(cfg, normalizedProvider)) {
-    return {
-      provider: normalizedProvider,
-      model: normalizeConfiguredProviderCatalogModelId(normalizedProvider, model, {
-        manifestPlugins: modelManifestContext.manifestPlugins,
-      }),
-    };
-  }
-  return normalizeAgentCommandModelRef(cfg, provider, model, modelManifestContext);
 }
 
 export function parseAgentCommandModelRef(
@@ -64,7 +42,16 @@ export function parseAgentCommandModelRef(
     ...modelManifestContext,
     allowPluginNormalization: false,
   })?.ref;
-  return parsed
-    ? normalizeAgentCommandModelRef(cfg, parsed.provider, parsed.model, modelManifestContext)
-    : null;
+  if (!parsed || !allowsPluginModelNormalization({ cfg, ...parsed })) {
+    return parsed ?? null;
+  }
+  // Parsing already applied manifest aliases; the runtime hook only refines that identity.
+  return {
+    provider: parsed.provider,
+    model:
+      normalizeProviderModelIdWithRuntime({
+        provider: parsed.provider,
+        context: { provider: parsed.provider, modelId: parsed.model },
+      }) ?? parsed.model,
+  };
 }

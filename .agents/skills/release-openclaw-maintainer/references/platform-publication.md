@@ -64,12 +64,36 @@ published bytes. Inspect an unconfirmed request before redispatching it.
 The stable updater endpoint stays at `releases/latest/download/latest.json`.
 Before a new latest release becomes visible, the publisher preserves the
 previous usable Linux manifest with its original version, signature, and asset
-URL. Linux publication then advances the current latest release's manifest
-without replacing a newer Linux version. Finalization and manifest writes share
-the publication queue; Linux builds use a separate queue. Verify the endpoint
-after publication, including when a newer Gateway release appeared during the
-Linux build. Native publication failures remain independent of npm and GitHub
-activation.
+URL. One post-build publisher writes immutable `OpenClaw-<version>-linux.json`,
+advances the fixed `linux-stable` canonical manifest only forward, and mirrors
+it to the current latest release. Asset completeness and unfinished channel
+publication are separate: retrying complete public assets verifies and reuses
+their bytes and identities, then completes only the remaining metadata work.
+
+An authorized Linux publication creates the `linux-stable` control release as
+prerelease/non-latest when absent; ordinary PR validation never initializes it.
+This tooling does not change shipped updater or
+download URLs. Keep client cutover and signed installed-client migration under
+separate approval; never claim local helper tests or unsigned packages prove it.
+
+Core finalization does not depend on canonical Linux metadata. After successful
+finalization/readback, a bounded detached mirror-only request uses the original
+validated publisher identity. It does not wait for the metadata queue in the
+core workflow. Dispatch acceptance is not success: cancellation, queue overflow,
+timeout, and readback failures must remain visibly degraded. The mirror and
+post-build publisher share serialization; Linux builds use a separate queue.
+Each write revalidates the active executing writer and original parent attempt
+after preparatory reads, including after a deletion and before its replacement.
+
+Verify both canonical and legacy endpoints after publication, including when a
+newer Gateway release appeared during the Linux build. If canonical metadata is
+missing after an interrupted deletion, normal publication refuses recovery.
+Use the explicit owner reconciliation procedure in
+`docs/reference/RELEASING.md` under **Linux companion publication**: preserve the
+last verified Linux floor and all intervening publication evidence, exclude
+other writers, revalidate release/source/inventory and immutable bytes, and
+read back both endpoints. Version/hash inputs or current Gateway `latest` alone
+cannot establish forward order. Stop on ambiguous history.
 
 ## Windows Hub
 

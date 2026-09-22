@@ -157,7 +157,7 @@ it.each([
       copiedNewOwner,
     }),
   );
-  expect(await fs.readFile(shared)).toEqual(sourceDatabase);
+  expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
   if (change === "added file") {
     expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
   } else {

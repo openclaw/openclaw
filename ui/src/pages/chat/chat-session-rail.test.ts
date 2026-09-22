@@ -210,8 +210,12 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.hydrate("one", load);
     await threads.hydrate("two", load);
 
-    expect(threads.view("one").exchanges[0]?.answer).toBe("Answer for one");
-    expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Question for one", status: "answered", answer: "Answer for one", ts: 1 },
+    ]);
+    expect(threads.view("two").turns).toMatchObject([
+      { question: "Question for two", status: "answered", answer: "Answer for two", ts: 2 },
+    ]);
   });
 
   it("records hydration until the authoritative companion state settles", async () => {
@@ -253,16 +257,18 @@ describe("ChatSessionCompanionThreads", () => {
         }),
     );
 
-    expect(threads.view("one").pendingQuestion).toBe("Why is it rerunning that test?");
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Why is it rerunning that test?", status: "pending" },
+    ]);
     expect(threads.view("one").draft).toBe("");
     resolveAnswer({ answer: "It is verifying the focused regression.", ts: 42 });
     await pending;
 
     expect(threads.view("one")).toMatchObject({
-      pendingQuestion: null,
-      exchanges: [
+      turns: [
         {
           question: "Why is it rerunning that test?",
+          status: "answered",
           answer: "It is verifying the focused regression.",
           ts: 42,
         },
@@ -279,11 +285,9 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "Is it stuck?",
-      hint: "busy",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Is it stuck?", status: "failed", hint: "busy", retryable: true },
+    ]);
   });
 
   it("preserves a context failure for an explicit retry", async () => {
@@ -295,18 +299,13 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      pendingQuestion: null,
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
+    ]);
     await threads.hydrate("one", async () => ({ exchanges: [] }));
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
+    ]);
   });
 
   it.each([
@@ -322,10 +321,14 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      hint: expected.hint,
-      retryable: expected.retryable,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      {
+        question: "What changed?",
+        status: "failed",
+        hint: expected.hint,
+        retryable: expected.retryable,
+      },
+    ]);
   });
 
   it("hydrates only a newly committed repeated question after a lost response", async () => {
@@ -336,20 +339,18 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.submit("one", "What changed?", async () => {
       throw new Error("socket closed");
     });
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
 
     await threads.hydrate("one", async () => ({
       exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
     }));
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
 
     await threads.hydrate("one", async () => ({
       exchanges: [
@@ -358,15 +359,10 @@ describe("ChatSessionCompanionThreads", () => {
       ],
     }));
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: null,
-      hint: null,
-      retryable: false,
-      exchanges: [
-        { question: "What changed?", answer: "Earlier answer.", ts: 1 },
-        { question: "What changed?", answer: "The fix committed.", ts: 4 },
-      ],
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "answered", answer: "The fix committed.", ts: 4 },
+    ]);
   });
 
   it("clears local state only after the reset RPC succeeds", async () => {
@@ -379,10 +375,10 @@ describe("ChatSessionCompanionThreads", () => {
         throw new Error("offline");
       }),
     ).rejects.toThrow("offline");
-    expect(threads.view("one").exchanges).toHaveLength(1);
+    expect(threads.view("one").turns).toHaveLength(1);
 
     await threads.reset("one", async () => ({ ok: true as const }));
-    expect(threads.view("one").exchanges).toEqual([]);
+    expect(threads.view("one").turns).toMatchObject([]);
   });
 
   it("retires one session without clearing unrelated companion state", () => {
@@ -407,7 +403,7 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one")).toMatchObject({
       draft: "unsent local draft",
-      exchanges: [],
+      turns: [],
     });
   });
 
@@ -435,11 +431,7 @@ describe("ChatSessionCompanionThreads", () => {
       }
       await pending;
 
-      expect(threads.view("one")).toMatchObject({
-        exchanges: [],
-        failedQuestion: null,
-        pendingQuestion: null,
-      });
+      expect(threads.view("one").turns).toMatchObject([]);
     },
   );
 });
@@ -491,17 +483,15 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       onSubmit,
       companion: {
-        exchanges: [
+        turns: [
           {
             question: "What changed?",
+            status: "answered",
             answer: "**Only** the UI. <script>bad()</script>",
             ts: 300_000,
           },
         ],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "What should I verify?",
       },
     });
@@ -518,31 +508,109 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       onSubmit,
       companion: {
-        exchanges: [],
+        turns: [{ question: "What changed?", status: "pending" }],
         loading: false,
-        pendingQuestion: "What changed?",
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
     expect(element.textContent).toContain("Answering from this session…");
 
     element.companion = {
-      exchanges: [],
+      turns: [
+        {
+          question: "What changed?",
+          status: "failed",
+          hint: "history-unavailable",
+          retryable: true,
+        },
+      ],
       loading: false,
-      pendingQuestion: null,
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      retryable: true,
       draft: "",
     };
     await element.updateComplete;
     expect(element.textContent).toContain("Couldn't load this session's history.");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
     (element.querySelector(".chat-session-rail__retry") as HTMLButtonElement).click();
-    expect(onSubmit).toHaveBeenCalledWith("What changed?");
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(element.companion.turns[0]);
+    expect(onSubmit.mock.calls[0]?.[0]).toBe(element.companion.turns[0]);
   });
+
+  it.each(["answered", "failed"] as const)(
+    "keeps a follow-up editable while answering and retains it when %s",
+    async (outcome) => {
+      const threads = new ChatSessionCompanionThreads(() => {
+        element.companion = { ...threads.view("one") };
+      });
+      const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      ask.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+      let submission: Promise<void> | undefined;
+      const element = await mount({
+        companion: threads.view("one"),
+        onDraftChange: (draft) => threads.setDraft("one", draft),
+        onSubmit: (question) => {
+          submission = threads.submit("one", question, ask);
+        },
+      });
+      const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
+      const send = element.querySelector<HTMLButtonElement>(".chat-send-btn")!;
+      const type = async (draft: string) => {
+        textarea.value = draft;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        await element.updateComplete;
+      };
+      const enter = () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      expect(send.disabled).toBe(true);
+      await type("What changed?");
+      expect(send.disabled).toBe(false);
+      enter();
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe("Ask a question");
+      await type("What should I verify next?");
+      expect(send.disabled).toBe(true);
+      enter();
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(textarea.value).toBe("What should I verify next?");
+      if (outcome === "answered") {
+        resolveAnswer({ answer: "The composer changed.", ts: 42 });
+      } else {
+        rejectAnswer(new Error("Side chat timed out."));
+      }
+      await submission;
+      await element.updateComplete;
+      expect(threads.view("one").turns[0]?.status).toBe(outcome);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+      element.connected = false;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(true);
+      expect(send.disabled).toBe(true);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      element.connected = true;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+    },
+  );
 
   it("freezes terminal relative time from digest.updatedAt", async () => {
     const element = await mount({
@@ -550,11 +618,8 @@ describe("ChatSessionRailElement", () => {
       running: false,
       activeRunId: null,
       companion: {
-        exchanges: [{ question: "Q", answer: "A", ts: 1 }],
+        turns: [{ question: "Q", status: "answered", answer: "A", ts: 1 }],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
@@ -578,11 +643,8 @@ describe("ChatSessionRailElement", () => {
   it("shows the shared chat skeleton instead of the empty state during hydration", async () => {
     const element = await mount({
       companion: {
-        exchanges: [],
+        turns: [],
         loading: true,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
@@ -683,11 +745,15 @@ describe("ChatSessionRailElement", () => {
   it("replaces the starters once the thread has an exchange", async () => {
     const element = await mount({
       companion: {
-        exchanges: [{ question: "What changed?", answer: "The rail toggle.", ts: 300_000 }],
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "The rail toggle.",
+            ts: 300_000,
+          },
+        ],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
@@ -705,11 +771,8 @@ describe("ChatSessionRailElement", () => {
       running: false,
       activeRunId: null,
       companion: {
-        exchanges: [],
+        turns: [],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "What changed?",
       },
     });

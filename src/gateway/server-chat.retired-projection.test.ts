@@ -34,7 +34,6 @@ vi.mock("./session-utils.js", async () => {
         entry: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
       };
     },
-    loadGatewaySessionLifecycleSnapshot: () => ({ row: null }),
   };
 });
 

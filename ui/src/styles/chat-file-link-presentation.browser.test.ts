@@ -35,6 +35,7 @@ const CHIP_PROPERTIES = [
 function readChatCss(): string {
   return [
     "ui/src/styles/base.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/text.css",
     "ui/src/styles/sidebar-markdown.css",
   ]

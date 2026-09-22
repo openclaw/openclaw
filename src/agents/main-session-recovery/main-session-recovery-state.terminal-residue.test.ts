@@ -8,6 +8,7 @@ import type {
 } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
@@ -147,6 +148,7 @@ describe("main session recovery terminal-only residue", () => {
       expect(entry?.mainRestartRecovery).toBeUndefined();
       expect(entry?.restartRecoveryRuns).toBeUndefined();
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
@@ -199,6 +201,7 @@ describe("main session recovery terminal-only residue", () => {
         restartRecoveryRuns: [{ runId: "live-run" }],
       });
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });

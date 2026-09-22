@@ -329,6 +329,8 @@ export type ProviderPlugin = {
    *
    * Opt in only when the provider must enforce the same wire contract outside
    * the embedded agent runtime.
+   * The factory runs once per prepared model; its returned stream retains
+   * wrapper-local state and reads per-request options on each invocation.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   /** Cheap, idempotent provider repair after local-service health and before each request. */

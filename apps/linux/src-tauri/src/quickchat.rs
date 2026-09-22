@@ -2,7 +2,7 @@ use crate::gateway_ws::{
     AgentsListResult, ChatHistoryPage, ChatSendResult, GatewayClient, GatewayGeneration,
 };
 use crate::quickchat_widgets::QuickChatWidgetState;
-use crate::{tray, DesktopState};
+use crate::DesktopState;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -21,11 +21,14 @@ use uuid::Uuid;
 pub const QUICKCHAT_LABEL: &str = "quickchat";
 // Alt+Space is GNOME's window-menu grab; a second X11 grab for it always fails.
 pub const QUICKCHAT_SHORTCUT: &str = "CmdOrCtrl+Shift+Space";
+// The focused dashboard owns this chord; a global Quick Chat binding would steal it.
+const NEW_SESSION_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
 const QUICKCHAT_SHORTCUT_FILE: &str = "quickchat-shortcut";
 const QUICKCHAT_SHORTCUT_DISABLED_MARKER: &str = "quickchat-shortcut-disabled";
-const QUICKCHAT_WIDTH: f64 = 640.0;
-const QUICKCHAT_HEIGHT: f64 = 92.0;
-const QUICKCHAT_EXPANDED_HEIGHT: f64 = 360.0;
+pub(crate) const QUICKCHAT_WIDTH: f64 = 640.0;
+pub(crate) const QUICKCHAT_COMPACT_WINDOW_HEIGHT: f64 = 152.0;
+pub(crate) const QUICKCHAT_TEXT_WINDOW_HEIGHT: f64 = 520.0;
+pub(crate) const QUICKCHAT_WIDGET_WINDOW_HEIGHT: f64 = 560.0;
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const RECOVERY_MAX_BYTES: usize = 256 * 1024;
 
@@ -788,11 +791,11 @@ fn parse_shortcut(accelerator: &str) -> Result<Shortcut, String> {
 
 fn validate_quickchat_shortcut(accelerator: &str) -> Result<Shortcut, String> {
     let shortcut = parse_shortcut(accelerator)?;
-    let dashboard_shortcut = parse_shortcut(tray::GLOBAL_SHORTCUT)
-        .expect("the built-in dashboard shortcut must be valid");
-    if shortcut == dashboard_shortcut {
+    let new_session_shortcut = parse_shortcut(NEW_SESSION_SHORTCUT)
+        .expect("the built-in New Session shortcut must be valid");
+    if shortcut == new_session_shortcut {
         return Err(format!(
-            "Shortcut \"{accelerator}\" is reserved for Open Dashboard."
+            "Shortcut \"{accelerator}\" is reserved for New Session in the focused dashboard."
         ));
     }
     Ok(shortcut)
@@ -932,7 +935,7 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<Window, String> {
         WebviewUrl::App("quickchat.html".into()),
     )
     .title("Quick Chat")
-    .inner_size(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT)
+    .inner_size(QUICKCHAT_WIDTH, QUICKCHAT_COMPACT_WINDOW_HEIGHT)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
@@ -1019,7 +1022,10 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     let window = ensure_quickchat_window(app)?;
     app.state::<GatewayClient>().resume_paused_reconnect();
     window
-        .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
+        .set_size(LogicalSize::new(
+            QUICKCHAT_WIDTH,
+            QUICKCHAT_COMPACT_WINDOW_HEIGHT,
+        ))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
     position_quickchat(app, &window)?;
     app.state::<QuickChatState>()
@@ -1180,9 +1186,9 @@ pub fn quickchat_set_expanded(webview: Webview, expanded: bool) -> Result<(), St
     require_quickchat_webview(&webview)?;
     let window = webview.window();
     let height = if expanded {
-        QUICKCHAT_EXPANDED_HEIGHT
+        QUICKCHAT_TEXT_WINDOW_HEIGHT
     } else {
-        QUICKCHAT_HEIGHT
+        QUICKCHAT_COMPACT_WINDOW_HEIGHT
     };
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, height))
@@ -1257,10 +1263,17 @@ pub async fn quickchat_ready(
 }
 
 #[tauri::command]
-pub fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
+pub async fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
     require_quickchat_webview(&webview)?;
-    tray::open_dashboard(&app);
-    Ok(())
+    let handle = app.clone();
+    let (reply, result) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = reply.send(crate::gateway_windows::show_primary(&handle));
+    })
+    .map_err(|error| error.to_string())?;
+    result
+        .await
+        .map_err(|_| "The Primary Gateway window closed.".to_string())?
 }
 
 #[cfg(test)]
@@ -2313,11 +2326,11 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_shortcut_preference_falls_back_to_default() {
+    fn new_session_shortcut_preference_falls_back_to_default() {
         let directory = test_directory("shortcut-reserved");
         fs::create_dir_all(&directory).expect("create test directory");
         let path = directory.join(QUICKCHAT_SHORTCUT_FILE);
-        fs::write(&path, tray::GLOBAL_SHORTCUT).expect("write reserved shortcut");
+        fs::write(&path, "CmdOrCtrl+Shift+O").expect("write reserved shortcut");
 
         let loaded = shortcut_preference_from_path(&path);
         assert_eq!(loaded.accelerator, QUICKCHAT_SHORTCUT);

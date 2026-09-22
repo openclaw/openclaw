@@ -206,7 +206,11 @@ impl BrowserHost {
         let state = json!({ "revision": self.revision, "tabs": self.tabs });
         if let (Some(view), Some(script)) = (
             app.get_webview("main"),
-            crate::native_browser_bridge::publication_script(app, &state.to_string()),
+            crate::native_browser_bridge::publication_script(
+                app,
+                &state.to_string(),
+                crate::native_browser_bridge::Publication::Browser,
+            ),
         ) {
             let _ = view.eval(script);
         }
@@ -486,7 +490,10 @@ impl NativeBrowserState {
             let failure_owner = self.clone();
             let failure_app = app.clone();
             let failure_label = view.label().to_string();
-            if let Err(error) = platform::observe_navigation_failure(&view, move || {
+            if let Err(error) = platform::observe_navigation_events(&view, move |navigation| {
+                if navigation != platform::NavigationEvent::Failed {
+                    return;
+                }
                 let event = navigation_epoch.load(Ordering::SeqCst);
                 failed_epoch.store(event, Ordering::SeqCst);
                 let clock = navigation_epoch.clone();

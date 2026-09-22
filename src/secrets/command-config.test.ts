@@ -60,6 +60,28 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
     ]);
   });
 
+  it("reports unresolved refs under a bracket-quoted provider key", () => {
+    const config = {
+      talk: { providers: { "acme.speech": { apiKey: "${TALK_API_KEY}" } } },
+    } as OpenClawConfig;
+    const read = resolveConfigForRead(config, {});
+    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
+    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+
+    const result = analyzeCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig: sourceConfig,
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+    });
+
+    expect(result.unresolved).toEqual([
+      {
+        path: 'talk.providers["acme.speech"].apiKey',
+        pathSegments: ["talk", "providers", "acme.speech", "apiKey"],
+      },
+    ]);
+  });
+
   it.each([
     { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
     { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },

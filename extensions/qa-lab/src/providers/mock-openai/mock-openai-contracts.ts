@@ -7,7 +7,11 @@ import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
-export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockOpenAiRequestKind =
+  | "agent-initial"
+  | "compaction-summary"
+  | "tool-continuation"
+  | "activity-summary";
 export type MockCompactionSummaryFaultMode =
   | "none"
   | "empty-output-once"
@@ -26,6 +30,7 @@ export type QaMockProviderFailure = {
   type: string;
   code?: string;
   message: string;
+  retryAfterSeconds?: number;
   presentation?: "anthropic-thinking";
 };
 
@@ -198,6 +203,8 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   return "unknown";
 }
 
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
+
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
   raw: string;
@@ -208,6 +215,7 @@ export type MockOpenAiRequestSnapshot = {
   toolOutput: string;
   model: string;
   providerVariant: MockOpenAiProviderVariant;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
@@ -224,6 +232,20 @@ export type MockOpenAiRequestSnapshot = {
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
+
+/** Snapshot fields known before the mock decides an outcome or plans a tool. */
+export type MockOpenAiRequestSnapshotBase = Omit<
+  MockOpenAiRequestSnapshotInput,
+  | "outcome"
+  | "errorCode"
+  | "plannedToolCallId"
+  | "plannedToolItemId"
+  | "plannedToolName"
+  | "plannedWireToolName"
+  | "plannedToolArgs"
+  | "toolOutputCallId"
+  | "toolOutputStructuredError"
+>;
 
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.

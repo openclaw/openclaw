@@ -1,6 +1,7 @@
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import type { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import {
   getActiveSkillMenuOptionId,
@@ -40,6 +41,7 @@ export function resolveComposerMenus(
   skill: SkillMenuState,
   slash: SlashMenuState,
   mention: HumanMentionMenu,
+  emoji: ComposerEmojiMenu,
 ) {
   const skillMenuVisible = commandsVisible && isSkillMenuVisible(skill);
   const slashMenuVisible = commandsVisible && isSlashMenuVisible(slash);
@@ -47,24 +49,31 @@ export function resolveComposerMenus(
     skillMenuVisible,
     slashMenuVisible,
     mentionMenuVisible: mention.open,
-    menuVisible: skillMenuVisible || slashMenuVisible || mention.open,
-    activeMenuOptionId: mention.open
-      ? mention.activeId(paneId)
-      : skillMenuVisible
-        ? getActiveSkillMenuOptionId(skill, paneId)
-        : getActiveSlashMenuOptionId(slash, paneId),
-    activeMenuOptionLabel: mention.open
-      ? mention.activeLabel()
-      : skillMenuVisible
-        ? getActiveSkillMenuOptionLabel(skill)
-        : getActiveSlashMenuOptionLabel(slash),
+    emojiMenuVisible: emoji.open,
+    menuVisible: skillMenuVisible || slashMenuVisible || mention.open || emoji.open,
+    activeMenuOptionId: emoji.open
+      ? emoji.activeId(paneId)
+      : mention.open
+        ? mention.activeId(paneId)
+        : skillMenuVisible
+          ? getActiveSkillMenuOptionId(skill, paneId)
+          : getActiveSlashMenuOptionId(slash, paneId),
+    activeMenuOptionLabel: emoji.open
+      ? emoji.activeLabel()
+      : mention.open
+        ? mention.activeLabel()
+        : skillMenuVisible
+          ? getActiveSkillMenuOptionLabel(skill)
+          : getActiveSlashMenuOptionLabel(slash),
     menuListboxId: paneDomId(
       paneId,
-      mention.open
-        ? "mention-menu-listbox"
-        : skillMenuVisible
-          ? "skill-menu-listbox"
-          : "slash-menu-listbox",
+      emoji.open
+        ? "emoji-menu-listbox"
+        : mention.open
+          ? "mention-menu-listbox"
+          : skillMenuVisible
+            ? "skill-menu-listbox"
+            : "slash-menu-listbox",
     ),
   };
 }

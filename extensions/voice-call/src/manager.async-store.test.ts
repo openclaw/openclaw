@@ -2,12 +2,13 @@ import fs from "node:fs";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
@@ -47,7 +48,7 @@ async function withDelayedStore(
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => storePath,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = createPluginStateKeyedStoreForTests<T>("voice-call", options);
         return {
           ...store,
@@ -115,6 +116,7 @@ async function withDelayedStore(
     await manager.stop();
     await Promise.allSettled(writes);
     persistence.mockRestore();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(storePath, { recursive: true, force: true });
   }

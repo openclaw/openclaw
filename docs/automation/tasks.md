@@ -141,7 +141,7 @@ stateDiagram-v2
 | Status      | What it means                                                               |
 | ----------- | --------------------------------------------------------------------------- |
 | `queued`    | Created, waiting for the agent to start                                     |
-| `running`   | Agent turn is actively executing                                            |
+| `running`   | Started, with no terminal lifecycle outcome recorded                        |
 | `succeeded` | Completed successfully                                                      |
 | `failed`    | Completed with an error                                                     |
 | `timed_out` | Exceeded the configured timeout                                             |
@@ -149,6 +149,12 @@ stateDiagram-v2
 | `lost`      | The runtime lost authoritative backing state after a 5-minute grace period  |
 
 Transitions happen automatically - agent run lifecycle events (start, end, error) update the task status; you do not manage it manually.
+
+Stored task status and live execution observation are separate. A task can retain
+`running` status while its execution observation is `waiting` or `unknown`.
+`unknown` means current execution cannot be observed; it does not mean the task
+failed or stopped. A retained subagent registration alone does not prove that
+its execution is running.
 
 Execution and result delivery are separate. A subagent task can remain
 `succeeded` while its `deliveryStatus` is `session_queued` or `failed`. The
@@ -163,6 +169,8 @@ Blocked media-generation tasks retain bounded attachment references in the task
 result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
+
+Distinct ACP executions receive separate task and flow IDs even when they share a request ID. Repeated status mirrors of the same execution keep its original task ID. A run-ID lookup selects the latest execution within that ACP session; an exact task-ID lookup still returns the older task and its terminal result. Cancelling one execution does not cancel a queued successor with the same request ID.
 
 `lost` is runtime-aware:
 
@@ -186,6 +194,11 @@ with that requester; another agent sharing the `global` session key cannot consu
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
 session. Session-queued notifications do not include this link.
+
+Failure, lost-task, and blocked-task notifications show a sanitized diagnostic
+preview of at most 120 characters. Full diagnostics remain in the task record;
+use `openclaw tasks show <lookup>` to inspect them. Successful completion summaries
+are not shortened by this diagnostic preview limit.
 
 Durable subagent completion handoffs retry for up to 30 minutes with capped
 exponential backoff. A queued handoff is not reported as delivered until the
@@ -217,6 +230,12 @@ Change the policy while a task is running:
 openclaw tasks notify <lookup> state_changes
 ```
 
+These policies control task notifications. A Telegram progress card that the
+requester already displayed can continue showing accepted `done_only` children
+after yield without creating another message. `silent` children remain excluded,
+and channel visibility settings still apply. See
+[Progress after yield](/concepts/subagent-yield-handoff#progress-after-yield).
+
 ## CLI reference
 
 ### tasks list
@@ -242,6 +261,8 @@ openclaw tasks cancel <lookup>
 ```
 
 For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
+
+Native harness subagents, such as Codex children, are observation-only task records. Cancellation is refused and leaves their task state unchanged. Use the parent session's native collaboration tools to stop them; their harness owns execution and reports the result.
 
 Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. On restore, a running task with a recorded local execution process that has exited is marked `cancelled`, with the interruption reason retained. It no longer delays the next Gateway drain. Settling an older task preserves the result of a newer task linked to the same flow. A live matching process remains running. Tasks without a recorded process identity retain normal maintenance grace, including 30 minutes for childless native subagents. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot infer Gateway liveness from an empty local run registry. See [task maintenance](/cli/tasks#maintenance).
 
@@ -345,13 +366,23 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 
 ### Control UI
 
-The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying.
+The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying. Final delivery and outcome corrections update the live task without counting delivery as additional execution time.
 
-Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
+Chat panes also have a collapsible **Background tasks** rail scoped to the current conversation, with active work, stop controls, and a finished section. Open it from the pane's **Tasks** panel action. Subagent activity below the parent conversation also opens the selected child's details.
+
+The compact subagent list below the conversation keeps queued, running, and waiting work in creation order. Completed children leave this list as soon as their task completion is published, including native harness subagents, without reloading the page. The list shows up to five ongoing children and a count of additional ongoing work. Open **Tasks** for the full active list and up to 50 recent finished tasks. Progress and result-delivery updates do not change the order.
 
 Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header. Session label and category edits preserve task pagination when session access stays the same. Sharing, role, and session identity changes can still require a fresh page.
 
-Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
+Select a task to open its **Review** panel beside the parent conversation; the **Tasks** tab keeps the list available. The inspector shows the child's transcript when available, or its complete sanitized input and bounded output, plus timing and tool usage. Background command details preserve the command’s line breaks and arguments; compact task-list labels do not replace the stored command. Their status follows the live process, including quiet commands, and activity updates refresh the open inspector. Current tool activity and the age of the last activity appear separately from the last completed tool. Explicit waits identify children, external results, agent messages, approval, or user input; unavailable runtime detail stays unknown.
+
+CLI-backed agent tasks use their live run to show **Running** or **Queued** when activity events are missing. The inspector updates automatically as run ownership and queue status change.
+
+Settled execution stays **Finished** while the task owner records its final outcome. Execution completion does not imply success; the task's final status still distinguishes completion, failure, cancellation, and timeout.
+
+Execution and delivery remain separate in the inspector. **Result ready** with **Queued for parent** means the child finished but its result has not been delivered. **Delivered to parent** confirms that handoff. Failed or dismissed delivery keeps the execution result visible, and cancellation and timeout retain their own labels. Stop controls address the selected active task through its execution owner. Child conversations remain view-only with **Open parent session** navigation.
+
+On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use Running and Finished grouping and open task details on selection.
 
 ## Status integration (task pressure)
 
@@ -377,7 +408,11 @@ Task records and delivery state persist in the shared OpenClaw SQLite state data
 
 Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) elsewhere; the shared database path moves with it.
 
-The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts. WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
+The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts.
+
+After refreshing an invalidated registry projection, agent events with no matching task skip task-store mutation admission. Streaming activity stays in a transient in-memory overlay, with display updates coalesced to once per second and yielded-subagent progress to 15-second batches. Activity-only durable liveness updates occur at most once per minute; lifecycle transitions, errors, and tool-start counters still persist immediately through the same registry owner. Transient activity is not restored after a restart.
+
+WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
 The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. If either sidecar is still present under the state root, `openclaw doctor` imports its rows into the shared database. Installs from `v2026.6.1` onward never create these files.
 

@@ -76,7 +76,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
-      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       getSessionBindingService: () => currentSessionBindingService,
       resolveConversationDeliveryTarget: (params) => currentDeliveryTargetResolver(params),

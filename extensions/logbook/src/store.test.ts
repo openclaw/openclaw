@@ -11,12 +11,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 import type { LogbookCardDraft } from "./types.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const DAY = "2026-07-03";
 
 function queryPlanDetails(database: DatabaseSync, sql: string): string[] {

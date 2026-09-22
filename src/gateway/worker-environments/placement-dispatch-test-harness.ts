@@ -144,7 +144,8 @@ export function createHarness(
     getWorkspaceReconciliationPlacement: (owner) =>
       placementStore.getWorkspaceReconciliationPlacement(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
-    listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
+    listPendingWorkspaceResults: (sessionId) =>
+      placementStore.listPendingWorkspaceResults(sessionId),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
     recordStagedWorkspaceResult: (claim, ref, repositoryWorkspaceId) =>
@@ -208,7 +209,7 @@ export function createHarness(
       return placementStore.fail(params);
     },
     list: () => placementStore.list(),
-    listForReconcile: () => placementStore.listForReconcile(),
+    listForReconcile: (sessionKey) => placementStore.listForReconcile(sessionKey),
     startDrain: (params) => {
       log.push("placement:draining");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
@@ -412,14 +413,12 @@ export function createHarness(
       preparedManifestRef: MANIFEST_REF,
     })),
     schedulePreparedRefill: vi.fn(),
-    create: vi.fn(async () => {
-      fail("create");
-      return currentEnvironment ?? ready;
-    }),
-    createFromProfileSnapshot: vi.fn(async () => {
-      fail("create");
-      return ready;
-    }),
+    createWithRequest: vi.fn<WorkerDispatchEnvironmentService["createWithRequest"]>(
+      async ({ inheritedProfile }) => {
+        fail("create");
+        return inheritedProfile ? ready : (currentEnvironment ?? ready);
+      },
+    ),
     get: vi.fn(() => currentEnvironment),
     attachSession: vi.fn(async ({ environmentId: attachedEnvironmentId }) => {
       fail("attach");
@@ -449,6 +448,7 @@ export function createHarness(
           setEnvironment({
             ...attached,
             state: options.destroyFailureState,
+            attachedSessionIds: [],
             tunnelStatus: "stopped",
           });
         }

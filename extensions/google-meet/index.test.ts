@@ -15,7 +15,6 @@ import {
   createNodeMeetingRealtimeAudioTransport,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
-  type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type {
@@ -24,7 +23,8 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Google Meet tests cover index plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
@@ -40,6 +40,7 @@ import {
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import {
+  createTestMeetRealtimeAudioTransport,
   meetAudioBridge,
   meetBrowserState,
   meetRuntime,
@@ -64,6 +65,23 @@ import {
 } from "./src/transports/twilio.js";
 import { testing as googleMeetPluginTesting } from "./test-api.js";
 
+let meetingTestState: ReturnType<typeof useMeetingTestState>;
+
+vi.mock("./src/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/runtime.js")>();
+  return {
+    ...actual,
+    GoogleMeetRuntime: class extends actual.GoogleMeetRuntime {
+      constructor(...args: ConstructorParameters<typeof actual.GoogleMeetRuntime>) {
+        super(...args);
+        meetingTestState.track(this, {
+          readWarnings: () => vi.mocked(args[0].logger.warn).mock.calls,
+        });
+      }
+    },
+  };
+});
+
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
 };
@@ -80,31 +98,6 @@ function createIsolatedTestDir(prefix: string): string {
 type MeetRealtimeAudioSpawn = NonNullable<
   Parameters<typeof createLocalMeetingRealtimeAudioTransport>[0]["spawn"]
 >;
-
-function createTestMeetRealtimeAudioTransport() {
-  let inputHandler: ((audio: Buffer) => void) | undefined;
-  const writeOutput = vi.fn(async () => {});
-  const transport: MeetingRealtimeAudioTransport = {
-    onFatal: vi.fn(),
-    startInput: vi.fn((handler) => {
-      inputHandler = handler;
-    }),
-    stop: vi.fn(async () => {}),
-    writeOutput,
-    clearOutput: vi.fn(async () => {}),
-    dispose: vi.fn(async () => {}),
-  };
-  return {
-    transport,
-    writeOutput,
-    deliverInput: (audio: Buffer) => {
-      if (!inputHandler) {
-        throw new Error("Expected Google Meet realtime input to be started");
-      }
-      inputHandler(audio);
-    },
-  };
-}
 
 type TestMeetVoiceBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 type TestMeetTranscriptionRequest = Parameters<
@@ -1006,6 +999,8 @@ describe("google-meet plugin", () => {
     vi.doUnmock("./src/voice-call-gateway.js");
     vi.resetModules();
   });
+
+  meetingTestState = useMeetingTestState(createOpenClawTestState);
 
   it("defaults to chrome agent mode with safe read-only tools", () => {
     const config = withPlatform("darwin", () => resolveGoogleMeetConfig({}));
@@ -6040,7 +6035,7 @@ describe("google-meet plugin", () => {
   });
 
   it("still leaves the browser when the Chrome bridge stop fails", async () => {
-    const stop = vi.fn(async () => {
+    const stop = vi.fn(async (): Promise<void> => {
       throw new Error("bridge stop failed");
     });
     const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
@@ -6069,6 +6064,7 @@ describe("google-meet plugin", () => {
       });
       expect(joined.session.state).toBe("ended");
     } finally {
+      stop.mockResolvedValue(undefined);
       leaveChromeMeet?.mockRestore();
       launchChromeMeet.mockRestore();
     }

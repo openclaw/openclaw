@@ -23,6 +23,12 @@ public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
     fileprivate let socketGeneration: UInt64
+
+    /// Compare routes from the same GatewayNodeSession. Socket reconnects retain this context;
+    /// replacing its endpoint, credentials, or connection options creates a different context.
+    public func hasSameConnectionContext(as other: GatewayNodeSessionRoute) -> Bool {
+        self.channelGeneration == other.channelGeneration
+    }
 }
 
 /// Owns a server-event stream until its caller is finished or canceled.
@@ -700,6 +706,17 @@ public actor GatewayNodeSession {
         }
         if let edge { connection["cloudflareAccess"] = edge }
         return try? JSONSerialization.data(withJSONObject: connection)
+    }
+
+    /// HTTP readers reuse only credentials accepted by this physical socket.
+    /// Bootstrap enrollment credentials never authorize resource downloads.
+    public func httpResourceAuthorization(ifCurrentRoute route: GatewayNodeSessionRoute) async -> (
+        url: URL, bearer: String?, tlsFingerprint: String?)?
+    {
+        guard self.isCurrentRoute(route), let channel, let url = self.activeURL else { return nil }
+        let bearer = await channel.httpResourceBearer(ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return (url, bearer, self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
     }
 
     public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {

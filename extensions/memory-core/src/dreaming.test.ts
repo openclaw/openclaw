@@ -1415,6 +1415,138 @@ describe("dreaming service reconciliation", () => {
     },
   );
 
+  it.each([
+    {
+      label: "no changes",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: false,
+      changed: false,
+      expected: null,
+    },
+    {
+      label: "rewrite without removals",
+      counts: [0, 0, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store",
+    },
+    {
+      label: "invalid only",
+      counts: [2, 0, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-2 invalid)",
+    },
+    {
+      label: "dangling only",
+      counts: [0, 3, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-3 dangling)",
+    },
+    {
+      label: "overflow only",
+      counts: [0, 0, 4],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-4 overflow)",
+    },
+    {
+      label: "nonadjacent counts",
+      counts: [2, 0, 4],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-2 invalid, -4 overflow)",
+    },
+    {
+      label: "all counts and lock",
+      counts: [2, 3, 4],
+      rewrite: true,
+      stale: true,
+      changed: true,
+      expected:
+        "rewrote recall store (-2 invalid, -3 dangling, -4 overflow), removed stale promotion lock",
+    },
+    {
+      label: "stale lock only",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: true,
+      changed: true,
+      expected: "removed stale promotion lock",
+    },
+    {
+      label: "synthetic changed counts without rewrite",
+      counts: [2, 3, 4],
+      rewrite: false,
+      stale: false,
+      changed: true,
+      expected: "",
+    },
+  ] as const)(
+    "formats recall repair log and report: $label",
+    async ({ counts, rewrite, stale, changed, expected }) => {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-repair-summary-");
+      const producer = await import("./short-term-promotion-artifacts.js");
+      const repairSpy = vi.spyOn(producer, "repairShortTermPromotionArtifacts").mockResolvedValue({
+        changed,
+        removedInvalidEntries: counts[0],
+        removedDanglingEntries: counts[1],
+        removedOverflowEntries: counts[2],
+        rewroteStore: rewrite,
+        removedStaleLock: stale,
+      });
+      try {
+        const { api, harness, logger } = createDreamingTestContext({
+          config: createDreamingConfig(
+            {
+              enabled: true,
+              limit: 5,
+              phases: { light: { enabled: false }, rem: { enabled: false } },
+            },
+            { agents: { defaults: { workspace: workspaceDir } } },
+          ),
+        });
+        registerShortTermPromotionDreamingForTest(api);
+        await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+        await getBeforeAgentReplyHandler(api.on)(
+          { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+          { trigger: "cron", agentId: "main", workspaceDir },
+        );
+        expect(logger.error).not.toHaveBeenCalled();
+        const summaryLines = mockStringMessages(logger.info).filter((line) =>
+          line.startsWith("memory-core: normalized recall artifacts before dreaming"),
+        );
+        const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
+        if (expected === null) {
+          expect(summaryLines).toEqual([]);
+          await expect(fs.access(reportDir)).rejects.toThrow();
+        } else {
+          expect(summaryLines).toEqual([
+            `memory-core: normalized recall artifacts before dreaming (${expected}) [workspace=${workspaceDir}].`,
+          ]);
+          const reports = await fs.readdir(reportDir);
+          expect(reports).toHaveLength(1);
+          const report = await fs.readFile(
+            path.join(reportDir, expectDefined(reports[0], "deep report filename")),
+            "utf-8",
+          );
+          expect(
+            report.split("\n").filter((line) => line.startsWith("- Repaired recall artifacts:")),
+          ).toEqual([`- Repaired recall artifacts: ${expected}.`]);
+        }
+      } finally {
+        repairSpy.mockRestore();
+      }
+    },
+  );
+
   it("does not create memory/ or DREAMS.md on an empty workspace sweep", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-sweep-");
     const { api, harness } = createDreamingTestContext({

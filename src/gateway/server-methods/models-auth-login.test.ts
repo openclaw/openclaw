@@ -35,7 +35,7 @@ vi.mock("../../commands/models/shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/models/shared.js")>()),
   updateConfig: hooks.writeConfig,
 }));
-vi.mock("../../commands/models/auth.js", () => ({ runModelsAuthLoginFlowCore: hooks.login }));
+vi.mock("../../commands/models/auth.js", () => ({ runModelsAuthLoginFlowForGateway: hooks.login }));
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeclaredProviderAuthChoices: () => {
     const choice = hooks.choice();
@@ -576,7 +576,9 @@ describe("models.authLogin ownership", () => {
         mode: "serve",
       });
       const h = harness();
-      h.client.browserOrigin = origin ? { origin } : undefined;
+      h.client.browserOrigin = origin
+        ? { origin, requestHost: new URL(origin).host, isLocalClient: true }
+        : undefined;
       const started = createDeferred<ModelsAuthLoginFlowOptions>();
       hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
         started.resolve(options);
@@ -587,9 +589,7 @@ describe("models.authLogin ownership", () => {
       try {
         await h.start();
         const options = await started.promise;
-        expect(typeof options.browserAuthorization).toBe(
-          origin === "https://gateway.example" ? "function" : "undefined",
-        );
+        expect(typeof options.browserAuthorization).toBe(origin ? "function" : "undefined");
         const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
         expect((await session.next()).step).toMatchObject({
           type: "text",
@@ -607,6 +607,32 @@ describe("models.authLogin ownership", () => {
       }
     },
   );
+
+  it("models.authLogin preserves device-flow cancellation when its managed origin is withdrawn", async () => {
+    const withdraw = prepareTailscalePublishedOrigin({
+      origin: "https://gateway.example",
+      mode: "serve",
+    });
+    const h = harness();
+    h.client.browserOrigin = { origin: "https://gateway.example" };
+    hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+      await options.prompter.text({ message: "Waiting for device approval" });
+      options.assertCurrent?.();
+      return result;
+    });
+    try {
+      await h.start();
+      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+      await h.next();
+      withdraw();
+      const options: ModelsAuthLoginFlowOptions = hooks.login.mock.calls[0]![0];
+      expect(options.signal?.aborted).toBe(true);
+      expect(options.assertCurrent).toThrow();
+      session.cancel();
+    } finally {
+      withdraw();
+    }
+  });
 
   it.each(["keep", "cancel", "revoked"])(
     "closes browser sign-in before post-save %s",

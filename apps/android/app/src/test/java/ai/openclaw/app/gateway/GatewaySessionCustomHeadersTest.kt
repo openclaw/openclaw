@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
@@ -23,6 +24,17 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import okio.Buffer
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.DERBitString
+import org.bouncycastle.asn1.DERNull
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.Certificate
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.asn1.x509.Time
+import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
+import org.bouncycastle.asn1.x509.Validity
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -32,11 +44,20 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.security.KeyPairGenerator
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
 
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_FRAME =
@@ -69,6 +90,176 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
+  @Test
+  fun sourceFaviconsUseReadAuthContextPathBoundsAndCurrentConnection() =
+    runBlocking {
+      assertSourceFavicons(contextPath = "/socket", basePath = "/ui")
+    }
+
+  @Test
+  fun sourceFaviconsPreserveNativeProxyMountsWithoutDuplicatingExplicitUiPaths() =
+    runBlocking {
+      for ((contextPath, basePath, encodedPath) in listOf(
+        Triple("/openclaw", "", "/openclaw"),
+        Triple("/tenant%20mount", "", "/tenant%20mount"),
+        Triple("/openclaw", "/openclaw", "/openclaw"),
+        Triple("/socket", "/team space", "/team%20space"),
+        Triple("/socket", "/知识", "/%E7%9F%A5%E8%AF%86"),
+        Triple("/socket", "/team%20space", "/team%20space"),
+      )) {
+        assertSourceFavicons(contextPath, basePath, expectedBasePath = encodedPath)
+      }
+    }
+
+  @Test
+  fun sourceFaviconsPreserveTlsProxyAuthorizationAndCanFallBackToGatewayCredentials() =
+    runBlocking {
+      for (proxyAcceptsRead in listOf(true, false)) {
+        assertSourceFavicons(contextPath = "/socket", basePath = "/ui", proxyAcceptsRead = proxyAcceptsRead)
+      }
+    }
+
+  private suspend fun assertSourceFavicons(
+    contextPath: String,
+    basePath: String,
+    proxyAcceptsRead: Boolean? = null,
+    expectedBasePath: String = basePath.ifEmpty { contextPath },
+  ) = coroutineScope {
+    val connected = CompletableDeferred<Unit>()
+    val slowStarted = CompletableDeferred<Unit>()
+    val releaseSlow = java.util.concurrent.CountDownLatch(1)
+    val iconRequests = ConcurrentLinkedQueue<RecordedRequest>()
+    val imageBytes = byteArrayOf(1, 2, 3, 4)
+    val tls = if (proxyAcceptsRead != null) sourceFaviconTls() else null
+    val proxyAuthorization = "Basic c3ludGhldGljOnByb3h5"
+    val expectedAuthorization = if (proxyAcceptsRead == true) listOf(proxyAuthorization) else listOfNotNull(proxyAuthorization.takeIf { tls != null }) + listOf("Bearer issued-device-token", "Bearer shared-token")
+    val trap = MockWebServer().apply { start() }
+    val server =
+      MockWebServer().apply {
+        tls?.let { useHttps(it.first, false) }
+        dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+              if (request.path == contextPath) {
+                if (tls != null && request.getHeader("Authorization") != proxyAuthorization) return MockResponse().setResponseCode(401)
+                return MockResponse().withWebSocketUpgrade(
+                  object : WebSocketListener() {
+                    override fun onOpen(
+                      webSocket: WebSocket,
+                      response: Response,
+                    ) {
+                      webSocket.send(CONNECT_CHALLENGE_FRAME)
+                    }
+
+                    override fun onMessage(
+                      webSocket: WebSocket,
+                      text: String,
+                    ) {
+                      val frame = Json.parseToJsonElement(text).jsonObject
+                      if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                        val id = frame.getValue("id").jsonPrimitive.content
+                        webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"auth":{"deviceToken":"issued-device-token","role":"operator","scopes":["operator.read"]}}}""")
+                      }
+                    }
+                  },
+                )
+              }
+              iconRequests.add(request)
+              if (request.path?.startsWith("$expectedBasePath/__openclaw__/link-favicon/") != true) return MockResponse().setResponseCode(404)
+              val authorization = request.getHeader("Authorization")
+              if (proxyAcceptsRead == true && authorization != proxyAuthorization) return MockResponse().setResponseCode(401)
+              if (proxyAcceptsRead != true && authorization != "Bearer shared-token") return MockResponse().setResponseCode(401)
+              return when {
+                request.path?.endsWith("redirect.example") == true -> {
+                  MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
+                }
+
+                request.path?.endsWith("large.example") == true -> {
+                  MockResponse().setHeader("Content-Type", "image/png").setChunkedBody(Buffer().write(ByteArray(65_537)), 4_096)
+                }
+
+                else -> {
+                  if (request.path?.endsWith("slow.example") == true) {
+                    slowStarted.complete(Unit)
+                    releaseSlow.await(8, java.util.concurrent.TimeUnit.SECONDS)
+                  }
+                  MockResponse().setHeader("Content-Type", "image/x-icon").setBody(Buffer().write(imageBytes))
+                }
+              }
+            }
+          }
+        start()
+      }
+    val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = tls != null, contextPath = contextPath)
+    val session =
+      GatewaySession(
+        scope = sessionScope,
+        identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+        deviceAuthStore = NoopDeviceAuthStore(),
+        onConnected = { connected.complete(Unit) },
+        onDisconnected = {},
+        onEvent = { _, _ -> },
+        customHeadersProvider = {
+          check(tls != null) { "Cleartext favicon reads must not access proxy credentials" }
+          mapOf("authorization" to proxyAuthorization, "X-Proxy-Route" to "source-proof")
+        },
+      )
+    val config =
+      resolveGatewaySourcePreviewConfig(
+        Json.parseToJsonElement("""{"gateway":{"controlUi":{"basePath":"$basePath","automaticallyFetchFavicons":true}}}""").jsonObject,
+        server.url(contextPath).toString(),
+        1L,
+      )!!
+    try {
+      session.connect(
+        endpoint = endpoint,
+        token = "shared-token",
+        bootstrapToken = "never-http-bootstrap",
+        password = null,
+        tls = tls?.let { GatewayTlsParams(required = true, expectedFingerprint = it.second, allowTOFU = false, stableId = endpoint.stableId) },
+        options =
+          GatewayConnectOptions(
+            role = "operator",
+            scopes = listOf("operator.read"),
+            caps = emptyList(),
+            commands = emptyList(),
+            permissions = emptyMap(),
+            client = GatewayClientInfo("openclaw-android-test", "Android Test", "1.0.0-test", "android", "ui", "source-test", "android", "test"),
+          ),
+      )
+      withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+      suspend fun load(
+        host: String,
+        current: GatewaySourcePreviewConfig = config,
+      ) = session.loadSourceFavicon(endpoint.stableId, current, host) { it() }
+      assertNull(load("disabled.example", config.copy(automaticallyFetchFavicons = false)))
+      assertTrue(iconRequests.isEmpty())
+      assertArrayEquals(imageBytes, load("example.com")?.bytes)
+      assertEquals(expectedAuthorization, iconRequests.map { it.getHeader("Authorization") })
+      assertTrue(iconRequests.all { it.path == "$expectedBasePath/__openclaw__/link-favicon/example.com" })
+      if (tls != null) assertTrue(iconRequests.all { it.getHeader("X-Proxy-Route") == "source-proof" })
+      assertArrayEquals(imageBytes, load("example.com")?.bytes)
+      assertEquals(expectedAuthorization.size, iconRequests.size)
+      assertNull(load("redirect.example"))
+      assertEquals(0, trap.requestCount)
+      assertNull(load("large.example"))
+      val stale = async { load("slow.example") }
+      withTimeout(TEST_TIMEOUT_MS) { slowStarted.await() }
+      session.disconnect()
+      releaseSlow.countDown()
+      assertNull(withTimeout(TEST_TIMEOUT_MS) { stale.await() })
+      assertNull(load("example.com"))
+    } finally {
+      releaseSlow.countDown()
+      session.disconnect()
+      sessionScope.cancel()
+      server.shutdown()
+      trap.shutdown()
+    }
+  }
+
   @Test
   fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() = runBlocking { assertManagedMediaDownload(contextPath = "") }
 
@@ -466,6 +657,40 @@ class GatewaySessionCustomHeadersTest {
         server.shutdown()
       }
     }
+
+  private fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
+    val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
+    val subject = X500Name("CN=source-favicon-test")
+    val now = System.currentTimeMillis()
+    val tbs =
+      V3TBSCertificateGenerator()
+        .apply {
+          setSerialNumber(ASN1Integer.ONE)
+          setSignature(algorithm)
+          setIssuer(subject)
+          setSubject(subject)
+          setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
+          setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
+        }.generateTBSCertificate()
+    val signature =
+      Signature.getInstance("SHA256withRSA").apply {
+        initSign(keyPair.private)
+        update(tbs.encoded)
+      }
+    val encoded = Certificate(tbs, algorithm, DERBitString(signature.sign())).encoded
+    val certificate = CertificateFactory.getInstance("X.509").generateCertificate(encoded.inputStream())
+    val password = charArrayOf()
+    val keyStore =
+      KeyStore.getInstance("PKCS12").apply {
+        load(null, null)
+        setKeyEntry("server", keyPair.private, password, arrayOf(certificate))
+      }
+    val managers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(keyStore, password) }
+    val factory = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }.socketFactory
+    val fingerprint = MessageDigest.getInstance("SHA-256").digest(encoded).joinToString("") { "%02x".format(it) }
+    return factory to fingerprint
+  }
 
   private fun startCapturingGatewayServer(onHandshake: (RecordedRequest) -> Unit): MockWebServer {
     val json = Json { ignoreUnknownKeys = true }

@@ -106,7 +106,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
         ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
         : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
     const fix = ownerTarget
-      ? `  Fix: set commands.ownerAllowFrom or a channel allowFrom to a direct-message owner, set heartbeat.target="none", or choose an explicit heartbeat target.`
+      ? `  Fix: set commands.ownerAllowFrom=["telegram:123456789"] or a channel allowFrom to a direct-message owner; for explicit delivery, set heartbeat.target="telegram" with heartbeat.to="123456789"; use heartbeat.target="none" to suppress delivery.`
       : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;
     warnings.push(
       [

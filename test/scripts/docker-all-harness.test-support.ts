@@ -27,6 +27,7 @@ export function copyDockerSchedulerHarness(root: string) {
     "release-version.mjs",
     "sleep.mjs",
     "upgrade-survivor-policy.mjs",
+    "upgrade-survivor-scenarios.json",
     "windows-taskkill.mjs",
   ]) {
     copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));

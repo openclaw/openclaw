@@ -25,8 +25,8 @@ import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   patchSessionEntryCore,
-  recordSessionParticipant,
 } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -453,13 +453,15 @@ test.each(["accepted", "revoked", "replacement"] as const)(
 );
 
 test.each([
-  ["sessions.patch", false, false],
-  ["sessions.patchMany", false, false],
-  ["sessions.patch", true, false],
-  ["sessions.patch", false, true],
+  ["sessions.patch", false, "none"],
+  ["sessions.patchMany", false, "none"],
+  ["sessions.patch", true, "none"],
+  ["sessions.patch", false, "ready"],
+  ["sessions.patch", false, "cleared-selection"],
 ] as const)(
   "%s archives the checkout and restores dirty work without deleting the conversation (already archived=%s, catalog preparation=%s)",
-  async (method, alreadyArchived, prepareCatalog) => {
+  async (method, alreadyArchived, catalogMode) => {
+    const prepareCatalog = catalogMode !== "none";
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
     await fs.writeFile(path.join(worktree.path, "committed.txt"), "unpushed work\n");
@@ -480,8 +482,19 @@ test.each([
     const loadGatewayModelCatalog = vi.fn(async () => {
       catalogEntered.resolve();
       await catalogRelease.promise;
+      if (catalogMode === "cleared-selection") {
+        throw new Error("Synthetic catalog preparation failed");
+      }
       return [];
     });
+    const context = { loadGatewayModelCatalog };
+    if (prepareCatalog) {
+      loadGatewayModelCatalog.mockResolvedValueOnce([]);
+      expect(await directSessionReq("sessions.describe", { key }, { context })).toMatchObject({
+        ok: true,
+      });
+      loadGatewayModelCatalog.mockClear();
+    }
     const patch = (archived: boolean) =>
       directSessionReq(
         method,
@@ -490,10 +503,14 @@ test.each([
               key,
               expectedSessionId: sessionId,
               archived,
-              ...(!archived && prepareCatalog ? { thinkingLevel: "off" } : {}),
+              ...(!archived && prepareCatalog
+                ? catalogMode === "cleared-selection"
+                  ? { model: null }
+                  : { thinkingLevel: "off" }
+                : {}),
             }
           : { targets: [{ key, expectedSessionId: sessionId }], patch: { archived } },
-        !archived && prepareCatalog ? { context: { loadGatewayModelCatalog } } : undefined,
+        prepareCatalog ? { context } : undefined,
       );
 
     expect(await patch(true)).toMatchObject({ ok: true });
@@ -512,6 +529,9 @@ test.each([
     ).not.toContain(worktree.path);
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
 
+    if (catalogMode === "cleared-selection") {
+      await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ thinkingLevel: "off" }));
+    }
     const restore = prepareCatalog ? vi.spyOn(managedWorktrees, "restore") : undefined;
     const restored = patch(false);
     try {
@@ -523,13 +543,21 @@ test.each([
           expect.any(Number),
         );
         await expect(fs.access(worktree.path)).rejects.toThrow();
+        if (catalogMode === "cleared-selection") {
+          await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({
+            thinkingLevel: undefined,
+            contextWindow: undefined,
+          }));
+        }
       }
       catalogRelease.resolve();
       expect(await restored).toMatchObject({ ok: true });
       if (prepareCatalog) {
         expect(restore).toHaveBeenCalledOnce();
         expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe("off");
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe(
+          catalogMode === "cleared-selection" ? undefined : "off",
+        );
       }
     } finally {
       catalogRelease.resolve();

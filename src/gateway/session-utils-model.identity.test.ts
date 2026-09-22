@@ -12,11 +12,9 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveDirectStoredModelOverride } from "../sessions/stored-model-overrides.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import { getSessionDefaults, projectSessionPatchResult } from "./session-utils-model.js";
-import {
-  buildSessionListRowMetadataContext,
-  resolveSessionSelectedModelRef,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
 afterEach(() => {
@@ -158,7 +156,7 @@ test.each(["custom/model", "middle"])(
           resolveSessionSelectedModelRef({
             cfg: identityConfig,
             agentId: "main",
-            source: { entry, loadSessionEntry: () => undefined },
+            source: { entry, readSourceEntry: () => undefined },
             allowPluginNormalization: false,
           }),
         )
@@ -169,7 +167,7 @@ test.each(["custom/model", "middle"])(
 );
 
 test.each([false, true])(
-  "separates cached raw and resolved selections (resolved first=%s)",
+  "projects raw and resolved selections once (resolved first=%s)",
   async (resolvedFirst) => {
     await withIdentityScope(() => {
       const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
@@ -180,7 +178,7 @@ test.each([false, true])(
           providerOverride: "custom",
           modelOverride: "latest",
         },
-        model: "final",
+        model: "middle",
       };
       const rowContext = buildSessionListRowMetadataContext({ now: 1 });
       for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
@@ -189,7 +187,7 @@ test.each([false, true])(
             resolveSessionSelectedModelRef({
               cfg: identityConfig,
               agentId: "main",
-              source: { entry, loadSessionEntry: () => undefined },
+              source: { entry, readSourceEntry: () => undefined },
               rowContext,
               allowPluginNormalization: false,
             }),

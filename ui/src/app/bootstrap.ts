@@ -7,20 +7,17 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { isSettingsTakeover } from "../app-navigation.ts";
+import { sameRouteLocation } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
   routeIdFromPath,
-  sameRouteLocation,
   startApplicationRouter,
   warmApplicationRouteModule,
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -54,6 +51,7 @@ import {
   subscribeBootRecordPersistence,
   subscribeWarmBootConnection,
 } from "./bootstrap-warm-boot.ts";
+import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -63,6 +61,7 @@ import type { ApplicationNavigationOptions, ApplicationContext } from "./context
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
@@ -87,7 +86,7 @@ import { openUpdateFailureTriage } from "./update-triage.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 export type ApplicationRuntime = {
-  readonly context: ApplicationContext<RouteId>;
+  readonly context: ApplicationContext;
   readonly router: ApplicationRouter;
   readonly documentMode: ControlUiDocumentMode | null;
   readonly warmBoot: boolean;
@@ -143,17 +142,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (startup.changed && !documentMode) {
     saveSettings(settings);
   }
-  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
-  const startupSearchParams = new URLSearchParams(applicationLocation.search);
-  const hasSidebarCollapseIntent =
-    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
-    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
-  if (hasSidebarCollapseIntent) {
-    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
-    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
-    const search = startupSearchParams.toString();
-    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
-  }
+  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
@@ -180,8 +169,22 @@ export function bootstrapApplication(): ApplicationRuntime {
       ...(startup.nativeClient ? { clientOptions: startup.nativeClient } : {}),
     },
   );
+  const getGatewayAuth = () => ({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  const documentGatewayScope = gatewayCredentialScope(
+    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}${resourceBasePath}`,
+  );
+  const stopBrowserAuthRecovery = startBrowserAuthRecovery(resourceBasePath, () =>
+    gatewayCredentialScope(gateway.connection.gatewayUrl) === documentGatewayScope
+      ? getGatewayAuth()
+      : {},
+  );
   const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
+  const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
   const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
     if (startup.pendingBootstrapToken || startup.password) {
@@ -267,9 +270,17 @@ export function bootstrapApplication(): ApplicationRuntime {
       patch: patchSettings,
     },
   );
+  const settingsAgentSelection = createAgentSelectionCapability(
+    gateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
   const channels = createChannelCapability(gateway);
   const stopForegroundBootstrap = subscribeForegroundChatBootstrap({
     router,
+    chatSubmissions,
     gateway,
     agents,
     agentSelection,
@@ -281,11 +292,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
-    getAuth: () => ({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    }),
+    getAuth: getGatewayAuth,
   });
   const sessions = createSessionCapability(gateway, agentSelection, {
     bootRecord,
@@ -309,12 +316,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     connectionBootstrap,
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
-  const navigation = createApplicationNavigationPreferences(
-    settings,
-    hasSidebarCollapseIntent &&
-      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
-  );
+  const navigation = createApplicationNavigationPreferences(settings);
   const nativeChatDrafts = createNativeChatDrafts();
+  const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot);
   const nativeLinkRouting = startNativeLinkRouting({
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
@@ -342,7 +346,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
-  const chatSubmissions = createChatSubmissions();
   const placementStartup = createApplicationPlacementStartup({
     gateway,
     sessions,
@@ -479,7 +482,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
     navigateWithMode(routeId, options, "push");
   const plugins = new ControlUiPluginRuntime(() => context);
-  const context: ApplicationContext<RouteId> = {
+  const context: ApplicationContext = {
     basePath,
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
@@ -489,6 +492,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agents,
     agentIdentity,
     agentSelection,
+    settingsAgentSelection,
     channels,
     config,
     scopeUpgrade,
@@ -553,42 +557,16 @@ export function bootstrapApplication(): ApplicationRuntime {
         // wait for setup's decision before fetching the Chat workspace graph.
         steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
       }
-      // Only the native host needs bridge parsers. Initialize before routing,
-      // and fence the import so a stopped application cannot install listeners.
-      // SAFETY: WebKit adds this optional host field; its callable handler is checked below.
-      const nativeWindow = window as Window & {
-        webkit?: {
-          messageHandlers?: {
-            openclawDeviceSettings?: { postMessage?: unknown };
-            openclawNotifications?: { postMessage?: unknown };
-          };
-        };
-      };
-      if (
-        typeof nativeWindow.webkit?.messageHandlers?.openclawNotifications?.postMessage ===
-        "function"
-      ) {
+      // Native bridge parsers and listeners stay out of browser startup.
+      // SAFETY: WebKit supplies the optional handler map; the native initializer checks each callable.
+      const nativeWindow = window as Window & { webkit?: { messageHandlers?: unknown } };
+      if (nativeWindow.webkit?.messageHandlers) {
         steps.unshift(async () => {
-          const { createNativeNotificationsCapability } = await import("./native-notifications.ts");
-          if (!startupLifecycle.signal.aborted) {
-            nativeNotifications = createNativeNotificationsCapability();
-            return () => nativeNotifications?.dispose();
-          }
-          return undefined;
-        });
-      }
-      if (
-        typeof nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings?.postMessage ===
-        "function"
-      ) {
-        steps.unshift(async () => {
-          const { createNativeDeviceSettingsCapability } =
-            await import("./native-device-settings.ts");
-          if (!startupLifecycle.signal.aborted) {
-            nativeDeviceSettings = createNativeDeviceSettingsCapability();
-            return () => nativeDeviceSettings?.dispose();
-          }
-          return undefined;
+          const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
+          return startNativeCapabilities(gateway, startupLifecycle, (capabilities) => {
+            nativeDeviceSettings = capabilities.deviceSettings;
+            nativeNotifications = capabilities.notifications;
+          });
         });
       }
       // Resolve first-run setup before routing: the default Chat route owns the
@@ -661,6 +639,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       return startupLifecycle.run(steps);
     },
     stop: () => {
+      stopBrowserAuthRecovery();
       startupLifecycle.stop();
       stopWarmBootConnection();
       stopBootRecordPersistence();
@@ -669,6 +648,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       connectionBootstrap.reset();
       agents.dispose();
       agentSelection.dispose();
+      settingsAgentSelection.dispose();
       channels.dispose();
       scopeUpgrade.dispose();
       sidebarAttention.dispose();
@@ -680,6 +660,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
+      linkReaderRouting.dispose();
       nativeLinkRouting.dispose();
       webPush.dispose();
       chatSubmissions.clear();

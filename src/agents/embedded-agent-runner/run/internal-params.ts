@@ -17,7 +17,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
-  | { kind: "model"; contextTokens: number | undefined }
+  | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
@@ -34,6 +34,12 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
+  onAttemptStart?: () => void;
+  /** Keep a bounded auxiliary tool set directly visible after runtime admission. */
+  disableToolSearch?: true;
+  /** Restrict history/search to an explicitly observed session, not this run's store key. */
+  sessionReadScopeKey?: string;
   /** Candidate producers have already resolved the model against their captured metadata. */
   requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;

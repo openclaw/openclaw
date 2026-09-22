@@ -656,7 +656,8 @@ describe("setup-owned SecretRef materialization", () => {
   it.each(["normal", "abort", "replacement", "nested", "other-store", "other-profile"] as const)(
     "keeps the prepared credential scoped through %s settlement",
     async (settlement) => {
-      const { withSetupCredentialAccess } = await import("./setup-access.js");
+      const { withSetupCredentialAccess, runOutsideSetupCredentialAccess } =
+        await import("./setup-access.js");
       const {
         getRuntimeAuthProfileStoreCredentialsRevision,
         getRuntimeAuthProfileStoreSnapshotCore,
@@ -709,6 +710,14 @@ describe("setup-owned SecretRef materialization", () => {
             await expect(resolve()).rejects.toMatchObject({ code: "SECRET_SURFACE_UNAVAILABLE" });
           } else if (settlement === "nested") {
             await withSetupCredentialAccess({ profileId }, async () => {
+              await expect(resolve()).resolves.toMatchObject({
+                apiKey: "synthetic-scoped-credential",
+              });
+              await runOutsideSetupCredentialAccess(async () => {
+                await expect(resolve()).rejects.toMatchObject({
+                  code: "SECRET_SURFACE_UNAVAILABLE",
+                });
+              });
               await expect(resolve()).resolves.toMatchObject({
                 apiKey: "synthetic-scoped-credential",
               });

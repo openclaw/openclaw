@@ -1,22 +1,50 @@
+import Foundation
+
 public struct OpenClawChatDictationControl {
-    public var isActive: Bool
+    public enum Phase: Equatable {
+        case idle
+        case starting
+        case listening
+        case processing
+
+        var statusText: String {
+            switch self {
+            case .idle: String(localized: "Not listening")
+            case .starting: String(localized: "Starting dictation…")
+            case .listening: String(localized: "Listening…")
+            case .processing: String(localized: "Finishing dictation…")
+            }
+        }
+    }
+
+    public var phase: Phase
     public var isAvailable: Bool
+    public var partialTranscript: String
+    public var level: Double
     public var start: @MainActor () async throws -> String?
     public var finish: @MainActor () -> Void
     public var cancel: @MainActor () -> Void
 
     public init(
-        isActive: Bool,
+        phase: Phase,
         isAvailable: Bool,
+        partialTranscript: String,
+        level: Double,
         start: @escaping @MainActor () async throws -> String?,
         finish: @escaping @MainActor () -> Void,
         cancel: @escaping @MainActor () -> Void)
     {
-        self.isActive = isActive
+        self.phase = phase
         self.isAvailable = isAvailable
+        self.partialTranscript = partialTranscript
+        self.level = level
         self.start = start
         self.finish = finish
         self.cancel = cancel
+    }
+
+    public var isActive: Bool {
+        self.phase != .idle
     }
 }
 

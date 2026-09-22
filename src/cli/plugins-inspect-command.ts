@@ -371,7 +371,7 @@ function formatPluginInspection(
       `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
     );
   }
-  lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
+  lines.push(`${theme.muted("Source:")} ${shortenHomePath(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
   if (inspect.plugin.trust) {
     lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);

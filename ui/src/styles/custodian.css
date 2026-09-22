@@ -368,6 +368,42 @@ openclaw-custodian-page {
   margin: 8px 0 0;
 }
 
+.custodian-surface .agent-chat__input {
+  --chat-composer-min-height: 0px;
+}
+
+.custodian-surface .agent-chat__composer-input-row {
+  padding-bottom: var(--chat-composer-editor-inset-block);
+}
+
+.custodian__plugin-intro {
+  display: grid;
+  gap: 20px;
+  margin-block: auto;
+  padding: 24px 12px;
+}
+
+.custodian__plugin-intro h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 20px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.custodian__plugin-starters {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.custodian__plugin-starters .btn {
+  min-height: 44px;
+  max-width: 100%;
+  text-align: start;
+  white-space: normal;
+}
+
 .custodian__thinking > span:not(.sr-only) {
   width: 5px;
   height: 5px;

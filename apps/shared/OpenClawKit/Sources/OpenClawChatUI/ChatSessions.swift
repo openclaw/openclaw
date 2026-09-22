@@ -164,6 +164,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let name: String
     public let provider: String
     public let available: Bool?
+    public let manualSelectionAllowed: Bool?
     public let unavailableReason: String?
     public let unavailableUntil: Int?
     public let contextWindow: Int?
@@ -180,6 +181,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         name: String,
         provider: String,
         available: Bool? = nil,
+        manualSelectionAllowed: Bool? = nil,
         unavailableReason: String? = nil,
         unavailableUntil: Int? = nil,
         contextWindow: Int?,
@@ -195,6 +197,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         self.name = name
         self.provider = provider
         self.available = available
+        self.manualSelectionAllowed = manualSelectionAllowed
         self.unavailableReason = unavailableReason
         self.unavailableUntil = unavailableUntil
         self.contextWindow = contextWindow

@@ -1,8 +1,39 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  captureRequesterCronAuthority,
+  promoteRequesterCronAuthority,
+  consumeRequesterCronAuthorityAdmission,
+  revokeRequesterCronAuthority,
+  withRequesterCronAuthority,
+} from "../../agents/subagents/requester-cron-authority.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  getCronManagementAuthority,
+  withCronManagementGrant,
+} from "../../gateway/cron-creator-authority-grant.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  registerAgentRunContext,
+  clearAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -12,6 +43,7 @@ import {
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
@@ -24,14 +56,25 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  baseParams,
+  createInboundBody,
+  createInboundTurn,
+  createSessionBody,
+  createSessionTurn,
+  createProviderSurface,
+  ownerParams,
+  requireMockCallArg,
+} from "./get-reply-run.test-support.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
-import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
@@ -208,6 +251,7 @@ vi.mock("../../config/sessions/group.js", () => ({
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
 }));
 
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
@@ -216,6 +260,7 @@ const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolv
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
+  loadSessionEntryReadOnly: loadSessionEntryMock,
   patchSessionEntryCore: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
 }));
@@ -333,160 +378,15 @@ function createGatewayDrainingError(): Error {
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.";
 
-function createInboundBody<T extends string>(body: T) {
-  return { Body: body, RawBody: body, CommandBody: body };
-}
-
-function createSessionBody<T extends string>(body: T) {
-  return { Body: body, BodyStripped: body };
-}
-
-function createProviderSurface<T extends string>(provider: T) {
-  return { Provider: provider, Surface: provider };
-}
-
-function createInboundTurn<
-  TBody extends string,
-  TProvider extends string,
-  TChatType extends string,
->(body: TBody, provider: TProvider, chatType: TChatType) {
-  return { ...createInboundBody(body), ...createProviderSurface(provider), ChatType: chatType };
-}
-
-function createSessionTurn<
-  TBody extends string,
-  TProvider extends string,
-  TChatType extends string,
->(body: TBody, provider: TProvider, chatType: TChatType) {
-  return { ...createSessionBody(body), ...createProviderSurface(provider), ChatType: chatType };
-}
-
-function baseParams(
-  overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
-): Parameters<typeof runPreparedReply>[0] {
-  const defaults = {
-    ctx: {
-      ...createInboundBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
-      ChatType: "group",
-    },
-    sessionCtx: {
-      ...createSessionBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
-      media: [{ path: "/tmp/input.png" }],
-      Provider: "slack",
-      ChatType: "group",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
-    },
-    cfg: { session: {}, channels: {}, agents: { defaults: {} } },
-    agentId: "default",
-    agentDir: "/tmp/agent",
-    agentCfg: {},
-    sessionCfg: {},
-    commandAuthorized: true,
-    command: {
-      surface: "slack",
-      channel: "slack",
-      isAuthorizedSender: true,
-      abortKey: "session-key",
-      ownerList: [],
-      senderIsOwner: false,
-      rawBodyNormalized: "",
-      commandBodyNormalized: "",
-    } as never,
-    commandSource: "",
-    allowTextCommands: true,
-    directives: {
-      hasThinkDirective: false,
-      thinkLevel: undefined,
-    } as never,
-    defaultActivation: "always",
-    resolvedThinkLevel: "high",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolvedElevatedLevel: "off",
-    elevatedEnabled: false,
-    elevatedAllowed: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    modelState: {
-      resolveDefaultThinkingLevel: async () => "medium",
-      resolveThinkingCatalog: async () => [],
-    } as never,
-    provider: "anthropic",
-    model: "claude-opus-4-1",
-    typing: {
-      onReplyStart: vi.fn().mockResolvedValue(undefined),
-      cleanup: vi.fn(),
-    } as never,
-    defaultModel: "claude-opus-4-1",
-    timeoutMs: 30_000,
-    isNewSession: true,
-    resetTriggered: false,
-    systemSent: true,
-    sessionKey: "session-key",
-    workspaceDir: "/tmp/workspace",
-    abortedLastRun: false,
-  };
-  const ctx = overrides.ctx ?? defaults.ctx;
-  const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
-  const resolveTestCanonicalText = (value: Record<string, unknown>) => {
-    const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
-    return { commandText, agentText, rawText };
-  };
-  const sessionText = resolveTestCanonicalText(sessionCtx);
-  return {
-    ...defaults,
-    ...overrides,
-    conversation:
-      overrides.conversation ??
-      prepareReplyConversation({
-        ctx: sessionCtx,
-        sessionEntry:
-          overrides.sessionStore?.[overrides.sessionKey ?? defaults.sessionKey] ??
-          overrides.sessionEntry,
-        isHeartbeat: overrides.opts?.isHeartbeat,
-      }),
-    ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
-    sessionCtx: {
-      ...sessionCtx,
-      ...sessionText,
-      agentText:
-        typeof sessionCtx.BodyStripped === "string"
-          ? sessionCtx.BodyStripped
-          : sessionText.agentText,
-    },
-  } as Parameters<typeof runPreparedReply>[0];
-}
-
 function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
   return runPreparedReply(baseParams(overrides));
 }
 
-function ownerParams(): Parameters<typeof runPreparedReply>[0] {
-  const params = baseParams();
-  params.command = {
-    ...(params.command as Record<string, unknown>),
-    senderIsOwner: true,
-  } as never;
-  return params;
-}
-
-type MockCallSource = {
-  mock: {
-    calls: ReadonlyArray<ReadonlyArray<unknown>>;
-  };
-};
-
-function requireMockCallArg(mock: MockCallSource, label: string, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`${label} call ${index} missing`);
-  }
-  return call[0];
+async function useActualSystemEventDrain() {
+  const actual = await vi.importActual<typeof import("./session-system-events.js")>(
+    "./session-system-events.js",
+  );
+  vi.mocked(drainFormattedSystemEvents).mockImplementation(actual.drainFormattedSystemEvents);
 }
 
 function requireRunReplyAgentCall(index = 0) {
@@ -507,6 +407,259 @@ function requireLastRunReplyAgentCall() {
 }
 
 describe("runPreparedReply media-only handling", () => {
+  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
+    "retires pending owner task authority only for new channel input: %s",
+    async (kind) => {
+      const sessionKey = "agent:default:discord:channel:123";
+      const sessionId = "pending-owner-session";
+      const originalRunId = "pending-owner-run";
+      const child: SubagentRunRecord = {
+        runId: "pending-child",
+        execution: { status: "running" },
+        requesterTurnRunId: originalRunId,
+        requesterAgentId: "default",
+        childSessionKey: "agent:default:subagent:child",
+        requesterSessionKey: sessionKey,
+        requesterDisplayKey: "discord",
+        task: "review",
+        cleanup: "keep",
+        createdAt: 1,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          batchRunIds: ["pending-child"],
+        },
+      };
+      const batch = [child];
+      const runs = new Map([[child.runId, child]]);
+      const sessionEntry: SessionEntry = { sessionId, updatedAt: 1, lifecycleRevision: "original" };
+      loadSessionEntryMock.mockReturnValue(sessionEntry);
+      const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      registerAgentRunContext(originalRunId, { sessionKey, sessionId, agentId: "default" });
+      const scope = createCronCreatorAuthorityCapability(
+        originalRunId,
+        { kind: "external", channel: "discord" },
+        { source: "channel-owner", isCurrent: () => true },
+      )!;
+      try {
+        await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "default",
+              sessionKey,
+              operationalRunInstance,
+              approvalAuthority: authority,
+            },
+            async () => {
+              const capture = captureRequesterCronAuthority({
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "default",
+                requesterTurnRunId: originalRunId,
+                batch,
+                runs,
+              });
+              expect(capture).toBeDefined();
+              capture!.commit();
+            },
+          ),
+        );
+        promoteRequesterCronAuthority({
+          requesterTurnRunId: originalRunId,
+          batch,
+          rearmGeneration: 1,
+        });
+        const provenance =
+          kind === "inter-session"
+            ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
+            : undefined;
+        const params = baseParams();
+        params.command.senderIsOwner = kind === "fresh-owner";
+        await runPrepared({
+          ...params,
+          conversation: undefined,
+          sessionKey,
+          sessionId,
+          sessionEntry,
+          ctx: {
+            ...createInboundTurn("new request", "discord", "group"),
+            SenderId: "sender",
+            InputProvenance: provenance,
+          },
+          sessionCtx: {
+            ...createSessionTurn("new request", "discord", "group"),
+            SenderId: "sender",
+            InputProvenance: provenance,
+          },
+          opts: {
+            isHeartbeat: kind === "heartbeat",
+            suppressNextUserMessagePersistence: kind === "replay",
+          },
+        });
+        expect(runReplyAgent).toHaveBeenCalledOnce();
+        await withRequesterCronAuthority(
+          {
+            requesterSessionKey: sessionKey,
+            requesterSessionId: sessionId,
+            requesterAgentId: "default",
+            batch,
+            rearmGeneration: 1,
+            runId: "successor",
+            isCurrent: () => true,
+          },
+          async () => {
+            const admission = consumeRequesterCronAuthorityAdmission({
+              runId: "successor",
+              sessionKey,
+              sessionId,
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceSessionKey: child.childSessionKey,
+              },
+            });
+            expect(Boolean(admission)).toBe(kind !== "fresh-non-owner" && kind !== "fresh-owner");
+            if (admission) {
+              expect(admission.callerOrigin).toEqual({ kind: "unknown" });
+            }
+          },
+        );
+      } finally {
+        revokeRequesterCronAuthority(sessionKey);
+        releaseAgentRunDelegatedAuthority(authority);
+        clearAgentRunContext(originalRunId);
+      }
+    },
+  );
+  it.each([
+    "owner",
+    "owner-alias",
+    "non-owner",
+    "channel-allowlist",
+    "owner-wildcard",
+    "revoked-before-bind",
+    "room-event",
+    "spawned",
+    "heartbeat",
+    "inter-session",
+    "cron",
+    "replay",
+    "revoked",
+  ] as const)(
+    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
+    async (kind) => {
+      const runId = "discord-owner-management";
+      const cfg =
+        kind === "channel-allowlist"
+          ? { channels: { discord: { allowFrom: ["owner-1"] } } }
+          : {
+              commands: { ownerAllowFrom: kind === "owner-wildcard" ? ["*"] : ["discord:owner-1"] },
+            };
+      const admitted = kind === "owner" || kind === "owner-alias" || kind === "revoked";
+      setRuntimeConfigSnapshot(cfg);
+      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const identity: AgentRuntimeIdentity = {
+        kind: "agentRuntime",
+        agentId: "default",
+        sessionKey: "agent:default:discord:channel:123",
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+      };
+      const calls: string[] = [];
+      vi.mocked(runReplyAgent).mockImplementationOnce(async ({ opts }) => {
+        await withGatewayToolCallerIdentity(
+          { ...identity, approvalAuthority: authority },
+          async () => {
+            if (kind === "revoked-before-bind") {
+              setRuntimeConfigSnapshot({});
+            }
+            const tool = createCronTool(
+              { runId: opts?.runId, agentSessionKey: identity.sessionKey },
+              {
+                callGatewayTool: async <T>(method: string) => {
+                  const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                  if (!admitted) {
+                    expect(grant).toBeUndefined();
+                    calls.push("restricted");
+                    return { jobs: [], total: 0, hasMore: false } as T;
+                  }
+                  expect(grant, "configured owner must receive a management grant").toBeDefined();
+                  return await withCronManagementGrant(grant!, identity, method, async () => {
+                    const assertActive = getCronManagementAuthority(identity)!;
+                    assertActive();
+                    await Promise.resolve();
+                    if (kind === "revoked") {
+                      setRuntimeConfigSnapshot({});
+                    }
+                    assertActive();
+                    calls.push(method);
+                    return { jobs: [], total: 0, hasMore: false } as T;
+                  });
+                },
+              },
+            );
+            if (kind === "revoked") {
+              await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
+                "Automation admin grant",
+              );
+            } else {
+              await tool.execute("list", { action: "list" });
+            }
+          },
+        );
+        return undefined;
+      });
+      try {
+        const params = ownerParams();
+        params.command.senderId = "owner-1";
+        params.command.senderIsOwner = ![
+          "non-owner",
+          "channel-allowlist",
+          "owner-wildcard",
+        ].includes(kind);
+        const provenance =
+          kind === "inter-session"
+            ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
+            : kind === "cron"
+              ? { kind: "internal_system" as const, sourceTool: "cron" }
+              : undefined;
+        await runPrepared({
+          ...params,
+          conversation: undefined,
+          cfg,
+          ctx: {
+            ...createInboundTurn("list automations", "discord", "group"),
+            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
+            InputProvenance: provenance,
+            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
+          },
+          sessionCtx: {
+            ...createSessionTurn("list automations", "discord", "group"),
+            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
+            InputProvenance: provenance,
+            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
+          },
+          sessionEntry:
+            kind === "spawned"
+              ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
+              : undefined,
+          opts: {
+            runId,
+
+            isHeartbeat: kind === "heartbeat",
+            suppressNextUserMessagePersistence: kind === "replay",
+          },
+        });
+        expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
   beforeAll(async () => {
     // Preload the runtime seams directly so test setup does not need a synthetic
     // reply turn with registry and session side effects.
@@ -708,53 +861,30 @@ describe("runPreparedReply media-only handling", () => {
     expect(requireRunReplyAgentCall().followupRun.run.spawnedBy).toBe(spawnedBy);
   });
 
-  it("propagates non-visible assistant silence for group runs", async () => {
-    await runPrepared();
-
-    let call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
-
+  it("keeps accepted unmentioned group input optional when silence is allowed", async () => {
+    const defaults = baseParams();
     await runPrepared({
       defaultActivation: "mention",
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      ctx: {
+        ...defaults.ctx,
+        InboundEventKind: "user_request",
+        WasMentioned: false,
+      },
+      sessionCtx: {
+        ...defaults.sessionCtx,
+        InboundEventKind: "user_request",
+        WasMentioned: false,
+      },
+      cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
     });
 
-    call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
+    expect(requireLastRunReplyAgentCall().followupRun.run.terminalReplyExpectation).toBe(
+      "optional",
+    );
   });
 
-  it.each([
-    {
-      name: "mention",
-      ctx: { WasMentioned: true },
-    },
-    {
-      name: "native command",
-      ctx: {
-        CommandTurn: {
-          kind: "native" as const,
-          source: "native" as const,
-          authorized: true,
-          commandName: "status",
-          body: "/status",
-        },
-      },
-    },
-  ])("keeps empty-assistant silence disabled for a directed group $name", async ({ ctx }) => {
-    await runPrepared({
-      ctx: {
-        ...baseParams().ctx,
-        ...ctx,
-      },
-    });
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
-  });
-
-  it("keeps empty-assistant silence optional for ambient room events", async () => {
+  it("keeps ambient room replies optional despite stale mention facts and silent policy", async () => {
     const defaults = baseParams();
     await runPrepared({
       ctx: {
@@ -776,11 +906,9 @@ describe("runPreparedReply media-only handling", () => {
       },
     });
 
-    const call = requireLastRunReplyAgentCall();
-    expect(call.followupRun.run).toMatchObject({
-      allowEmptyAssistantReplyAsSilent: true,
-      terminalReplyExpectation: "optional",
-    });
+    expect(requireLastRunReplyAgentCall().followupRun.run.terminalReplyExpectation).toBe(
+      "optional",
+    );
   });
 
   it("hydrates runtime thinking metadata before trusting static provider support", async () => {
@@ -895,30 +1023,27 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
   });
 
-  it.each([
-    ["telegram", "direct", "automatic"],
-    ["telegram", "group", "automatic"],
-    ["slack", "direct", "automatic"],
-    ["slack", "group", "automatic"],
-    ["telegram", "direct", "message_tool_only"],
-    ["telegram", "group", "message_tool_only"],
-    ["slack", "direct", "message_tool_only"],
-    ["slack", "group", "message_tool_only"],
-  ] as const)("allows a silent heartbeat for %s %s %s", async (channel, chatType, deliveryMode) => {
-    await runPrepared({
-      opts: { isHeartbeat: true, sourceReplyDeliveryMode: deliveryMode },
-      ctx: { ...createInboundTurn("Heartbeat check-in", channel, chatType), WasMentioned: true },
-      sessionCtx: createSessionTurn("Heartbeat check-in", channel, chatType),
-    });
+  it.each(["automatic", "message_tool_only"] as const)(
+    "keeps heartbeat replies optional with %s transport",
+    async (deliveryMode) => {
+      await runPrepared({
+        opts: { isHeartbeat: true, sourceReplyDeliveryMode: deliveryMode },
+        ctx: {
+          ...createInboundTurn("Heartbeat check-in", "slack", "group"),
+          WasMentioned: true,
+        },
+        sessionCtx: {
+          ...createSessionTurn("Heartbeat check-in", "slack", "group"),
+          WasMentioned: true,
+        },
+        cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
+      });
 
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.run).toMatchObject({
-      allowEmptyAssistantReplyAsSilent: true,
-      terminalReplyExpectation: "optional",
-    });
-  });
+      expect(requireRunReplyAgentCall().followupRun.run.terminalReplyExpectation).toBe("optional");
+    },
+  );
 
-  it("keeps empty-assistant silence disabled for direct runs by default", async () => {
+  it("requires a reply to a direct media-only request", async () => {
     await runPrepared({
       ctx: {
         ...createInboundBody(""),
@@ -939,7 +1064,7 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+    expect(call.followupRun.run.terminalReplyExpectation).toBe("required");
   });
 
   it("passes message-tool-only delivery into direct chat prompt context", async () => {
@@ -1116,70 +1241,6 @@ describe("runPreparedReply media-only handling", () => {
       content: "please answer here",
     });
     expect(persistedUserMessage.content).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
-  });
-
-  it.each(["direct", "dm"] as const)(
-    "does not propagate empty-assistant silence for %s runs",
-    async (chatType) => {
-      await runPrepared({
-        ctx: {
-          ...createInboundBody(""),
-          ThreadHistoryBody: "Earlier direct message",
-          OriginatingChannel: "slack",
-          OriginatingTo: "D123",
-          ChatType: chatType,
-        },
-        sessionCtx: {
-          ...createSessionBody(""),
-          ThreadHistoryBody: "Earlier direct message",
-          media: [{ path: "/tmp/input.png" }],
-          Provider: "slack",
-          ChatType: chatType,
-          OriginatingChannel: "slack",
-          OriginatingTo: "D123",
-        },
-        cfg: {
-          session: {},
-          channels: {},
-          agents: {},
-        },
-      });
-
-      const call = requireLastRunReplyAgentCall();
-      expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
-    },
-  );
-
-  it("does not borrow target-session silence for native commands sent from direct chats", async () => {
-    await runPrepared({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:group:target",
-      ctx: {
-        ...createInboundBody(""),
-        ThreadHistoryBody: "Earlier direct message",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "D123",
-        ChatType: "direct",
-        CommandSource: "native",
-        SessionKey: "agent:main:telegram:direct:source",
-        CommandTargetSessionKey: "agent:main:telegram:group:target",
-      },
-      sessionCtx: {
-        ...createSessionBody(""),
-        ThreadHistoryBody: "Earlier direct message",
-        media: [{ path: "/tmp/input.png" }],
-        Provider: "telegram",
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "D123",
-        CommandSource: "native",
-        SessionKey: "agent:main:telegram:direct:source",
-        CommandTargetSessionKey: "agent:main:telegram:group:target",
-      },
-    });
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -3316,12 +3377,7 @@ describe("runPreparedReply media-only handling", () => {
   });
   it("keeps route and dispatch system events queued when busy admission returns", async () => {
     vi.useFakeTimers();
-    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-      "./session-system-events.js",
-    );
-    vi.mocked(drainFormattedSystemEvents).mockImplementation(
-      actualSystemEvents.drainFormattedSystemEvents,
-    );
+    await useActualSystemEventDrain();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const routeSessionKey = "agent:main:slack:channel:c123";
@@ -3373,15 +3429,11 @@ describe("runPreparedReply media-only handling", () => {
     nextRun.complete();
   });
   it("drains system events only after waiting behind an active run", async () => {
-    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-      "./session-system-events.js",
-    );
-    vi.mocked(drainFormattedSystemEvents).mockImplementation(
-      actualSystemEvents.drainFormattedSystemEvents,
-    );
+    await useActualSystemEventDrain();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    enqueueSystemEvent("System event after active run", { sessionKey: "session-key" });
+    const queueKey = "agent:default:session-key";
+    enqueueSystemEvent("System event after active run", { sessionKey: queueKey });
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -3399,7 +3451,7 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     await Promise.resolve();
-    expect(peekSystemEventEntries("session-key").map((event) => event.text)).toEqual([
+    expect(peekSystemEventEntries(queueKey).map((event) => event.text)).toEqual([
       "System event after active run",
     ]);
     previousRun.complete();
@@ -3416,7 +3468,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).not.toContain("System event after active run");
     expect(call.followupRun.prompt).toBe("[User sent media without caption]");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System event after active run");
-    expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
+    expect(peekSystemEventEntries(queueKey)).toStrictEqual([]);
   });
 
   it("threads inbound context as current-turn context without changing transcript text", async () => {
@@ -3687,6 +3739,13 @@ describe("runPreparedReply media-only handling", () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
+    const operatorController = new AbortController();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => operatorController.signal.throwIfAborted(),
+      signal: operatorController.signal,
+    });
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "collect",
       debounceMs: 500,
@@ -3701,7 +3760,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("user request context");
 
     await runPrepared({
-      opts: { abortSignal: abortController.signal },
+      opts: { abortSignal: abortController.signal, operatorAuthority },
       ctx: {
         ...createInboundTurn("@bot keep this", "telegram", "group"),
       },
@@ -3718,6 +3777,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.followupRun.currentInboundEventKind).toBe("user_request");
     expect(call.followupRun.abortSignal).toBeUndefined();
+    expect(call.followupRun.operatorAuthority).toBe(operatorAuthority);
+    abortController.abort();
+    expect(resolveFollowupAbortSignal(call.followupRun)?.aborted).toBe(false);
+    operatorController.abort();
+    expect(resolveFollowupAbortSignal(call.followupRun)?.aborted).toBe(true);
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {
@@ -3876,14 +3940,9 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: heartbeatPrompt,
           CommandBody: heartbeatPrompt,
           InternalTurnSource: source,
-          ...(suppliedSourceTool
-            ? {
-                InputProvenance: {
-                  kind: "internal_system" as const,
-                  sourceTool: suppliedSourceTool,
-                },
-              }
-            : {}),
+          InputProvenance: suppliedSourceTool
+            ? { kind: "internal_system", sourceTool: suppliedSourceTool }
+            : undefined,
           ChatType: "direct",
           OriginatingChannel: "discord",
           OriginatingTo: "discord:channel-123",
@@ -3907,8 +3966,12 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",
       });
-      expect(call?.transcriptCommandBody).toBe(transcriptPrompt);
-      expect(call?.followupRun.transcriptPrompt).toBe(transcriptPrompt);
+      const expectedTranscript =
+        expectedSourceTool === "exec" || expectedSourceTool === "exec-event"
+          ? `${transcriptPrompt}\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.`
+          : transcriptPrompt;
+      expect(call?.transcriptCommandBody).toBe(expectedTranscript);
+      expect(call?.followupRun.transcriptPrompt).toBe(expectedTranscript);
       expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
         provenance: { kind: "internal_system", sourceTool: expectedSourceTool },
       });
@@ -4946,12 +5009,7 @@ describe("runPreparedReply media-only handling", () => {
   it.each(["live", "replaced", "absent"] as const)(
     "respects the heartbeat admission selection when it is %s",
     async (selection) => {
-      const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-        "./session-system-events.js",
-      );
-      vi.mocked(drainFormattedSystemEvents).mockImplementation(
-        actualSystemEvents.drainFormattedSystemEvents,
-      );
+      await useActualSystemEventDrain();
       const queueKey = "agent:main:main:heartbeat:heartbeat";
       const runKey = "agent:main:main:heartbeat";
       const generic = expectDefined(
@@ -5020,12 +5078,7 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it("includes route system events in a thread-scoped turn", async () => {
-    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-      "./session-system-events.js",
-    );
-    vi.mocked(drainFormattedSystemEvents).mockImplementation(
-      actualSystemEvents.drainFormattedSystemEvents,
-    );
+    await useActualSystemEventDrain();
     enqueueSystemEvent("Slack reaction added: :eyes:", {
       sessionKey: "agent:main:slack:channel:c123",
     });
@@ -5062,6 +5115,39 @@ describe("runPreparedReply media-only handling", () => {
       [],
     );
   });
+
+  it.each(["creator", "assigned", "unowned", "internal", "session-internal"] as const)(
+    "selects the session personal profile, never the incoming participant: %s",
+    async (kind) => {
+      const params = ownerParams();
+      params.sessionEntry = {
+        sessionId: "session-owner-profile",
+        updatedAt: 1,
+        ...(kind === "unowned"
+          ? {}
+          : { createdActor: { type: "human" as const, source: "profile" as const, id: "alice" } }),
+        ...(kind === "assigned"
+          ? { owner: { actor: { type: "human" as const, id: "carol" } } }
+          : {}),
+      };
+      prepareSessionParticipantInput(params.ctx, { type: "profile", id: "bob" });
+      params.ctx.SenderId = "bob";
+      if (kind === "session-internal") {
+        params.sessionCtx.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
+      }
+      if (kind === "internal") {
+        params.ctx.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
+      }
+      await runPreparedReply(params);
+      expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
+        kind === "unowned" || kind === "internal" || kind === "session-internal"
+          ? undefined
+          : kind === "assigned"
+            ? "carol"
+            : "alice",
+      );
+    },
+  );
 
   it("keeps sender ownership when queued system events are prepended", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
@@ -5241,7 +5327,7 @@ describe("runPreparedReply media-only handling", () => {
       "Beta hook finished",
       withSystemEventOwner({ sessionKey: "global" }, "beta"),
     );
-    enqueueSystemEvent("Legacy unowned event", { sessionKey: "global" });
+    enqueueSystemEvent("Alpha follow-up", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
 
     await runPreparedReply(
       baseParams({
@@ -5249,7 +5335,7 @@ describe("runPreparedReply media-only handling", () => {
         sessionKey: "global",
         opts: withReplySystemEventContext(
           { isHeartbeat: true },
-          { sessionKey: "global", events: peekSystemEventEntries("global") },
+          { sessionKey: "global", events: peekSystemEventEntries("agent:alpha:global") },
         ),
       }),
     );
@@ -5257,7 +5343,7 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     const context = call.followupRun.currentInboundContext;
     expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    for (const event of ["Alpha hook finished", "Legacy unowned event"]) {
+    for (const event of ["Alpha hook finished", "Alpha follow-up"]) {
       expect(context?.text).toContain(event);
       expect(context?.fragments).toContainEqual({
         kind: "conversation-data",
@@ -5268,7 +5354,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).not.toContain("Beta hook finished");
     expect(context?.text).not.toContain("Beta hook finished");
     expect(JSON.stringify(context?.fragments)).not.toContain("Beta hook finished");
-    expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+    expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
       "Beta hook finished",
     ]);
   });

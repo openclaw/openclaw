@@ -2,8 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client, Plugin } from "../internal/discord.js";
 
-const { registerVoiceClientSpy, waitForDiscordGatewayPluginRegistrationMock } = vi.hoisted(() => ({
+const {
+  registerVoiceClientSpy,
+  waitForDiscordGatewayPluginRegistrationMock,
+  stopPresenceListener,
+} = vi.hoisted(() => ({
   registerVoiceClientSpy: vi.fn(),
+  stopPresenceListener: vi.fn(async () => {}),
   waitForDiscordGatewayPluginRegistrationMock: vi.fn(),
 }));
 
@@ -71,7 +76,7 @@ vi.mock("./listeners.js", () => ({
     return { type: "interaction" };
   },
   DiscordPresenceListener: function DiscordPresenceListener() {
-    return { type: "presence" };
+    return { type: "presence", stop: stopPresenceListener };
   },
   DiscordPresenceGuildCreateListener: function DiscordPresenceGuildCreateListener() {
     return { type: "presence-guild-create" };
@@ -90,6 +95,9 @@ vi.mock("./listeners.js", () => ({
   },
   DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {
     return { type: "thread-delete" };
+  },
+  DiscordThreadReadyListener: function DiscordThreadReadyListener() {
+    return { type: "thread-ready" };
   },
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {
     return { type: "thread-update" };
@@ -385,8 +393,8 @@ describe("registerDiscordMonitorListeners", () => {
     expect(registeredListenerTypes()).toContain("reaction-remove");
   });
 
-  it("registers presence lifecycle listeners when the presence intent is enabled", () => {
-    registerDiscordMonitorListeners(
+  it("registers and stops presence lifecycle listeners when the presence intent is enabled", async () => {
+    const stop = registerDiscordMonitorListeners(
       createListenerParams({ discordConfig: { intents: { presence: true } } }),
     );
 
@@ -397,12 +405,15 @@ describe("registerDiscordMonitorListeners", () => {
       "reaction-add",
       "reaction-remove",
       "thread-update",
+      "thread-ready",
       "thread-delete",
       "presence",
       "presence-guild-create",
       "presence-guild-delete",
       "presence-ready",
     ]);
+    await stop();
+    expect(stopPresenceListener).toHaveBeenCalledTimes(1);
   });
 });
 

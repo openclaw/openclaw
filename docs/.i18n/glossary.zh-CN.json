@@ -20,6 +20,26 @@
     "target": "OpenClaw"
   },
   {
+    "source": "FaceTime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "FaceTime recovery and removal",
+    "target": "FaceTime 恢复与移除"
+  },
+  {
+    "source": "Facetime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "Facetime plugin reference",
+    "target": "FaceTime 插件参考"
+  },
+  {
+    "source": "facetime",
+    "target": "facetime"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },
@@ -2900,6 +2920,10 @@
     "target": "llmman（本地模型）"
   },
   {
+    "source": "llmman (local + hybrid local/hosted models)",
+    "target": "llmman（本地 + 本地/托管混合模型）"
+  },
+  {
     "source": "llama.cpp (managed or existing server)",
     "target": "llama.cpp（托管或现有服务器）"
   },
@@ -3782,6 +3806,10 @@
   {
     "source": "Code Mode quickstart",
     "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
   },
   {
     "source": "Code Mode configuration",
@@ -4858,5 +4886,37 @@
   {
     "source": "FAQ: providers, hardware, and hosting",
     "target": "常见问题：服务商、硬件与托管"
+  },
+  {
+    "source": "Decision models",
+    "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
+  },
+  {
+    "source": "Local ONNX decision models",
+    "target": "本地 ONNX 决策模型"
+  },
+  {
+    "source": "ONNX",
+    "target": "ONNX"
+  },
+  {
+    "source": "onnx",
+    "target": "onnx"
+  },
+  {
+    "source": "Onnx plugin reference",
+    "target": "ONNX 插件参考"
   }
 ]

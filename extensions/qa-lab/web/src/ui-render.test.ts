@@ -73,7 +73,7 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],
     selectedConversationKey: null,
-    selectedEvidenceEntryId: null,
+    selectedEvidenceEntryKey: null,
     selectedScenarioId: null,
     selectedThreadId: null,
     sidebarCollapsed: false,
@@ -446,6 +446,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.blocked", role: "primary" }],
               failureReason: "Environment unavailable",
               id: "qa-lab.blocked",
+              key: "0",
+              effective: true,
               kind: "script-test",
               sourcePath: "scripts/blocked.ts",
               status: "blocked",
@@ -456,6 +458,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.skipped", role: "primary" }],
               failureReason: null,
               id: "qa-lab.skipped",
+              key: "1",
+              effective: true,
               kind: "vitest-test",
               sourcePath: "extensions/qa-lab/src/skipped.test.ts",
               status: "skipped",
@@ -469,7 +473,7 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "qa-lab.blocked",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
@@ -524,6 +528,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
+              key: "0",
+              effective: true,
               kind: "ux-matrix-cell",
               sourcePath: "scripts/ux-matrix/dashboard.ts",
               status: "pass",
@@ -560,6 +566,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "pass",
                   surface: "web-ui",
                   testId: "ux-matrix.web-ui.first-run",
+                  entryKey: "0",
                   title: "UX Matrix: web-ui / first-run",
                 },
                 {
@@ -577,6 +584,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "proof-gap",
                   surface: "cli",
                   testId: null,
+                  entryKey: null,
                   title: null,
                 },
               ],
@@ -593,11 +601,11 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "ux-matrix.web-ui.first-run",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
-    expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
+    expect(html).toContain('data-evidence-entry-key="0"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
     expect(html).not.toContain("Coverage:");
@@ -606,7 +614,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain("Open video artifact");
     expect(html).not.toContain('src="/api/evidence/artifact?artifactPath=recording.gif"');
     expect(html).not.toContain("<video controls");
-    expect(html).not.toContain('data-evidence-entry-id="null"');
+    expect(html).not.toContain('data-evidence-entry-key="null"');
   });
 
   it("redacts secret-like capture payload fields in raw previews", () => {

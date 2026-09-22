@@ -51,27 +51,28 @@ describe("status.command-sections", () => {
     ).toBe("2 · no workspaces bootstrapping · sessions 0");
   });
 
-  it("shows when heartbeat is waiting for a delivery route", () => {
-    expect(
-      buildStatusHeartbeatValue({
-        summary: {
-          heartbeat: {
-            defaultAgentId: "main",
-            agents: [
-              {
-                agentId: "main",
-                enabled: true,
-                every: "30m",
-                everyMs: 1_800_000,
-                waitingForRoute: true,
-              },
-            ],
-          },
+  it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
+    const value = buildStatusHeartbeatValue({
+      summary: {
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [
+            {
+              agentId: "main",
+              enabled: true,
+              every: "30m",
+              everyMs: 1_800_000,
+              waitingForRoute: true,
+            },
+          ],
         },
-      }),
-    ).toBe(
-      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
-    );
+      },
+    });
+
+    expect(value).toContain("30m (main; waiting for delivery route");
+    expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(value).toContain('heartbeat.target="telegram"');
+    expect(value).toContain('heartbeat.to="123456789"');
   });
 
   it("formats security audit lines with finding caps and follow-up commands", () => {

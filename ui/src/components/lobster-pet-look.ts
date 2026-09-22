@@ -5,7 +5,6 @@ import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,
-  LobsterPetBuild,
   LobsterPetClawSize,
   LobsterPetLook,
   LobsterPetPalette,
@@ -70,7 +69,6 @@ export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook
     facing: 1,
     personality: "friendly",
     blinkDelayS: (paletteHash % 36) / 10,
-    build: "round",
     clawSize: "regular",
     tailFan: false,
     shiny: false,
@@ -128,26 +126,11 @@ const SCALES: Array<[number, number]> = [
   [2.5, 20],
 ];
 
-const BUILDS: Array<[LobsterPetBuild, number]> = [
-  ["round", 40],
-  ["squat", 30],
-  ["slender", 30],
-];
-
 const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
   ["regular", 55],
   ["dainty", 25],
   ["mighty", 20],
 ];
-
-// Builds reshape the whole sprite by stretching its aspect ratio (the svg
-// renders with preserveAspectRatio="none"), so eyes, claws, accessories, and
-// rare-variant geometry stay aligned for every silhouette.
-const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
-  round: { w: 1, h: 1 },
-  squat: { w: 1.14, h: 0.94 },
-  slender: { w: 0.88, h: 1.1 },
-};
 
 const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
   dainty: 0.85,
@@ -203,9 +186,9 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   const facing = rng() < 0.5 ? 1 : -1;
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
-  // Trait generations append their rolls (shape, then sparkle) so earlier
-  // seeds keep their palette/personality and only gain new details.
-  const build = pickWeighted(rng, BUILDS);
+  // Retain the former body-build draw so removing stretched silhouettes does
+  // not reroll the remaining seeded traits, including shiny and claw choices.
+  rng();
   const clawSize = pickWeighted(rng, CLAW_SIZES);
   const tailFan = rng() < 0.3;
   const shiny = rng() < 1 / 512;
@@ -232,7 +215,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     facing,
     personality,
     blinkDelayS,
-    build,
     clawSize,
     tailFan,
     shiny,
@@ -322,7 +304,7 @@ export function renderLobsterSvg(
     <svg
       class="lobster-pet__svg"
       viewBox="0 0 120 105"
-      preserveAspectRatio="none"
+      preserveAspectRatio="xMidYMax meet"
       aria-hidden="true"
     >
       <g class=${PALETTE_FRAME_CLASSES[look.palette.id] ?? ""}>
@@ -446,8 +428,6 @@ function lobsterLookStyleVars(look: LobsterPetLook): string[] {
     `--lob-claw:${bodyDonorClaw ?? look.palette.claw}`,
     `--lob-blink-delay:${look.blinkDelayS}s`,
     `--lob-breathe-delay:-${breatheDelayS}s`,
-    `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
-    `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
     `--lob-claw-l:${clawMul("left")}`,
     `--lob-claw-r:${clawMul("right")}`,
     ...(look.chimeraParts

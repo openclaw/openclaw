@@ -6,15 +6,16 @@ import { build } from "tsdown";
 import { expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
 
-it("keeps admitted session ownership across native and transformed SDK graphs", async () => {
+it("keeps admitted session ownership when transformed plugins import the native SDK", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "reply-admission-module-")));
   const repo = process.cwd();
   const dist = path.join(root, "dist");
+  const deferredModules = new Set<string>();
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
   const ownerExports = `
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
     export { replyRunRegistry } from ${source("src/auto-reply/reply/reply-run-registry.ts")};
-    export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.ts")};
+    export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
     export { closeOpenClawAgentDatabases } from ${source("src/state/openclaw-agent-db.ts")};
     export { closeOpenClawStateDatabase } from ${source("src/state/openclaw-state-db.ts")};
   `;
@@ -33,8 +34,26 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Model the packaged host/SDK graph, then load a plugin through its supported transform path.
+    // Keep lazy recovery/archival graphs out of this admission fixture. The child
+    // rejects and records any attempt to enter them, including caught import errors.
     await build({
+      plugins: [
+        {
+          name: "defer-unexercised-runtime",
+          async resolveId(id, importer, options) {
+            if (options.kind !== "dynamic-import") {
+              return null;
+            }
+            const resolved = await this.resolve(id, importer, { skipSelf: true });
+            if (!resolved || resolved.external) {
+              return resolved;
+            }
+            const url = pathToFileURL(resolved.id).href;
+            deferredModules.add(url);
+            return { id: url, external: true };
+          },
+        },
+      ],
       config: false,
       cwd: repo,
       entry: {
@@ -45,11 +64,8 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       envPrefix: [],
       clean: false,
       deps: {
-        // Match compiled workers: workspace packages bring their private dependencies.
-        alwaysBundle: (id) =>
-          (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
-          id !== "@openclaw/fs-safe" &&
-          !id.startsWith("@openclaw/fs-safe/"),
+        // Build the host and SDK together, matching the packaged host graph.
+        alwaysBundle: (id) => id !== "@openclaw/fs-safe" && !id.startsWith("@openclaw/fs-safe/"),
       },
       platform: "node",
       format: "esm",
@@ -65,7 +81,19 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       String.raw`
         import assert from "node:assert/strict";
         import path from "node:path";
+        import { registerHooks } from "node:module";
         const root = ${JSON.stringify(root)};
+        const deferredModules = new Set(${JSON.stringify([...deferredModules])});
+        const unexpectedImports = [];
+        const hooks = registerHooks({
+          resolve(specifier, context, nextResolve) {
+            if (deferredModules.has(specifier)) {
+              unexpectedImports.push(specifier);
+              throw new Error("Admission fixture entered deferred runtime: " + specifier);
+            }
+            return nextResolve(specifier, context);
+          },
+        });
         const operations = new Set();
         const outcomes = [];
         let host;
@@ -90,10 +118,9 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           const modulePath = path.join(root, "plugin.ts");
           transformed = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
-            transformOpenClawDependencies: true,
             aliasMap: { "openclaw/plugin-sdk/admission-fixture": path.join(root, "dist/admission-runtime.js") },
           })(modulePath);
-          assert.notEqual(transformed.admitReplyTurn, host.admitReplyTurn, "transformed SDK evaluates a separate graph");
+          assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
           const cases = [
             { name: "native-same-store", parent: native, foreign: false },
             { name: "transformed-same-store", parent: transformed, foreign: false },
@@ -103,7 +130,8 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
             const sessionKey = "global";
             const sessionId = "before-" + scenario.name;
             const successorId = "after-" + scenario.name;
-            const caseRoot = path.join(root, "state", scenario.name);
+            // Reuse the target database; each scenario still owns a distinct operation and UUID.
+            const caseRoot = path.join(root, "state");
             const targetStore = path.join(caseRoot, "target", "sessions.json");
             const parentStore = scenario.foreign
               ? path.join(caseRoot, "foreign", "sessions.json") : targetStore;
@@ -172,7 +200,9 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           host?.closeOpenClawAgentDatabases();
           transformed?.closeOpenClawStateDatabase();
           host?.closeOpenClawStateDatabase();
+          hooks.deregister();
         }
+        assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");
       `,
       {
         timeout: 45_000,

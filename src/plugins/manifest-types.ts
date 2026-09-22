@@ -3,7 +3,7 @@ import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-ty
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
-import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
@@ -20,6 +20,16 @@ export type PluginConfigUiHint = {
   presentation?: ConfigUiPresentation;
 };
 
+/** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
+export type PluginManifestTheme = {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
+};
+
 /** Top-level plugin manifest format. */
 export type PluginFormat = "openclaw" | "bundle";
 
@@ -33,6 +43,8 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 export type PluginDiagnosticCode =
   | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
+  | "configured-plugin-path-inspection-failed"
+  | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
   | "sdk-incompatible"
@@ -45,6 +57,9 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  configDisposition?: "preserve";
+  errorCode?: string;
+  fixHint?: string;
   sdkCompatibility?: {
     seam: string;
     coreVersion: string;
@@ -379,6 +394,12 @@ export type PluginManifestBackupResource = {
   relativePath: string;
 };
 
+export type PluginManifestDecisionModel = {
+  provider: string;
+  id: string;
+  name: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -469,6 +490,7 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
@@ -478,11 +500,14 @@ export type PluginManifest = {
   catalog?: PluginManifestCatalog;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  configGroups?: ConfigUiGroup[];
   /**
    * Static capability ownership snapshot used for manifest-driven discovery,
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Static model choices owned by contracts.decisionProviders; never conversational models. */
+  decisionModels?: PluginManifestDecisionModel[];
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
@@ -504,6 +529,8 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
+  codeModeExecutors?: string[];
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   trustedToolPolicies?: string[];
@@ -513,6 +540,7 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  decisionProviders?: string[];
   embeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -606,6 +634,10 @@ export type PluginManifestProviderAuthChoice = {
   method: string;
   /** Stable auth-choice id used by onboarding and other CLI auth flows. */
   choiceId: string;
+  /** Configure a utility model without replacing the regular agent primary. */
+  modelTarget?: "utility";
+  /** Supported Gateway host platforms; omission allows all, an empty list allows none. */
+  platforms?: NodeJS.Platform[];
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
@@ -616,7 +648,7 @@ export type PluginManifestProviderAuthChoice = {
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   /** Legacy choice ids that should point users at this replacement choice. */
   deprecatedChoiceIds?: string[];
   /** Optional grouping metadata for auth-choice pickers. */

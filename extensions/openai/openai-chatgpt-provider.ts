@@ -567,7 +567,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
             title: "OpenAI Codex device code",
             code: userCode,
             expiresInMinutes,
-            message: deviceCodeMessage,
+            message: "Enter this one-time code on the sign-in page.",
           });
         } else {
           // The prompter note is the user-facing TTY fallback, so
@@ -657,8 +657,8 @@ export function buildOpenAICodexProviderHooks(): Pick<
   return {
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId, agentRuntime, api, compat }) =>
-      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat, api),
+    resolveThinkingProfile: ({ modelId, agentRuntime, api, compat, thinkingLevelMap }) =>
+      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat, api, thinkingLevelMap),
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CHATGPT_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {

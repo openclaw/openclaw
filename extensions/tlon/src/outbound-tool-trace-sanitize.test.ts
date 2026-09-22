@@ -148,6 +148,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
     });
     expect(uploadImageFromUrl).toHaveBeenCalledWith(
       "https://source.example/image.png",
+      expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
       1024 * 1024,
     );
 

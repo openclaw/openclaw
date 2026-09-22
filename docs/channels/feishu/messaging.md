@@ -9,6 +9,25 @@ sidebarTitle: "Message types"
 
 The Feishu message types OpenClaw can receive and send, sticker support, and thread-aware replies.
 
+## Reading messages and chat information
+
+Official Feishu plugins installed from npm or ClawHub use the same Feishu access
+checks as the bundled plugin for message reads, reaction and pin lists, chat and
+member information, directory lists, and configured sticker searches. Existing
+account, action, and [access controls](/channels/feishu/access-control) still apply.
+Direct-chat member lookups remain limited to the current sender, and directory
+results remain filtered by the configured policy.
+
+For live peer lookups, the `channel-list` action matches `query` against user IDs
+and names across provider pages. `limit` applies to matching peers and defaults
+to 50. The action reports a lookup failure if pagination cannot finish within
+100 pages or the provider returns an invalid continuation token.
+
+Delegated reads from an installed plugin require the current Feishu account and
+conversation context. Ending the originating action or retiring the plugin
+prevents later provider requests and rejects late results. Requests already sent
+to Feishu cannot be undone.
+
 ## Supported message types
 
 ### Receive

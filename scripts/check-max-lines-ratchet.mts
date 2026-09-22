@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
-import { main as checkEnvVarCount } from "./check-env-var-count.mts";
+import {
+  addEnvVarNames,
+  isCountedSourcePath,
+  main as checkEnvVarCount,
+} from "./check-env-var-count.mts";
 import {
   compareRatchetSets,
   listRatchetRenames,
@@ -126,7 +130,7 @@ function listStagedSuppressionCandidates(root: string) {
 
 export function collectCurrentSuppressionState(
   root = process.cwd(),
-  options: { staged?: boolean } = {},
+  options: { staged?: boolean; envVarNames?: Map<string, ReadonlySet<string>> } = {},
 ) {
   const staged = options.staged === true;
   const filePaths = staged
@@ -149,6 +153,11 @@ export function collectCurrentSuppressionState(
     const source = stagedSources
       ? stagedSources.get(filePath)!
       : fs.readFileSync(path.join(root, filePath), "utf8");
+    if (!staged && options.envVarNames && isCountedSourcePath(filePath)) {
+      const names = new Set<string>();
+      addEnvVarNames(source, names);
+      options.envVarNames.set(filePath, names);
+    }
     const directives = collectLintDisableDirectives(source, filePath);
     if (directives.some((rules) => rules.length === 0)) {
       allRules.push(filePath);
@@ -172,7 +181,11 @@ function envVarCountArgs(argv: string[]) {
   return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
 }
 
-export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+export function main(
+  root = process.cwd(),
+  argv: string[] = process.argv.slice(2),
+  envVarNames?: Map<string, ReadonlySet<string>>,
+) {
   try {
     const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
@@ -188,6 +201,7 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
     const baseline = baselineSource;
     const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
       staged: args.staged,
+      envVarNames,
     });
     const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
     const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
@@ -250,14 +264,18 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
 }
 
 function runBaselineRatchets(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
-  const maxLinesStatus = main(root, argv);
+  // Keep name sets local to this invocation, including files with no matches.
+  const envVarNames = argv.includes("--staged")
+    ? undefined
+    : new Map<string, ReadonlySet<string>>();
+  const maxLinesStatus = main(root, argv, envVarNames);
   if (maxLinesStatus !== 0) {
     return maxLinesStatus;
   }
   try {
     // CI invokes this entry with its frozen fork-point ref. Carry the same snapshot
     // into the env budget so every baseline ratchet judges one tested tree.
-    checkEnvVarCount(envVarCountArgs(argv), root);
+    checkEnvVarCount(envVarCountArgs(argv), root, envVarNames);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

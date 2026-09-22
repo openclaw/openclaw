@@ -500,7 +500,10 @@ describe("terminal observations", () => {
           activeRunIds: overlap ? ["run-b"] : ["run-a"],
         };
         if (includePrimary) {
-          expect(sessions.state.result?.sessions[0]).toMatchObject(expectedOlder);
+          expect(sessions.state.result?.sessions[0]).toMatchObject({
+            ...expectedOlder,
+            activeRunIds: ["run-b"],
+          });
         } else {
           expect(sessions.state.result?.sessions).toEqual([]);
         }

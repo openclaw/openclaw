@@ -1,4 +1,3 @@
-// MS Teams plugin module implements action threading behavior.
 import type { ChannelToolSend } from "openclaw/plugin-sdk/channel-contract";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -1,8 +1,8 @@
 // Discovers and copies static assets declared by bundled extension packages.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { parseDockerSelectedPluginBuildIdFilter } from "./bundled-plugin-build-entries.mjs";
+import { collectTrackedBundledPluginSourceCandidates } from "./bundled-plugin-source-utils.mts";
 import { isRecord } from "./record-shared.mjs";
 
 type StaticExtensionAsset = {
@@ -61,49 +61,12 @@ function listTrackedExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
   if (fsImpl !== fs) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", ":(glob)extensions/*/package.json"], {
-    cwd: rootDir,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const deletedResult = spawnSync(
-    "git",
-    ["ls-files", "--deleted", "--", ":(glob)extensions/*/package.json"],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    },
+  return collectTrackedBundledPluginSourceCandidates(rootDir)?.flatMap(
+    ({ dirName, pluginDir, packageJsonPath }) =>
+      packageJsonPath
+        ? [{ dirName, hasPackageJson: true, packageDir: pluginDir, packageJsonPath }]
+        : [],
   );
-  if (deletedResult.status !== 0) {
-    return null;
-  }
-  const deletedPaths = new Set(
-    deletedResult.stdout.split("\n").map((line) => toPosixPath(line.trim())),
-  );
-  return result.stdout
-    .split("\n")
-    .map((line) => toPosixPath(line.trim()))
-    .filter((line) => line.length > 0 && !deletedPaths.has(line))
-    .flatMap((line) => {
-      const match = /^extensions\/([^/]+)\/package\.json$/u.exec(line);
-      if (!match?.[1]) {
-        return [];
-      }
-      const packageDir = path.join(rootDir, "extensions", match[1]);
-      return [
-        {
-          dirName: match[1],
-          hasPackageJson: true,
-          packageDir,
-          packageJsonPath: path.join(packageDir, "package.json"),
-        },
-      ];
-    })
-    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
 function listFilesystemExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {

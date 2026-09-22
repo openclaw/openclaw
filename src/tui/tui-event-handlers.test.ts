@@ -1,7 +1,7 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as failoverClassifier from "../agents/failover/classify.js";
+import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -1660,8 +1660,13 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
   });
 
-  it("ignores selected-global chat events from other agents", () => {
-    const { chatLog, handleChatEvent } = createHandlersHarness({
+  it.each([
+    { sessionKey: "global", agentId: "main" },
+    { sessionKey: "global", agentId: undefined },
+    { sessionKey: "agent:main:global", agentId: undefined },
+    { sessionKey: "agent:work:global", agentId: "main" },
+  ])("ignores foreign global events $sessionKey/$agentId", (event) => {
+    const { chatLog, btw, handleChatEvent, handleBtwEvent } = createHandlersHarness({
       state: {
         agentDefaultId: "main",
         currentAgentId: "work",
@@ -1671,37 +1676,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleChatEvent({
-      runId: "run-main-global",
-      agentId: "main",
+      ...event,
+      runId: "run-foreign-global",
       message: { content: "wrong agent" },
     });
-    handleChatEvent({
-      runId: "run-legacy-default-global",
-      message: { content: "legacy default" },
-    });
-
-    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
-  });
-
-  it("ignores selected-global BTW events from other agents", () => {
-    const { btw, handleBtwEvent } = createHandlersHarness({
-      state: {
-        agentDefaultId: "main",
-        currentAgentId: "work",
-        currentSessionKey: "global",
-      },
-    });
-
     handleBtwEvent({
+      ...event,
       kind: "btw",
-      runId: "btw-main-global",
-      sessionKey: "global",
-      agentId: "main",
+      runId: "btw-foreign-global",
       question: "status?",
       text: "wrong agent",
     });
 
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
     expect(btw.showResult).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-selected-global",
+      sessionKey: "AGENT:WORK:GLOBAL",
+      message: { content: "selected agent" },
+    });
+    expect(chatLog.updateAssistant).toHaveBeenCalledExactlyOnceWith(
+      "selected agent",
+      "run-selected-global",
+    );
   });
 
   it("clears run mapping when the session changes", () => {
@@ -2541,7 +2539,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleChatEvent({ runId: "run-stale", seq: 1, message: { content: "complete reply" } });
       handleChatEvent({ runId: "run-terminal", seq: 2, state: terminal });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
       expect(state.activeChatRunId).toBeNull();
       expect(state.activityStatus).toBe("idle");
@@ -2565,7 +2563,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         state: { activeChatRunId: "run-restored", activityStatus: "streaming" },
       });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", ...event });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", ...event });
 
       expect(state.activeChatRunId).toBe("run-restored");
       expect(state.activityStatus).toBe("streaming");
@@ -2583,7 +2581,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleSessionsChangedEvent({
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       sessionId: "session-old",
       activeRunIds: [],
     });
@@ -2614,7 +2612,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleSessionsChangedEvent({
         sessionKey: "main",
         ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        reason: "chat.run.settled",
+        reason: "agent.input.settled",
         activeRunIds: [],
       });
 
@@ -2636,7 +2634,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     Object.assign(state, pending);
     setActivityStatus.mockClear();
 
-    handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+    handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingSubmit).toEqual(pending.pendingSubmit);
@@ -2857,7 +2855,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("renders non-auth failures without invoking provider classification", () => {
     const classify = vi
-      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .spyOn(failoverClassifier, "classifyFailoverReasonCore")
       .mockImplementation(() => {
         throw new Error("provider classification must not block non-auth error rendering");
       });
@@ -4092,7 +4090,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     handlers.handleSessionsChangedEvent({
       sessionKey: state.currentSessionKey,
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       activeRunIds: [],
     });
 

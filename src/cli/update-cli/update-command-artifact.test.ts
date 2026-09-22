@@ -92,7 +92,6 @@ it.each(["activate", "refuse", "directory"] as const)(
         timeoutMs: 30_000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         installTarget: target,
         nodeRunner: path.join(base, "not-the-selected-node"),
         installEnv: {
@@ -233,7 +232,6 @@ it("preserves an artifact refusal when private workspace cleanup also fails", as
           tag: "file:/fixture/candidate.tgz",
           timeoutMs: 1000,
           startedAt: Date.now(),
-          jsonMode: true,
           progress: {},
           installEnv: {},
         }),

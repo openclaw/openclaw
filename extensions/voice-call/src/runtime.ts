@@ -1,4 +1,3 @@
-// Voice Call plugin module implements runtime behavior.
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -329,7 +328,7 @@ export async function createVoiceCallRuntime(params: {
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
-  const manager = new CallManager(config, undefined, cfg.session);
+  const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
   const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
   const webhookServer = new VoiceCallWebhookServer(
     config,

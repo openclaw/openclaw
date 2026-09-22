@@ -19,7 +19,9 @@ const pwAiMocks = vi.hoisted(() => {
 });
 
 const chromeMocks = vi.hoisted(() => ({
-  stopOwnedOpenClawChrome: vi.fn(async () => false),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(
+    async () => ({ status: "not-running" }),
+  ),
 }));
 
 vi.mock("./pw-ai.js", () => ({ pwAi: pwAiMocks }));
@@ -43,7 +45,7 @@ vi.mock("./chrome-mcp.js", () => ({
 
 afterEach(() => {
   vi.clearAllMocks();
-  chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue(false);
+  chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue({ status: "not-running" });
 });
 
 function createStopHarness(profile: ReturnType<typeof makeBrowserProfile>) {
@@ -90,7 +92,7 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
   });
 
   it("stops a local managed browser launched by another runtime", async () => {
-    chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue(true);
+    chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue({ status: "stopped" });
     const profile = makeBrowserProfile();
     const { profileCtx } = createStopHarness(profile);
 

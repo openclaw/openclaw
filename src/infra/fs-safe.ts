@@ -3,7 +3,7 @@ import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
+import "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
   root as fsSafeRoot,
@@ -11,10 +11,8 @@ import {
   type Root as FsSafeRoot,
   type RootDefaults,
 } from "@openclaw/fs-safe/root";
-import { writeOwnedTempFile } from "./owned-temp-file.js";
 
-export { FsSafeError };
-export type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
@@ -66,57 +64,8 @@ export { withTimeout } from "@openclaw/fs-safe/advanced";
 // new Root.walk capability core-only until a dedicated plugin contract is approved.
 export type Root = Omit<FsSafeRoot, "walk">;
 
-const PINNED_WRITE_CATCH_ALL_MESSAGE = "path is not a regular file under root";
-
-const PINNED_WRITE_ERRNO_MESSAGES = new Map<string, string>([
-  ["EACCES", "permission denied"],
-  ["ENOSPC", "no space left on device"],
-  ["EPERM", "permission denied"],
-  ["EROFS", "read-only filesystem"],
-]);
-
-async function runPinnedWrite(write: () => Promise<void>): Promise<void> {
-  try {
-    await write();
-  } catch (error) {
-    if (
-      !(error instanceof FsSafeError) ||
-      error.code !== "invalid-path" ||
-      error.message !== PINNED_WRITE_CATCH_ALL_MESSAGE
-    ) {
-      throw error;
-    }
-    const cause = error.cause;
-    if (
-      !(cause instanceof Error) ||
-      !("code" in cause) ||
-      typeof cause.code !== "string" ||
-      !cause.code
-    ) {
-      throw error;
-    }
-    // fs-safe retains the errno but replaces its message with a path assertion.
-    // Keep its structured classification and original cause for existing callers.
-    const described = PINNED_WRITE_ERRNO_MESSAGES.get(cause.code) ?? "filesystem write failed";
-    throw new FsSafeError(error.code, `${described} (${cause.code})`, {
-      cause,
-      details: error.details,
-    });
-  }
-}
-
 export async function root(rootDir: string, defaults?: RootDefaults): Promise<Root> {
-  const created = await fsSafeRoot(rootDir, defaults);
-  const create = created.create.bind(created);
-  const write = created.write.bind(created);
-  // Keep the dependency's handle and identity. Its JSON methods call these writes.
-  const overrides: Pick<FsSafeRoot, "create" | "write"> = {
-    create: async (relativePath, data, options) =>
-      await runPinnedWrite(async () => await create(relativePath, data, options)),
-    write: async (relativePath, data, options) =>
-      await runPinnedWrite(async () => await write(relativePath, data, options)),
-  };
-  return Object.assign(created, overrides);
+  return await fsSafeRoot(rootDir, defaults);
 }
 
 export type ExternalFileWriteOptions = {
@@ -171,8 +120,9 @@ export async function writeExternalFileWithinRoot(
   const result = await writeExternalFileWithinRootBase({
     rootDir: options.rootDir,
     path: options.path,
-    write: (tempPath) => writeOwnedTempFile(tempPath, options.write),
+    write: options.write,
     staging: "sibling",
+    producerIsolation: "private-directory",
     fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
   });
   // Preserve the caller-facing path spelling while carrying forward any

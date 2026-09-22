@@ -30,7 +30,7 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
     },
     canDetectMention: false,
     shouldBypassMention: false,
-    hasControlCommand: false,
+    commandSource: undefined,
     stickerCacheHit: false,
     locationData: undefined,
   });

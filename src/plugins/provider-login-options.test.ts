@@ -35,6 +35,7 @@ describe("provider login choices", () => {
       choice(),
       choice({ choiceId: "setup", credentialOnly: undefined }),
       choice({ choiceId: "hidden", assistantVisibility: "manual-only" }),
+      choice({ choiceId: "undetected", assistantVisibility: "detected-only" }),
       choice({ choiceId: "media", onboardingScopes: ["image-generation"] }),
     ];
     expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([

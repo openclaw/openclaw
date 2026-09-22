@@ -9,6 +9,7 @@ export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceProps = {
   filter: SessionWorkspaceFilter;
+  browserPath: string;
   browserSearch: string;
   collapsed: boolean;
   sessionKey: string;
@@ -61,6 +62,7 @@ export type SessionWorkspaceState = {
   dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
+  errorOwner?: object;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;
@@ -76,6 +78,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;

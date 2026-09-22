@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,6 +13,7 @@ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
@@ -142,8 +144,9 @@ function resolvePluginOwnedToolConfigKeys(plugin: PluginManifestRecord): string[
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[plugin.id]?.config;
-  if (!isRecord(pluginConfig)) {
+  const entry = cfg.plugins?.entries?.[plugin.id];
+  const pluginConfig = entry?.config;
+  if (isNativeSessionCatalogOptOutOnly(plugin.id, entry) || !isRecord(pluginConfig)) {
     return false;
   }
   return resolvePluginOwnedToolConfigKeys(plugin).some((key) => pluginConfig[key] !== undefined);
@@ -383,6 +386,9 @@ function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
 }
 
 function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (getConfiguredDecisionProviderIds(cfg).length > 0) {
+    return true;
+  }
   if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
     return true;
   }
@@ -555,6 +561,15 @@ export function resolveConfiguredPluginAutoEnableCandidates(
     collectConfiguredWorkerProviderIds(params.config),
   )) {
     changes.push({ pluginId, kind: "worker-provider-selected", providerId });
+  }
+
+  const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));
+  for (const plugin of params.registry.plugins) {
+    for (const providerId of plugin.contracts?.decisionProviders ?? []) {
+      if (decisionProviderIds.has(providerId)) {
+        changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+      }
+    }
   }
 
   for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config)) {

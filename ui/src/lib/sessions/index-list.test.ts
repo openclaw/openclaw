@@ -17,7 +17,7 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type ListParams = {
   agentId?: string;
@@ -113,6 +113,8 @@ describe("session list requests", () => {
 
     try {
       await sessions.refresh({ agentId: "main", force: true });
+      void sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.loading).toBe(true);
       const wire = JSON.stringify({
         sessionKey: child.key,
         agentId: "main",
@@ -646,7 +648,12 @@ describe("session list requests", () => {
       const { gateway, emitEvent } = createGatewayHarness(client);
       const sessions = createTestSessionCapability(gateway);
       const query = { agentId: "main", archivedFilter: "archived" as const, limit: 17 };
-      const unsubscribe = sessions.subscribeList(query, () => undefined);
+      const readThreeObserved = createDeferred();
+      const unsubscribe = sessions.subscribeList(query, (next) => {
+        if (next.result?.sessions[0]?.label === "Read 3") {
+          readThreeObserved.resolve();
+        }
+      });
       const event = {
         type: "event",
         event: "sessions.changed",
@@ -667,6 +674,14 @@ describe("session list requests", () => {
         await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
         second.resolve(sessionsResult([row(2)], 2));
         await Promise.all([initial, forced]);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(managedCalls).toBe(2);
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Read 2");
+        await vi.advanceTimersByTimeAsync(1);
+        if (eventTiming === "after") {
+          expect(managedCalls).toBe(3);
+          await readThreeObserved.promise;
+        }
         expect.soft(managedCalls).toBe(eventTiming === "before" ? 2 : 3);
         expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe(
           eventTiming === "before" ? "Read 2" : "Read 3",
@@ -923,7 +938,12 @@ describe("session list requests", () => {
       });
       const { sessions, publish } = sessionHarness(request);
       const query = { hasBoard: true };
-      const unsubscribe = sessions.subscribeList(query, () => undefined);
+      const recoveredObserved = createDeferred();
+      const unsubscribe = sessions.subscribeList(query, (next) => {
+        if (next.result?.sessions[0]?.key === "agent:main:recovered") {
+          recoveredObserved.resolve();
+        }
+      });
       try {
         await sessions.refreshList(query);
         fail = true;
@@ -952,7 +972,13 @@ describe("session list requests", () => {
           expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
           pending.reject(error);
           await refresh;
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
+          expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:original");
+          await vi.advanceTimersByTimeAsync(1);
+          expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(3);
         }
+        await recoveredObserved.promise;
         expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:recovered");
         expect(sessions.listSnapshot(query).error).toBeNull();
         expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(3);

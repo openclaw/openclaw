@@ -16,10 +16,6 @@ import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
 } from "../commands/daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-} from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
@@ -61,6 +57,7 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
+import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -146,22 +143,6 @@ async function closeSessionGatewayForOnboarding(params: {
   await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
-}
-
-function getLocalizedGatewayDaemonRuntimeOptions() {
-  return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNodeHint"
-        : "wizard.finalize.daemonRuntimeBunHint",
-    ),
-    label: t(
-      option.value === "node"
-        ? "wizard.finalize.daemonRuntimeNode"
-        : "wizard.finalize.daemonRuntimeBun",
-    ),
-    value: option.value,
-  }));
 }
 
 const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
@@ -346,20 +327,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (installDaemon) {
-    const daemonRuntime =
-      flow === "quickstart"
-        ? DEFAULT_GATEWAY_DAEMON_RUNTIME
-        : await prompter.select({
-            message: t("wizard.finalize.daemonRuntime"),
-            options: getLocalizedGatewayDaemonRuntimeOptions(),
-            initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          });
-    if (flow === "quickstart") {
-      await prompter.note(
-        t("wizard.finalize.quickstartNodeRuntime"),
-        t("wizard.finalize.daemonRuntime"),
-      );
-    }
     const service = resolveGatewayService();
     if (params.loadedAction === "resume") {
       try {
@@ -461,28 +428,33 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const existingCommand = await service.readCommand(process.env).catch(() => null);
-          const { programArguments, workingDirectory, environment, environmentValueSources } =
-            await buildGatewayInstallPlan({
-              env: process.env,
-              port: settings.port,
-              runtime: daemonRuntime,
-              existingCommand,
-              warn: (message, title) => {
-                installWarnings.push({ message, title });
-              },
-              config: nextConfig,
-            });
+          const existingCommand = await service.readCommand(process.env);
+          const selection = await resolveOnboardingGatewayRuntime({
+            env: process.env,
+            existingCommand,
+            runtime: opts.daemonRuntime,
+            flow,
+            prompter,
+          });
+          const plan = await buildGatewayInstallPlan({
+            env: selection.env,
+            port: settings.port,
+            runtime: selection.runtime,
+            pinnedRuntimePath: selection.pinnedRuntimePath,
+            existingCommand,
+            warn: (message, title) => {
+              installWarnings.push({ message, title });
+            },
+            config: nextConfig,
+          });
           await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
             env: process.env,
             stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
+            ...plan,
+            runtimePinUpdate: selection.runtimePinUpdate,
           });
           gateway = { status: "ready", action: "installed" };
         }

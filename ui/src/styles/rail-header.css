@@ -13,6 +13,14 @@
   background: var(--rail-header-background);
 }
 
+/* Keep the side-panel variant after the base rule across lazy stylesheet loads. */
+.side-panel__header {
+  --rail-header-action-glyph-size: 15px;
+  margin-bottom: 0;
+  padding-left: 0;
+  border-bottom: 0;
+}
+
 .rail-header__copy {
   display: flex;
   min-width: 0;

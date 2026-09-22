@@ -31,6 +31,7 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
 
@@ -242,7 +243,10 @@ async function statSessionSource(source: SessionIngestionSource) {
     try {
       const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
       return stat
-        ? { mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)), size: Math.floor(stat.size) }
+        ? {
+            mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
+            size: Math.floor(stat.size),
+          }
         : null;
     } catch {
       return undefined;
@@ -299,7 +303,7 @@ export async function scanSessionIngestionSource(params: {
     return emptyScan("unavailable", params.previous);
   }
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
     size: Math.floor(Math.max(0, entry.size)),
   };
   const lines = entry.content ? entry.content.split("\n") : [];
@@ -495,22 +499,11 @@ export async function appendSessionCorpusLines(params: {
     SESSION_CORPUS_RELATIVE_DIR,
     `${params.day}.txt`,
   );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const existing = await fs.readFile(absolutePath, "utf-8").catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  });
-  const normalized = existing.replace(/\r\n/g, "\n");
-  const existingLines = normalized
-    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
-    : 0;
-  await appendRegularFile({
-    filePath: absolutePath,
-    content: `${params.lines.map((entry) => entry.rendered).join("\n")}\n`,
-    rejectSymlinkParents: true,
-  });
+  const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const existingLines = files
+    ? await files.appendCorpus(absolutePath, content)
+    : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,
     startLine: existingLines + index + 1,
@@ -521,4 +514,25 @@ export async function appendSessionCorpusLines(params: {
     provenance: entry.provenance,
     ...(entry.sessionOrigin ? { sessionOrigin: entry.sessionOrigin } : {}),
   }));
+}
+
+/** Native file append; session admission and checkpoints stay with the caller. */
+export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  const normalized = existing.replace(/\r\n/g, "\n");
+  const existingLines = normalized
+    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
+    : 0;
+  await appendRegularFile({
+    filePath,
+    content,
+    rejectSymlinkParents: true,
+  });
+  return existingLines;
 }

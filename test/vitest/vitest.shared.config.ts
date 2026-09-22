@@ -7,6 +7,7 @@ import normalizationCorePackageJson from "../../packages/normalization-core/pack
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import {
   isCiLikeEnv,
   resolveLocalVitestScheduling,
@@ -16,7 +17,11 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
-import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
+import {
+  createVitestProjectCachePlugin,
+  loadVitestPerformanceConfig,
+} from "./vitest.performance-config.ts";
+import { createRedactingReporterPlugin } from "./vitest.reporters.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
@@ -31,9 +36,11 @@ export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {
   optimizer: {
-    web: {
+    client: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
+      // Root and directives must share browser/development internals; native
+      // Node deep imports otherwise mix incompatible private Lit fields.
+      include: ["lit/**"] as string[],
     },
   },
 };
@@ -84,22 +91,31 @@ export function resolveSharedVitestWorkerConfig(params: {
   isCI?: boolean;
   isWindows?: boolean;
   localScheduling?: LocalVitestScheduling;
-}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> & {
+  pool: "forks" | "threads";
+} {
   const env = params.env ?? process.env;
   const local = params.localScheduling ?? localScheduling;
+  const windows = params.isWindows ?? isWindows;
+  // Windows concurrent thread spawns can inherit one another's temporary pipe
+  // handles. Separate processes keep those writers out of unrelated child trees.
+  const pool = windows ? "forks" : "threads";
   if (hasWorkerOverride(env)) {
     return {
+      pool,
       fileParallelism: local.fileParallelism,
       maxWorkers: local.maxWorkers,
     };
   }
   if (params.isCI ?? isCI) {
     return {
+      pool,
       fileParallelism: true,
-      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+      maxWorkers: windows ? 2 : 3,
     };
   }
   return {
+    pool,
     fileParallelism: local.fileParallelism,
     maxWorkers: local.maxWorkers,
   };
@@ -130,7 +146,20 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot), compiledSubprocessesPlugin()],
+  plugins: [
+    {
+      name: "openclaw:node-worker-policy",
+      config: () => ({
+        test: {
+          globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
+        },
+      }),
+    },
+    createStateSchemaInlinePlugin(repoRoot),
+    compiledSubprocessesPlugin(),
+    createVitestProjectCachePlugin(),
+    createRedactingReporterPlugin(),
+  ],
   resolve: {
     alias: [
       {
@@ -262,6 +291,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/gateway-protocol/system-agent-context",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "system-agent-context.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/version",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "version.ts"),
       },
@@ -313,6 +352,8 @@ export const sharedVitestConfig = {
         find: "@openclaw/llm-core/validation",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "validation.ts"),
       },
+      sourcePackageAlias("llm-core", "types"),
+      sourcePackageAlias("llm-core", "model-contracts/anthropic"),
       {
         find: "@openclaw/llm-core",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "index.ts"),
@@ -435,6 +476,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
       sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract", "session-key-normalization"),
       sourcePackageAlias("session-url-contract", "share-build"),
       sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
@@ -464,7 +506,9 @@ export const sharedVitestConfig = {
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,
-    pool: "threads" as const,
+    pool: workerConfig.pool,
+    // Native imports keep the invocation owner's isolated source-cache policy.
+    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -473,6 +517,9 @@ export const sharedVitestConfig = {
     },
     server: {
       deps: {
+        // Vite versions unoptimized imports; native transitive imports do not.
+        // Keep editor classes and parser properties in one module graph.
+        inline: [/@(?:codemirror|lezer)\//u],
         external: dependencyExternalPatterns,
       },
     },
@@ -555,7 +602,7 @@ export const sharedVitestConfig = {
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
         "src/gateway/server-methods/skills.ts",
-        "src/gateway/server-methods/talk.ts",
+        "src/gateway/talk/handlers/index.ts",
         "src/gateway/server-methods/web.ts",
         "src/gateway/server-methods/wizard.ts",
         "src/gateway/call.ts",

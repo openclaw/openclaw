@@ -202,6 +202,15 @@ function extractDiagnosticMediaField(
   return { kind: "redacted", bytes, source: encoded };
 }
 
+const diagnosticRecords = new WeakSet<object>();
+
+/** Fresh records need no native-object probe while their prototype stays ordinary. */
+export function createDiagnosticRecord(): Record<string, unknown> {
+  const record = {};
+  diagnosticRecords.add(record);
+  return record;
+}
+
 export function projectDiagnosticValue(
   value: unknown,
   policy: DiagnosticProjectionPolicy = {},
@@ -235,14 +244,16 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    try {
-      // Brand-check without provider getters; retain only numeric retry timing.
-      Headers.prototype.has.call(value, "retry-after");
-      const seconds = parseRetryAfterHeadersSeconds(value);
-      state.changed = true;
-      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
-    } catch {
-      // Other objects follow the bounded descriptor walk below.
+    if (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+      try {
+        // Brand-check without provider getters; retain only numeric retry timing.
+        Headers.prototype.has.call(value, "retry-after");
+        const seconds = parseRetryAfterHeadersSeconds(value);
+        state.changed = true;
+        return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+      } catch {
+        // Other objects follow the bounded descriptor walk below.
+      }
     }
     const keys = Reflect.ownKeys(value);
     // Snapshot descriptors before recursion; the map restores numeric key order from proxies.

@@ -1,4 +1,4 @@
-import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
@@ -52,24 +52,12 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     managedSkillsDir: "/tmp/skills",
     skills: [createSkill()],
   };
-  const agentsList: AgentsListResult = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [
-      { id: "main", name: "Main" },
-      { id: "research", identity: { name: "Research", avatar: "R" } },
-    ],
-  };
-
   return {
     canUpdate: true,
     canInstall: true,
     connected: true,
     loading: false,
     report,
-    agentsList,
-    selectedAgentId: "main",
     error: null,
     filter: "",
     statusFilter: "all",
@@ -93,7 +81,6 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
-    onAgentChange: () => undefined,
     onFilterChange: () => undefined,
     onStatusFilterChange: () => undefined,
     onRefresh: () => undefined,

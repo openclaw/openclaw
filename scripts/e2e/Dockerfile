@@ -24,6 +24,9 @@ COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2
 COPY scripts/e2e/lib/plugins/npm-registry-server.mjs /opt/openclaw-e2e/scripts/e2e/lib/plugins/
 COPY scripts/lib/bounded-response.mjs /opt/openclaw-e2e/scripts/lib/
 
+# COPY --chmod can also set modes on newly created parent directories.
+RUN find /opt/openclaw-e2e -type d -exec chmod 0755 {} +
+
 RUN useradd --create-home --shell /bin/bash appuser \
  && mkdir -p /app \
  && chown appuser:appuser /app
@@ -48,7 +51,8 @@ CMD ["bash"]
 
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
-RUN apk add --no-cache bash
+# Native dependencies without musl prebuilds must compile during real npm installs.
+RUN apk add --no-cache bash g++ make python3
 COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 

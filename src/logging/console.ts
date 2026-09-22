@@ -204,6 +204,7 @@ function writeFormattedConsoleOutput(params: {
           })
         : redactSensitiveText(stack ?? params.formatted);
     const line = timestamp ? `${timestamp} ${rendered}` : rendered;
+    clearActiveProgressLine();
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
     } else if (
@@ -230,7 +231,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (!rawConsole) {
     return false;
   }
-  clearActiveProgressLine();
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }

@@ -1,12 +1,63 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import { createSessionDeletionHarness } from "./session-deletion.test-support.ts";
 
 describe("optimistic session deletion", () => {
+  it.each(["single", "batch"] as const)(
+    "preserves the recovery error and target through a %s deletion",
+    async (mode) => {
+      const h = createSessionDeletionHarness();
+      const target = {
+        key: h.alpha.key,
+        agentId: "main",
+        expectedSessionId: h.alpha.sessionId,
+        deleteTranscript: true,
+      };
+      const error = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Reconnect the device or continue on the Gateway.",
+        details: {
+          code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+          cause: "device_offline",
+          recoveryAction: "continue_on_gateway",
+          sessionId: h.alpha.sessionId,
+          source: { generation: 5, environmentId: "device-environment", ownerEpoch: 70 },
+        },
+      });
+      try {
+        await h.sessions.refresh({ force: true });
+        const operation =
+          mode === "single"
+            ? h.sessions.delete(target.key, target)
+            : h.sessions.deleteMany([target]);
+        const settled =
+          mode === "single"
+            ? expect(operation).rejects.toBe(error)
+            : expect(operation).resolves.toEqual({
+                deleted: [],
+                errors: [{ target, error }],
+                preservedWorktrees: [],
+              });
+        h.responses.get(target.key)!.reject(error);
+        await settled;
+        expect(h.sessions.deletionState(target.key)).toBeUndefined();
+        expect(h.sessions.state.result?.sessions).toContainEqual(h.alpha);
+      } finally {
+        h.responses.get(target.key)?.resolve({ deleted: false });
+        h.sessions.dispose();
+      }
+    },
+  );
+
   it.each(
     ["main", "agent:main:main"].flatMap((firstKey) =>
       (["single", "batch"] as const).flatMap((firstMode) =>
@@ -95,7 +146,7 @@ describe("optimistic session deletion", () => {
         }
         await settled;
         expect(h.sessions.state.deletedSessions).toEqual([]);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.sessions.state.result?.sessions).toEqual([h.beta, h.sibling]);
         expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.beta, h.sibling]);
       } finally {
@@ -428,7 +479,8 @@ describe("optimistic session deletion", () => {
           expect(errors).toEqual([]);
         } else {
           expect(result.errors).toHaveLength(1);
-          expect(errors).toContain(result.errors[0]);
+          expect(result.errors[0]?.target).toEqual({ key: h.beta.key });
+          expect(errors).toContain(formatUiError(result.errors[0]?.error));
         }
         expect(h.responses.has(h.beta.key)).toBe(false);
         await h.sessions.refresh({ force: true });
@@ -468,7 +520,11 @@ describe("optimistic session deletion", () => {
         };
         assertRemoved();
         for (const target of targets) {
-          h.sessions.reconcileChanged({ sessionKey: target.key, reason: "send", ...target });
+          h.emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: { sessionKey: target.key, reason: "send", ...target },
+          });
           h.emitEvent({
             type: "event",
             event: "session.message",
@@ -512,14 +568,24 @@ describe("optimistic session deletion", () => {
       const rejection = expect(alpha).rejects.toThrow("cloud cleanup failed");
       const beta = h.sessions.delete(h.beta.key);
       expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
-      h.sessions.patchRowLocal(h.sibling.key, { label: "new sibling name" });
+      h.sessions.patchRowLocal(
+        h.sibling.key,
+        { label: "new sibling name" },
+        {
+          agentId: "main",
+          sessionId: h.sibling.sessionId!,
+        },
+      );
       h.responses.get(h.alpha.key)!.reject(new Error("cloud cleanup failed"));
       await rejection;
       expect(h.sessions.state.result?.sessions).toEqual([
         h.alpha,
         { ...h.sibling, label: "new sibling name" },
       ]);
-      expect(h.sessions.listSnapshot(filtered).result?.sessions).toEqual([h.alpha, h.sibling]);
+      expect(h.sessions.listSnapshot(filtered).result?.sessions).toEqual([
+        h.alpha,
+        { ...h.sibling, label: "new sibling name" },
+      ]);
       expect(h.sessions.state.error).toContain("cloud cleanup failed");
       h.setRows([h.alpha, { ...h.sibling, label: "new sibling name" }]);
       h.responses.get(h.beta.key)!.resolve({ deleted: true });

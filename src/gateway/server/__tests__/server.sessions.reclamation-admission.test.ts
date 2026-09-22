@@ -1,6 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import {
   deleteSessionEntryLifecycle,
@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { retainSessionListForegroundWork } from "../../session-projection-work.js";
 import { rpcReq, writeSessionStore } from "../../test-helpers.js";
 import {
   loadSeededTranscriptEvents,
@@ -245,6 +246,8 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
 });
 
 test("sessions.delete rejects revoked authority before repairing the same database", async () => {
+  // This test invokes the lifecycle owner directly instead of the foreground RPC dispatcher.
+  onTestFinished(retainSessionListForegroundWork());
   const sessionKey = "agent:main:validation-revoked";
   const sessionId = "validation-revoked";
   const { storePath } = await createSessionStoreDir();

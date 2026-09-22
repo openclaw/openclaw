@@ -30,19 +30,11 @@ export type {
   OfficialExternalWebSearchProvider,
   OfficialExternalPluginCatalogEntry,
   OfficialExternalPluginCatalogFeed,
-  HostedOfficialExternalPluginCatalogMetadata,
-  HostedOfficialExternalPluginCatalogSnapshot,
-  HostedOfficialExternalPluginCatalogSnapshotStore,
-  HostedOfficialExternalPluginCatalogTrustState,
-  HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   HostedOfficialExternalPluginCatalogLoadResult,
 } from "./official-external-plugin-catalog.types.js";
 
 export {
-  HostedCatalogSignedFeedMonotonicityError,
   isOfficialExternalPluginCatalogFeed,
-  isOfficialExternalPluginCatalogSequence,
-  parseOfficialExternalPluginCatalogTimestamp,
   getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginId,
 } from "./official-external-plugin-catalog-source.js";

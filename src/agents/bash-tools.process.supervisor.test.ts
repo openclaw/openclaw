@@ -4,6 +4,7 @@
  */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isToolResultError } from "./tool-result-error.js";
 
 const { supervisorMock } = vi.hoisted(() => ({
   supervisorMock: {
@@ -88,7 +89,7 @@ describe("process tool supervisor cancellation", () => {
     resetProcessRegistryForTests();
   });
 
-  it("routes kill through supervisor when run is managed", async () => {
+  it("confirms a requested stop without reporting a new process failure", async () => {
     const session = createBackgroundSession("sess");
     session.processActivity = { resultSettled: false, lastOutputAtMs: session.startedAt };
     const processTool = createProcessTool();
@@ -102,7 +103,56 @@ describe("process tool supervisor cancellation", () => {
     expectSessionState("sess", { exited: false });
     expect(getActiveBackgroundExecSessionCount()).toBe(1);
     expectTextContent(result.content[0], "Termination requested for session sess.");
+
+    markExited(session, null, "SIGTERM", "failed", "manual-cancel");
+    for (const action of ["poll", "log"] as const) {
+      const observed = await processTool.execute(`observe-${action}`, {
+        action,
+        sessionId: "sess",
+      });
+      expect(observed.details).toMatchObject({
+        status: "completed",
+        exitSignal: "SIGTERM",
+        exitReason: "manual-cancel",
+        timedOut: false,
+      });
+      expect(isToolResultError(observed)).toBe(false);
+      if (action === "poll") {
+        expectTextContent(
+          observed.content[0],
+          "(no new output)\n\nProcess stopped by request (signal SIGTERM).",
+        );
+      }
+    }
+    expect(getFinishedSession("sess")?.terminalStatus).toBe("failed");
   });
+
+  it.each([
+    { reason: "manual-cancel", requested: false },
+    { reason: "signal", requested: false },
+    { reason: "overall-timeout", requested: true },
+    { reason: "no-output-timeout", requested: true },
+    { reason: "spawn-error", requested: true },
+  ] as const)(
+    "preserves $reason errors when requested=$requested",
+    async ({ reason, requested }) => {
+      const session = createBackgroundSession("failed-session");
+      session.processActivity = { resultSettled: false, lastOutputAtMs: session.startedAt };
+      const processTool = createProcessTool();
+      if (requested) {
+        await processTool.execute("stop-session", { action: "kill", sessionId: session.id });
+      }
+      markExited(session, null, "SIGTERM", "failed", reason);
+      for (const action of ["poll", "log"] as const) {
+        const observed = await processTool.execute(`observe-${action}`, {
+          action,
+          sessionId: session.id,
+        });
+        expect(observed.details).toMatchObject({ status: "failed", exitReason: reason });
+        expect(isToolResultError(observed)).toBe(true);
+      }
+    },
+  );
 
   it("remove drops running session immediately when cancellation is requested", async () => {
     const session = createBackgroundSession("sess");

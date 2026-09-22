@@ -77,6 +77,18 @@ phase visible. Reload does not rebuild compiled bundled code; see
 [CLI reload](/cli/plugins#reload) for that boundary. The separate **Reload plugin UI**
 action only refreshes browser UI modules.
 
+Before replacing an enabled plugin, the Gateway validates its metadata and config,
+pauses new plugin calls, and waits up to 60 seconds for in-flight work while the
+previous generation stays active. If the work does not finish, the reload fails
+once, resumes calls, and leaves services and channels running. Otherwise, it stops
+services and channels, drains remaining work, and completes shutdown and disposal
+before registering the replacement. Other plugin instances remain active. If
+registration or pre-publication activation fails, the Gateway attempts
+a fresh registration using the captured previous code and config automatically.
+Recovery restores the active runtime; it does not rewrite externally edited config files.
+If cleanup or recovery also fails, the error reports that recovery could not
+complete. Failures after publication remain visible on the accepted generation.
+
 Administrators can reload with externally managed or Nix config when no new
 capability consent needs to be recorded. Config and installation changes stay unavailable. If a
 reload requires new capability consent, manage that acceptance through the

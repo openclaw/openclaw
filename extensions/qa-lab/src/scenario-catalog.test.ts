@@ -194,7 +194,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
+      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle cli-status-health-snapshots diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty voice-call-cli-rpc-agent-tool".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -210,6 +210,16 @@ describe("qa scenario catalog", () => {
       allowBlockedEvidence: true,
     });
     for (const scenarioId of ["cached-health-snapshot-boundaries", "gateway-rpc-account-health"]) {
+      expect(readQaScenarioById(scenarioId).execution).toMatchObject({
+        kind: "script",
+        parallelSafe: false,
+      });
+    }
+    expect(readQaScenarioById("tui-local-shell-pty").execution).toMatchObject({
+      kind: "script",
+      parallelSafe: false,
+    });
+    for (const scenarioId of ["tui-entrypoints-pty", "tui-terminal-safety-pty"]) {
       expect(readQaScenarioById(scenarioId).execution).toMatchObject({
         kind: "script",
         parallelSafe: false,

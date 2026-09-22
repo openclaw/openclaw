@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -12,6 +14,11 @@ import {
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationClaim,
+} from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -63,6 +70,72 @@ afterEach(async () => {
 });
 
 describe("shared API-key editing and removal", () => {
+  it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
+    writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
+    let claim: RuntimeConfigWriteApplicationClaim | undefined;
+    const written = createDeferred();
+    const updateConfig = configWriter.updateConfig;
+    vi.spyOn(configWriter, "updateConfig").mockImplementationOnce(async (...args) => {
+      const config = await updateConfig(...args);
+      written.resolve();
+      return config;
+    });
+    const stop = registerRuntimeConfigWriteListener((event) => {
+      claim = getRuntimeConfigWriteApplication(event)?.claim() ?? undefined;
+    });
+    const response = save();
+    try {
+      await written.promise;
+      expect(
+        await Promise.race([response.then(() => "completed"), nextEventLoopTurn("pending")]),
+      ).toBe("pending");
+      const runtimeConfig = await readConfig();
+      claim?.settle("applied");
+      expect(await response).toEqual({ profileId: "sample:manual" });
+      stop();
+      await removeModelAuthCredentials({
+        cfg: runtimeConfig,
+        agentDir: agentDir("writer"),
+        profileIds: ["sample:manual"],
+        apiKeyProvider: "sample",
+      });
+      expect((await readConfig()).models?.providers?.sample?.apiKey).toBeUndefined();
+      expect(loadPersistedAuthProfileStore()?.profiles["sample:manual"]).toBeUndefined();
+    } finally {
+      claim?.settle("failed");
+      stop();
+      await response;
+    }
+  });
+
+  it.each(["failed", "restart-pending", "unclaimed"] as const)(
+    "reports a saved key with a warning when config application is %s",
+    async (status) => {
+      const stop = registerRuntimeConfigWriteListener((event) => {
+        if (status !== "unclaimed") {
+          getRuntimeConfigWriteApplication(event)?.claim()?.settle(status);
+        }
+      });
+      try {
+        expect(await save()).toEqual({
+          profileId: "sample:manual",
+          warning: expect.stringContaining("Gateway has not confirmed applying"),
+        });
+        expect((await readConfig()).auth?.profiles?.["sample:manual"]).toEqual({
+          provider: "sample",
+          mode: "api_key",
+        });
+        expect(
+          loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
+        ).toMatchObject({
+          key: "synthetic-new-key",
+        });
+      } finally {
+        stop();
+      }
+    },
+  );
+
   it("replaces a configured shared key, preserving metadata, defaults and cross-agent resolution", async () => {
     const profileId = "sample:work";
     await upsertAuthProfileWithLockOrThrow({
@@ -88,7 +161,7 @@ describe("shared API-key editing and removal", () => {
       auth: { profiles: { [profileId]: configuredProfile } },
       models: { providers: { sample: { ...connection, apiKey: profileId } } },
     });
-    expect(await save()).toBe(profileId);
+    expect(await save()).toEqual({ profileId });
     const config = await readConfig();
     expect(config.agents?.defaults?.model).toBe("kept/model");
     expect(config.models?.providers?.sample).toEqual({ ...connection, apiKey: profileId });
@@ -126,7 +199,7 @@ describe("shared API-key editing and removal", () => {
       provider: "sample",
       order: ["sample:work", "sample:backup"],
     });
-    expect(await save()).toBe("sample:work");
+    expect(await save()).toMatchObject({ profileId: "sample:work" });
     const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir("writer"));
     expect(store.profiles["sample:work"]).toMatchObject({ key: "synthetic-new-key" });
     expect(store.profiles["sample:backup"]).toMatchObject({ key: "kept-backup" });
@@ -347,7 +420,7 @@ describe("shared API-key editing and removal", () => {
   });
 
   it("retains the credential when config reference cleanup fails", async () => {
-    const profileId = await save();
+    const { profileId } = await save();
     vi.spyOn(configWriter, "updateConfig").mockRejectedValueOnce(new Error("config write failed"));
     await expect(
       removeModelAuthCredentials({
@@ -536,7 +609,9 @@ describe("shared API-key editing and removal", () => {
     async (auth) => {
       const provider = { ...connection, auth, apiKey: "existing-connection-key" };
       writeConfig({ models: { providers: { sample: provider } } });
-      expect(await save("backup-key", "sample:backup")).toBe("sample:backup");
+      expect(await save("backup-key", "sample:backup")).toMatchObject({
+        profileId: "sample:backup",
+      });
       expect((await readConfig()).models?.providers?.sample).toEqual(provider);
       expect(
         loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:backup"],

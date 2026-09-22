@@ -95,6 +95,11 @@ describe("buildQaGatewayConfig", () => {
       expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
       expect(cfg.logging?.file).toBe(`${workspaceDir}/logs/openclaw-YYYY-MM-DD.log`);
       expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
+      expect(cfg.commands?.ownerAllowFrom).toEqual([
+        "qa-channel:qa-operator",
+        "qa-channel:dm:qa-operator",
+      ]);
+      expect(cfg.commands?.allowFrom).toEqual({ "qa-channel": ["*"] });
       expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
       expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
       expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
@@ -142,6 +147,11 @@ describe("buildQaGatewayConfig", () => {
       },
     });
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
+    expect(cfg.commands?.ownerAllowFrom).toEqual([
+      "qa-channel:qa-operator",
+      "qa-channel:dm:qa-operator",
+    ]);
+    expect(cfg.commands?.allowFrom).toEqual({ "qa-channel": ["*"] });
     expectQaLabPluginEnabled(cfg);
     expect(cfg.plugins?.slots?.memory).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toBeUndefined();

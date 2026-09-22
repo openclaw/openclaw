@@ -17,6 +17,10 @@ const enUpdateActions = {
     },
     dialog: {
       checkStatus: "Check status",
+      checkingStatus: "Checking status…",
+      statusRefreshed: "Status refreshed.",
+      statusNotRefreshed: "Status could not be refreshed. Check your connection and try again.",
+      checkStatusDisconnected: "Reconnect to the Gateway to check status or retry the update.",
       retryUpdate: "Retry update",
       installing: "Installing the update on the Gateway. It restarts once the install finishes.",
       notStarted:

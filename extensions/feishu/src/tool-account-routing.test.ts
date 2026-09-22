@@ -58,6 +58,31 @@ function createConfig(params: {
   } as OpenClawPluginApi["config"];
 }
 
+function createMixedCaseConfig(params: {
+  toolsOps: FeishuToolsConfig;
+  toolsAdmin: FeishuToolsConfig;
+}): OpenClawPluginApi["config"] {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: {
+          Ops: {
+            appId: "app-ops",
+            appSecret: "sec-ops", // pragma: allowlist secret
+            tools: params.toolsOps,
+          },
+          admin: {
+            appId: "app-admin",
+            appSecret: "sec-admin", // pragma: allowlist secret
+            tools: params.toolsAdmin,
+          },
+        },
+      },
+    },
+  } as OpenClawPluginApi["config"];
+}
+
 function clientAppIdAt(index: number): string | undefined {
   const calls = createFeishuClientMock.mock.calls;
   const resolvedIndex = index < 0 ? calls.length + index : index;
@@ -198,6 +223,37 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { action: "search" });
 
     expect(lastClientAppId()).toBe("app-b");
+  });
+
+  test("wiki tool rejects a mixed-case contextual account before sibling fallback", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createMixedCaseConfig({
+        toolsOps: { wiki: false },
+        toolsAdmin: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
+    const result = await tool.execute("call", { action: "search" });
+
+    expect(result.details.error).toBe('Feishu Wiki tools are disabled for account "ops"');
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+  });
+
+  test("wiki tool routes a mixed-case enabled contextual account without sibling fallback", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createMixedCaseConfig({
+        toolsOps: { wiki: true },
+        toolsAdmin: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
+    await tool.execute("call", { action: "search" });
+
+    expect(lastClientAppId()).toBe("app-ops");
   });
 
   test("wiki tool implicit fallback selects an account with wiki enabled", async () => {

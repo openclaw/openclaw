@@ -135,6 +135,13 @@ Start agent work in the background: hook-dispatched turns for external content, 
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
+    Owner-authorized command launches can pass their captured assertion as
+    `subagent.run({ ..., assertCurrent })`; the Gateway applies it at run
+    admission. Managed `worktrees.create({ ..., commitGuard })` accepts the same
+    assertion through its existing creation owner. Revocation prevents pending
+    launches or worktree writes, while accepted work retains its cleanup and
+    completion responsibilities.
+
     `promptMode: "minimal"` selects the bounded subagent prompt instead of the full conversation prompt. The plugin runtime exposes only this mode; omission keeps the full prompt. Use `disableTools: true` as well when the run must have an exact empty tool surface.
 
     `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
@@ -159,14 +166,19 @@ Start agent work in the background: hook-dispatched turns for external content, 
     before reporting its result. Updates check the owner, managed mode, and
     expected revision together inside the worker's SQLite transaction.
 
+    On an ordinary persistence rejection, `createManaged` throws
+    `TaskFlow persistence failed.` with the original error in `cause`;
+    `tryCreateManaged` returns `null`. Both methods propagate preparation and
+    input-validation errors.
+
     Results preserve the corresponding synchronous payloads and owner scope.
     Reads query persisted SQLite records in the shared database worker, without
-    overwriting the process registry. Cold registry restoration still uses its
-    existing main-thread storage owner. Access
-    checks for bare owner keys without a persisted requester agent can also
-    require existing runtime-configuration preparation on the main thread.
-    Warmed task and flow SQL queries and these managed-flow writes run in the
-    worker. Committed writes reconcile the relevant process task and flow registries before
+    overwriting the process registry. Cold restoration also reads through the
+    worker and installs a complete snapshot before exposing the registry. Concurrent
+    callers share restoration, and newer synchronous writes take precedence over
+    delayed snapshots. Access checks for bare owner keys await any required
+    runtime configuration, plugin metadata, and consent preparation.
+    Committed writes reconcile the relevant process task and flow registries before
     publication; a failed reconciliation leaves that projection dirty without
     changing the durable write result. A result describes its operation snapshot
     and may be superseded by a later mutation.
@@ -178,7 +190,9 @@ Start agent work in the background: hook-dispatched turns for external content, 
     Lists sort newest first. Equal task timestamps sort by task ID descending;
     equal flow timestamps sort by flow ID ascending. Run-ID lookup retains its
     runtime preference and oldest-first selection, then uses task ID ascending
-    for ties. Legacy synchronous methods
+    for ties. When an ACP run ID is reused, lookup excludes superseded backing
+    generations before applying that ordering. Backing details stay internal and
+    are not included in task views. Legacy synchronous methods
     keep their existing insertion-order tie behavior.
 
     The synchronous read methods and corresponding managed-flow state mutations
@@ -267,3 +281,11 @@ for remote or unidentified owners, including Copilot, whose SDK does not expose
 its process identity. The SDK never substitutes the Gateway PID. Records without
 an identity retain the existing grace period, including records written before
 execution ownership was available.
+
+Bundled harnesses delivering a completion can pass
+`isSourceSessionAdmissionAllowed` to `deliverAgentHarnessTaskCompletion(...)`.
+Keep this callback bound to the current parent and task ownership. The delivery
+owner rechecks it after asynchronous routing and immediately before a new Gateway
+turn or message injection is accepted. Work already accepted keeps its own
+lifecycle and can finish after the source retires. Use `signal` when the caller
+also intends to cancel accepted work.

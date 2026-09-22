@@ -6,6 +6,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI local-provider recovery mocked Gateway E2E",
@@ -33,17 +34,40 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const config = { agents: { defaults: { model: "openai/gpt-5" } } };
+        const gateway = await installSetupGateway(page, {
+          agentModel: "openai/gpt-5",
           featureMethods: [
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.verify",
+            "models.probe",
             "openclaw.setup.activate.start",
             "openclaw.setup.auth.start",
             "wizard.next",
           ],
+          models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
           methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              raw: JSON.stringify(config),
+              hash: "configured-provider",
+              valid: true,
+              issues: [],
+            },
+            "models.authStatus": {
+              ts: 1,
+              providerCapabilities: [],
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "static",
+                  profiles: [{ profileId: "openai:existing", type: "api_key", status: "static" }],
+                },
+              ],
+            },
             "openclaw.setup.detect": {
               candidates: [
                 {
@@ -88,10 +112,13 @@ suite.define(() => {
               configuredModel: "openai/gpt-5",
               setupComplete: true,
             },
-            "openclaw.setup.verify": {
-              ok: true,
-              modelRef: "openai/gpt-5",
+            "models.probe": {
+              provider: "openai",
+              status: "ok",
               latencyMs: 1234,
+              results: [
+                { label: "Configured credential · openai/gpt-5", status: "ok", latencyMs: 1234 },
+              ],
             },
             "openclaw.setup.activate.start": { done: false, status: "running" },
             "wizard.next": {
@@ -102,7 +129,7 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         await expect
           .poll(() => page.locator('[data-candidate-kind="existing-model"]').count())
@@ -138,24 +165,47 @@ suite.define(() => {
           );
           await page.setViewportSize({ height: 900, width: 1280 });
         }
-        await page.getByRole("button", { name: "Check model" }).click();
-        const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({ agentId: "main" });
-        await page.getByText("Ready · 1234 ms").waitFor();
+        await page
+          .locator(".model-setup-discovery")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        const currentProvider = page.locator('[data-provider-id="openai"]');
+        await currentProvider.getByRole("button", { name: "Test connection", exact: true }).click();
+        const verify = await gateway.waitForRequest("models.probe");
+        expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
+        await currentProvider
+          .locator(".model-providers__probe-summary")
+          .getByText("1234 ms", { exact: true })
+          .waitFor();
+        await currentProvider
+          .locator(".model-providers__probe-summary")
+          .getByText("Connected", { exact: true })
+          .waitFor();
         const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
           .length;
-        const verifyCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.verify"))
-          .length;
-        await page.getByRole("button", { name: "Check again" }).click();
+        const verifyCountBeforeRefresh = (await gateway.getRequests("models.probe")).length;
+        await currentProvider.getByRole("button", { name: "Test connection", exact: true }).click();
         await expect
-          .poll(async () => (await gateway.getRequests("openclaw.setup.verify")).length)
+          .poll(async () => (await gateway.getRequests("models.probe")).length)
           .toBe(verifyCountBeforeRefresh + 1);
         expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
           detectCountBeforeRefresh,
         );
-        await page.getByRole("button", { name: "Check again" }).waitFor();
-        await page.getByText("Ready · 1234 ms").waitFor();
-        await savedCredentials.getByRole("button", { name: "Test & use" }).click();
+        await currentProvider
+          .getByRole("button", { name: "Test connection", exact: true })
+          .waitFor();
+        await currentProvider
+          .locator(".model-providers__probe-summary")
+          .getByText("1234 ms", { exact: true })
+          .waitFor();
+        await currentProvider
+          .locator(".model-providers__probe-summary")
+          .getByText("Connected", { exact: true })
+          .waitFor();
+        await openModelSetup(page);
+        await savedCredentials
+          .getByRole("button", { name: "Test & use for this agent", exact: true })
+          .click();
         const activation = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activation.params).toEqual({
           kind: "saved-auth:openai:replacement",
@@ -242,7 +292,17 @@ suite.define(() => {
           }
           await signIn.click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
+          const alert = dialog.getByRole("alert");
+          await alert.waitFor();
+          expect((await alert.textContent())?.trim()).toBe(
+            "Could not finish. Open Details to see what to do next.",
+          );
+          const details = dialog.locator("details");
+          expect(await details.getAttribute("open")).toBeNull();
+          const diagnostic = details.getByText("The model could not finish setup", { exact: true });
+          expect(await diagnostic.isVisible()).toBe(false);
+          await details.getByText("Details", { exact: true }).click();
+          await diagnostic.waitFor();
           await dialog.getByRole("button", { name: "Close", exact: true }).click();
           await expect.poll(() => dialog.count()).toBe(0);
           await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
@@ -262,7 +322,14 @@ suite.define(() => {
             );
           } else {
             await signIn.click();
-            await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
+            await alert.waitFor();
+            expect((await alert.textContent())?.trim()).toBe(
+              "Could not finish. Open Details to see what to do next.",
+            );
+            expect(await details.getAttribute("open")).toBeNull();
+            expect(await diagnostic.isVisible()).toBe(false);
+            await details.getByText("Details", { exact: true }).click();
+            await diagnostic.waitFor();
             expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
           }
           if (artifactDir) {
@@ -276,7 +343,7 @@ suite.define(() => {
     },
   );
 
-  it("shows a failed LM Studio connection with its detected endpoint", async () => {
+  it("shows a failed configured LM Studio connection without implicit preparation", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -286,16 +353,53 @@ suite.define(() => {
       },
       async ({ page }) => {
         const modelRef = "lmstudio/qwen3-8b-instruct";
-        const gateway = await installMockGateway(page, {
+        const config = {
+          agents: { defaults: { model: modelRef } },
+          // LM Studio persists this non-secret placeholder for local, unauthenticated access.
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                apiKey: "lmstudio-local",
+                models: [{ id: "qwen3-8b-instruct", name: "qwen3-8b-instruct" }],
+              },
+            },
+          },
+        };
+        const gateway = await installSetupGateway(page, {
+          agentModel: modelRef,
           featureMethods: [
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.verify",
+            "models.probe",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
+          models: [
+            {
+              id: "qwen3-8b-instruct",
+              name: "qwen3-8b-instruct",
+              provider: "lmstudio",
+              available: true,
+            },
+          ],
           methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              raw: JSON.stringify(config),
+              hash: "configured-provider",
+              valid: true,
+              issues: [],
+            },
+            "models.authStatus": {
+              ts: 1,
+              providerCapabilities: [],
+              providers: [
+                { provider: "lmstudio", displayName: "LM Studio", status: "static", profiles: [] },
+              ],
+            },
             "openclaw.setup.detect": {
               candidates: [
                 {
@@ -322,10 +426,18 @@ suite.define(() => {
               configuredModel: modelRef,
               setupComplete: true,
             },
-            "openclaw.setup.verify": {
-              ok: false,
-              status: "unavailable",
-              error: "connect ECONNREFUSED 127.0.0.1:1234",
+            // models.probe intentionally sanitizes raw connection errors.
+            "models.probe": {
+              provider: "lmstudio",
+              status: "unknown",
+              error: "The connection probe failed.",
+              results: [
+                {
+                  label: "Configured credential · lmstudio/qwen3-8b-instruct",
+                  status: "unknown",
+                  error: "The connection probe failed.",
+                },
+              ],
             },
             "openclaw.setup.prepare.start": {
               sessionId: "lmstudio-recovery-session",
@@ -345,20 +457,26 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await page.goto(suite.server.baseUrl + "settings/model-providers");
         expect(response?.status()).toBe(200);
-        const selectedModel = page.locator(".model-setup__current");
+        const selectedModel = page.locator('[data-provider-id="lmstudio"]');
         await selectedModel.getByText("LM Studio", { exact: true }).waitFor();
-        await selectedModel.getByRole("button", { name: "Check model" }).click();
-        await selectedModel.getByText("qwen3-8b-instruct at http://localhost:1234/v1").waitFor();
-        await selectedModel
-          .getByText("connect ECONNREFUSED 127.0.0.1:1234", { exact: false })
-          .waitFor();
-        await selectedModel.getByRole("button", { name: "Try again" }).waitFor();
-        await expect.poll(() => selectedModel.getByText("Change connection").count()).toBe(0);
         await expect
-          .poll(() => page.locator('[data-candidate-kind="provider-auto:lmstudio"]').count())
-          .toBe(0);
+          .poll(() =>
+            page.locator(".model-providers__defaults openclaw-select-picker").first().textContent(),
+          )
+          .toContain("qwen3-8b-instruct");
+        await selectedModel.getByRole("button", { name: "Test connection", exact: true }).click();
+        await selectedModel
+          .locator(".model-providers__probe-summary")
+          .getByText("Connection failed", { exact: true })
+          .waitFor();
+        await expect
+          .poll(() => selectedModel.locator(".model-providers__probe").textContent())
+          .toContain("The connection probe failed.");
+        await selectedModel.getByRole("button", { name: "Test connection", exact: true }).waitFor();
+        expect(await gateway.getRequests("openclaw.setup.prepare.start")).toHaveLength(0);
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
 
         if (artifactDir) {
           await page.screenshot({
@@ -374,8 +492,15 @@ suite.define(() => {
           });
         }
 
-        const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({ agentId: "main" });
+        const verify = await gateway.waitForRequest("models.probe");
+        expect(verify.params).toEqual({ provider: "lmstudio", agentId: "main" });
+        await openModelSetup(page);
+        expect(await page.locator('[data-candidate-kind="provider-auto:lmstudio"]').count()).toBe(
+          0,
+        );
+        expect(await page.locator('[data-prepare-choice="lmstudio"]').count()).toBe(0);
+        expect(await gateway.getRequests("openclaw.setup.prepare.start")).toHaveLength(0);
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
       },
     );
   });

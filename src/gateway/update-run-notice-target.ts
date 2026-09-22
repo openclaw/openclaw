@@ -1,22 +1,27 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
+import {
+  isConfiguredCommandOwner,
+  prepareCommandOwnerAuthority,
+} from "../auto-reply/command-auth.js";
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionDeliveryRoute } from "../infra/session-delivery-queue-storage.js";
+import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
-  type DeliveryContext,
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.read.js";
+import {
+  type DeliveryContext,
   hasDeliveryTargetFields,
   mergeDeliveryContext,
-  sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveGatewayLifecycleNoticeRoute } from "./server-restart-sentinel-notice.js";
@@ -24,10 +29,15 @@ import { loadSessionEntry } from "./session-utils.js";
 
 type NoticeSession = ReturnType<typeof loadSessionEntry>;
 const log = createSubsystemLogger("gateway/update-run");
-type NoticeTarget =
+type NoticeDestination =
   | { kind: "route"; route: SessionDeliveryRoute }
   | { kind: "internal"; session: NoticeSession & { entry: SessionEntry } }
   | { kind: "none"; reason: string };
+type NoticeTarget =
+  | (Extract<NoticeDestination, { kind: "route" }> & {
+      owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>>;
+    })
+  | Exclude<NoticeDestination, { kind: "route" }>;
 
 function isUpdateNoticeSendEnabled(cfg: OpenClawConfig, route: SessionDeliveryRoute): boolean {
   const channel = asOptionalRecord(cfg.channels?.[route.channel]);
@@ -55,6 +65,71 @@ function isUpdateNoticeSendEnabled(cfg: OpenClawConfig, route: SessionDeliveryRo
   })("sendMessage");
 }
 
+async function prepareUpdateNoticeOwner(
+  cfg: OpenClawConfig,
+  route: SessionDeliveryRoute,
+  env?: NodeJS.ProcessEnv,
+) {
+  const requester = { ...route, senderId: route.to };
+  if (isConfiguredCommandOwner(cfg, requester)) {
+    return await prepareCommandOwnerAuthority(cfg, requester, { env });
+  }
+  if (route.chatType !== "direct") {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(route.channel);
+  const targetKind = plugin?.messaging?.inferTargetChatType?.({ to: route.to });
+  if (targetKind && targetKind !== "direct") {
+    return undefined;
+  }
+  const owner = await prepareCommandOwnerAuthority(cfg, requester, { env });
+  if (owner.source) {
+    return owner;
+  }
+  // Only a channel-proven direct recipient can be translated into a sender identity.
+  if (targetKind !== "direct" || !plugin?.config.formatAllowFrom) {
+    return undefined;
+  }
+  const target = plugin.messaging?.normalizeTarget?.(route.to) ?? route.to;
+  const senderIds = plugin.config.formatAllowFrom({
+    cfg,
+    accountId: route.accountId,
+    allowFrom: [target],
+  });
+  for (const senderId of senderIds) {
+    const translatedOwner = await prepareCommandOwnerAuthority(
+      cfg,
+      { ...route, senderId },
+      { env },
+    );
+    if (translatedOwner.source) {
+      return translatedOwner;
+    }
+  }
+  return undefined;
+}
+
+async function prepareUpdateRunNoticeTarget(
+  cfg: OpenClawConfig,
+  target: NoticeDestination,
+  env?: NodeJS.ProcessEnv,
+): Promise<NoticeTarget> {
+  if (target.kind !== "route") {
+    return target;
+  }
+  const route = { ...target.route };
+  if (!isUpdateNoticeSendEnabled(cfg, route)) {
+    return {
+      kind: "none",
+      reason: `update lifecycle notices are disabled by ${route.channel} actions.sendMessage policy`,
+    };
+  }
+  const owner = await prepareUpdateNoticeOwner(cfg, route, env);
+  return owner
+    ? authorizeUpdateRunNoticeTarget(cfg, { kind: "route", route, owner })
+    : { kind: "none", reason: "target is not a current command owner" };
+}
+
 export function authorizeUpdateRunNoticeTarget(
   cfg: OpenClawConfig,
   target: NoticeTarget,
@@ -65,35 +140,40 @@ export function authorizeUpdateRunNoticeTarget(
       reason: `update lifecycle notices are disabled by ${target.route.channel} actions.sendMessage policy`,
     };
   }
-  return target.kind === "route" &&
-    !isConfiguredCommandOwner(cfg, { ...target.route, senderId: target.route.to })
-    ? { kind: "none", reason: "target is not a configured command owner" }
+  return target.kind === "route" && !target.owner.isCurrent(cfg)
+    ? { kind: "none", reason: "target is not a current command owner" }
     : target;
 }
 
-export function recordUpdateRunNoticeSkipped(runId: string | undefined, reason: string): void {
+export function recordUpdateRunNoticeSkipped(
+  runId: string | undefined,
+  reason: string,
+  env?: NodeJS.ProcessEnv,
+): void {
   log.warn(`lifecycle notice skipped: ${reason}`, { runId });
-  if (runId && getUpdateRun(runId)?.verification.noticeDelivered !== true) {
-    recordUpdateRunVerification(runId, { noticeDelivered: false });
+  if (runId && getUpdateRun(runId, { env })?.verification.noticeDelivered !== true) {
+    recordUpdateRunVerification(runId, { noticeDelivered: false }, { env });
   }
 }
 
 /** Resolve the origin once; internal sessions intentionally have no external delivery context. */
-export function resolveUpdateRunNoticeTarget(params: {
+export async function resolveUpdateRunNoticeTarget(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   explicitDeliveryContext?: DeliveryContext;
   threadId?: string;
   session?: NoticeSession;
-}): NoticeTarget {
+  env?: NodeJS.ProcessEnv;
+}): Promise<NoticeTarget> {
   const session =
-    params.session ?? (params.sessionKey ? loadSessionEntry(params.sessionKey) : undefined);
+    params.session ??
+    (params.sessionKey ? loadSessionEntry(params.sessionKey, { env: params.env }) : undefined);
   const routingKey = params.sessionKey ?? session?.canonicalKey;
   const { baseSessionKey, threadId } = parseSessionThreadInfo(routingKey);
   let context = deliveryContextFromSession(session?.entry);
   let chatType = sessionDeliveryOrigin(session?.entry)?.chatType ?? "direct";
   if (!hasDeliveryTargetFields(context) && baseSessionKey && baseSessionKey !== routingKey) {
-    const { entry } = loadSessionEntry(baseSessionKey);
+    const { entry } = loadSessionEntry(baseSessionKey, { env: params.env });
     chatType =
       sessionDeliveryOrigin(session?.entry)?.chatType ??
       sessionDeliveryOrigin(entry)?.chatType ??
@@ -115,10 +195,11 @@ export function resolveUpdateRunNoticeTarget(params: {
     // Ambient recovery keeps the persisted system route thread; origin keys can supply hints.
     threadId: params.threadId ?? (params.sessionKey ? threadId : undefined),
   });
-  return authorizeUpdateRunNoticeTarget(
+  return await prepareUpdateRunNoticeTarget(
     params.cfg,
     route
       ? { kind: "route", route: { ...route, chatType } }
       : { kind: "none", reason: "no delivery target" },
+    params.env,
   );
 }

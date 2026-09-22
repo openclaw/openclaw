@@ -390,25 +390,6 @@ export function selectBatchFrames(params: {
   };
 }
 
-/** Evenly samples frames so a batch stays within the per-call image budget. */
-export function sampleFrames<T>(frames: T[], max: number): T[] {
-  if (max <= 0) {
-    return [];
-  }
-  if (frames.length <= max) {
-    return frames;
-  }
-  if (max === 1) {
-    return [expectDefined(frames[0], "first Logbook frame sample")];
-  }
-  const sampled: T[] = [];
-  const step = (frames.length - 1) / (max - 1);
-  for (let i = 0; i < max; i += 1) {
-    sampled.push(expectDefined(frames[Math.round(i * step)], "sampled Logbook frame"));
-  }
-  return [...new Set(sampled)];
-}
-
 /** Picks the frame closest to a card's midpoint as its keyframe. */
 export function pickKeyframeId(
   card: { startMs: number; endMs: number },

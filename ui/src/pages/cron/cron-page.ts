@@ -3,6 +3,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -10,6 +11,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import {
   addCronJob,
@@ -18,9 +20,7 @@ import {
   hasCronFormErrors,
   invalidateCronRefresh,
   loadCronJobsPage,
-  loadCronRuns,
   loadCronStatus,
-  loadMoreCronRuns,
   normalizeCronFormState,
   removeCronJob,
   runCronJob,
@@ -28,25 +28,37 @@ import {
   startCronEdit,
   toggleCronJob,
   updateCronJobsFilter,
-  updateCronRunsFilter,
   validateCronForm,
-  type CronFormState,
-  type CronState,
 } from "../../lib/cron/index.ts";
+import {
+  getCronRunsViewState,
+  loadCronRuns,
+  loadMoreCronRuns,
+  updateCronRunsFilter,
+} from "../../lib/cron/runs.ts";
+import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import {
-  resolveSessionNavigationAgentId,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CronEditorClearance } from "./editor-clearance.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { resolveCronRouteData } from "./route-model.ts";
-import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
+import { CronRunTranscript } from "./run-transcript.ts";
+import type { CronDetailTab, CronListTab } from "./view-types.ts";
+import { renderCron } from "./view.ts";
+
+registerCronEnglish();
 
 class CronPage extends OpenClawLightDomElement {
+  constructor() {
+    super();
+    void new CronEditorClearance(this);
+  }
+
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
@@ -59,6 +71,17 @@ class CronPage extends OpenClawLightDomElement {
   @state() private detailTab: CronDetailTab = "settings";
   @state() private heartbeatScratch = "";
 
+  private readonly runTranscript = new CronRunTranscript(this, () => {
+    const scope = this.gateway.capture();
+    const cron = this.cron;
+    return scope
+      ? {
+          client: scope.client,
+          epoch: this.gateway.epoch,
+          isCurrent: () => this.gateway.isCurrent(scope) && this.cron === cron,
+        }
+      : null;
+  });
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
   private routeJobRequested = false;
   private highlightedRunId: string | null = null;
@@ -129,6 +152,9 @@ class CronPage extends OpenClawLightDomElement {
             this.gateway.connected &&
             this.gateway.client
           ) {
+            if (event.event === "task") {
+              this.runTranscript.observe(event.payload);
+            }
             if (event.event === "cron") {
               void this.refreshCron({ tableFilters: true, coalesce: true });
             } else if (
@@ -147,6 +173,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+    this.runTranscript.close();
     this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
@@ -156,6 +183,8 @@ class CronPage extends OpenClawLightDomElement {
     });
     cron.canRefresh = () => this.canRefreshCron(cron);
     this.cron = cron;
+    const routeData = resolveCronRouteData(this.routeSearch);
+    cron.cronSessionFilter = routeData.session;
     this.routeJobRequested = false;
     this.pageHidden = document.visibilityState === "hidden";
     this.cron.cronAgentId = this.context.agentSelection.state.scopeId;
@@ -200,9 +229,17 @@ class CronPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
+      this.runTranscript.close();
       this.cron.cronError = null;
       const routeData = resolveCronRouteData(this.routeSearch);
-      this.pendingRouteData = routeData.jobId ? routeData : null;
+      // A route filter owns a new inventory snapshot; late responses keep the retired state.
+      if (JSON.stringify(this.cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
+        this.resetGatewayState(this.context.gateway.snapshot);
+        this.ensureInitialData();
+      }
+      this.listTab = "tasks";
+      this.detailTab = "settings";
+      this.pendingRouteData = routeData.jobId || routeData.session ? routeData : null;
       this.routeJobRequested = false;
       this.highlightedRunId = null;
       this.pendingRunScroll = false;
@@ -225,7 +262,14 @@ class CronPage extends OpenClawLightDomElement {
     }
     const routeData = this.pendingRouteData;
     const client = this.cron.client;
-    if (routeData && client && this.cron.connected && !this.routeJobRequested) {
+    if (routeData?.session && this.cron.cronJobsSnapshotRevision && !this.cron.cronLoading) {
+      this.pendingRouteData = null;
+      const [job] = this.cron.cronJobs;
+      if (this.cron.cronJobsTotal === 1 && job) {
+        this.selectJob(job);
+      }
+    }
+    if (routeData?.jobId && client && this.cron.connected && !this.routeJobRequested) {
       this.routeJobRequested = true;
       void this.runCronTask(async (current) => {
         const isCurrent = () =>
@@ -289,7 +333,9 @@ class CronPage extends OpenClawLightDomElement {
     try {
       const result = await loadModelCatalog(client, { agentId });
       if (isCurrent()) {
-        this.cronModelSuggestions = result.models.map((entry) => entry.id);
+        this.cronModelSuggestions = result.models
+          .filter((entry) => entry.manualSelectionAllowed !== false)
+          .map((entry) => entry.id);
         this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {
@@ -481,11 +527,12 @@ class CronPage extends OpenClawLightDomElement {
 
   private submitForm(options: { runNow?: boolean } = {}) {
     this.runCronAdminTask(async (cronState) => {
+      const editing = Boolean(cronState.cronEditingJob);
       const result = await addCronJob(cronState);
       if (!result.saved) {
         return;
       }
-      if (cronState.cronEditingJob) {
+      if (editing || cronState.cronEditingJob) {
         return;
       }
       if (options.runNow && result.jobId) {
@@ -518,12 +565,27 @@ class CronPage extends OpenClawLightDomElement {
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("cron"),
-        subtitle: subtitleForRoute("cron"),
-        actions: renderAgentScopeControl({
-          agents: this.agentsList?.agents ?? [],
-          selection: this.context.agentSelection,
-        }),
+        subtitle: this.cron.cronSessionFilter
+          ? t("cron.list.sessionFilter")
+          : subtitleForRoute("cron"),
+        actions: this.cron.cronSessionFilter
+          ? html`<a
+              class="btn"
+              href=${pathForRoute("cron", this.context.basePath)}
+              @click=${(event: MouseEvent) => {
+                if (shouldHandleNavigationClick(event)) {
+                  event.preventDefault();
+                  this.context.navigate("cron", { search: "" });
+                }
+              }}
+              >${t("cron.list.showAll")}</a
+            >`
+          : renderAgentScopeControl({
+              agents: this.agentsList?.agents ?? [],
+              selection: this.context.agentSelection,
+            }),
       })}
+      ${this.runTranscript.render()}
       ${renderSettingsWorkspace(
         renderCron({
           basePath: this.context.basePath,
@@ -548,7 +610,7 @@ class CronPage extends OpenClawLightDomElement {
           createOpen: this.cron.cronCreateOpen,
           listTab: this.listTab,
           detailTab: this.detailTab,
-          error: this.cron.cronError ?? this.modelSuggestionsError,
+          error: this.cron.cronError ?? this.cron.cronRunsError ?? this.modelSuggestionsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
           heartbeatScratch: canManage ? this.heartbeatScratch : "",
@@ -558,6 +620,7 @@ class CronPage extends OpenClawLightDomElement {
           channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
           channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
           runs: this.cron.cronRuns,
+          runsState: getCronRunsViewState(this.cron),
           highlightedRunId: this.highlightedRunId,
           runsTotal: this.cron.cronRunsTotal,
           runsHasMore: this.cron.cronRunsHasMore,
@@ -619,15 +682,7 @@ class CronPage extends OpenClawLightDomElement {
               updateCronRunsFilter(cronState, patch);
               await loadCronRuns(cronState);
             }),
-          onNavigateToChat: (sessionKey) =>
-            this.context.navigate(
-              "chat",
-              sessionNavigationTarget({
-                context: this.context,
-                face: "chat",
-                sessionKey,
-              }).options,
-            ),
+          onViewRunTranscript: (entry) => void this.runTranscript.open(entry),
         }),
       )}
     `;

@@ -260,7 +260,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         handle: ctx.account.config.handle!,
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
       };
-      assertReefIdentityBinding(runtime, identityBinding);
+      await assertReefIdentityBinding(runtime, identityBinding);
       const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
@@ -471,7 +471,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           }),
         createReefWebSocket,
         {
-          initialCursor: inboxCursor.load(),
+          initialCursor: await inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
             if (ctx.abortSignal.aborted || state !== "connected") {

@@ -191,6 +191,13 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each(["", "   "])("rejects blank payload --script %j before Gateway access", async (value) => {
+    await expectCronEditRejection(
+      ["--script", value, "--display-name", "Replacement", "--pacing-min", "30m"],
+      "--script must not be blank",
+    );
+  });
+
   it("validates trigger script files before Gateway access", async () => {
     const fixtureDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-invalid-"));
     const emptyPath = path.join(fixtureDir, "empty.js");
@@ -741,30 +748,36 @@ describe("cron edit command", () => {
     );
   });
 
-  it.each([
-    { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
-    { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
-    { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
-    { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
-  ])("preserves $kind payloads when editing their tool allowlist", async ({ kind, payload }) => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", payload };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
+  it.each(
+    [
+      { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
+      { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
+      { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
+      { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
+    ].flatMap((entry) => [
+      { ...entry, tools: "read,write", toolsAllow: ["read", "write"] },
+      { ...entry, tools: "", toolsAllow: [] },
+    ]),
+  )(
+    "preserves $kind payloads when editing their tool allowlist to '$tools'",
+    async ({ kind, payload, tools, toolsAllow }) => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return { id: "job-1", payload };
+        }
+        return { ok: true };
+      });
+      await createCronProgram().parseAsync(["edit", "job-1", "--tools", tools], { from: "user" });
 
-    await program.parseAsync(["edit", "job-1", "--tools", "read,write"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id: "job-1",
-    });
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: { payload: { kind, toolsAllow: ["read", "write"] } },
-    });
-  });
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: { payload: { kind, toolsAllow } },
+      });
+    },
+  );
 
   it.each([
     { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },

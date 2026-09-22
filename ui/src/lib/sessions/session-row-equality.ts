@@ -1,14 +1,15 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 
-/** Same-content merge detection; row values are wire scalars/plain objects, so one level suffices. */
+/** Compare presentation values without treating read freshness as a content change. */
 export function isShallowEqualSessionRow(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow,
 ): boolean {
   const incomingFields: Record<string, unknown> = incoming;
   const existingFields: Record<string, unknown> = existing;
-  const incomingKeys = Object.keys(incoming);
-  if (incomingKeys.length !== Object.keys(existing).length) {
+  const incomingKeys = Object.keys(incoming).filter((key) => key !== "snapshotAt");
+  const existingKeys = Object.keys(existing).filter((key) => key !== "snapshotAt");
+  if (incomingKeys.length !== existingKeys.length) {
     return false;
   }
   return incomingKeys.every((key) => {

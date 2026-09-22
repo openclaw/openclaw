@@ -36,7 +36,18 @@ export function isCountedSourcePath(filePath: string) {
   );
 }
 
-export function collectEnvVarNames(root = process.cwd(), options: { staged?: boolean } = {}) {
+export type EnvVarNamesByPath = ReadonlyMap<string, ReadonlySet<string>>;
+
+export function addEnvVarNames(source: string, names: Set<string>) {
+  for (const match of source.matchAll(ENV_VAR_PATTERN)) {
+    names.add(match[0]);
+  }
+}
+
+export function collectEnvVarNames(
+  root = process.cwd(),
+  options: { staged?: boolean; preparedNames?: EnvVarNamesByPath } = {},
+) {
   const staged = options.staged === true;
   const files = execFileSync(
     "git",
@@ -57,10 +68,15 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
   const sources = staged ? loadRatchetSources(root, files).values() : files;
   const names = new Set<string>();
   for (const entry of sources) {
-    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
-    for (const match of source.matchAll(ENV_VAR_PATTERN)) {
-      names.add(match[0]);
+    const prepared = staged ? undefined : options.preparedNames?.get(entry);
+    if (prepared !== undefined) {
+      for (const name of prepared) {
+        names.add(name);
+      }
+      continue;
     }
+    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
+    addEnvVarNames(source, names);
   }
   return [...names].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
@@ -97,7 +113,11 @@ function readBaseBudget(root: string, ref: string) {
   return loadRatchetReference(root, baselineRef, BUDGET_PATH, parseBudget);
 }
 
-export function main(argv: string[] = process.argv.slice(2), root = process.cwd()) {
+export function main(
+  argv: string[] = process.argv.slice(2),
+  root = process.cwd(),
+  preparedNames?: EnvVarNamesByPath,
+) {
   const baseIndex = argv.indexOf("--base");
   const baseRef = baseIndex < 0 ? "origin/main" : argv[baseIndex + 1];
   const staged = argv.includes("--staged");
@@ -114,7 +134,7 @@ export function main(argv: string[] = process.argv.slice(2), root = process.cwd(
       increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
     });
   }
-  const names = collectEnvVarNames(root, { staged });
+  const names = collectEnvVarNames(root, { staged, preparedNames });
   enforceRatchetScalar(names.length, budget, {
     decreased: `OPENCLAW_* count ${names.length} is below budget ${budget}; update ${BUDGET_PATH}`,
     increased: `OPENCLAW_* count ${names.length} exceeds budget ${budget}; update ${BUDGET_PATH}`,

@@ -4,7 +4,6 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
   createSessionWorkStartChangedError,
-  isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
 } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
@@ -19,12 +18,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
-import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.read.js";
 import {
   executionIdentity,
   prepareAgentCommandExecutionIdentity,
@@ -35,6 +32,8 @@ import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
+  prepareCommandHarnessCompletionRecovery,
+  bindCommandHarnessCompletionAssertion,
   resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
@@ -56,7 +55,10 @@ import {
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
-import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
+import {
+  prepareCommandSessionDiffBaseline,
+  prepareEmbeddedSessionState,
+} from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
   AgentCommandGatewayIngressOpts,
@@ -192,6 +194,7 @@ async function agentCommandInternal(
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
             ? sessionStoreRuntime.loadSessionEntry({
+                agentId: sessionAgentId,
                 storePath,
                 sessionKey,
                 readConsistency: "latest",
@@ -316,12 +319,16 @@ async function agentCommandInternal(
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         await prepareDeliveryForRun(entry);
-        const generatedMediaSourceRunId =
-          opts.internalDeliveryMediaUrls !== undefined &&
-          opts.inputProvenance?.kind === "inter_session" &&
-          isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
-            ? runId
-            : undefined;
+        const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
+          prepareCommandHarnessCompletionRecovery({
+            entry,
+            sessionId,
+            sessionKey,
+            runId,
+            agentId: sessionAgentId,
+            opts,
+            hasDeliveryContext: Boolean(currentRunDeliveryContext),
+          });
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next = {
           ...entry,
@@ -336,51 +343,51 @@ async function agentCommandInternal(
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
-            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
-            sourceRunId: generatedMediaSourceRunId,
-            sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
+            harnessCompletion,
+            ...sourceOptions,
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
         };
         const persisted = await persistAgentSession({
+          agentId: sessionAgentId,
           sessionStore,
           sessionKey,
           storePath,
           initialEntry,
           entry: next,
           shouldPersist: (current) =>
-            isSessionRollover
+            isCompletionCurrent(current) &&
+            (isSessionRollover
               ? current?.sessionId === initialEntry.sessionId
               : shouldPersistRestartRecoveryContextClaim(
                   current,
                   sessionId,
                   runId,
                   allowCreateRestartRecoveryEntry,
-                ),
+                )),
         });
+        // The commit already happened. Cleanup must retain ownership even if
+        // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
+        opts = bindCommandHarnessCompletionAssertion({
+          claim: guardedHarnessCompletion,
+          persisted,
+          sessionKey,
+          storePath,
+          opts,
+        });
       }
       if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
-        try {
-          sessionEntry = await ensureSessionDiffBaseline({
-            cwd: cwd ?? workspaceDir,
-            entry: sessionEntry,
-            isNewSession,
-            sessionKey,
-            storePath,
-          });
-          if (sessionStore) {
-            sessionStore[sessionKey] = sessionEntry;
-          }
-        } catch (error) {
-          if (isSessionWorkStartInvalidatedError(error)) {
-            throw error;
-          }
-          log.warn(
-            `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
-          );
-        }
+        sessionEntry = await prepareCommandSessionDiffBaseline({
+          agentId: sessionAgentId,
+          cwd: cwd ?? workspaceDir,
+          entry: sessionEntry,
+          isNewSession,
+          sessionKey,
+          storePath,
+          sessionStore,
+        });
       }
       await prepareDeliveryForRun(sessionEntry);
 

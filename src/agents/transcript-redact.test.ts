@@ -787,17 +787,37 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("preserves validated Anthropic compaction state while redacting its summary", () => {
-    const msg = castAgentMessage({
-      role: "assistant",
-      api: "anthropic-messages",
-      model: "claude-sonnet-4-6",
-      provider: "anthropic",
-      content: [{ type: "text", text: "visible" }],
-      providerReplay: {
+  it.each([undefined, null, CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES])(
+    "preserves validated Anthropic compaction state and opaque metadata %s while redacting its summary",
+    (encryptedContent) => {
+      const msg = castAgentMessage({
+        role: "assistant",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        content: [{ type: "text", text: "visible" }],
+        providerReplay: {
+          v: 1,
+          type: "anthropic-compaction",
+          data: "summary containing sk-abcdef1234567890xyz",
+          replayIndex: 0,
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+          ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+          secret: "sk-another-secret-value",
+        },
+      });
+
+      const result = redactTranscriptMessage(msg, cfg("tools"));
+
+      expect(result).toHaveProperty("providerReplay", {
         v: 1,
         type: "anthropic-compaction",
-        data: "summary containing sk-abcdef1234567890xyz",
+        data: expect.stringContaining("summary containing"),
         replayIndex: 0,
         provider: "anthropic",
         api: "anthropic-messages",
@@ -805,29 +825,12 @@ describe("redactTranscriptMessage", () => {
         baseUrlHash: "ozhevd1smnk8s",
         sessionHash: "171dzdv17gum5g",
         authProfileHash: "oe8bkr3r8947",
-        secret: "sk-another-secret-value",
-      },
-    });
-
-    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
-      providerReplay: Record<string, unknown>;
-    };
-
-    expect(result.providerReplay).toMatchObject({
-      v: 1,
-      type: "anthropic-compaction",
-      replayIndex: 0,
-      provider: "anthropic",
-      api: "anthropic-messages",
-      model: "claude-sonnet-4-6",
-      baseUrlHash: "ozhevd1smnk8s",
-      sessionHash: "171dzdv17gum5g",
-      authProfileHash: "oe8bkr3r8947",
-    });
-    expect(result.providerReplay.data).toContain("summary containing");
-    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
-    expect(result.providerReplay).not.toHaveProperty("secret");
-  });
+        ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+      expect(result).not.toHaveProperty("providerReplay.secret");
+    },
+  );
 
   it("preserves Anthropic suppression and drops malformed or foreign replay state", () => {
     const base = {
@@ -848,14 +851,18 @@ describe("redactTranscriptMessage", () => {
           api: "anthropic-messages",
           model: "claude-sonnet-4-6",
           baseUrlHash: "ozhevd1smnk8s",
+          encryptedContent: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
         },
       }),
       cfg("tools"),
-    ) as unknown as { providerReplay: Record<string, unknown> };
-    expect(suppression.providerReplay).toMatchObject({
-      type: "anthropic-compaction-suppression",
-      data: "rejected",
+    );
+    expect(suppression).toMatchObject({
+      providerReplay: {
+        type: "anthropic-compaction-suppression",
+        data: "rejected",
+      },
     });
+    expect(suppression).not.toHaveProperty("providerReplay.encryptedContent");
 
     for (const providerReplay of [
       {
@@ -876,6 +883,16 @@ describe("redactTranscriptMessage", () => {
         model: "claude-sonnet-4-6",
         baseUrlHash: "ozhevd1smnk8s",
       },
+      ...[42, "not an opaque token"].map((encryptedContent) => ({
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+        encryptedContent,
+      })),
     ]) {
       const result = redactTranscriptMessage(
         castAgentMessage({ ...base, providerReplay }),

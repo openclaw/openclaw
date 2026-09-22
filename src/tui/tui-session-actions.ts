@@ -5,6 +5,7 @@ import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/in
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -28,13 +29,13 @@ import {
   type SessionInfoDefaults,
   type SessionInfoEntry,
 } from "./tui-session-info.js";
-import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   getTuiSessionProjection,
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
 } from "./tui-session-projection.js";
 import * as submit from "./tui-submit-state.js";
+import { renderTuiHistoryToolResult } from "./tui-tool-activity.js";
 import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionContext = {
@@ -338,32 +339,20 @@ export function createSessionActions(context: SessionActionContext) {
       sessionGeneration === (state.sessionGeneration ?? 0) &&
       isCurrentSessionSelection(selection);
     try {
-      const resolveListAgentId = () => {
-        if (selection.sessionKey === "global") {
-          return selection.agentId;
-        }
-        if (selection.sessionKey === "unknown") {
-          return undefined;
-        }
-        const parsed = parseAgentSessionKey(selection.sessionKey);
-        return parsed?.agentId ? normalizeAgentId(parsed.agentId) : selection.agentId;
-      };
-      const listAgentId = resolveListAgentId();
-      const result = await client.listSessions({
-        limit: TUI_SESSION_LOOKUP_LIMIT,
-        search: selection.sessionKey,
-        includeGlobal: selection.sessionKey === "global",
-        includeUnknown: selection.sessionKey === "unknown",
-        agentId: listAgentId,
+      const result = await client.describeSession({
+        sessionKey: selection.sessionKey,
+        ...(!parseAgentSessionKey(selection.sessionKey) && selection.sessionKey !== "unknown"
+          ? { agentId: selection.agentId }
+          : {}),
       });
-      // Agent-scoped list results may expand a legacy alias to its canonical key,
-      // but cannot move the selection to another agent.
       if (!isCurrentRefresh()) {
         return;
       }
-      const entry = result.sessions.find((row) => {
-        return agentSessionKeysMatchByRequestKey(row.key, selection.sessionKey);
-      });
+      const entry =
+        result.session &&
+        agentSessionKeysMatchByRequestKey(result.session.key, selection.sessionKey)
+          ? result.session
+          : undefined;
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
         state.currentSessionKey = entry.key;
@@ -378,7 +367,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
+      chatLog.addSystem(`session description failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -468,6 +457,7 @@ export function createSessionActions(context: SessionActionContext) {
       }
       const record = history as {
         messages?: unknown[];
+        activity?: AgentHistoryActivity[];
         sessionId?: string;
         sessionInfo?: SessionInfoEntry &
           Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">> & {
@@ -536,6 +526,9 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.clearAll();
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
+      const activityByMessageId = new Map(
+        record.activity?.map((entry) => [entry.messageId, entry.items]),
+      );
       for (const entry of projection.entries) {
         const message = entry.message as Record<string, unknown>;
         if (isCommandMarkedMessage(message)) {
@@ -584,23 +577,13 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "toolResult") {
-          const toolCallId = formatPrimitiveString(message.toolCallId, "");
-          const toolName = formatPrimitiveString(message.toolName, "tool");
-          const component = chatLog.startTool(toolCallId, toolName, {});
-          component.setResult(
-            state.sessionInfo.verboseLevel === "full"
-              ? {
-                  content: Array.isArray(message.content)
-                    ? (message.content as Record<string, unknown>[])
-                    : [],
-                  details:
-                    typeof message.details === "object" && message.details
-                      ? (message.details as Record<string, unknown>)
-                      : undefined,
-                }
-              : { content: [] },
-            { isError: Boolean(message.isError) },
-          );
+          const messageId = entry.identity?.id;
+          renderTuiHistoryToolResult({
+            chatLog,
+            message,
+            items: messageId ? activityByMessageId.get(messageId) : undefined,
+            verboseLevel: state.sessionInfo.verboseLevel,
+          });
         }
       }
       submit.reconcilePendingSubmitHistory(

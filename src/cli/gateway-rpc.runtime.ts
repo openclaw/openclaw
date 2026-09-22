@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
+import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -53,6 +54,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
+  assertGatewayCliMessageContext(method, params);
   const localPortOverride = resolveGatewayLocalPortOverride(opts);
   // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;

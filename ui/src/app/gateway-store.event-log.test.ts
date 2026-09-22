@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import {
   createGatewayEvent,
@@ -67,6 +68,28 @@ describe("application gateway diagnostic history ownership", () => {
 
       current().opts.onClose?.({ code: 4008, reason: "rejected", willRetry: false });
       expect(gateway.eventLog).toEqual([]);
+    },
+  );
+
+  it.each(["account-a", ""])(
+    "retires unowned goal payloads for resolved scope %j",
+    (recoveryScope) => {
+      const { gateway, current } = store;
+      const ownKey = `${goalOperationScopePrefix(gateway.connection.gatewayUrl, recoveryScope)}session`;
+      const oldKey = `${goalOperationScopePrefix(gateway.connection.gatewayUrl, "account-b")}session`;
+      const otherGatewayKey = `${goalOperationScopePrefix(B_URL, "account-b")}session`;
+      const request = JSON.stringify({ objective: "Private goal edit", issuedAtMs: Date.now() });
+      for (const key of [ownKey, oldKey, otherGatewayKey]) {
+        sessionStorage.setItem(key, request);
+      }
+      if (recoveryScope === "") {
+        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      }
+      Object.defineProperty(current(), "recoveryScope", { value: recoveryScope });
+      current().opts.onRecoveryScopeChange?.();
+      expect(sessionStorage.getItem(ownKey)).toBe(recoveryScope ? request : null);
+      expect(sessionStorage.getItem(oldKey)).toBeNull();
+      expect(sessionStorage.getItem(otherGatewayKey)).toBe(request);
     },
   );
 

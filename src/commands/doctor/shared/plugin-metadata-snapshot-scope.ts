@@ -4,6 +4,7 @@ import {
   withPluginMetadataSnapshotScope,
   type PluginMetadataSnapshotScopeRunner,
 } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
@@ -70,6 +71,7 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
   baseSnapshot?: PluginMetadataSnapshot;
   getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
   env?: NodeJS.ProcessEnv;
+  getDeferredPluginIds?: () => readonly string[];
 }): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
   const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
@@ -133,14 +135,16 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
 
   const run: PluginMetadataSnapshotScopeRunner = (scope, operation) => {
     refreshBaseSnapshot();
-    return withPluginCache(cache, () => {
-      const snapshot = resolveSnapshot(scope.config, scope.workspaceDir);
-      return withPluginMetadataSnapshotScope(snapshot, operation, {
-        config: scope.config,
-        env,
-        ...(scope.workspaceDir ? { workspaceDir: scope.workspaceDir } : {}),
-      });
-    });
+    return withDeferredPluginDoctorMigrations(params.getDeferredPluginIds?.() ?? [], () =>
+      withPluginCache(cache, () => {
+        const snapshot = resolveSnapshot(scope.config, scope.workspaceDir);
+        return withPluginMetadataSnapshotScope(snapshot, operation, {
+          config: scope.config,
+          env,
+          ...(scope.workspaceDir ? { workspaceDir: scope.workspaceDir } : {}),
+        });
+      }),
+    );
   };
 
   return {

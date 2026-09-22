@@ -34,7 +34,8 @@ const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
   it.each([
-    "native fresh",
+    "internal fresh",
+    "native custody",
     "native committed",
     "browser custody",
     "browser custody session ACL",
@@ -84,6 +85,12 @@ describe("steering input custody", () => {
             version: "test",
             platform: "ios",
             mode: "ui",
+          };
+        }
+        if (inputState === "internal fresh") {
+          fixture.params.systemInputProvenance = {
+            kind: "internal_system",
+            sourceTool: "internal-steering-fixture",
           };
         }
         fixture.client.authenticatedUserProfile = {
@@ -203,9 +210,14 @@ describe("steering input custody", () => {
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         const persistFallback = vi.spyOn(recorder, "persistFallback");
         const pending = listSessionPendingInputs(fixture.scope);
-        expect(pending.total).toBe(browserCustody ? 1 : 0);
+        expect(pending.total).toBe(inputState === "internal fresh" ? 0 : 1);
+        expect(
+          fixture.beforeApprove.mock.calls.filter(
+            ([message]) => "idempotencyKey" in message && message.idempotencyKey === inputKey,
+          ),
+        ).toHaveLength(inputState === "internal fresh" ? 0 : 1);
         fixture.beforeApprove.mockClear();
-        if (sharedProfileCustody) {
+        if (sharedProfileCustody || inputState === "native custody") {
           expect(session.getSteeringMessages()).toEqual([fixture.params.message]);
           expect(session.isStreaming).toBe(true);
           expect(released).toBe(false);
@@ -262,7 +274,7 @@ describe("steering input custody", () => {
             kind: "aborted",
             code: "aborted_for_restart",
           });
-        } else if (inputState === "native fresh") {
+        } else if (inputState === "internal fresh") {
           fixture.beforeApprove.mockImplementation(() => linkEmail(email, target.id));
         }
         finishProvider();
@@ -283,12 +295,12 @@ describe("steering input custody", () => {
           expect(finalReceipt).toBeDefined();
           expect(operation.result).toBeNull();
           expect(session.isStreaming).toBe(true);
-          expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+          expect(fixture.beforeApprove).not.toHaveBeenCalled();
           linkEmail(email, target.id);
           expect(await recorder.persistApproved()).toBeUndefined();
           expect(recorder.getAdmissionReceipt()).toEqual(finalReceipt);
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(committedTranscript);
-          expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+          expect(fixture.beforeApprove).not.toHaveBeenCalled();
           finishSteeringProvider();
         }
         await backingRun;
@@ -386,14 +398,12 @@ describe("steering input custody", () => {
             }),
           );
         } else {
-          const refused = inputState === "native fresh";
+          const refused = inputState === "internal fresh";
           expect(
             fixture.beforeApprove.mock.calls.map(([message]) =>
               "idempotencyKey" in message ? message.idempotencyKey : undefined,
             ),
-          ).toEqual(
-            refused ? [inputKey, inputKey] : inputState === "browser custody" ? [] : [inputKey],
-          );
+          ).toEqual(refused ? [inputKey, inputKey] : []);
           if (refused) {
             expect(persistFallback).toHaveBeenCalledOnce();
           }

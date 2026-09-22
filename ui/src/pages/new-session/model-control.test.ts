@@ -127,7 +127,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
-        { agentId: "main", limitPerHost: 1 },
+        { agentId: "main", metadataOnly: true },
         { signal: expect.any(AbortSignal) },
       ),
     );
@@ -239,83 +239,6 @@ describe("new-session model runtime", () => {
     expect(
       renderControl(control, context).querySelector("[data-chat-context-window-toggle]"),
     ).toBeNull();
-  });
-
-  it.each([
-    { inherited: true, checked: "true", toggleValue: "off", next: false },
-    { inherited: false, checked: "false", toggleValue: "on", next: true },
-    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
-  ] as const)(
-    "renders the current composer toggle for inherited Fast Mode $inherited",
-    async ({ inherited, checked, toggleValue, next }) => {
-      const { context } = contextWith([
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          reasoning: true,
-          effectiveFastMode: inherited,
-        },
-      ]);
-      const control = new NewSessionModelControl(() => undefined);
-      control.load(context, "main", true);
-
-      await vi.waitFor(() => {
-        const container = renderControl(control, context);
-        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
-        expect(
-          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
-        ).toBe("Fast mode");
-        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
-        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
-        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
-      });
-
-      renderControl(control, context)
-        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-        ?.click();
-      expect(control.fastMode).toBe(next);
-    },
-  );
-
-  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
-    const { context } = contextWith([
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      {
-        id: "llama-4",
-        name: "Llama 4",
-        provider: "ollama",
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High" },
-        ],
-      },
-    ]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true);
-
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
-      ).not.toBeNull(),
-    );
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
-      ?.click();
-    expect(control.fastMode).toBe(true);
-
-    renderControl(control, context)
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
-      ?.click();
-
-    expect(control.selected).toBe("ollama/llama-4");
-    expect(control.fastMode).toBeUndefined();
-    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
-      "[data-chat-speed-toggle]",
-    );
-    expect(unsupportedToggle?.disabled).toBe(true);
-    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
-    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
   });
 
   it("does not mark ordinary catalog loading as preference restoration", async () => {
@@ -982,29 +905,42 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("drops a stored model and its reasoning override when the model is unavailable", async () => {
-    const { context, request } = contextWith([
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
-    ]);
-    const notify = vi.fn();
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(notify, onSelectionChange);
+  it.each(["missing", "denied"])(
+    "drops a stored model and reasoning when the model is %s",
+    async (state) => {
+      const { context, request } = contextWith([
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+        ...(state === "denied"
+          ? [
+              {
+                id: "retired-model",
+                name: "Retired model",
+                provider: "anthropic",
+                manualSelectionAllowed: false,
+              },
+            ]
+          : []),
+      ]);
+      const notify = vi.fn();
+      const onSelectionChange = vi.fn();
+      const control = new NewSessionModelControl(notify, onSelectionChange);
 
-    control.load(context, "main", true, {
-      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
-    });
-    await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
-    expect(control.thinkingLevel).toBe("high");
+      control.load(context, "main", true, {
+        preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+      });
+      await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+      expect(control.thinkingLevel).toBe("high");
 
-    control.load(context, "main", true, {
-      preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
-    });
+      control.load(context, "main", true, {
+        preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
+      });
 
-    expect(request).toHaveBeenCalledOnce();
-    expect(control.selected).toBe("");
-    expect(control.thinkingLevel).toBe("");
-    expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
-  });
+      expect(request).toHaveBeenCalledOnce();
+      expect(control.selected).toBe("");
+      expect(control.thinkingLevel).toBe("");
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
+    },
+  );
 
   it("drops a stored reasoning override when its option is no longer available", async () => {
     const { context, request } = contextWith([

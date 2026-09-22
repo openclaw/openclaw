@@ -33,7 +33,7 @@ import {
   listAuthProfileStoreTargets as listDiscoveredAuthProfileStoreTargets,
   type AuthProfileStoreTarget,
 } from "./auth-store-paths.js";
-import { createSecretsConfigIO } from "./config-io.js";
+import { createSecretsConfigIO, writeTextFileAtomic } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
 import {
@@ -46,7 +46,7 @@ import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
-import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
+import { isNonEmptyString, isRecord } from "./shared.js";
 import { listSecretsDotEnvPaths, parseEnvAssignmentValue } from "./storage-scan.js";
 
 type FileSnapshot = {
@@ -833,7 +833,6 @@ function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
   writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
 }
 
-/** Applies or dry-runs a validated secrets plan across config, auth stores, and scrub targets. */
 /** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;

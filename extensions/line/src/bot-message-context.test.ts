@@ -991,6 +991,14 @@ describe("buildLineMessageContext", () => {
     expect(context?.route.agentId).toBe("codex");
     expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
     expect(context?.route.matchedBy).toBe("binding.channel");
+    if (!context) {
+      throw new Error("expected a bound LINE message context");
+    }
+    const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
+    expect(routeMetadataKeys).not.toHaveLength(0);
+    for (const key of routeMetadataKeys) {
+      expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+    }
   });
 
   it("gives the agent the sender's and the group's name instead of their ids", async () => {

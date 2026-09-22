@@ -341,7 +341,7 @@ async function previewStoreCleanup(params: {
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.
     forceMaintenance: true,
-    preserveKeys: preserveSessionKeys,
+    readPreserveKeys: () => preserveSessionKeys,
     log: false,
     readAgeCandidates: () => previewStore,
     readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),

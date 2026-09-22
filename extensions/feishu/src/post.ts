@@ -1,4 +1,3 @@
-// Feishu plugin module implements post behavior.
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -213,12 +212,24 @@ function resolvePostPayload(parsed: unknown): PostPayload | null {
   return resolveLocalePayload(parsed);
 }
 
-export function parsePostContent(
-  content: string,
-  options: { renderMediaPlaceholders?: boolean; emptyTextFallback?: string } = {},
+type PostParseOptions = {
+  renderMediaPlaceholders?: boolean;
+  emptyTextFallback?: string;
+};
+
+export function parsePostContent(content: string, options: PostParseOptions = {}): PostParseResult {
+  try {
+    return renderPostContent(JSON.parse(content), options);
+  } catch {
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
+  }
+}
+
+export function renderPostContent(
+  parsed: unknown,
+  options: PostParseOptions = {},
 ): PostParseResult {
   try {
-    const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
     if (!payload) {
       return {

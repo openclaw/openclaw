@@ -57,7 +57,7 @@ async function resolveGatewayCopyModel(params: {
       catalog,
       ref: source,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId: params.agentId,
     });
     return {
@@ -128,8 +128,8 @@ export async function copySessionCatalogToGateway(params: {
       : {}),
     creation: resolveOperatorSessionCreation(params.client),
     commandSource: "gateway:sessions.catalog.continue",
-    loadGatewayModelCatalog: () =>
-      params.context.loadGatewayModelCatalog({ agentId: params.agentId }),
+    loadGatewayModelCatalogSnapshot: () =>
+      params.context.loadGatewayModelCatalogSnapshot({ agentId: params.agentId }),
     atomicInitialization: true,
     commitGuard: params.commitGuard,
     afterCreate: async (entry) => {

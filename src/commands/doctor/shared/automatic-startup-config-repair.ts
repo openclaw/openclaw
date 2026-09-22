@@ -4,6 +4,12 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
 import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
+import {
+  getDeferredPluginMigrationConfigFacts,
+  omitDeferredPluginMigrationConfig,
+  preserveDeferredPluginMigrationConfig,
+  setDeferredPluginMigrationConfigFacts,
+} from "../../../config/deferred-plugin-migration-config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
@@ -11,6 +17,7 @@ import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { inspectShippedPluginInstallConfigRecords } from "../../../config/plugin-install-config-migration.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -18,12 +25,16 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   withoutPluginInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import { restoreDoctorConfigEnvRefs } from "./config-flow-steps.js";
+import {
+  prepareDoctorConfigReferenceSource,
+  restoreDoctorConfigEnvRefs,
+} from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 import {
@@ -37,6 +48,7 @@ type AutomaticConfigRepairPlan = {
   config: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   changes: string[];
+  writeConfig: OpenClawConfig;
 };
 
 function admitAutomaticConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
@@ -76,6 +88,7 @@ function planConfigRepair(
   if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
     return null;
   }
+  const deferredPluginMigrations = getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig);
   const sourceRecords = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
   if (sourceRecords.status === "invalid") {
     return null;
@@ -94,47 +107,77 @@ function planConfigRepair(
     config: OpenClawConfig,
     run: (metadata?: PluginMetadataSnapshot) => T,
   ): T => {
+    const invoke = (metadata?: PluginMetadataSnapshot) =>
+      deferredPluginMigrations
+        ? withDeferredPluginDoctorMigrations(
+            deferredPluginMigrations.map((pending) => pending.pluginId),
+            () => run(metadata),
+          )
+        : run(metadata);
     if (installRecords === undefined) {
-      return run();
+      return invoke();
     }
     const metadata = resolveConfigWidePluginMetadataSnapshot({
       config,
       installRecords,
       allowCurrent: false,
     });
-    return withPluginMetadataSnapshotScope(metadata, () => run(metadata), { config });
+    return withPluginMetadataSnapshotScope(metadata, () => invoke(metadata), { config });
   };
   const migration = withMetadata(projected, () =>
-    applyLegacyDoctorMigrations(
-      projected,
-      { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
-      { pluginContracts },
-    ),
+    applyLegacyDoctorMigrations(projected, {
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+      context: { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
+      pluginContracts,
+    }),
   );
-  const config = migration.next ?? projected;
+  const config = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.sourceConfig,
+    nextConfig: migration.next ?? projected,
+    pending: deferredPluginMigrations ?? [],
+  });
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
   }
-  const valid = withMetadata(config, (metadata) => {
+  // Migration rebuilds the source object; retain only facts whose values survived.
+  copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, config);
+  // Validate, verify, and commit one authored candidate; resolving a moved escaped
+  // reference again would make successful repairs look like unexpected config drift.
+  // Core-only selection must not resolve plugin migration contracts before state admission.
+  const writeConfig = pluginContracts
+    ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
+    : config;
+  let warnings = snapshot.warnings;
+  const runtimeConfig = withMetadata(config, (metadata) => {
+    const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
-      ? validateConfigObjectWithPlugins(
-          prepareAutomaticConfigRepairWrite(snapshot, config),
-          metadata ? { pluginMetadataSnapshot: metadata } : undefined,
-        ).ok
-      : validateConfigObjectRaw(config).ok;
+      ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, writeConfig), {
+          ...(metadata ? { pluginMetadataSnapshot: metadata } : {}),
+          deferredPluginMigrations,
+        })
+      : { ...validateConfigObjectRaw(validationConfig), warnings };
+    warnings = validated.warnings;
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
-      config,
-      config,
+      validationConfig,
+      validationConfig,
     );
-    return validated && issues.length === 0;
+    return validated.ok && issues.length === 0
+      ? deferredPluginMigrations?.length
+        ? validated.config
+        : config
+      : null;
   });
-  if (!valid) {
+  if (!runtimeConfig) {
     return null;
   }
+  copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, runtimeConfig);
+  setDeferredPluginMigrationConfigFacts(config, deferredPluginMigrations);
   return {
     config,
+    writeConfig,
     changes: [
       ...migration.changes,
+      ...(migration.warnings ?? []),
       ...(sourceRecords.status === "valid"
         ? ["Removed retired plugins.installs after preserving plugin install records."]
         : []),
@@ -143,8 +186,9 @@ function planConfigRepair(
       ...snapshot,
       sourceConfig: config,
       resolved: config,
-      runtimeConfig: config,
-      config,
+      runtimeConfig,
+      config: runtimeConfig,
+      warnings,
       valid: true,
       issues: [],
       legacyIssues: [],
@@ -188,7 +232,7 @@ export function isStartupConfigRepairResult(
   after: ConfigFileSnapshot,
 ): boolean {
   const plan = planAutomaticConfigRepair(before);
-  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.config) : null;
+  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.writeConfig) : null;
   return Boolean(
     expected &&
     after.valid &&
@@ -210,13 +254,13 @@ async function writeAutomaticConfigRepair(
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     // Preflight can commit before the later Doctor health write. Preserve moved
     // references here, under the same snapshot/hash and read-time environment.
-    transform: (_current, { snapshot: currentSnapshot }, { envSnapshotForRestore }) => {
+    transform: (_current, { snapshot: currentSnapshot }) => {
       assertShippedPluginInstallConfigImportCurrent(
         currentSnapshot,
         options.pluginInstallConfigImport,
       );
       return {
-        nextConfig: restoreDoctorConfigEnvRefs(plan.config, currentSnapshot, envSnapshotForRestore),
+        nextConfig: plan.writeConfig,
       };
     },
     afterWrite: { mode: "none", reason: "automatic migration" },

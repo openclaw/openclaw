@@ -1,4 +1,5 @@
-import { once } from "node:events";
+import { on } from "node:events";
+import { performance } from "node:perf_hooks";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -10,6 +11,7 @@ import type {
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 function nativeErrorDetails(error: Error) {
   // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
@@ -36,47 +38,73 @@ function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
   });
 }
 
-// SAFETY: Only assertSqliteIntegrityInWorker sends this private IPC input.
-const [input] = (await once(process, "message")) as [SqliteIntegrityWorkerInput];
-let database: import("node:sqlite").DatabaseSync | undefined;
-let failure: Error | undefined;
-try {
-  await sendPhase("opening");
-  readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-  database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
-  setSqliteBusyTimeout(database, input.busyTimeoutMs);
-  // Full index checks revisit pages. Keep their cache in this disposable child,
-  // without raising the memory budget of the Gateway's retained connections.
-  database.exec("PRAGMA cache_size = -65536;"); // sqlite-allow-raw -- Connection-local page-cache policy for this disposable integrity child.
-  readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-  await sendPhase("checking");
-  assertSqliteIntegrity(database, input.databaseLabel);
-} catch (error) {
-  failure = toStringifiedError(error);
-} finally {
-  if (database) {
-    try {
-      await sendPhase("closing");
-    } catch (error) {
-      // Reporting failure cannot replace a native failure or skip native close.
-      failure ??= toStringifiedError(error);
-    }
-  }
+async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrityWorkerResult> {
+  let database: import("node:sqlite").DatabaseSync | undefined;
+  let failure: Error | undefined;
+  let checkElapsedMs: number | undefined;
   try {
-    database?.close();
+    await sendPhase("opening");
+    readSqliteIntegrityFileIdentity(input.pathname, input.identity);
+    database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
+    setSqliteBusyTimeout(database, input.busyTimeoutMs);
+    configureSqliteMaintenanceCache(database);
+    readSqliteIntegrityFileIdentity(input.pathname, input.identity);
+    await sendPhase("checking");
+    const startedAt = performance.now();
+    try {
+      assertSqliteIntegrity(database, input.databaseLabel);
+    } finally {
+      checkElapsedMs = performance.now() - startedAt;
+    }
   } catch (error) {
     failure = toStringifiedError(error);
+  } finally {
+    if (database) {
+      try {
+        await sendPhase("closing");
+      } catch (error) {
+        // Reporting failure cannot replace a native failure or skip native close.
+        failure ??= toStringifiedError(error);
+      }
+    }
+    try {
+      database?.close();
+    } catch (error) {
+      failure = toStringifiedError(error);
+    }
+  }
+  let result: SqliteIntegrityWorkerResult = { ok: true };
+  if (failure) {
+    result = {
+      ok: false,
+      error: {
+        name: failure.name,
+        ...nativeErrorDetails(failure),
+        ...(failure.cause instanceof Error ? { cause: nativeErrorDetails(failure.cause) } : {}),
+      },
+    };
+  }
+  if (checkElapsedMs !== undefined) {
+    result.checkElapsedMs = checkElapsedMs;
+  }
+  return result;
+}
+
+// Plain inputs and results remain compatible with published one-shot parents.
+// SAFETY: Only the private integrity parent sends these requests; node:events leaves IPC payloads untyped.
+for await (const [input] of on(process, "message") as AsyncIterable<
+  [SqliteIntegrityWorkerInput | { type: "close" }]
+>) {
+  if ("type" in input) {
+    disconnect();
+    break;
+  }
+  const result = await check(input);
+  await new Promise<void>((resolve, reject) => {
+    sendMessage(result, (error) => (error ? reject(error) : resolve()));
+  });
+  if (!input.reuse || !result.ok) {
+    disconnect();
+    break;
   }
 }
-let result: SqliteIntegrityWorkerResult = { ok: true };
-if (failure) {
-  result = {
-    ok: false,
-    error: {
-      name: failure.name,
-      ...nativeErrorDetails(failure),
-      ...(failure.cause instanceof Error ? { cause: nativeErrorDetails(failure.cause) } : {}),
-    },
-  };
-}
-sendMessage(result, disconnect);

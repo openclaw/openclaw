@@ -6,7 +6,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
-import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
+import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
@@ -51,9 +51,8 @@ export function normalizeLiveAssistantBufferedText(
     ? { text: normalized, tail: "" }
     : splitTrailingDirective(normalized);
   const parsedTail = trailing.tail
-    ? splitMediaFromOutput(trailing.tail, {
+    ? splitMediaOutput(trailing.tail, {
         extractAudioDirectives: false,
-        extractMarkdownImages: false,
       })
     : undefined;
   // Hold an ambiguous final line until it is either a client-renderable legacy

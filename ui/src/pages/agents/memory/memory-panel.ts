@@ -13,6 +13,7 @@ import {
 } from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultDescription } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
@@ -43,6 +44,8 @@ import {
   resetWikiPreview,
   type DreamingViewState,
 } from "./view.ts";
+
+registerDreamingEnglish();
 
 type WikiPagePreview = {
   title: string;

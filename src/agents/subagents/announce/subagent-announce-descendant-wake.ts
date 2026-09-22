@@ -59,6 +59,7 @@ function buildDescendantWakeMessage(params: { findings: string; taskLabel: strin
 export async function runDescendantWake(params: {
   runId: string;
   childSessionKey: string;
+  runTimeoutSeconds?: number;
   taskLabel: string;
   findings: string;
   announceId: string;
@@ -102,6 +103,7 @@ export async function runDescendantWake(params: {
             sessionKey: params.childSessionKey,
             message: wakeMessage,
             deliver: false,
+            timeout: params.runTimeoutSeconds ?? 0,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.childSessionKey,

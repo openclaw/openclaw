@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  requestHeartbeat,
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -33,16 +34,69 @@ describe("heartbeat wake settlement", () => {
     disposeHandler = setHeartbeatWakeHandler(handler);
   }
 
-  it("settles ready work after installation when a later target is admitted", async () => {
+  it("records handler-unavailable instead of waiting for installation", async () => {
     vi.useFakeTimers();
     setHandler(null);
-    const settled = vi.fn();
+    const controller = new AbortController();
+    const result = requestHeartbeatAndWait(
+      { source: "interval", intent: "scheduled", coalesceMs: 0 },
+      { abortSignal: controller.signal },
+    );
+    try {
+      expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({
+        status: "skipped",
+        reason: "handler-unavailable",
+      });
+      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      setHandler(handler);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await result;
+    }
+  });
+
+  it.each(["queued", "running"])(
+    "settles a %s waiter when its handler is removed",
+    async (phase) => {
+      vi.useFakeTimers();
+      const release = createDeferred();
+      setHandler(async () => {
+        await release.promise;
+        return { status: "ran", durationMs: 1 };
+      });
+      const controller = new AbortController();
+      const result = requestHeartbeatAndWait(
+        { source: "interval", intent: "scheduled", coalesceMs: 0 },
+        { abortSignal: controller.signal },
+      );
+      try {
+        if (phase === "running") {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        disposeHandler?.();
+        expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({
+          status: "skipped",
+          reason: "handler-unavailable",
+        });
+      } finally {
+        controller.abort();
+        release.resolve();
+        await result;
+      }
+    },
+  );
+
+  it("dispatches queued notifications after installation before a later target", async () => {
+    vi.useFakeTimers();
+    setHandler(null);
     const wake = { source: "session-state" as const, intent: "immediate" as const };
-    void requestHeartbeatAndWait({
+    requestHeartbeat({
       ...wake,
       sessionKey: "agent:main:ready",
       coalesceMs: 0,
-    }).then(settled);
+    });
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
     setHandler(handler);
     const later = requestHeartbeatAndWait({
@@ -52,7 +106,6 @@ describe("heartbeat wake settlement", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledExactlyOnceWith({ status: "ran", durationMs: 7 });
     expect(handler.mock.calls.map(([request]) => request.sessionKey)).toEqual(["agent:main:ready"]);
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -61,6 +114,30 @@ describe("heartbeat wake settlement", () => {
       "agent:main:ready",
       "agent:main:later",
     ]);
+  });
+
+  it("retains an awaited result across direct handler replacement", async () => {
+    vi.useFakeTimers();
+    const release = createDeferred();
+    setHandler(async () => {
+      await release.promise;
+      return { status: "ran", durationMs: 1 };
+    });
+    const result = requestHeartbeatAndWait({
+      source: "interval",
+      intent: "scheduled",
+      coalesceMs: 0,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const successor = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+      setHandler(successor);
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(result).resolves.toEqual({ status: "ran", durationMs: 7 });
+      expect(successor).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+    }
   });
 
   it("shares one turn between the public heartbeat and session wake entry points", async () => {

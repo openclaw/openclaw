@@ -107,7 +107,10 @@ const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
   }),
-  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
+  getDocumentIdentitiesViaCdp: vi.fn(async () => ({
+    mainFrame: "cdp:test-document",
+    frameTree: "cdp:test-tree",
+  })),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
@@ -121,13 +124,13 @@ const cdpMocks = vi.hoisted(() => ({
 /** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
-  getMainFrameDocumentIdentityViaCdp: MockFn;
+  getDocumentIdentitiesViaCdp: MockFn;
   snapshotAria: MockFn;
   snapshotRoleViaCdp: MockFn;
 } {
   return cdpMocks as unknown as {
     createTargetViaCdp: MockFn;
-    getMainFrameDocumentIdentityViaCdp: MockFn;
+    getDocumentIdentitiesViaCdp: MockFn;
     snapshotAria: MockFn;
     snapshotRoleViaCdp: MockFn;
   };
@@ -220,7 +223,10 @@ const pwMocks = vi.hoisted(() => {
     getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
       dialogs: { pending: [], recent: [] },
     })),
-    getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
+    getDocumentIdentitiesViaPlaywright: vi.fn(async () => ({
+      mainFrame: "pw:test-document",
+      frameTree: "pw:test-tree",
+    })),
     getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
     getPageTextViaPlaywright: vi.fn(async (_opts?: unknown) => ({
       text: "Page text",
@@ -241,7 +247,6 @@ const pwMocks = vi.hoisted(() => {
     resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     setInputFilesViaPlaywright: vi.fn(async () => {}),
-    snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
     snapshotRoleViaPlaywright: vi.fn(async () => ({
       snapshot: '- button "Role" [ref=e1]',
       refs: { e1: { role: "button", name: "Role" } },
@@ -541,7 +546,9 @@ vi.mock("./chrome.js", () => ({
     };
   }),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
-  stopOwnedOpenClawChrome: vi.fn(async () => false),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(
+    async () => ({ status: "not-running" }),
+  ),
   stopOpenClawChrome: vi.fn(async () => {
     state.reachable = false;
   }),
@@ -549,7 +556,7 @@ vi.mock("./chrome.js", () => ({
 
 vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
-  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
+  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,

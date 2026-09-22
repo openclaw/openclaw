@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { getSessionEntry, upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../src/plugin-sdk/session-store-runtime.js";
 import {
   appendSqliteSessionTranscriptEventForTest,
   closeOpenClawAgentDatabasesForTest,
@@ -109,13 +113,17 @@ describe("Gateway dreaming session restart cleanup", () => {
     let client = await connect(instance);
 
     try {
-      // gateway_start fires after the listener opens; observe its first sweep before
-      // creating interrupted rows that must survive until the second process starts.
+      // gateway_start fires after the listener opens; observe its first sweep.
       await vi.waitFor(() => {
         expect(getSessionEntry({ agentId: "main", sessionKey: sentinel }), instance.logs()).toBe(
           undefined,
         );
       }, WAIT_OPTIONS);
+
+      // The serving Gateway owns its resident projection. Seed persisted rows only
+      // after it stops, so the next process admits them through startup.
+      await disconnectGatewayClient(client);
+      await instance.stopGateway();
 
       const now = Date.now();
       const stale = await Promise.all([
@@ -163,13 +171,11 @@ describe("Gateway dreaming session restart cleanup", () => {
         }),
       ]);
 
-      await vi.waitFor(async () => {
-        const keys = await listSessionKeys(client);
-        expect(keys, instance.logs()).toEqual(expect.arrayContaining([...stale, ...preserved]));
-      }, WAIT_OPTIONS);
+      const seededKeys = ["main", "worker"].flatMap((agentId) =>
+        listSessionEntries({ agentId, readOnly: true }).map(({ sessionKey }) => sessionKey),
+      );
+      expect(seededKeys).toEqual(expect.arrayContaining([...stale, ...preserved]));
 
-      await disconnectGatewayClient(client);
-      await instance.stopGateway();
       await instance.startGateway();
       client = await connect(instance);
 

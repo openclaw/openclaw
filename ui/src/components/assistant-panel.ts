@@ -31,6 +31,11 @@ import {
 } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
+import {
+  consumePluginHelpAutoOpen,
+  dismissPluginHelpAutoOpen,
+  subscribePluginHelp,
+} from "../pages/custodian/plugin-help-state.ts";
 import { renderAssistantPanelLoading } from "./assistant-panel-loading.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
 import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
@@ -54,7 +59,7 @@ type AssistantDock = Exclude<DockPanelSide, "left">;
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
@@ -85,6 +90,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
+      .watch(
+        () => this.context,
+        (context, notify) => subscribePluginHelp(context, notify),
+      )
       .watch(
         () => this.store,
         (store, notify) => store.subscribe(notify),
@@ -170,6 +179,15 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     }
     if (wasOpen && !this.dockLayout.open) {
       this.claimInput("page");
+    }
+    if (
+      this.context &&
+      this.custodianAvailable &&
+      !this.custodianSuppressed &&
+      window.innerWidth > 1100 &&
+      consumePluginHelpAutoOpen(this.context)
+    ) {
+      this.openDestination("custodian");
     }
     this.startHomeAfterPrimaryChat();
     this.contentLoader.requestWhileActive(
@@ -337,6 +355,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   private setOpen(open: boolean): void {
+    if (!open && this.destination === "custodian" && this.context) {
+      dismissPluginHelpAutoOpen(this.context);
+    }
     if (open && this.destination === "home") {
       this.homeStarted = true;
     }
