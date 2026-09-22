@@ -503,10 +503,7 @@ export function executeSharedStateCommand(
     env: getSqliteWorkerStateContext().environment,
   };
   if (command.type === "secrets.purge") {
-    return purgeExpiredSecretStoreEntriesInDatabase({
-      cutoffs: command.input,
-      database: writeOptions,
-    });
+    return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
   if (
     command.type === "conversationBindings.resolve" ||

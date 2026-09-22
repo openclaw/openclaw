@@ -33,10 +33,10 @@ import {
 function purgeExpiredSecretStoreEntries(params: {
   database: ReturnType<typeof createDatabaseOptions>;
 }) {
-  return purgeExpiredSecretStoreEntriesInDatabase({
-    ...params,
-    cutoffs: captureSecretStoreExpiryCutoffs(),
-  });
+  return purgeExpiredSecretStoreEntriesInDatabase(
+    captureSecretStoreExpiryCutoffs(),
+    params.database,
+  );
 }
 
 const roots: string[] = [];

@@ -29,12 +29,12 @@ export function captureSecretStoreExpiryCutoffs(): SecretStoreExpiryCutoffs {
   };
 }
 
-export function purgeExpiredSecretStoreEntriesInDatabase(params: {
-  database?: OpenClawStateDatabaseOptions;
-  cutoffs: SecretStoreExpiryCutoffs;
-}): number {
-  const state = openOpenClawStateDatabase(params.database);
-  const { threshold, handoffThreshold, deviceThreshold } = params.cutoffs;
+export function purgeExpiredSecretStoreEntriesInDatabase(
+  cutoffs: SecretStoreExpiryCutoffs,
+  databaseOptions?: OpenClawStateDatabaseOptions,
+): number {
+  const state = openOpenClawStateDatabase(databaseOptions);
+  const { threshold, handoffThreshold, deviceThreshold } = cutoffs;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
@@ -83,7 +83,7 @@ export function purgeExpiredSecretStoreEntriesInDatabase(params: {
         }
         return Number(deleted.numAffectedRows ?? 0n) + expiredHidden;
       },
-      { ...params.database, database: state },
+      { ...databaseOptions, database: state },
       { operationLabel: "secrets.store.purge" },
     );
   } catch (error) {
