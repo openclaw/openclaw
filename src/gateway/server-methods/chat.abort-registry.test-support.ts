@@ -80,7 +80,12 @@ export function useChatAbortRegistryFixture() {
         clearConfigCache();
         clearRuntimeConfigSnapshot();
         if (stateDir) {
-          await rm(stateDir, { recursive: true, force: true });
+          // Resource cleanup finished; removal failure must not retain a retired owner.
+          try {
+            await rm(stateDir, { recursive: true, force: true });
+          } catch (error) {
+            failures.push(error);
+          }
         }
         env.restore();
         deliveries?.[Symbol.dispose]();
