@@ -316,6 +316,55 @@ describe("live preview delivery ownership", () => {
     expect(onFinalFailure).not.toHaveBeenCalled();
   });
 
+  it("does not present a queued failure after the generation resets", async () => {
+    const { draft } = createPreviewHarness();
+    const onFinalFailure = vi.fn(async () => {});
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onFinalFailure });
+
+    lifecycle.observeFailure();
+    lifecycle.reset();
+    await Promise.resolve();
+
+    expect(onFinalFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not present a queued failure after a final becomes accepted", async () => {
+    const { draft } = createPreviewHarness();
+    const onFinalFailure = vi.fn(async () => {});
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onFinalFailure });
+
+    lifecycle.observeFailure();
+    await lifecycle.observeDelivery({
+      visibleReplySent: true,
+      receipt: createPreviewMessageReceipt({ id: "final" }),
+    });
+
+    expect(onFinalFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not let failed cleanup cross into a replacement generation", async () => {
+    const { draft } = createPreviewHarness();
+    const failureStarted = createDeferred();
+    const releaseFailure = createDeferred();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      onFinalFailure: async () => {
+        failureStarted.resolve();
+        await releaseFailure.promise;
+      },
+    });
+
+    lifecycle.observeFailure();
+    const cleanup = lifecycle.cleanup({ failed: true });
+    await failureStarted.promise;
+    lifecycle.reset();
+    releaseFailure.resolve();
+    await cleanup;
+
+    expect(draft.discardPending).not.toHaveBeenCalled();
+    expect(draft.clear).not.toHaveBeenCalled();
+  });
+
   it("preserves promoted text and receipt when supplemental delivery is rejected", async () => {
     const { posts, draft, send } = createPreviewHarness();
     const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });

@@ -485,7 +485,12 @@ export function createLivePreviewLifecycle<TPayload, TId>(
     ) {
       return;
     }
-    current.failureSettlement ??= Promise.resolve().then(() => options.onFinalFailure?.());
+    current.failureSettlement ??= Promise.resolve().then(async () => {
+      if (current !== generation || (hasAccepted(current) && current.outcome !== "error")) {
+        return;
+      }
+      await options.onFinalFailure?.();
+    });
     const attempt = current.failureSettlement;
     try {
       await attempt;
@@ -515,8 +520,14 @@ export function createLivePreviewLifecycle<TPayload, TId>(
     ) {
       await settleFinalFailure(current);
     }
+    if (current !== generation) {
+      return;
+    }
     await runBestEffortCleanup({
       cleanup: async () => {
+        if (current !== generation) {
+          return;
+        }
         await options.draft?.discardPending?.();
         if (
           current !== generation ||

@@ -130,6 +130,17 @@ export function createMattermostDraftStream(params: {
       throw terminalAcceptedDeliveryError;
     }
   };
+  const latchAcceptedDeliveryFailure = (error: unknown): Error | undefined => {
+    if (!isChannelPartialDeliveryError(error)) {
+      return undefined;
+    }
+    const acceptedDeliveryError = toErrorObject(error, "Mattermost accepted delivery failed");
+    // An accepted post without a usable id cannot be updated or deleted safely.
+    // Stop and retain the receipt failure before any caller can retry the create.
+    streamState.stopped = true;
+    terminalAcceptedDeliveryError = acceptedDeliveryError;
+    return acceptedDeliveryError;
+  };
   type DraftGeneration = {
     postId?: string;
     lastSentText: string;
@@ -186,13 +197,8 @@ export function createMattermostDraftStream(params: {
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
       streamState.stopped = true;
-      const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-        ? toErrorObject(err, "Mattermost accepted delivery failed")
-        : undefined;
-      if (acceptedDeliveryError) {
-        // Warning handlers can synchronously re-enter finalization; retain the failure first.
-        terminalAcceptedDeliveryError = acceptedDeliveryError;
-      }
+      // Warning handlers can synchronously re-enter finalization; retain the failure first.
+      const acceptedDeliveryError = latchAcceptedDeliveryFailure(err);
       params.warn?.(
         `mattermost stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -309,14 +315,8 @@ export function createMattermostDraftStream(params: {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
-        const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-          ? toErrorObject(err, "Mattermost accepted delivery failed")
-          : undefined;
-        if (acceptedDeliveryError) {
-          // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
-          streamState.stopped = true;
-          terminalAcceptedDeliveryError = acceptedDeliveryError;
-        }
+        // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
+        const acceptedDeliveryError = latchAcceptedDeliveryFailure(err);
         const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
         if (publishedAssistantPrefix) {
           // A later physical chunk failed after this exact source prefix became durable.
@@ -373,16 +373,20 @@ export function createMattermostDraftStream(params: {
       currentGeneration.lastSentText = normalized;
       return true;
     }
-    const sent = await createMattermostPost(params.client, {
-      channelId: params.channelId,
-      message: normalized,
-      rootId: params.rootId,
-      postType: params.postType,
-    });
-    currentGeneration.postId = sent.id;
-    currentGeneration.lastProviderText = sent.message ?? normalized;
-    currentGeneration.lastSentText = normalized;
-    return true;
+    try {
+      const sent = await createMattermostPost(params.client, {
+        channelId: params.channelId,
+        message: normalized,
+        rootId: params.rootId,
+        postType: params.postType,
+      });
+      currentGeneration.postId = sent.id;
+      currentGeneration.lastProviderText = sent.message ?? normalized;
+      currentGeneration.lastSentText = normalized;
+      return true;
+    } catch (error) {
+      throw latchAcceptedDeliveryFailure(error) ?? error;
+    }
   };
   const clear = async () => {
     assertNoAcceptedDeliveryFailure();

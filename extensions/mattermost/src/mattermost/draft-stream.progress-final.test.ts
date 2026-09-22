@@ -9,16 +9,26 @@ function createFixture(
     rootId?: string;
     postType?: string;
     throttleMs?: number;
+    postResponses?: unknown[];
   } = {},
 ) {
   const calls: RequestRecord[] = [];
   let nextId = 1;
+  const postResponses = [...(options.postResponses ?? [])];
+  const { postResponses: _postResponses, ...streamOptions } = options;
   const request: MattermostClient["request"] = async <T>(
     path: string,
     init?: RequestInit,
   ): Promise<T> => {
     calls.push({ path, init });
     if (path === "/posts") {
+      if (postResponses.length > 0) {
+        const response = postResponses.shift();
+        if (response instanceof Error) {
+          throw response;
+        }
+        return response as T;
+      }
       return { id: `post-${nextId++}` } as T;
     }
     return { id: "post-1" } as T;
@@ -34,7 +44,7 @@ function createFixture(
     client,
     channelId: "channel-1",
     throttleMs: 0,
-    ...options,
+    ...streamOptions,
   });
   return { calls, stream };
 }
@@ -97,5 +107,34 @@ describe("Mattermost typed progress draft stream", () => {
       type: MATTERMOST_PROGRESS_POST_TYPE,
     });
     expect(stream.postId()).toBe("post-1");
+  });
+
+  it("does not duplicate an accepted terminal post whose receipt has no usable id", async () => {
+    const { calls, stream } = createFixture({
+      postType: MATTERMOST_PROGRESS_POST_TYPE,
+      postResponses: [{}, { id: "duplicate-post" }],
+    });
+
+    await expect(stream.retainTerminalText("Failed.")).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+    });
+    await expect(stream.retainTerminalText("Failed.")).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+    });
+
+    expect(calls.filter((call) => call.path === "/posts")).toHaveLength(1);
+  });
+
+  it("allows a terminal post retry after a definite provider rejection", async () => {
+    const { calls, stream } = createFixture({
+      postType: MATTERMOST_PROGRESS_POST_TYPE,
+      postResponses: [new Error("provider rejected post"), { id: "retry-post" }],
+    });
+
+    await expect(stream.retainTerminalText("Failed.")).rejects.toThrow("provider rejected post");
+    await expect(stream.retainTerminalText("Failed.")).resolves.toBe(true);
+
+    expect(calls.filter((call) => call.path === "/posts")).toHaveLength(2);
+    expect(stream.postId()).toBe("retry-post");
   });
 });
