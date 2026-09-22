@@ -216,11 +216,9 @@ openclaw-pending-session-create {
   background: var(--card);
 }
 
-.agent-chat__search-bar:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+.agent-chat__search-bar:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .agent-chat__search-bar svg {

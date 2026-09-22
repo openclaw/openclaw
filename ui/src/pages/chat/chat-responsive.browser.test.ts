@@ -953,11 +953,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(box?.height).toBeCloseTo(16, 3);
         }
         await input.focus();
-        const focusRing = await page.locator(".agent-chat__search-bar").evaluate((element) => {
-          const style = getComputedStyle(element);
-          return style.boxShadow;
+        const search = page.locator(".agent-chat__search-bar");
+        const focusStyle = () =>
+          search.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              shadow: style.boxShadow,
+              outline: style.outlineStyle,
+              width: style.outlineWidth,
+              offset: style.outlineOffset,
+            };
+          });
+        expect(await focusStyle()).toEqual({
+          shadow: "none",
+          outline: "solid",
+          width: "2px",
+          offset: "-1px",
         });
-        expect(focusRing).not.toBe("none");
+        expect(await input.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+          "none",
+        );
+        await page.keyboard.press("Tab");
+        const close = page.locator(".agent-chat__search-bar button");
+        await expectBrowser(close).toBeFocused();
+        expect(await focusStyle()).toMatchObject({ shadow: "none", outline: "none" });
+        expect(await close.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+          "solid",
+        );
       });
     },
   );
