@@ -356,6 +356,16 @@ GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
 automatically evaluates it again. Approval comments do not rerun the test suite.
+
+Every ten minutes and on manual dispatch, the resolver reconciles CI runs completed
+since the previous successful scheduled pass (60-minute fallback, six-hour cap),
+but at least five minutes ago. It reads each head's `openclaw/ci-gate` commit status
+and schedules normal review only when it is missing or pending and predates CI
+completion. A review that ends pending stops reselection; wholly skipped runs are
+ignored. It never checks out PR code. Each tick costs one hosted `ubuntu-24.04`
+resolver job, a runs-list read plus a combined-status read per newly completed
+head, and no Blacksmith registrations.
+
 The Security Review Actions job succeeds when evaluation completes, including
 when the required commit status blocks merging for missing approval or failed CI.
 This prevents an earlier evaluation from leaving a stale failed job after automatic
@@ -503,7 +513,8 @@ that CI bypass.
 
 Results apply to the PR head evaluated by the workflow. New PR heads, base-branch
 retargeting, command comment events, and CI completion reevaluate automatically;
-unrelated pushes to `main` do not. Sensitive-path policy and permission changes
+ten-minute reconciliation recovers lost CI-completion deliveries. Unrelated pushes
+to `main` do not. Sensitive-path policy and permission changes
 take effect on the next automatic evaluation. Guard execution does not require
 manual dispatches or manual reruns.
 

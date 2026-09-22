@@ -1,5 +1,5 @@
 ---
-summary: "Performance, QA Lab, CodeQL, maintenance jobs, and ClawSweeper forwarding"
+summary: "Performance, QA Lab, CodeQL, Security Review, maintenance jobs, and ClawSweeper forwarding"
 title: "Scheduled and maintenance workflows"
 read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
@@ -141,6 +141,17 @@ improvement ratio and at least five of its seven pairs individually meet that
 ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
+
+## Security Review reconciler
+
+Every ten minutes and on manual dispatch, Security Review reconciles CI runs completed
+since the previous successful scheduled pass (60-minute fallback, six-hour cap),
+excluding the last five minutes and wholly skipped runs. It schedules normal review
+only for heads whose `openclaw/ci-gate` status is missing or pending and predates CI
+completion; a review that remains pending stops reselection. It never checks out PR
+code and uses one hosted `ubuntu-24.04` resolver job per tick, a runs-list read plus
+a combined-status read per newly completed head, and no Blacksmith registrations.
+See [Security review checks](/ci/pipeline#security-review-checks).
 
 ## QA Lab
 

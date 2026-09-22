@@ -131,11 +131,13 @@ describe("security review workflow trust boundaries", () => {
     expect(existsSync(".github/workflows/dependency-guard.yml")).toBe(false);
   });
 
-  it("uses automatic PR, command, revocation, and CI completion events only", () => {
+  it("uses PR, command, revocation, CI completion, and reconciliation events", () => {
     const workflow = readWorkflow("security-review");
     expect(Object.keys(workflow.on).toSorted()).toEqual([
       "issue_comment",
       "pull_request_target",
+      "schedule",
+      "workflow_dispatch",
       "workflow_run",
     ]);
     expect(workflow.on.pull_request_target?.types).toEqual(
@@ -150,9 +152,13 @@ describe("security review workflow trust boundaries", () => {
     );
     expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
     expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
+    expect(workflow.on.workflow_dispatch).toBeNull();
     const condition = workflow.jobs.resolve!.if!.replace(/^\$\{\{|\}\}$/gu, "");
     for (const event of [
       { eventName: "pull_request_target", allowed: true },
+      { eventName: "schedule", allowed: true },
+      { eventName: "workflow_dispatch", allowed: true },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },

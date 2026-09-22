@@ -8,6 +8,9 @@ on:
   workflow_run: # zizmor: ignore[dangerous-triggers] reads CI metadata only; never downloads artifacts or executes PR code
     workflows: [CI]
     types: [completed]
+  schedule:
+    - cron: "4-59/10 * * * *" # reconcile CI completions whose workflow_run delivery was lost
+  workflow_dispatch:
 
 permissions:
   contents: read
