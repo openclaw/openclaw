@@ -3,12 +3,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -805,10 +804,12 @@ test("sessions.create waits for the parent work admission to release", async () 
 test("sessions.create fences new parent work while rollover hooks run", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeMainSessionEntry("sess-parent-fenced");
-  const hookStarted = createDeferredCore();
-  const releaseHook = createDeferredCore();
+  const hookEntered = createDeferred();
+  const releaseHook = createDeferred();
+  const admissionController = new AbortController();
+  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
-    hookStarted.resolve();
+    hookEntered.resolve();
     await releaseHook.promise;
   });
 
@@ -817,41 +818,43 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     parentSessionKey: "main",
     emitCommandHooks: true,
   });
-  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
-  await runQaGatewayFixture(
-    async () => {
-      await Promise.race([
-        hookStarted.promise,
-        creating.then(() => {
-          throw new Error("sessions.create completed before its command:new hook");
-        }),
-      ]);
-      expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-      let admissionStarted = false;
-      admission = beginSessionWorkAdmission({
-        scope: storePath,
-        identities: ["agent:main:main", "sess-parent-fenced"],
-        assertAllowed: () => {
-          admissionStarted = true;
-        },
-      });
-      await Promise.resolve();
-      expect(admissionStarted).toBe(false);
-      releaseHook.resolve();
-      expect((await creating).ok).toBe(true);
-      await admission;
-      expect(admissionStarted).toBe(true);
-    },
-    async () => {
-      releaseHook.resolve();
-      // A prematurely acquired admission may be blocking creation itself.
-      (await admission)?.release();
-    },
-    async () => {
-      await creating;
-    },
-    () => sessionHookMocks.triggerInternalHook.mockReset(),
-  );
+  const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
+  try {
+    await Promise.race([
+      hookEntered.promise,
+      creating.then((result) => {
+        throw new Error(
+          `Session creation settled before its rollover hook: ${result.error?.message ?? "no hook"}`,
+        );
+      }),
+    ]);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+
+    let admissionStarted = false;
+    admission = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["agent:main:main", "sess-parent-fenced"],
+      signal: admissionController.signal,
+      assertAllowed: () => {
+        admissionStarted = true;
+      },
+    });
+    settledWork.push(Promise.allSettled([admission]));
+    await Promise.resolve();
+    expect(admissionStarted).toBe(false);
+
+    releaseHook.resolve();
+    expect((await creating).ok).toBe(true);
+    await admission;
+    expect(admissionStarted).toBe(true);
+  } finally {
+    releaseHook.resolve();
+    admissionController.abort();
+    await Promise.all(settledWork);
+    const lease = await admission?.catch(() => undefined);
+    lease?.release();
+    sessionHookMocks.triggerInternalHook.mockReset();
+  }
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
