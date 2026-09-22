@@ -202,7 +202,7 @@ function isOpenAIResponseItemId(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): boolean {
-  return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
+  return isSafeReplayIdentifier(value, 512);
 }
 
 const replaySanitizerHelpers = {
