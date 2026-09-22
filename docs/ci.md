@@ -61,6 +61,10 @@ Linux PR tests use Bun for the measured compatible unit lanes and Control UI
 Vitest job, with a targeted CSS-tokenizer optimizer workaround. Full Release Validation
 keeps their Node coverage and runs them on Bun too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
 
+Full Release Validation's exact-target UI job retains the current three native
+shards for both runtimes. Historical compatibility targets keep their original
+unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budgets).
+
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
 
 The measured Gateway isolated/database-worker cohort uses at most eight workers

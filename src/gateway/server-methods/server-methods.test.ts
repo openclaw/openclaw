@@ -3585,30 +3585,19 @@ describe("exec approval handlers", () => {
   );
 
   it("accepts an explicit approval id with a leading dash", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext);
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
+    await withAcceptedExecApproval(
+      testContext,
+      { request: { id: "-approval-123", host: "gateway", twoPhase: true } },
+      async ({ manager, respond, requestPromise, id }) => {
+        expect(id).toBe("-approval-123");
+        expect(await manager.getSnapshot(id)).not.toBeNull();
+        expect(mockCallArg(respond)).toBe(true);
 
-      const { pending: requestPromise } = await waitForApprovalRequested(
-        context,
-        "exec.approval.requested",
-        () =>
-          fixture.track(
-            requestExecApproval({
-              handlers,
-              respond,
-              context,
-              params: { id: "-approval-123", host: "gateway", twoPhase: true },
-            }),
-          ),
-      );
-
-      const { id } = getRequestedExecApprovalPayload(broadcasts);
-      await requestPromise;
-      expect(id).toBe("-approval-123");
-      expect(await manager.getSnapshot(id)).not.toBeNull();
-      expect(mockCallArg(respond)).toBe(true);
-    });
+        expect(await manager.resolve(id, "allow-once")).toBe(true);
+        await requestPromise;
+        expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
+      },
+    );
   });
 
   it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {

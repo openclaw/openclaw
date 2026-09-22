@@ -2947,6 +2947,48 @@ export function createNodeTestShardBundles(
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
+    if (shard.shardName === "agentic-gateway-server-isolated") {
+      // Full release validation retains two workers. Its whole native cohort
+      // exhausted the job deadline, so reuse the existing file envelope here.
+      const files = shard.includePatterns ?? [
+        ...gatewayServerIsolatedTestFiles,
+        ...gatewayDatabaseWorkerTestFiles,
+      ];
+      const stripes = createStripedBatches(
+        files,
+        Math.ceil(files.length / MAX_BUNDLED_NODE_TEST_PATTERNS),
+        stripeFileWeight,
+      ).flatMap((stripe) =>
+        Array.from(
+          { length: Math.ceil(stripe.length / MAX_BUNDLED_NODE_TEST_PATTERNS) },
+          (_, index) =>
+            stripe.slice(
+              index * MAX_BUNDLED_NODE_TEST_PATTERNS,
+              (index + 1) * MAX_BUNDLED_NODE_TEST_PATTERNS,
+            ),
+        ),
+      );
+      const timingKeys = shard.timing_key
+        ? createCompactSplitTimingGeneration({
+            configs: shard.configs,
+            env: shard.env,
+            parentShardName: shard.timing_key,
+            stripes,
+          }).timingKeys
+        : undefined;
+      for (const [index, includePatterns] of stripes.entries()) {
+        const shardName = `${shard.shardName}-${index + 1}`;
+        unbundled.push({
+          ...shard,
+          checkName: formatNodeTestShardCheckName(shardName),
+          shardName,
+          ...(timingKeys ? { timing_key: timingKeys[index]! } : {}),
+          includePatterns,
+          runner,
+        });
+      }
+      continue;
+    }
     const [config] = shard.configs;
     if (
       shard.requiresDist ||

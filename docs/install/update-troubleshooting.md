@@ -146,15 +146,23 @@ probe, or unreadable layout stops the update before staging; an unknown
 destination is never treated as empty. Restore inspection access or make
 `npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
-The report names the destination (or says that npm could not resolve it), the cause,
-and the selected service's launcher when available. Switch the runtime back and
+The saved outcome and public failure report name the destination prefix, package,
+launcher, running installation, and classified ownership cause. Public paths
+replace your home with `~` and redact other home-directory usernames. `openclaw
+update status` and Doctor retain the warning and recovery step. A symlinked prefix
+that resolves to the same installation is admitted; spelling alone does not make
+a destination foreign. Switch the runtime back and
 retry through the retained absolute launcher. Alternatively, with the destination
 owner's agreement, explicitly select that installation for the intended service
 using a printed `gateway install --force` command when available, then update. This changes
 the service binding; it is not permission to overwrite another deployment's
 package. A protected service definition uses deployment-owner instructions instead;
 `--force` cannot replace a sealed mount. Dry-run returns the same refusal. Recorded attempts remain in update
-history and are shown by Doctor.
+history and are shown by Doctor. If the active CLI and service point at different
+installations, follow [Gateway service recovery](/cli/doctor/recovery#gateway-service-recovery)
+to select the intended installation while preserving its state and service account.
+An older updater that refuses before staging cannot load a candidate's improved
+diagnostics; resolve its prefix mismatch before retrying the update.
 
 If the ranges do not overlap, install a supported Node and select a compatible
 OpenClaw target; that candidate cannot run through this updater on a supported

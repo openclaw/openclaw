@@ -8729,7 +8729,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       compatibilityTarget: false,
       policy: "dual",
       runtimes: ["node", "bun"],
-      shards: [1],
+      shards: [1, 2, 3],
     },
     {
       label: "frozen legacy",
@@ -8795,9 +8795,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ? evaluateWorkflowExpression(ui.strategy.matrix.shard, context)
       : [1];
     expect(shards).toEqual(scenario.shards);
-    if (!scenario.frozenTarget) {
-      expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
-    }
+    expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
     expect(ui.needs).toEqual(["preflight"]);
     expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
     expect(ui.permissions).toEqual({ contents: "read" });
@@ -8826,7 +8824,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           String(evaluateWorkflowExpression(expression, rowContext)),
         );
       expect(resolveValue(ui.name)).toBe(
-        scenario.frozenTarget ? "checks-ui" : `checks-ui (${shard}/3)`,
+        scenario.compatibilityTarget ? "checks-ui" : `checks-ui (${shard}/3)`,
       );
       expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
         scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
@@ -8848,7 +8846,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "--reporter=verbose",
         "--reporter=github-actions",
         "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-        ...(scenario.frozenTarget ? [] : [`--shard=${shard}/3`]),
+        ...(scenario.compatibilityTarget ? [] : [`--shard=${shard}/3`]),
       ];
       const steps = [
         ...(!lint.if || evaluateWorkflowExpression(lint.if, rowContext) ? [lint] : []),
