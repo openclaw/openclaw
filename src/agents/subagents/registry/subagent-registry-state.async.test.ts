@@ -12,6 +12,7 @@ import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -21,7 +22,9 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForSessions,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
@@ -690,7 +693,19 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
       const committed = mode === "strict commit" || mode === "atomic commit";
       expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
       const refused = mode === "strict refusal";
+      expect(
+        getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey).get("one"),
+      ).toMatchObject({
+        model: refused ? "before" : "after",
+        execution: { status: refused ? "running" : "terminal" },
+      });
       expect(getSubagentRunsSnapshotForRead(new Map()).get("one")).toMatchObject({
+        model: refused ? "before" : "after",
+        execution: { status: refused ? "running" : "terminal" },
+      });
+      expect(
+        getSubagentRunsSnapshotForSessions(new Map(), [entry.childSessionKey]).get("one"),
+      ).toMatchObject({
         model: refused ? "before" : "after",
         execution: { status: refused ? "running" : "terminal" },
       });
@@ -712,6 +727,55 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
     expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
   },
 );
+
+it("keeps retired publications with their draining source across source switches and reopen", async () => {
+  const selectedChild = () =>
+    getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
+  persistSubagentRunsToDiskOrThrow(runs("before"), ["one"]);
+  expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("before");
+  const context = captureOpenClawStateWorkerContext();
+  const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
+  let releaseClose = createDeferredCore();
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    close: () => releaseClose.promise,
+  });
+  let closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+  try {
+    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
+    expect(selectedChild().get("one")?.model).toBe("after");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
+    expect(
+      getSubagentRunsSnapshotForSessions(new Map(), ["agent:main:subagent:one"]).get("one")?.model,
+    ).toBe("after");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      expect(selectedChild().has("one")).toBe(false);
+      expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+      persistSubagentRunsToDiskOrThrow(runs("other"), ["one"]);
+    });
+    expect(selectedChild().has("one")).toBe(false);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
+    expect(selectedChild().get("one")?.model).toBe("after");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
+    releaseClose.resolve();
+    await closing;
+
+    store.saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
+    releaseClose = createDeferredCore();
+    closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+    expect(selectedChild().has("one")).toBe(false);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+    releaseClose.resolve();
+    await closing;
+    expect(selectedChild().get("one")?.model).toBe("reopened");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
+  } finally {
+    releaseClose.resolve();
+    await closing;
+    unregister();
+    await other.cleanup();
+  }
+});
 
 it("keeps unrelated publication context failures visible", () => {
   const failure = new Error("synthetic context failure");

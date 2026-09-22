@@ -2013,9 +2013,7 @@ src/auto-reply/reply/directive-handling.shared.ts	2
 src/auto-reply/reply/directives.ts	2
 src/auto-reply/reply/dispatch-acp.ts	2
 src/auto-reply/reply/dispatch-from-config.events.ts	1
-src/auto-reply/reply/dispatch-from-config.plugin-binding.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
-src/auto-reply/reply/dispatch-from-config.prepare-operation.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1

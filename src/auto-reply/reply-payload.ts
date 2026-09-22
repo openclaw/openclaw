@@ -279,6 +279,7 @@ export type ReplyPayloadMetadata = {
   progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
+    agentId?: string;
     deliveryId: string;
     intentId: string;
     recoveryRunId?: string;

@@ -247,6 +247,8 @@ Pass `watch: true` to also register the sender as a state-change watcher of the 
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
 
+Model changes stay scoped to the selected session and do not update the agent's or global default. Gateway-managed sessions apply the same model, runtime, and execution-environment checks as other session model selections. Repeating an unchanged choice does not update session activity or emit model-change notifications.
+
 When route metadata is available, `session_status` also includes a visible `Route context` JSON block and matching structured `details` fields. These fields disambiguate the session key from the route that is currently handling the live run:
 
 - `origin` is where the session was created, or the provider inferred from a deliverable session-key prefix when older state lacks stored origin metadata.
