@@ -30,6 +30,7 @@ import {
   runTaskRegistryWorkerMutation,
   ensureTaskRegistryReadyAsync,
 } from "../../tasks/task-registry-state.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -239,6 +240,7 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
       const { runTaskRegistryWorkerOperation } =
         await import("../../tasks/task-registry-worker-operation.js");
       context.admission.assertCurrent();
+      const taskStore = getTaskRegistryStore();
       const scope = {
         taskId: crypto.randomUUID(),
         flowId: taskInput.flowId.trim(),
@@ -247,7 +249,7 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
       };
       let publicationTask: TaskRecord | undefined;
       let creationOwner: SqliteWorkerNativeSettlementOwner | undefined;
-      const result = await store.runOpenClawStateWorkerOperation(context, (worker) =>
+      const result = await store.runOpenClawStateWorkerOperation(context, () =>
         runTaskRegistryWorkerMutation(
           {
             scope,
@@ -285,7 +287,7 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
             }
             return receipt;
           },
-          () => worker.execute({ type: "tasks.mutationSnapshot", input: scope }),
+          () => taskStore.loadMutationSnapshotAsync(context, scope),
         ),
       );
       return mapFlowTaskRunResult(result);

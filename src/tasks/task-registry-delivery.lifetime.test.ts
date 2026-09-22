@@ -20,7 +20,7 @@ import type { TaskDeliveryState, TaskEventRecord, TaskRecord } from "./task-regi
 const storage = vi.hoisted(() => ({
   tasks: new Map<string, TaskRecord>(),
   delivery: new Map<string, TaskDeliveryState>(),
-  pending: new Set<string>(),
+  pending: new Map<string, symbol>(),
   ensureReady: vi.fn(),
   update: vi.fn<(taskId: string, patch: Partial<TaskRecord>) => TaskRecord | null>(),
   upsertDelivery: vi.fn<(state: TaskDeliveryState) => TaskDeliveryState>(),
@@ -42,6 +42,7 @@ vi.mock("./task-registry-state.js", () => ({
   taskDeliveryStates: storage.delivery,
   tasksWithPendingDelivery: storage.pending,
   ensureTaskRegistryReady: storage.ensureReady,
+  assertTaskRegistryRestoreNotFailed: storage.ensureReady,
   withTaskRegistryMutation: <T>(operation: () => T) => operation(),
   getTasksByRunId: (runId: string) =>
     [...storage.tasks.values()].filter((task) => task.runId === runId),
@@ -53,11 +54,52 @@ vi.mock("./task-registry-mutation.js", () => ({
 }));
 vi.mock("./task-notification-mutation.async.js", async () => {
   const { sameTaskRunScope } = await import("./task-registry-records.js");
+  const { captureTaskNotificationTarget, updateTaskNotificationDelivery } =
+    await import("./task-notification.operation.js");
   return {
+    settleNotificationMutationAfterPreparationFailure: async (pending: unknown) => {
+      expect(pending).toBeUndefined();
+    },
     captureTaskNotificationMutationOwner: (assertCurrent: () => void) => ({
-      async prepare<T>(consume: () => T): Promise<T> {
+      async prepare<T>(
+        consume: (flows: import("./task-flow-registry.read.js").TaskFlowRegistryRead) => T,
+      ): Promise<T> {
         assertCurrent();
-        return consume();
+        storage.ensureReady();
+        return consume({
+          assertOwnerCurrent: assertCurrent,
+          assertCurrent,
+          listTaskFlowIds: () => [],
+          isTaskFlowCurrent: () => true,
+          getTaskFlowById: () => undefined,
+        });
+      },
+      async updateDelivery(
+        task: TaskRecord,
+        outcome: import("./task-notification.operation.js").TaskNotificationDeliveryOutcome,
+      ): Promise<TaskRecord | null> {
+        assertCurrent();
+        const receipt = updateTaskNotificationDelivery(
+          { taskId: task.taskId, expectedTask: captureTaskNotificationTarget(task), ...outcome },
+          {
+            readCurrent: () => ({
+              task: storage.tasks.get(task.taskId),
+              deliveryState: storage.delivery.get(task.taskId),
+            }),
+            write: (operation) => operation(),
+            assertCurrent,
+            upsertDelivery: storage.upsertDelivery,
+            upsertTask: (updated) => {
+              storage.update(updated.taskId, updated);
+            },
+            deferCommit: (publish) => publish(),
+            onCommitted: () => {},
+            onFailure: (_stage, error) => {
+              throw error;
+            },
+          },
+        );
+        return receipt?.task ?? null;
       },
       bindStateChange(task: TaskRecord, eventAt: number) {
         assertCurrent();
@@ -84,7 +126,7 @@ vi.mock("./task-notification-mutation.async.js", async () => {
 vi.mock("./task-flow-runtime-internal.js", () => ({ getTaskFlowById: () => undefined }));
 vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage: storage.send,
-  resolveTaskControlUiSessionUrl: () => undefined,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent: storage.enqueue }));
 vi.mock("../infra/heartbeat-wake.js", () => ({ requestHeartbeat: storage.heartbeat }));
@@ -285,16 +327,24 @@ it.each(["resume", "restart"] as const)(
   },
 );
 
-it("preserves initial restore failure even when restart would defer delivery", async () => {
-  const task = seed("terminal");
-  const caller = await closeCaller("absent");
-  const failure = new Error("Task registry restore failed");
-  storage.ensureReady.mockImplementation(() => {
-    throw failure;
-  });
-  markGatewayRestartDraining();
-  await expect(caller.run(() => maybeDeliverTaskTerminalUpdate(task.taskId))).rejects.toBe(failure);
-  expect(storage.send).not.toHaveBeenCalled();
-  expect(storage.update).not.toHaveBeenCalled();
-  expect(storage.tasks.get(task.taskId)).toEqual(task);
-});
+it.each(["terminal", "state"] as const)(
+  "preserves initial restore failure in its admitted %s delivery lifetime",
+  async (kind) => {
+    const task = seed(kind);
+    const caller = await closeCaller("absent");
+    const failure = new Error("Task registry restore failed");
+    storage.ensureReady.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(
+      caller.run(() =>
+        kind === "terminal"
+          ? maybeDeliverTaskTerminalUpdate(task.taskId)
+          : maybeDeliverTaskStateChangeUpdate(task, event),
+      ),
+    ).rejects.toBe(failure);
+    expect(storage.send).not.toHaveBeenCalled();
+    expect(storage.update).not.toHaveBeenCalled();
+    expect(storage.tasks.get(task.taskId)).toEqual(task);
+  },
+);

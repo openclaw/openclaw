@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createBackupScratchDirectory,
   finishBackupScratch,
@@ -10,10 +11,99 @@ import {
 } from "./backup-scratch.js";
 import * as fsSafe from "./fs-safe.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import * as privateDirectory from "./sqlite-private-directory.js";
 import * as stagingToken from "./sqlite-staging-token.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])(
+  "coordinates a scratch creator awaiting lifetime admission (repair=%s)",
+  async (repair) => {
+    const root = dirs.make("backup-scratch-creation-");
+    const entered = createDeferredCore<string>();
+    const resume = createDeferredCore();
+    const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
+    let paused = false;
+    vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementation(
+      async (...args) => {
+        const directory = await createDirectory(...args);
+        if (!paused && args[0] === root) {
+          paused = true;
+          entered.resolve(directory);
+          await resume.promise;
+        }
+        return directory;
+      },
+    );
+    const creating = createBackupScratchDirectory(root);
+    try {
+      const originalDirectory = await entered.promise;
+      const report = await maintainBackupScratch({ roots: [root], repair, log: () => {} });
+      expect(report.warnings).toEqual([]);
+      expect(repair ? report.reclaimed : report.unchecked).toEqual([originalDirectory]);
+      resume.resolve();
+      const scratch = await creating;
+      expect(scratch.directory === originalDirectory).toBe(!repair);
+      const active = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
+      expect(active.warnings).toEqual([]);
+      expect(active.active).toEqual([scratch.directory]);
+    } finally {
+      resume.resolve();
+      await expect(finishBackupScratch(await creating, () => {})).resolves.toBeUndefined();
+    }
+  },
+);
+
+it.each([false, true])(
+  "retries a creator's native token-open failure only when its directory was reclaimed (%s)",
+  async (reclaimed) => {
+    const root = dirs.make("backup-scratch-create-open-");
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let failedDirectory: string | undefined;
+    let nativeFailure: unknown;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
+      if (failedDirectory) {
+        return open(location, options);
+      }
+      failedDirectory = path.dirname(location);
+      if (reclaimed) {
+        fsSync.rmSync(failedDirectory, { recursive: true });
+      }
+      try {
+        return open(
+          reclaimed ? location : path.join(failedDirectory, "missing", "owner.sqlite"),
+          options,
+        );
+      } catch (error) {
+        nativeFailure = error;
+        throw error;
+      }
+    });
+    let scratch: Awaited<ReturnType<typeof createBackupScratchDirectory>> | undefined;
+    try {
+      const outcome = await createBackupScratchDirectory(root).then(
+        (value) => ({ scratch: value }),
+        (failure: unknown) => ({ failure }),
+      );
+      scratch = "scratch" in outcome ? outcome.scratch : undefined;
+      const failure = "failure" in outcome ? outcome.failure : undefined;
+      expect(nativeFailure).toBeInstanceOf(Error);
+      if (reclaimed) {
+        expect(failure).toBeUndefined();
+        expect(scratch?.directory).toBeDefined();
+        expect(scratch?.directory).not.toBe(failedDirectory);
+      } else {
+        expect(failure).toBe(nativeFailure);
+        expect(scratch).toBeUndefined();
+      }
+    } finally {
+      if (scratch) {
+        await expect(finishBackupScratch(scratch, () => {})).resolves.toBeUndefined();
+      }
+    }
+  },
+);
 
 it.each(["lstat", "boundary", "cleanup"] as const)(
   "records scratch reclaimed before %s as an intentional non-outcome",
@@ -191,44 +281,87 @@ it("preserves unexpected contents and symbolic links instead of adopting them as
   await expect(fs.lstat(linked)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
 });
 
-it("classifies active scratch before inspecting a journal that can disappear", async () => {
-  const root = dirs.make("backup-scratch-active-journal-");
-  const scratch = await createBackupScratchDirectory(root);
-  const snapshot = path.join(scratch.directory, ".sqlite-snapshot-Active");
-  await fs.mkdir(snapshot);
-  const database = nodeSqlite.openNodeSqliteDatabase(path.join(snapshot, "database.sqlite"));
-  const journal = path.join(snapshot, "database.sqlite-journal");
-  const lstat = fs.lstat;
-  let inspectedJournal = false;
-  const inspect = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    if (args[0] === journal) {
-      inspectedJournal = true;
-      // A live snapshot can commit between the maintainer's readdir and lstat.
-      database.exec("COMMIT");
+it.each(["admitted", "creating"] as const)(
+  "classifies active scratch before inspecting a journal that can disappear (%s)",
+  async (phase) => {
+    const root = dirs.make("backup-scratch-active-journal-");
+    const entered = createDeferredCore<string>();
+    const resume = createDeferredCore();
+    if (phase === "creating") {
+      const createDirectory = privateDirectory.createPrivateSqliteTempDirectory;
+      vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementation(
+        async (...args) => {
+          const directory = await createDirectory(...args);
+          entered.resolve(directory);
+          await resume.promise;
+          return directory;
+        },
+      );
     }
-    return lstat(...args);
-  });
-  try {
-    database.exec(
-      "PRAGMA journal_mode = DELETE; CREATE TABLE fixture (id INTEGER); BEGIN IMMEDIATE; INSERT INTO fixture VALUES (1);",
-    );
-    expect(fsSync.existsSync(journal)).toBe(true);
-    const report = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
-    expect(report.warnings).toEqual([]);
-    expect(report.active).toEqual([scratch.directory]);
-    expect(report.reclaimed).toEqual([]);
-    expect(report.alreadyReclaimed).toEqual([]);
-    expect(inspectedJournal).toBe(false);
-    expect(database.isTransaction).toBe(true);
-  } finally {
-    inspect.mockRestore();
-    if (database.isTransaction) {
-      database.exec("ROLLBACK");
+    const creating = createBackupScratchDirectory(root);
+    const directory = phase === "creating" ? await entered.promise : (await creating).directory;
+    const snapshot = path.join(directory, ".sqlite-snapshot-Active");
+    const journal = path.join(snapshot, "database.sqlite-journal");
+    let database: ReturnType<typeof nodeSqlite.openNodeSqliteDatabase> | undefined;
+    const startSnapshot = () => {
+      fsSync.mkdirSync(snapshot);
+      const opened = nodeSqlite.openNodeSqliteDatabase(path.join(snapshot, "database.sqlite"));
+      database = opened;
+      opened.exec(
+        "PRAGMA journal_mode = DELETE; CREATE TABLE fixture (id INTEGER); BEGIN IMMEDIATE; INSERT INTO fixture VALUES (1);",
+      );
+      expect(fsSync.existsSync(journal)).toBe(true);
+    };
+    const lstat = fs.lstat;
+    let inspectedJournal = false;
+    let observedMissingToken = false;
+    const inspect = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (
+        phase === "creating" &&
+        args[0] === path.join(directory, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]) &&
+        !observedMissingToken
+      ) {
+        try {
+          return await lstat(...args);
+        } catch (error) {
+          expect(error).toMatchObject({ code: "ENOENT" });
+          observedMissingToken = true;
+          resume.resolve();
+          await creating;
+          startSnapshot();
+          throw error;
+        }
+      }
+      if (args[0] === journal) {
+        inspectedJournal = true;
+        // A live snapshot can commit between the maintainer's readdir and lstat.
+        database?.exec("COMMIT");
+      }
+      return lstat(...args);
+    });
+    try {
+      if (phase === "admitted") {
+        startSnapshot();
+      }
+      const report = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
+      expect(observedMissingToken).toBe(phase === "creating");
+      expect(report.warnings).toEqual([]);
+      expect(report.active).toEqual([directory]);
+      expect(report.reclaimed).toEqual([]);
+      expect(report.alreadyReclaimed).toEqual([]);
+      expect(inspectedJournal).toBe(false);
+      expect(database?.isTransaction).toBe(true);
+    } finally {
+      inspect.mockRestore();
+      resume.resolve();
+      if (database?.isTransaction) {
+        database.exec("ROLLBACK");
+      }
+      database?.close();
+      await finishBackupScratch(await creating);
     }
-    database.close();
-    await finishBackupScratch(scratch);
-  }
-});
+  },
+);
 
 it("reclaims abandoned scratch while a live transaction protects its files", async () => {
   const root = dirs.make("backup-scratch-lifetime-");

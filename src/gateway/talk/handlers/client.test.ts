@@ -36,6 +36,7 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { runWithGatewayHttpWorkAdmission } from "../../server/http-work-admission.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
@@ -50,7 +51,6 @@ import {
 import { createTalkClient } from "./client-create.js";
 import { readLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { talkClientHandlers } from "./client.js";
-import { closeTalkClientTestDatabases } from "./client.test-support.js";
 
 const voiceMocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
@@ -261,7 +261,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     resetClientVoiceConfirmationStateForTest();
     vi.useRealTimers();
-    await closeTalkClientTestDatabases();
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);

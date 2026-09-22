@@ -17,7 +17,7 @@ import {
   readTaskBackingInstance,
   type TaskBackingRead,
 } from "./task-backing-authority.js";
-import { resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { resolveTaskDeliveryOwner } from "./task-notification-routing.js";
 import {
   MAX_PROGRESS_BATCH_MEMBERS,
   scheduleYieldedSubagentRunProgress,
