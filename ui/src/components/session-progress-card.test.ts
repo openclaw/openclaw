@@ -629,6 +629,7 @@ describe("renderSessionProgressCard", () => {
     expect(card.open).toBe(true);
     touch("touchend", 160);
     expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
     renderCard("run-2");
     for (let drag = 0; drag < 2; drag++) {
       touch("touchstart", 0);
@@ -641,6 +642,7 @@ describe("renderSessionProgressCard", () => {
     expect(card.open).toBe(true);
     touch("touchend", 0);
     expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
     renderCard("run-3");
     touch("touchstart", 0);
     touch("touchmove", 320);
@@ -660,6 +662,7 @@ describe("renderSessionProgressCard", () => {
     touch("touchend", 25);
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
     renderCard("run-4");
     for (let drag = 0; drag < 2; drag++) {
       touch("touchstart", 300);
@@ -669,6 +672,7 @@ describe("renderSessionProgressCard", () => {
     }
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
     renderCard("run-5");
     touch("touchstart", 0);
     touch("touchmove", 320);
@@ -691,6 +695,7 @@ describe("renderSessionProgressCard", () => {
     touch("touchend", 25);
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
     renderCard("run-6");
     touch("touchstart", 0);
     touch("touchmove", 200);

@@ -144,7 +144,7 @@ class ProgressDisclosureController {
     }
     const choices =
       manualChoicesByGateway.get(this.gatewayScope) ?? new Map<string, RememberedChoice>();
-    if (event.type === "click") {
+    if (event.type === "click" || (event.type === "extent" && this.state.manualOpen === false)) {
       choices.set(this.sessionKey, this.state.open);
       manualChoicesByGateway.set(this.gatewayScope, choices);
     } else if (

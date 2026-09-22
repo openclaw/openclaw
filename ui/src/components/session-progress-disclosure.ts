@@ -74,7 +74,8 @@ export function resolveProgressDisclosure(
             ...state,
             activeRunId: event.runId,
             completedRunId: null,
-            open: typeof state.manualOpen === "boolean" ? state.manualOpen : event.open,
+            open:
+              typeof state.manualOpen === "boolean" ? state.manualOpen : state.open && event.open,
             manualOpen: typeof state.manualOpen === "boolean" ? state.manualOpen : undefined,
             manualReopens: 0,
             gestures: 0,
@@ -130,7 +131,7 @@ export function resolveProgressDisclosure(
       return {
         ...state,
         open: event.extent > 0,
-        manualOpen: event.extent,
+        manualOpen: event.extent === 0 ? false : event.extent,
         manualReopens: state.manualReopens + Number(!state.open && event.extent > 0),
         gestures: 0,
         distancePx: 0,

@@ -107,7 +107,7 @@ describe("progress disclosure transitions", () => {
     });
     state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
     expect(state.open).toBe(false);
-    state = resolve(state, { type: "run", runId: "run-2", open: false });
+    state = resolve(state, { type: "run", runId: "run-2", open: true });
     expect(state.open).toBe(false);
     state = resolve(state, { type: "complete", runId: "run-2", reopen: true });
     expect(state.open).toBe(true);

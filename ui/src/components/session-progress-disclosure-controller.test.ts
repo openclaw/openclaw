@@ -94,6 +94,44 @@ describe("elastic progress disclosure controller", () => {
     expect(card.open).toBe(false);
   });
 
+  it.each(["history", "header", "click"] as const)(
+    "keeps a %s collapse when the next message starts a run",
+    async (choice) => {
+      const container = createContainer();
+      const gatewayScope = {};
+      const show = (activeRunId: string, readingHistory = false) =>
+        renderTranscriptCard(container, { gatewayScope, activeRunId, readingHistory });
+      show("run-1", true);
+      let card = container.querySelector("details")!;
+      let summary = card.querySelector("summary")!;
+      if (choice === "history") {
+        const transcript = observeTranscript(container, transcriptCleanups);
+        await Promise.resolve();
+        transcript.wheel(200);
+        vi.advanceTimersByTime(201);
+        transcript.wheel(200);
+        vi.advanceTimersByTime(301);
+      } else if (choice === "header") {
+        summary.dispatchEvent(new WheelEvent("wheel", { deltaY: 400, cancelable: true }));
+      } else {
+        summary.click();
+      }
+      expect(card.open).toBe(false);
+      show("run-2");
+      expect(card.open).toBe(false);
+      if (choice !== "history") {
+        render(nothing, container);
+        show("run-2");
+        card = container.querySelector("details")!;
+        summary = card.querySelector("summary")!;
+        expect(card.open).toBe(false);
+      }
+      summary.click();
+      show("run-3");
+      expect(card.open).toBe(true);
+    },
+  );
+
   it.each([true, false])(
     "records endpoint wheel ownership and cancels following (collapsed=%s)",
     (collapsed) => {
@@ -132,10 +170,10 @@ describe("elastic progress disclosure controller", () => {
         }),
       );
       expect(onManipulate).toHaveBeenCalledTimes(1);
-      expect(body.style.height).toBe(collapsed ? "0px" : "300px");
+      expect(body.style.height).toBe(collapsed ? "" : "300px");
       show(true);
       expect(card.open).toBe(!collapsed);
-      expect(body.style.height).toBe(collapsed ? "0px" : "300px");
+      expect(body.style.height).toBe(collapsed ? "" : "300px");
     },
   );
 

@@ -17,6 +17,7 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it.each([
     { name: "collapsed desktop", mobile: false, expanded: false, multiline: false },
+    { name: "header-closed desktop", mobile: false, expanded: false, multiline: false },
     { name: "expanded desktop", mobile: false, expanded: true, multiline: false },
     { name: "multiline desktop", mobile: false, expanded: false, multiline: true },
     { name: "collapsed mobile", mobile: true, expanded: false, multiline: false },
@@ -44,7 +45,13 @@ suite.define(() => {
         expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
           !mobile,
         );
-        if (mobile ? expanded : !expanded) {
+        if (name === "header-closed desktop") {
+          await card.locator("summary").hover();
+          await page.mouse.wheel(0, 400);
+          await expect
+            .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
+            .toBe(false);
+        } else if (mobile ? expanded : !expanded) {
           await card.locator("summary").click();
         }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
@@ -89,6 +96,9 @@ suite.define(() => {
           path.join(suite.artifactDir, `${name.replaceAll(" ", "-")}.json`),
           JSON.stringify(samples),
         );
+        if (name === "header-closed desktop") {
+          await captureUiProof(suite, page, "header-closed", "after-send.png");
+        }
         const initial = samples[0]!;
         expect(samples.filter((sample) => sample.source === "frame").length).toBeGreaterThan(1);
         expect(
