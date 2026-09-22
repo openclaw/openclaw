@@ -154,6 +154,10 @@ describe("minimal npm extended-stable workflow", () => {
       parsed.jobs?.check_openclaw_npm,
       "Check source, test types, and architecture",
     );
+    const pluginCompatibility = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Enforce plugin compatibility release readiness",
+    );
     const trustedCheckout = step(
       parsed.jobs?.check_openclaw_npm,
       "Checkout trusted package source preflight",
@@ -185,12 +189,14 @@ describe("minimal npm extended-stable workflow", () => {
       );
     }
     expect(sourceCheck.run).toBe("pnpm check --include-test-types --include-architecture");
+    expect(pluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
     expect(metadata).toContain("--unshallow origin");
     expect(metadata).toContain('"+refs/tags/v*:refs/tags/v*"');
     const sourceSteps = parsed.jobs?.check_openclaw_npm?.steps ?? [];
     const prepareSteps = parsed.jobs?.prepare_openclaw_npm?.steps ?? [];
     expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(sourceAncestry));
     expect(sourceSteps.indexOf(sourceAncestry)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
+    expect(sourceSteps.indexOf(sourceCheck)).toBeLessThan(sourceSteps.indexOf(pluginCompatibility));
     expect(prepareSteps.indexOf(tideclawAncestry)).toBeGreaterThan(
       prepareSteps.findIndex(
         (candidate) => candidate.name === "Checkout trusted package source preflight",

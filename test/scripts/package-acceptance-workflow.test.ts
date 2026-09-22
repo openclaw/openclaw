@@ -9245,7 +9245,11 @@ describe("package artifact reuse", () => {
     const qualify = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "qualify_npm_package");
     const candidate = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_acquisition");
     for (const job of [prepare, docker]) {
-      expect(jobNeeds(job)).toEqual(["resolve_target", "evidence_reuse"]);
+      expect(jobNeeds(job)).toEqual([
+        "resolve_target",
+        "plugin_compatibility_readiness",
+        "evidence_reuse",
+      ]);
     }
     expect(jobNeeds(qualify)).toEqual(["resolve_target", "prepare_npm_package"]);
     expect(qualify.if).toBe(
@@ -12760,6 +12764,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       resolveTargetJob,
       "Checkout target package manifest",
     );
+    const detectPluginCompatibility = workflowStep(
+      resolveTargetJob,
+      "Detect target plugin compatibility gate",
+    );
+    const pluginCompatibilityJob = workflowJob(
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      "plugin_compatibility_readiness",
+    );
+    const enforcePluginCompatibility = workflowStep(
+      pluginCompatibilityJob,
+      "Enforce target compatibility readiness",
+    );
     const toolingIdentity = workflowStep(resolveTargetJob, "Resolve trusted workflow identity");
     const releaseInputValidation = workflowStep(resolveTargetJob, "Validate release inputs");
     const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
@@ -12797,6 +12813,39 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
       resolveTargetSteps.indexOf(releaseInputValidation),
     );
+    expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
+      resolveTargetSteps.indexOf(detectPluginCompatibility),
+    );
+    expect(detectPluginCompatibility.run).toContain('.scripts["plugins:boundary-report:ci"]');
+    expect(detectPluginCompatibility.run).toContain("38ba27834dd3f98c19d5833e0598dfef3abb7587");
+    expect(detectPluginCompatibility.run).toContain("Current target is missing");
+    expect(detectPluginCompatibility.run).toContain("required=false");
+    expect(resolveTargetJob.outputs?.plugin_compatibility_required).toBe(
+      "${{ steps.plugin_compatibility.outputs.required }}",
+    );
+    expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
+    expect(pluginCompatibilityJob.if).toBe(
+      "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
+    );
+    expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
+    for (const jobName of [
+      "docker_runtime_assets_preflight",
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "release_checks_independent",
+      "npm_telegram",
+      "performance",
+      "prepare_npm_package",
+      "prepare_docker_release",
+    ]) {
+      const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
+      expect(jobNeeds(job), jobName).toContain("plugin_compatibility_readiness");
+      expect(String(job.if), jobName).toContain("needs.plugin_compatibility_readiness.result");
+    }
+    expect(jobNeeds(evidenceReuseJob)).toContain("plugin_compatibility_readiness");
+    expect(evidenceReuseJob.if).toContain("always()");
+    expect(evidenceReuseJob.if).toContain("needs.resolve_target.result == 'success'");
+    expect(evidenceReuseJob.if).toContain("needs.plugin_compatibility_readiness.result");
     expect(resolveTargetJob.outputs?.trusted_workflow_json).toBe(
       "${{ steps.tooling_identity.outputs.json }}",
     );
@@ -12821,7 +12870,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "target_context_ref must be a canonical OpenClaw release branch or tag.",
     ]);
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(npmTelegramJob.needs).toEqual([
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+    ]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(15);
     expect(performanceJob["timeout-minutes"]).toBe(15);
     expect(npmTelegramJob.if).toContain(

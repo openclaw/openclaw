@@ -194,6 +194,9 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check --include-test-types --include-architecture
 
+      - name: Enforce plugin compatibility release readiness
+        run: pnpm plugins:boundary-report:ci
+
       - name: Seal source-check evidence
         id: source_evidence
         env:

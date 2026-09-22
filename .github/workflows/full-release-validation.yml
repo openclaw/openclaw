@@ -203,6 +203,7 @@ jobs:
       source_admission_json: ${{ steps.publication_admission.outputs.json }}
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
+      plugin_compatibility_required: ${{ steps.plugin_compatibility.outputs.required }}
     steps:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -435,6 +436,26 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Detect target plugin compatibility gate
+        id: plugin_compatibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if jq -e '.scripts["plugins:boundary-report:ci"] | type == "string"' target/package.json >/dev/null; then
+            echo 'required=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gate_introduction=38ba27834dd3f98c19d5833e0598dfef3abb7587
+          relationship="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${gate_introduction}...${TARGET_SHA}" --jq .status)"
+          if [[ "$relationship" == "ahead" || "$relationship" == "identical" ]]; then
+            echo 'Current target is missing plugins:boundary-report:ci.' >&2
+            exit 1
+          fi
+          echo 'required=false' >> "$GITHUB_OUTPUT"
+          echo '::warning::Frozen target predates the plugin compatibility release gate; skipping target-owned compatibility readiness.'
 
       - name: Validate release inputs
         id: release_inputs
@@ -875,10 +896,53 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  plugin_compatibility_readiness:
+    name: Enforce plugin compatibility release readiness
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout trusted package-manager setup
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-harness
+          sparse-checkout: .github/actions/setup-pnpm-store-cache
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup target package manager
+        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: package.json
+          lockfile-path: pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: restore
+
+      - name: Install target dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Enforce target compatibility readiness
+        run: pnpm plugins:boundary-report:ci
+
   evidence_reuse:
     name: Check for reusable validation evidence
-    needs: [resolve_target]
-    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
+    needs: [resolve_target, plugin_compatibility_readiness]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
     runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
@@ -1051,10 +1115,10 @@ jobs:
 
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
-    needs: [resolve_target, evidence_reuse]
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     # Release image preparation checks runtime-assets on both native architectures.
     # Alpha has no release image producer, so it retains this standalone proof.
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -1079,8 +1143,8 @@ jobs:
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -1469,8 +1533,8 @@ jobs:
 
   plugin_prerelease_independent:
     name: Run plugin prerelease independent validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -1521,8 +1585,8 @@ jobs:
 
   release_checks_independent:
     name: Run release checks independent validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
@@ -1599,8 +1663,8 @@ jobs:
 
   npm_telegram:
     name: Run package Telegram E2E
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1624,8 +1688,8 @@ jobs:
 
   performance:
     name: Run product performance evidence
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
@@ -1646,8 +1710,8 @@ jobs:
 
   prepare_npm_package:
     name: Prepare release npm artifacts
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     outputs:
@@ -1735,8 +1799,8 @@ jobs:
 
   prepare_docker_release:
     name: Prepare release Docker artifacts
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     outputs:
