@@ -50,6 +50,7 @@ function createDistFixture() {
 function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
   tempDirs.push(rootDir);
+  fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}\n');
   const scriptsDir = path.join(rootDir, "scripts");
   const scriptLibDir = path.join(scriptsDir, "lib");
   const configDir = path.join(rootDir, "config");
