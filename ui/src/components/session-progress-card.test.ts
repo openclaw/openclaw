@@ -901,7 +901,7 @@ describe("renderSessionProgressCard", () => {
           ...progressCard,
           revision: progressCard.revision + 1,
           steps: progressCard.steps?.map((step, index) =>
-            index === 1 ? { ...step, step: "Wire the updated checklist" } : step,
+            index === 1 ? { status: step.status, step: "Wire the updated checklist" } : step,
           ),
         },
         "composer",
