@@ -399,6 +399,20 @@ while ($true) {
 export const WINDOWS_PIN_OWNER_SCRIPT_NAME = ".srt-sandbox-pin-owner.ps1";
 
 /**
+ * Absolute path to Windows PowerShell. srt-win's runner launches the target via
+ * \`CreateProcessAsUserW\` with a non-NULL \`lpApplicationName\`, which does NOT
+ * perform a PATH search and does NOT append \`.exe\` — so a bare \`powershell\`
+ * target fails with \`0x80070002\` (ERROR_FILE_NOT_FOUND). Resolve the full
+ * System32 path (verified on real Windows 11 ARM64: bare name fails, full path
+ * launches). Uses SystemRoot so it is correct regardless of the Windows install
+ * drive.
+ */
+export function resolveWindowsPowerShellPath(): string {
+  const root = process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows";
+  return `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+}
+
+/**
  * Build the inner argv that \`srt-win exec\` runs to launch the persistent
  * Windows pin owner from a STAGED script file (written by the caller; see
  * WindowsSrtSandboxBackend.spawnPinOwner).
@@ -415,7 +429,7 @@ export const WINDOWS_PIN_OWNER_SCRIPT_NAME = ".srt-sandbox-pin-owner.ps1";
  */
 export function buildWindowsPinOwnerInnerArgs(scriptPath: string): string[] {
   return [
-    "powershell",
+    resolveWindowsPowerShellPath(),
     "-NoProfile",
     "-NonInteractive",
     "-ExecutionPolicy",

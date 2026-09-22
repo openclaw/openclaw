@@ -52,7 +52,9 @@ describe("embedded Windows program sources", () => {
     // over CreateProcessW's 32 767-char limit (srt-win: argv_too_long). It must
     // be launched from a staged file, not -EncodedCommand.
     const argv = buildWindowsPinOwnerInnerArgs("C:\\ws\\.srt-sandbox-pin-owner.ps1");
-    expect(argv[0]).toBe("powershell");
+    // srt-win's runner uses CreateProcessAsUserW (no PATH search) — the target
+    // must be the absolute powershell.exe path, not a bare name.
+    expect(argv[0]).toMatch(/\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i);
     expect(argv).not.toContain("-EncodedCommand");
     expect(argv).toContain("-File");
     expect(argv.at(-1)).toBe("C:\\ws\\.srt-sandbox-pin-owner.ps1");
