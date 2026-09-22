@@ -35,14 +35,18 @@ engine unchanged, and tries that engine again on the next logical turn.
 - `registerMemoryCapability` is the exclusive memory-plugin API.
 - Owning `plugins.slots.memory` does not by itself register a host memory
   capability. A plugin can fill the slot and handle recall and retain through
-  its own agent hooks, but the host integrations that need a registered
-  capability (search, prompt section, dream planning, wiki artifact listing,
-  deterministic recall, private-transcript recall) stay inactive, and
-  `doctor.memory.status` reports `eligible: true` with
-  `capabilityRegistered: false`. The Control UI Memory page shows that as the
-  slot owner holding the slot with host integrations inactive, not as a health
-  failure and not as an unconfigured slot. Register the capability to
-  participate in host-side memory.
+  its own agent hooks, in which case `doctor.memory.status` reports
+  `eligible: true` with `capabilityRegistered: false`. Host memory search,
+  deterministic recall and private-transcript recall then have nothing to run
+  on, because those are exactly the fields stripped from any capability whose
+  plugin does not own the slot. The prompt section, dream planning and wiki
+  artifact listing are not covered by that flag: an unselected memory plugin
+  kept alive for dreaming still contributes `promptBuilder`,
+  `flushPlanResolver` and `publicArtifacts`, and those consumers resolve
+  through the registry without filtering on the slot owner. The Control UI
+  Memory page therefore names the owner and its missing capability without
+  claiming the independently provided integrations are inactive. Register the
+  capability to participate in host-side memory search.
 - `capabilityRegistered` answers whether a capability was registered at all. It
   is not a statement about search. `MemoryPluginCapability.runtime` is optional,
   so a plugin that registers only a prompt builder or a

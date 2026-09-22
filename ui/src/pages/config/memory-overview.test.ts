@@ -294,7 +294,12 @@ describe("renderMemoryOverview", () => {
     });
 
     expect(container.textContent).toContain("Memory is not configured");
-    expect(container.textContent).toContain("Host integrations that depend on memory");
+    expect(container.textContent).toContain("Memory is not running");
+    // Same claim boundary as the self-managed hero: an unselected memory plugin can still be
+    // loaded and serving the prompt section, dream planning and artifact listing, so only the
+    // three stripped surfaces may be reported as unavailable.
+    expect(container.textContent).toContain("Host memory search");
+    expect(container.textContent).toContain("may still be served");
     expect(container.querySelector(".lob-reading-book")).toBeNull();
     // The unconfigured state must NOT show the error/grumpy pose
     expect(container.textContent).not.toContain("Memory needs attention");
@@ -323,6 +328,28 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).not.toContain("Memory needs attention");
     expect(container.textContent).not.toContain("Retry");
     expect(container.querySelector(".lob-reading-book")).toBeNull();
+  });
+
+  it("does not claim sidecar-provided integrations are inactive when the slot owner registers nothing", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        ...fixturePayload(),
+        eligible: true,
+        capabilityRegistered: false,
+        searchRuntimeRegistered: false,
+      },
+    });
+
+    // `capabilityRegistered: false` answers for the slot owner alone. A memory plugin kept alive
+    // as a dreaming sidecar still contributes promptBuilder, flushPlanResolver and publicArtifacts
+    // (registry-registrars-memory.ts strips only runtime and the two recall fields), and those
+    // consumers resolve without filtering on the owner. Only the stripped three can be claimed.
+    expect(container.textContent).toContain("host memory search");
+    expect(container.textContent).toContain("deterministic recall");
+    expect(container.textContent).toContain("private-transcript recall");
+    expect(container.textContent).not.toContain("wiki artifact listing) are inactive");
+    expect(container.textContent).toContain("may still be served");
   });
 
   it("names the third-party slot owner in the self-managed hero", () => {

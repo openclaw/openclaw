@@ -1258,10 +1258,10 @@ const enSettings = {
         needsAttention: "Memory needs attention",
         unconfigured: "Memory is not configured",
         unconfiguredDescription:
-          "Memory is not running. Host integrations that depend on memory (search, prompt section, dream planning, wiki artifact listing, deterministic recall, private-transcript recall) are inactive.",
+          "Memory is not running. Host memory search, deterministic recall and private-transcript recall are unavailable. Other integrations, such as the prompt section, dream planning and wiki artifact listing, may still be served by a loaded memory plugin.",
         selfManaged: "{engine} owns the memory slot",
         selfManagedDescription:
-          "{engine} has not registered a host memory capability, so host integrations that require one (search, prompt section, dream planning, wiki artifact listing, deterministic recall, private-transcript recall) are inactive. A plugin that handles memory through its own agent hooks still works; this page reports only host-side memory.",
+          "{engine} has not registered a host memory capability, so host memory search, deterministic recall and private-transcript recall are unavailable. Other integrations, such as the prompt section, dream planning and wiki artifact listing, may still be served by another loaded memory plugin. A plugin that handles memory through its own agent hooks also keeps working; this page reports only host-side memory.",
         noSearchRuntime: "{engine} does not provide memory search",
         noSearchRuntimeDescription:
           "{engine} registered a host memory capability but no search runtime, so host memory search is unavailable. Anything else that capability registered, such as the prompt section or wiki artifact listing, is unaffected and still running.",
