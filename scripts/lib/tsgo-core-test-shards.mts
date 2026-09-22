@@ -3,7 +3,7 @@
  * time but never block CI, so unrelated test-only PRs keep landing while a
  * rebalance is scheduled.
  */
-export const TSGO_CORE_TEST_MAX_ROOTS = 720;
+const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
 export const TSGO_CORE_TEST_SHARDS = [
   {
