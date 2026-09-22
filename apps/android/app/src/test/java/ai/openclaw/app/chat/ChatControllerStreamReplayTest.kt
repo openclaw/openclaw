@@ -305,7 +305,8 @@ class ChatControllerStreamReplayTest {
         text("z-original")
         tool("z-original", "shared-call")
         tool("a-followup", "shared-call")
-        val followupTools = controller.pendingToolCalls.value
+        assertEquals(2, controller.pendingToolCalls.value.size)
+        val followupTools = controller.pendingToolCalls.value.filter { it.runId == "a-followup" }
         tool("z-original", "shared-call", "result")
         assertEquals("Original output", controller.streamingAssistantText.value)
         assertEquals(followupTools, controller.pendingToolCalls.value)
@@ -337,7 +338,7 @@ class ChatControllerStreamReplayTest {
           release.complete(Unit)
           assertTrue(original.await())
           assertEquals("Original output", controller.streamingAssistantText.value)
-          assertEquals(originalTools, controller.pendingToolCalls.value)
+          assertEquals(originalTools.map { it.copy(runId = "canonical-original") }, controller.pendingToolCalls.value)
           terminal("canonical-original", "lifecycle-end")
           assertEquals(1, controller.pendingRunCount.value)
           assertNull(controller.streamingAssistantText.value)
@@ -826,6 +827,38 @@ class ChatControllerStreamReplayTest {
     }
 
   @Test
+  fun concurrentRunsKeepReusedToolIdsAndTheirOwnCompletion() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        assertTrue(send("a-followup"))
+        tool("z-original", "shared")
+        tool("a-followup", "shared")
+        assertEquals(
+          setOf("z-original", "a-followup"),
+          controller.pendingToolCalls.value
+            .map { it.runId }
+            .toSet(),
+        )
+        tool("z-original", "shared", "result")
+        assertEquals(
+          "a-followup",
+          controller.pendingToolCalls.value
+            .single()
+            .runId,
+        )
+        assertEquals(2, controller.toolActivities.value.size)
+        terminal("z-original", "lifecycle-end")
+        assertEquals(
+          "a-followup",
+          controller.toolActivities.value
+            .single()
+            .runId,
+        )
+      }
+    }
+
+  @Test
   fun liveEditDiffCreatesAndUpdatesPendingToolUntilResult() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -862,9 +895,14 @@ class ChatControllerStreamReplayTest {
 
       controller.handleGatewayEvent(
         "agent",
-        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1"}}""",
+        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1","isError":true}}""",
       )
       assertTrue(controller.pendingToolCalls.value.isEmpty())
+      val completed = controller.toolActivities.value.single()
+      assertTrue(completed.isComplete)
+      assertEquals(true, completed.isError)
+      assertEquals(runId, completed.runId)
+      assertEquals(ChatDiffStat(added = 8, removed = 2), completed.liveDiff)
     }
 
   @Test
