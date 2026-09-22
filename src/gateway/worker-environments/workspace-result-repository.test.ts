@@ -15,6 +15,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { runCommandWithTimeout } from "../../process/exec.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -74,8 +75,12 @@ describe("repository workspace result ownership", () => {
       await closeNode?.();
     } finally {
       closeNode = undefined;
-      await cleanupWorkerTurnLauncherTest();
+      await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
     }
+  });
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
   });
 
   async function initializeOriginSeed(origin: string, runSetupScript: boolean) {
