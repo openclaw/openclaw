@@ -1,4 +1,9 @@
-export const TSGO_CORE_TEST_MAX_ROOTS = 720;
+/**
+ * Advisory shard size. Oversized shards only warn: they cost tsgo memory and wall
+ * time but never block CI, so unrelated test-only PRs keep landing while a
+ * rebalance is scheduled.
+ */
+const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
 export const TSGO_CORE_TEST_SHARDS = [
   {
