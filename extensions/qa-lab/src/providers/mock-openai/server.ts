@@ -2225,6 +2225,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       toolOutput: extractToolOutput(input),
       model,
       providerVariant: resolveProviderVariant(model),
+      codeModeExecSurface:
+        resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),
       requestKind,
       compactionSummaryFaultMode,

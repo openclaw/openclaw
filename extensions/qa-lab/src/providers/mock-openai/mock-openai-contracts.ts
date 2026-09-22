@@ -203,6 +203,8 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   return "unknown";
 }
 
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
+
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
   raw: string;
@@ -213,6 +215,7 @@ export type MockOpenAiRequestSnapshot = {
   toolOutput: string;
   model: string;
   providerVariant: MockOpenAiProviderVariant;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
