@@ -1907,6 +1907,7 @@
     "plugins:assets:copy": "node --import ./scripts/tsx.mjs scripts/bundled-plugin-assets.mts --phase copy",
     "plugins:inventory:check": "node --import ./scripts/tsx.mjs scripts/generate-plugin-inventory-doc.mts --check",
     "plugins:inventory:gen": "node --import ./scripts/tsx.mjs scripts/generate-plugin-inventory-doc.mts --write",
+    "plugins:inventory:json": "node scripts/generate-plugin-inventory-doc.mts --json",
     "plugins:sync": "node --import ./scripts/tsx.mjs scripts/sync-plugin-versions.ts",
     "plugins:sync:check": "node --import ./scripts/tsx.mjs scripts/sync-plugin-versions.ts --check",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
