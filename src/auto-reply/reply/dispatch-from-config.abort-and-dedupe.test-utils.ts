@@ -8,6 +8,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -16,7 +17,6 @@ import {
   acpMocks,
   agentEventMocks,
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
@@ -969,7 +969,6 @@ describe("dispatchReplyFromConfig", () => {
                 accountId: "work",
                 conversationId: "thread-1",
               },
-              boundAt: Date.now(),
               pluginId: "missing-plugin",
               pluginRoot: "/plugins/missing-plugin",
               pluginName: "Missing Plugin",

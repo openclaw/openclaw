@@ -292,26 +292,11 @@ vi.mock("./command/session-store.runtime.js", () => ({
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
 
-vi.mock("./command/session.js", () => ({
-  resolveSession: () => {
-    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    return {
-      sessionId: "session-1",
-      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
-      sessionEntry,
-      sessionStore: state.sessionStoreMock,
-      storePath: state.storePathMock,
-      isNewSession: false,
-      persistedThinking:
-        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
-      persistedVerbose: undefined,
-    };
-  },
-}));
+vi.mock("./command/session.js", async () => {
+  const { createTestSessionResolver } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return { resolveSession: createTestSessionResolver(state) };
+});
 
 vi.mock("./command/types.js", () => ({}));
 
@@ -3368,6 +3353,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runDiscordDelivery();
 
     expect(state.loadSessionEntryMock).toHaveBeenCalledWith({
+      agentId: "default",
       storePath: "/tmp/openclaw-sessions.json",
       sessionKey: "agent:main:main",
       readConsistency: "latest",

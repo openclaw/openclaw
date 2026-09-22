@@ -23,7 +23,7 @@ import type { CommandInteraction } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const directories: string[] = [];
 const userId = "100000000000000003";

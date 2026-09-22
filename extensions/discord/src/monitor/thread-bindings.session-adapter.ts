@@ -1,9 +1,12 @@
 import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordChannelId } from "../target-parsing.js";
@@ -12,7 +15,12 @@ import {
   resolveBindingRecordKey,
   resolvePreparedThreadBindingLifecycle,
 } from "./thread-bindings.state.js";
-import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
+import {
+  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+  type ThreadBindingManager,
+  type ThreadBindingRecord,
+} from "./thread-bindings.types.js";
 
 type ThreadBindingDefaults = {
   idleTimeoutMs: number;
@@ -197,5 +205,32 @@ export function createThreadBindingSessionAdapter(params: {
       });
       return removed ? [serializeBinding(removed)] : [];
     },
+  };
+}
+
+/** Disabled bindings have a live empty owner; retirement still makes that owner unavailable. */
+export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBindingManager {
+  const accountId = normalizeAccountId(accountIdRaw);
+  const adapter: SessionBindingAdapter = {
+    channel: "discord",
+    accountId,
+    capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+    listBySession: () => [],
+    resolveByConversation: () => null,
+  };
+  registerSessionBindingAdapter(adapter);
+  return {
+    accountId,
+    getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+    getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+    getByThreadId: () => undefined,
+    getBySessionKey: () => undefined,
+    listBySessionKey: () => [],
+    listBindings: () => [],
+    touchThread: () => null,
+    bindTarget: async () => null,
+    unbindThread: () => null,
+    unbindBySessionKey: () => [],
+    stop: () => unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter }),
   };
 }

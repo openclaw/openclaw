@@ -481,7 +481,7 @@ function beginPluginCacheRetirement(
         continue;
       }
       const { resource, result } = outcome.value;
-      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result.errors);
+      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result);
     }
     return { cleanupCount: host?.cleanupCount ?? 0, failures };
   };

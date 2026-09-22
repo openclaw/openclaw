@@ -1630,8 +1630,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning for extracted sources without replacing their test owners", () => {
-    const provision = "test/scripts/pr-worktree-provision.test.ts";
+  it("selects provisioning and closure guards without replacing source test owners", () => {
+    const guards = [
+      "test/scripts/pr-worktree-provision.test.ts",
+      "test/scripts/eager-import-closure.test.ts",
+    ];
     const manifest = "scripts/pr-lib/wrapper-components.txt";
     for (const changedPath of [
       "scripts/pr",
@@ -1639,19 +1642,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/plugins/discovery.ts",
       "src/plugins/discovery-availability.ts",
     ]) {
-      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(provision);
+      const targets = resolvePolicyTestTargets([changedPath]);
+      for (const guard of guards) {
+        expect(targets, changedPath).toContain(guard);
+      }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
     }
-    expect(resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"])).not.toContain(
-      provision,
-    );
+    const unrelatedTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"]);
+    for (const guard of guards) {
+      expect(unrelatedTargets).not.toContain(guard);
+    }
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
-    const owners = shards
-      .flatMap((shard) => shard.groups ?? [])
-      .filter((group) => group.includePatterns?.includes(provision));
-    expect(owners).toHaveLength(1);
-    expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+    for (const guard of guards) {
+      const owners = shards
+        .flatMap((shard) => shard.groups ?? [])
+        .filter((group) => group.includePatterns?.includes(guard));
+      expect(owners).toHaveLength(1);
+      expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+    }
   });
 
   it("matches policy owners only for exact changed paths", () => {

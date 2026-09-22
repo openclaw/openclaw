@@ -371,6 +371,7 @@ src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
+src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
 src/config/io.snapshot-preparation-scope.ts
 src/config/io.snapshot-preparation.ts
@@ -518,6 +519,7 @@ src/gateway/operator-scopes.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
+src/gateway/worker-environments/workspace-git-input.ts
 src/gateway/worker-environments/workspace-hash-memo.ts
 src/gateway/worker-environments/workspace-inventory-computation.runtime.ts
 src/gateway/worker-environments/workspace-inventory-error.ts

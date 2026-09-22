@@ -62,6 +62,7 @@ import { transitionMainSessionRecovery } from "../main-session-recovery/main-ses
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
+  sessionAgentId: string;
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
@@ -678,6 +679,7 @@ export function resolveSession(opts: {
     : undefined;
 
   return {
+    sessionAgentId,
     sessionId,
     sessionKey,
     sessionEntry: resolvedSessionEntry,

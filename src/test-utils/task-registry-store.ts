@@ -23,7 +23,10 @@ import {
   runTaskFlowRegistryWorkerMutation,
 } from "../tasks/task-flow-runtime-internal.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
-import { acknowledgeTaskStateNotification } from "../tasks/task-notification.operation.js";
+import {
+  acknowledgeTaskStateNotification,
+  updateTaskNotificationDelivery,
+} from "../tasks/task-notification.operation.js";
 import { captureTaskCreationEventTarget } from "../tasks/task-registry-agent-event-target.js";
 import {
   captureTaskAgentEventLineage,
@@ -188,6 +191,21 @@ export function createInMemoryTaskRegistryStore(
       } = {
         "tasks.acknowledgeStateChange": (input) =>
           acknowledgeTaskStateNotification(input, {
+            readCurrent: () => ({
+              task: state.tasks.get(input.taskId),
+              deliveryState: state.deliveryStates.get(input.taskId),
+            }),
+            write: (write) => write(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+            onFailure() {},
+          }),
+        "tasks.updateNotificationDelivery": (input) =>
+          updateTaskNotificationDelivery(input, {
             readCurrent: () => ({
               task: state.tasks.get(input.taskId),
               deliveryState: state.deliveryStates.get(input.taskId),

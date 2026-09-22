@@ -3,6 +3,8 @@ import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   acknowledgeTaskStateNotification,
+  updateTaskNotificationDelivery,
+  type TaskNotificationDeliveryUpdate,
   type TaskNotificationOperations,
   type TaskStateNotificationAcknowledgement,
 } from "./task-notification.operation.js";
@@ -65,6 +67,18 @@ export function acknowledgeTaskStateNotificationInDatabase(
   options: TaskNotificationKernelOptions,
 ): TaskRecordTransitionReceipt | null {
   return acknowledgeTaskStateNotification(
+    input,
+    taskNotificationOperations(db, input.taskId, write, options),
+  );
+}
+
+export function updateTaskNotificationDeliveryInDatabase(
+  db: DatabaseSync,
+  input: TaskNotificationDeliveryUpdate,
+  write: <T>(operation: () => T) => T,
+  options: TaskNotificationKernelOptions,
+): TaskRecordTransitionReceipt | null {
+  return updateTaskNotificationDelivery(
     input,
     taskNotificationOperations(db, input.taskId, write, options),
   );

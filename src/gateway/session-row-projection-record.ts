@@ -161,6 +161,37 @@ export function ready(row: Row | undefined): row is MaterializedRow {
   return Boolean(row?.entry && row.materialized);
 }
 
+export function publishTranscriptFields(
+  row: MaterializedRow,
+  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+): boolean {
+  // Same-generation metadata may change while transcript work is awaiting publication.
+  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+    cfg,
+    agentId: row.agentId,
+    sessionId: row.entry.sessionId,
+    sessionKey: row.key,
+    storePath: row.storeTarget.storePath,
+    entry: row.entry,
+    selectedModel: row.materialized.source.selectedModel,
+    projectedAgentRuns: context.projectedAgentRuns!,
+    active: false,
+    activeModel: fields.fallbackModel ?? null,
+  });
+  if (
+    row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.fallbackModel, fallbackModel)
+  ) {
+    return false;
+  }
+  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
+  row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
+  row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  return true;
+}
+
 export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[] {
   return sortBy === null
     ? rows

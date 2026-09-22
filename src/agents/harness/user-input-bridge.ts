@@ -2,27 +2,10 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/r
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-
-export type AgentHarnessUserInputOption = {
-  label: string;
-  description?: string;
-};
-
-export type AgentHarnessUserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  /** External step to open without answering the question. */
-  url?: string;
-  multiSelect?: boolean;
-  isOther?: boolean;
-  isSecret?: boolean;
-  options?: readonly AgentHarnessUserInputOption[] | null;
-};
-
-export type AgentHarnessUserInputAnswers = {
-  answers: Record<string, { answers: string[] }>;
-};
+import type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputQuestion,
+} from "./user-input-types.js";
 
 export type AgentHarnessUserInputPromptOptions = {
   intro?: string;

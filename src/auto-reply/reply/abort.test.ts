@@ -237,8 +237,8 @@ describe("abort detection", () => {
   }
 
   function bindAcpSessionForTest(targetSessionKey: string) {
-    vi.spyOn(getSessionBindingService(), "resolveByConversation").mockImplementation(
-      (conversation) => ({
+    vi.spyOn(getSessionBindingService(), "resolveByConversationAsync").mockImplementation(
+      async (conversation) => ({
         bindingId: "test-acp-binding",
         targetKind: "session",
         targetSessionKey,

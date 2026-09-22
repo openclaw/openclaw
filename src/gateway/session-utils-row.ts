@@ -297,7 +297,7 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-function resolveGatewaySessionActiveModel(params: {
+export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;

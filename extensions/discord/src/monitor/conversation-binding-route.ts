@@ -35,13 +35,17 @@ export function resolveDiscordConversationBindingRoute(params: {
     logVerbose(
       `discord: ignoring stale route binding for conversation ${params.runtimeConversationId} (${runtimeRoute.bindingRecord?.targetSessionKey} -> ${params.route.sessionKey})`,
     );
-    runtimeRoute = { bindingOwnerAvailable: true, bindingRecord: null, route: params.route };
+    runtimeRoute = {
+      bindingOwnerAvailable: true,
+      bindingRecord: null,
+      route: { ...runtimeRoute.route, ...params.route },
+    };
   }
   const configuredRoute = runtimeRoute.bindingRecord
     ? null
     : resolveConfiguredBindingRoute({
         cfg: params.cfg,
-        route: params.route,
+        route: runtimeRoute.route,
         conversation: {
           channel: "discord",
           accountId: params.accountId,
