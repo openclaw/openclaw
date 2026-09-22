@@ -163,7 +163,12 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
-Cron retention discovery also uses the session reader worker. It validates the
+Cron retention discovery uses a separate, single-worker maintenance lane within the
+same session database lifecycle owner. Foreground history and exact-entry reads
+keep their own queue while full-store validation runs. Both lanes retain the same
+admission, revocation, cleanup, and idle-retirement rules; a database close joins
+every lane that holds it. The additional worker is created on demand and retires
+on idle timeout or critical memory pressure. Discovery validates the
 complete physical store's metadata and participants in one read snapshot. Its
 existing full-row decoder streams JSON once and retains prompt snapshots only
 for expired cron runs belonging to the logical agent. The
