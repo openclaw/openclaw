@@ -1641,17 +1641,37 @@ maintenance also waits for the parent's commit-settlement probe to release its
 writer lock. Child transaction settlement and parent probe release are distinct
 facts in the existing commit gate; failed release cannot acknowledge success.
 
-Queued archive pruning prepares cold connections through the same asynchronous
-admission owner while retaining its existing writer section. File-backed page
-drains use the existing reclamation worker, acquired before the caller's writer
-section. Each unit checks current authority before checkpointing and vacuum,
-authorizes commit, and joins native settlement. Cache eviction between units can
-refresh the host claim only for the same physical database; no dispatched mutation
-is replayed. Incognito maintenance retains its in-process owner.
-Archive-row and unpublished-name reads follow
-validation. After removing a derived archive file, pruning reacquires before the
-canonical row-deletion transaction; an acquisition failure propagates without
-deleting that recovery row.
+Archive pruning retains its maintenance and archive-worker lifetimes while each
+page-reclamation unit acquires and releases the physical writer separately.
+Foreground session writes can run between units. Durable archive metadata reads
+use the existing history worker; conditional deletions, legacy file removal, and
+page reclamation use the agent database execution broker.
+The host captures the physical file before
+waiting and rechecks the original path alias and live authority before effects
+and at worker admission. Each write joins native settlement without replaying a
+dispatched mutation. Host connection eviction does not redirect work or require
+a synchronous database reopen. Process-held incognito maintenance retains its
+existing in-process owner and remains a separate worker migration.
+
+Canonical archive removal holds one writer section through selection, derived-file
+removal, and conditional row deletion. It rechecks pressure, authority, and the
+selected published row before deleting the canonical recovery copy. A failed
+admission or changed row preserves that copy and stops the current
+cleanup attempt. Legacy file removal checks exact canonical filename ownership,
+stats the file, and unlinks it in one synchronous worker write transaction. It
+preserves files owned by published or unpublished rows and holds the SQLite writer
+lock through unlink. Since file removal cannot roll back, the host grants commit
+immediately before unlink; no-effect outcomes also require current commit authority.
+Native settlement finishes before the item writer is released. Filesystem inventory
+and successive page drains run outside the item writer.
+Aggregate pruning diagnostics report the whole operation separately from actual
+writer waits.
+Archive order, retention policy, schemas, and update behavior are unchanged.
+
+Worker retirement preserves the original operation failure without reporting it
+again as a cleanup failure. A successfully retired execution owner is released for
+later requests; genuine native-close and lease-cleanup failures retain their
+existing retry custody.
 
 Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
 agent-database admission. A cold mutation waits for the existing integrity worker;

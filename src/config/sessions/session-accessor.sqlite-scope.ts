@@ -37,7 +37,6 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   SqliteSessionArtifactPreparationDiagnostics,
-  SqliteSessionArchivePruningDiagnostics,
   SqliteSessionDatabaseAdmissionDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
@@ -193,39 +192,6 @@ function artifactPreparationLogFields(diagnostics: SqliteSessionArtifactPreparat
   };
 }
 
-function archivePruningLogFields(diagnostics: SqliteSessionArchivePruningDiagnostics) {
-  const milliseconds = (value: number | undefined) =>
-    value === undefined ? undefined : Math.round(value);
-  return {
-    trigger: diagnostics.trigger,
-    admissionMs: milliseconds(diagnostics.admissionMs),
-    cachedAdmissions: diagnostics.cachedAdmissions,
-    asyncAdmissions: diagnostics.asyncAdmissions,
-    checkpointCalls: diagnostics.checkpointCalls,
-    checkpointIncomplete: diagnostics.checkpointIncomplete,
-    checkpoint: diagnostics.checkpoint,
-    totalBytesBefore: diagnostics.totalBytesBefore,
-    totalBytesAfter: diagnostics.totalBytesAfter,
-    walBytesBefore: diagnostics.walBytesBefore,
-    walBytesAfter: diagnostics.walBytesAfter,
-    checkpointMs: milliseconds(diagnostics.checkpointMs),
-    checkpointMaxMs: milliseconds(diagnostics.checkpointMaxMs),
-    vacuumMs: milliseconds(diagnostics.vacuumMs),
-    vacuumPasses: diagnostics.vacuumPasses,
-    vacuumPagesRequested: diagnostics.vacuumPagesRequested,
-    queryMs: milliseconds(diagnostics.queryMs),
-    rowDeletionMs: milliseconds(diagnostics.rowDeletionMs),
-    fileRemovalMs: milliseconds(diagnostics.fileRemovalMs),
-    removedFiles: diagnostics.removedFiles,
-    missingFiles: diagnostics.missingFiles,
-    failedRemovals: diagnostics.failedRemovals,
-    measurementMs: milliseconds(diagnostics.measurementMs),
-    measurements: diagnostics.measurements,
-    legacyInventoryMs: milliseconds(diagnostics.legacyInventoryMs),
-    completed: diagnostics.completed === true,
-  };
-}
-
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
@@ -248,9 +214,6 @@ export async function runExclusiveSqliteSessionWrite<T>(
       : {}),
     ...(diagnostics?.artifactPreparation
       ? { artifactPreparation: artifactPreparationLogFields(diagnostics.artifactPreparation) }
-      : {}),
-    ...(diagnostics?.archivePruning
-      ? { archivePruning: archivePruningLogFields(diagnostics.archivePruning) }
       : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined

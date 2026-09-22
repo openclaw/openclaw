@@ -642,9 +642,6 @@ export class SqliteWorkerBroker {
         resume(slot.failed);
       }
     }
-    if (completed) {
-      slot.retiredAfterCompletion = true;
-    }
     const current = slot.current;
     slot.current = undefined;
     if (current) {

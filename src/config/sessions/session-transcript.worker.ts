@@ -123,6 +123,17 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "session-archive-pruning") {
+        const { readSessionArchivePruningInWorker } =
+          await import("./session-history-archive-pruning.worker.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-archive-pruning" as const,
+            result: readSessionArchivePruningInWorker(request),
+          }))),
+        };
+      }
       if (request.kind === "transcript-search") {
         const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");

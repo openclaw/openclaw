@@ -1,5 +1,10 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
+import type {
+  PublishedSessionTranscriptArchive,
+  SessionLegacyArchiveRemovalResult,
+} from "../config/sessions/session-history-archive-pruning.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
@@ -33,6 +38,18 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;
+  };
+  "session.archivePruning.deletePublished": {
+    input: PublishedSessionTranscriptArchive;
+    output: void;
+  };
+  "session.archivePruning.removeLegacy": {
+    input: { filePath: string };
+    output: SessionLegacyArchiveRemovalResult;
+  };
+  "session.archivePruning.reclaimPages": {
+    input: { maxPages?: number };
+    output: SqliteWalReclamationResult;
   };
 };
 

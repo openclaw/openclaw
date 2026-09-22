@@ -119,7 +119,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
   });
   const databaseOptions = toDatabaseOptions(resolved);
   if (
-    hasCanonicalSessionTranscriptArchives(databaseOptions) ||
+    (await hasCanonicalSessionTranscriptArchives(databaseOptions)) ||
     (await hasRetainedSessionTranscriptArchives(params.storePath))
   ) {
     return { diskBudget, wouldMutate: true };
@@ -435,24 +435,15 @@ async function enforceSessionHistoryMaintenanceForDatabase(
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
   const pruneArchives = (trigger: SqliteSessionArchivePruningDiagnostics["trigger"]) => {
     const archivePruning: SqliteSessionArchivePruningDiagnostics = { trigger };
-    return withSqliteSessionPageReclamation(databaseOptions, (reclaimPages) =>
-      runExclusiveSqliteSessionWrite(
-        resolved,
-        async () =>
-          pruneAllSessionTranscriptArchivesToHighWater({
-            archiveDirectory,
-            databaseOptions,
-            diagnostics: archivePruning,
-            highWaterBytes,
-            storePath: params.storePath,
-            reclaimPages,
-            onCheckpointIncomplete: (checkpoint) =>
-              deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
-          }),
-        "session.history.archive-prune",
-        { archivePruning },
-      ),
-    );
+    return pruneAllSessionTranscriptArchivesToHighWater({
+      archiveDirectory,
+      databaseOptions,
+      diagnostics: archivePruning,
+      highWaterBytes,
+      storePath: params.storePath,
+      onCheckpointIncomplete: (checkpoint) =>
+        deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
+    });
   };
   let pruning = await pruneArchives("initial");
   let { usage, removedFiles } = pruning;
@@ -667,23 +658,20 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         };
         const checkpointCompleted = await withSqliteSessionPageReclamation(
           databaseOptions,
-          (reclaimPages) =>
-            runExclusiveSqliteSessionWrite(
-              resolved,
-              async () => {
-                try {
-                  return await reclaimSqliteFreePages(databaseOptions, pageDiagnostics, {
-                    reclaimPages,
-                    onCheckpointIncomplete: (checkpoint) =>
-                      deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
-                  });
-                } catch {
-                  // The durable deletion succeeded; a later pass can reclaim pages.
-                  return true;
-                }
-              },
-              "session.history.free-pages",
-            ),
+          async (reclaimPages, assertCurrent, preparedOptions) => {
+            try {
+              return await reclaimSqliteFreePages(preparedOptions, pageDiagnostics, {
+                reclaimPages,
+                assertCurrent,
+                onCheckpointIncomplete: (checkpoint) =>
+                  deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
+              });
+            } catch {
+              // The durable deletion succeeded; a later pass can reclaim pages.
+              assertCurrent();
+              return true;
+            }
+          },
         );
         usage = await measureSessionPhysicalDiskUsage(params.storePath);
         if (!checkpointCompleted) {

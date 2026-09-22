@@ -189,6 +189,9 @@ export function openExistingSqliteWorkerBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let archivePruning:
+    | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -207,6 +210,17 @@ export function openExistingSqliteWorkerBackend(
   };
   return {
     prepare(command) {
+      if (
+        command.type === "session.archivePruning.deletePublished" ||
+        command.type === "session.archivePruning.removeLegacy" ||
+        command.type === "session.archivePruning.reclaimPages"
+      ) {
+        return import("../config/sessions/session-history-archive-pruning.worker.js").then(
+          (module) => {
+            archivePruning = module;
+          },
+        );
+      }
       if (command.type === "session.providerReview.compare") {
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
           providerReview = module;
@@ -252,6 +266,29 @@ export function openExistingSqliteWorkerBackend(
           openWriter(),
           options,
           command.input,
+          admit,
+        );
+      }
+      if (command.type === "session.archivePruning.deletePublished" && archivePruning) {
+        return archivePruning.deletePublishedSessionArchiveInDatabase(
+          openWriter(),
+          options,
+          command.input,
+          admit,
+        );
+      }
+      if (command.type === "session.archivePruning.removeLegacy" && archivePruning) {
+        return archivePruning.removeLegacySessionArchiveInDatabase(
+          openWriter(),
+          options,
+          command.input.filePath,
+          admit,
+        );
+      }
+      if (command.type === "session.archivePruning.reclaimPages" && archivePruning) {
+        return archivePruning.reclaimSessionArchivePagesInWorker(
+          openWriter(),
+          command.input.maxPages,
           admit,
         );
       }

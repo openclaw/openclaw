@@ -39,6 +39,7 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import {
   createHistoryEvictionReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -609,28 +610,20 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   }
   const budgetBefore = freePages();
   const databaseOptions = plan.databaseOptions;
-  const duringDrain = yieldToEventLoop().then(() => {
-    expect(budgetBefore - freePages()).toBeGreaterThan(0);
-    expect(budgetBefore - freePages()).toBeLessThanOrEqual(512);
+  await withSqliteSessionPageReclamation(databaseOptions, async (reclaimPages) => {
+    const first = await reclaimPages();
+    expect(first.remainingFreePages).toBeGreaterThan(0);
+    expect(budgetBefore - first.remainingFreePages!).toBeGreaterThan(0);
+    expect(budgetBefore - first.remainingFreePages!).toBeLessThanOrEqual(512);
     expect(database.db.isTransaction).toBe(false);
-    closeOpenClawAgentDatabaseByPath(database.path);
     for (const scope of scopes) {
       expect(appendTranscriptEventSync(scope, { type: "budget-progress" })).toEqual({
         ok: true,
         value: true,
       });
     }
+    await reclaimSqliteFreePages(databaseOptions, undefined, { reclaimPages });
   });
-  // Production retains writer admission across every yielded pass. In particular,
-  // retiring the old handle must queue its Worker checkpoint behind this drain.
-  await Promise.all([
-    runExclusiveSqliteSessionWrite(
-      databaseOptions,
-      () => reclaimSqliteFreePages(databaseOptions),
-      "session.history.free-pages",
-    ),
-    duringDrain,
-  ]);
   const reopened = openOpenClawAgentDatabase(databaseOptions);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });

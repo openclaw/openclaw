@@ -66,7 +66,6 @@ export type Slot = {
   queue: Job[];
   current?: Job;
   failed?: Error;
-  retiredAfterCompletion?: true;
   retiring?: Promise<void>;
   exit: Promise<void>;
   exited: boolean;

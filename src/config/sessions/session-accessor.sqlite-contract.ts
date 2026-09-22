@@ -78,9 +78,6 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
   trigger: "initial" | "after-eviction" | "final";
-  admissionMs?: number;
-  cachedAdmissions?: number;
-  asyncAdmissions?: number;
   checkpointCalls?: number;
   checkpointIncomplete?: number;
   checkpoint?: SqliteWalHealth;
@@ -107,7 +104,6 @@ export type SqliteSessionArchivePruningDiagnostics = {
 
 export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
   artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
-  archivePruning?: SqliteSessionArchivePruningDiagnostics;
   reclamationAdmission?: SqliteSessionReclamationAdmissionDiagnostics;
 };
 

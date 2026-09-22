@@ -69,7 +69,9 @@ const IDLE_EXECUTION_MS = 60_000;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 /** These native-only scopes still need their complete owning caller cutover. */
-function supportsOpenClawAgentDatabaseExecution(options: OpenClawAgentDatabaseOptions): boolean {
+export function supportsOpenClawAgentDatabaseExecution(
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
   return (
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
