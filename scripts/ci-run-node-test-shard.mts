@@ -7,6 +7,7 @@ import {
   cpSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -39,6 +40,31 @@ const NODE_COMPILE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
 const FS_MODULE_CACHE_METADATA_FILE = "_metadata.json";
 const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
+
+function reportCiResourceSnapshot(phase: "start" | "end") {
+  const pressure = (resource: "cpu" | "memory" | "io") => {
+    if (process.platform !== "linux") {
+      return null;
+    }
+    try {
+      return readFileSync(`/proc/pressure/${resource}`, "utf8").trim();
+    } catch {
+      return null;
+    }
+  };
+  console.log(
+    `[shard:resource-snapshot] ${JSON.stringify({
+      phase,
+      uptimeSeconds: os.uptime(),
+      cpuModel: os.cpus()[0]?.model ?? null,
+      loadAverage: os.loadavg(),
+      freeMemoryBytes: os.freemem(),
+      availableMemoryBytes: process.availableMemory?.() ?? null,
+      constrainedMemoryBytes: process.constrainedMemory?.() ?? null,
+      pressure: { cpu: pressure("cpu"), memory: pressure("memory"), io: pressure("io") },
+    })}`,
+  );
+}
 
 export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
@@ -496,6 +522,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     console.log(
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
+    reportCiResourceSnapshot("start");
   }
   const measuredHost =
     hostResources !== null &&
@@ -672,6 +699,9 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     try {
       await context?.workerRun.dispose();
     } finally {
+      if (hostResources) {
+        reportCiResourceSnapshot("end");
+      }
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
       if (interrupted && context) {
