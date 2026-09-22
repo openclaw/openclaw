@@ -60,7 +60,7 @@ export function markTranscriptPromptText(message: AgentMessage, text: string): v
   });
 }
 
-function getTranscriptPromptText(message: AgentMessage): string | undefined {
+export function getTranscriptPromptText(message: AgentMessage): string | undefined {
   const value = Reflect.get(message, TRANSCRIPT_PROMPT_TEXT_KEY);
   return typeof value === "string" ? value : undefined;
 }

@@ -28,6 +28,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
@@ -52,6 +53,7 @@ import {
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
+import type { UserTranscriptContext } from "./attempt-history.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
@@ -185,6 +187,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
   getPrePromptMessageCount: () => number;
+  getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
   getCompactionReplayEnabled: () => boolean;
@@ -360,6 +363,13 @@ export function installEmbeddedAttemptContextGuards(input: {
     activeSession.agent,
     {
       workspaceDir: input.effectiveWorkspace,
+      config: attempt.config,
+      getUserTranscriptContexts: input.getUserTranscriptContexts,
+      channelId: attempt.messageChannel ?? attempt.messageProvider,
+      accountId: attempt.agentAccountId,
+      assertCurrent: attempt.admittedRunContext
+        ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext)
+        : undefined,
       agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
       maxBytes: MAX_IMAGE_BYTES,

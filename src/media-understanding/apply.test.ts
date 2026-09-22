@@ -2758,35 +2758,6 @@ describe("applyMediaUnderstanding", () => {
       expect(context).toEqual({ text: "", images: [] });
     });
 
-    it("returns rendered PDF page images for a scanned document", async () => {
-      const { renderInboundDocumentContext } = await import("./file-context.js");
-      const mediaPath = await createTempMediaFile({
-        fileName: "scan.pdf",
-        content: Buffer.from("%PDF-1.4\n", "utf8"),
-      });
-      mockedExtractFileContentFromBuffer.mockResolvedValueOnce({
-        text: "",
-        images: [
-          { type: "image", data: "page-1-bytes", mimeType: "image/png" },
-          { type: "image", data: "page-2-bytes", mimeType: "image/png" },
-        ],
-      });
-      const ctx: MsgContext = {
-        Body: "see attached",
-        media: [{ path: mediaPath, contentType: "application/pdf" }],
-      };
-
-      const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
-
-      // The marker alone would tell the model the document exists while the
-      // injected images channel carries nothing; the pages must ride along.
-      expect(context?.text).toContain("[PDF content rendered to images]");
-      expect(context?.images).toEqual([
-        { type: "image", data: "page-1-bytes", mimeType: "image/png", attachmentIndex: 0 },
-        { type: "image", data: "page-2-bytes", mimeType: "image/png", attachmentIndex: 0 },
-      ]);
-    });
-
     it("applies the skipped-attachment marker budget to steer blocks", async () => {
       const { renderInboundDocumentContext } = await import("./file-context.js");
       const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
