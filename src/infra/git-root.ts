@@ -87,7 +87,7 @@ export function readGitMetadataPrefix(filePath: string, limit = 256): string {
  * bytes actually read, so callers can detect EOF without confusing UTF-8 byte
  * counts with decoded string lengths.
  */
-export function readGitMetadataBytes(
+function readGitMetadataBytes(
   filePath: string,
   limit: number,
 ): { text: string; bytesRead: number } {
