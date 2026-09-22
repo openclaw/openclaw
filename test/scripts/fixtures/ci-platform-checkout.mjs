@@ -385,14 +385,16 @@ function holdLease() {
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
   const deadline = Date.now() + 60_000;
-  setInterval(() => {
+  const checkLease = () => {
     if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
     }
-  }, 20);
-  if (!isLive()) {
-    process.exit(0);
-  }
+  };
+  // Watch the owned root before rereading: replacing or retiring the lease
+  // must wake actors immediately, including a change during registration.
+  fs.watch(root, checkLease);
+  setTimeout(checkLease, Math.max(0, deadline - Date.now()));
+  checkLease();
 }
 
 function insideOwnedPath(target) {
@@ -1087,9 +1089,8 @@ async function supervise() {
   let shell;
   let stopping;
   let censusFailed = false;
-  const pendingChildren = new Set();
+  const pendingChildren = new Map();
   const track = (child) => {
-    pendingChildren.add(child);
     // Spawn errors precede close; only close releases a direct child's ownership.
     const closed = new Promise((resolve) => {
       child.once("close", (code) => {
@@ -1097,6 +1098,7 @@ async function supervise() {
         resolve(code);
       });
     });
+    pendingChildren.set(child, closed);
     child.on("error", (error) => void stop(error));
     return closed;
   };
@@ -1156,7 +1158,23 @@ async function supervise() {
           }
         }
         // Empty registration does not prove a spawned writer has closed.
-        await until(() => pendingChildren.size === 0, "direct child close", actorEnd);
+        let closeCutoff;
+        try {
+          await Promise.race([
+            Promise.all(pendingChildren.values()),
+            new Promise((_, reject) => {
+              closeCutoff = setTimeout(
+                () => reject(new Error("Timed out waiting for direct child close")),
+                Math.max(0, actorEnd - Date.now()),
+              );
+            }),
+          ]);
+          if (Date.now() >= actorEnd || pendingChildren.size !== 0) {
+            throw new Error("Timed out waiting for direct child close");
+          }
+        } finally {
+          clearTimeout(closeCutoff);
+        }
         await until(
           async () => {
             report.cleanupRemaining = await liveRecords();
