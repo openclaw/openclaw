@@ -509,8 +509,8 @@ suite.define(() => {
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
-      const replyPreview = activePane.locator(".chat-reply-preview", {
-        hasText: "Replying to current message",
+      const replyPreview = activePane.locator(".chat-reply-attribution").filter({
+        has: page.getByText("current message", { exact: true }),
       });
       const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
       await replyPreview.waitFor({ state: "visible" });

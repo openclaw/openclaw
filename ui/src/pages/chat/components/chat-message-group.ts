@@ -1,8 +1,6 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
-import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -45,6 +43,11 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
+  isOwnSenderGroup,
+  isSourceOnlyUserGroup,
+  resolveMessageGroupSenderLabel,
+} from "./chat-message-sender.ts";
+import {
   emptyGroupFooter,
   renderStreamGroupParts,
   type StreamGroupOptions,
@@ -59,7 +62,7 @@ import {
   type ReplyAttribution,
 } from "./chat-reply-attribution.ts";
 import { renderReplyConnector } from "./chat-reply-connector.ts";
-import type { ReplyPreview } from "./chat-reply-preview.ts";
+import type { ReplyPreview } from "./chat-reply-preview.types.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
@@ -193,14 +196,6 @@ function renderPreparedGroupMessage(
     },
     opts.onOpenSidebar,
   );
-}
-
-function isOwnSenderGroup(
-  group: Pick<MessageGroup, "sender">,
-  userId: string | null | undefined,
-): boolean {
-  const identity = group.sender?.identity;
-  return identity?.type === "profile" && identity.id === userId;
 }
 
 export function renderActivityGroup(
@@ -395,61 +390,6 @@ export function renderActivityGroup(
           <div class="chat-group-messages">${content}</div>
         </div>
       `;
-}
-
-function isSourceOnlyUserGroup(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients">,
-): boolean {
-  return (
-    normalizeRoleForGrouping(group.role) === "user" &&
-    Boolean(group.sourceClients?.length) &&
-    !group.sender &&
-    !group.senderLabel?.trim()
-  );
-}
-
-export function resolveMessageGroupSenderLabel(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients"> & {
-    messages: ReadonlyArray<{ message: unknown }>;
-  },
-  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName">,
-): string {
-  const normalizedRole = normalizeRoleForGrouping(group.role);
-  if (isSourceOnlyUserGroup(group)) {
-    return messageClientSourcesLabel(group.sourceClients ?? []);
-  }
-  if (normalizedRole === "custom") {
-    const isError = group.messages.every(({ message }) => {
-      const customType = asNullableRecord(message)?.customType;
-      return (
-        customType === "run-failed-before-reply" || customType === "cloud-workspace-recovery-failed"
-      );
-    });
-    if (isError) {
-      const isContention = group.messages.every(({ message }) => {
-        const entry = asNullableRecord(message);
-        return (
-          entry?.customType === "run-failed-before-reply" &&
-          asNullableRecord(entry.details)?.errorKind === "state_contention"
-        );
-      });
-      return t(isContention ? "common.system" : "chat.messages.errorSender");
-    }
-    return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
-      ? t("chat.workspaceConflict.eventSender")
-      : t("common.system");
-  }
-  const resolvedUserName = resolveLocalUserName({ name: opts.userName });
-  const userLabel = group.senderLabel?.trim();
-  return normalizedRole === "user"
-    ? isOwnSenderGroup(group, opts.userId)
-      ? resolvedUserName
-      : (userLabel ?? resolvedUserName)
-    : normalizedRole === "assistant"
-      ? (userLabel ?? opts.assistantName ?? "Assistant")
-      : normalizedRole === "tool"
-        ? t("chat.messages.toolSender")
-        : normalizedRole;
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
@@ -696,7 +636,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   {
                     ...opts,
                     isForwarded: forwardedSource,
-                    actionOverlay: isPeerGroup && !mobile ? actions : nothing,
                     hasReplyAttribution: Boolean(replyAttribution || peerAttribution),
                     avatar:
                       !peerAttribution &&
@@ -717,14 +656,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                         </div>`
                       : message
                   }
-                  ${
-                    isPeerGroup && !mobile && actions !== nothing
-                      ? html`<div
-                          class="chat-message-actions-row chat-message-actions-row--spacer"
-                          aria-hidden="true"
-                        ></div>`
-                      : actions
-                  }
+                  ${actions}
                 `;
               },
             ),

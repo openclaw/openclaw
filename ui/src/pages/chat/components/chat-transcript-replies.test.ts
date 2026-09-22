@@ -55,7 +55,11 @@ describe("chat transcript replies", () => {
   it.each([false, true])(
     "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", () => ({ matches: reducedMotion }));
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("prefers-reduced-motion") && reducedMotion,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const props = threadProps("pane-reply-preview", "agent:main:main", [...replyMessages()]);

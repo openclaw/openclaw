@@ -486,6 +486,9 @@ suite.define(() => {
           const thread = element.closest<HTMLElement>(".chat-thread")!;
           const lastMessage = element.querySelectorAll<HTMLElement>(".chat-bubble");
           const last = lastMessage[lastMessage.length - 1];
+          if (!last) {
+            throw new Error("Expected a message in the metadata disclosure fixture");
+          }
           const sample = () => ({
             top: last.getBoundingClientRect().top,
             scrollTop: thread.scrollTop,

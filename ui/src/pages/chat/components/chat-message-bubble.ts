@@ -63,7 +63,7 @@ import {
   renderReplyAttribution,
   resolveMessageReplyAttribution,
 } from "./chat-reply-attribution.ts";
-import type { ReplyPreview } from "./chat-reply-preview.ts";
+import type { ReplyPreview } from "./chat-reply-preview.types.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
@@ -185,7 +185,6 @@ export function renderGroupedMessage(
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
     messageActions?: MessageActionDetails | null;
-    actionOverlay?: TemplateResult | typeof nothing;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
@@ -603,7 +602,7 @@ export function renderGroupedMessage(
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${opts.actionOverlay} ${reply}
+      ${reply}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)

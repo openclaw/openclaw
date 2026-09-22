@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import "./chat-attribution.css";
 import { ref } from "lit/directives/ref.js";
 import { stripMarkdown } from "../../../../../src/shared/text/strip-markdown.js";
@@ -11,7 +11,7 @@ import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
-import type { ReplyPreview } from "./chat-reply-preview.ts";
+import type { ReplyPreview } from "./chat-reply-preview.types.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 
 export type ReplyAttribution = {
@@ -230,6 +230,16 @@ function renderReplyAttributionContent(
       ? attribution.target.id
       : attribution.loadedMessageId;
   const accessibleName = t("chat.messages.replyingTo", { name: attribution.name });
+  const button = (className: string, content: TemplateResult) => html`<button
+    class=${className}
+    type="button"
+    aria-label=${accessibleName}
+    ?disabled=${options.navigationLoading}
+    aria-busy=${options.navigationLoading ? "true" : "false"}
+    @click=${() => sourceId && onOpenReply?.(sourceId)}
+  >
+    ${content}
+  </button>`;
   const contents = html`${attribution.isAttachment ? html`<span class="chat-reply-attribution__file" aria-hidden="true">${attribution.isImage ? icons.image : icons.file}</span>` : nothing}<span
       class="chat-reply-attribution__excerpt-text"
       >${excerpt}</span
@@ -241,16 +251,7 @@ function renderReplyAttributionContent(
   const reference = html`
     ${
       mobile && sourceId && onOpenReply
-        ? html`<button
-            class="chat-reply-attribution__person chat-reply-attribution__mobile-target"
-            type="button"
-            aria-label=${accessibleName}
-            ?disabled=${options.navigationLoading}
-            aria-busy=${options.navigationLoading ? "true" : "false"}
-            @click=${() => onOpenReply(sourceId)}
-          >
-            ${person}
-          </button>`
+        ? button("chat-reply-attribution__person chat-reply-attribution__mobile-target", person)
         : html`<span class="chat-reply-attribution__person">${person}</span>`
     }
     ${
@@ -258,23 +259,14 @@ function renderReplyAttributionContent(
         ? nothing
         : excerpt
           ? !inline && sourceId && onOpenReply
-            ? html`<button
-                class="chat-reply-attribution__excerpt"
-                type="button"
-                aria-label=${accessibleName}
-                ?disabled=${options.navigationLoading}
-                aria-busy=${options.navigationLoading ? "true" : "false"}
-                @click=${() => onOpenReply(sourceId)}
-              >
-                ${contents}
-              </button>`
+            ? button("chat-reply-attribution__excerpt", contents)
             : html`<span class="chat-reply-attribution__excerpt">${contents}</span>`
           : html`<span class="chat-reply-attribution__unavailable"
               >${t("chat.messages.replyOriginalUnavailable")}</span
             >`
     }
   `;
-  const className = `chat-reply-attribution ${inline ? "chat-reply-attribution--inline" : "chat-reply-attribution--reply"}${excerpt ? "" : " chat-reply-attribution--unavailable"}`;
+  const className = `chat-reply-attribution ${inline ? "chat-reply-attribution--inline" : "chat-reply-attribution--reply"}`;
   const resolveMissing = (element?: Element) => {
     if (element && attribution.resolveMessageId) {
       onResolveReply?.(attribution.resolveMessageId);
@@ -282,16 +274,7 @@ function renderReplyAttributionContent(
   };
   const target = inline
     ? sourceId && onOpenReply && excerpt
-      ? html`<button
-          class="chat-reply-attribution__target"
-          type="button"
-          aria-label=${accessibleName}
-          ?disabled=${options.navigationLoading}
-          aria-busy=${options.navigationLoading ? "true" : "false"}
-          @click=${() => onOpenReply(sourceId)}
-        >
-          ${reference}
-        </button>`
+      ? button("chat-reply-attribution__target", reference)
       : html`<span class="chat-reply-attribution__target">${reference}</span>`
     : reference;
   return html`<div

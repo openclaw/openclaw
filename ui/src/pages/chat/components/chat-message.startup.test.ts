@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
-import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
+import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import { renderStreamGroup } from "./chat-message.ts";
 
 describe("chat message startup status", () => {

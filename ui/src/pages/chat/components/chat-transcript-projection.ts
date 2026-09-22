@@ -54,7 +54,8 @@ import {
 } from "./chat-message.ts";
 import { projectChatPositions } from "./chat-position-projection.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
-import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
+import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
+import type { LoadedReplySource } from "./chat-reply-preview.types.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,

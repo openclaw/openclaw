@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
-import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
+import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
+import type { LoadedReplySource } from "./chat-reply-preview.types.ts";
 
 describe("attachment reply previews", () => {
   it.each([
@@ -40,11 +41,7 @@ describe("attachment reply previews", () => {
           userId: null,
           userName: null,
           replyMessageAccess: {
-            revision: 0,
-            navigationId: null,
             read: () => (location === "fetched" ? source : undefined),
-            request: () => undefined,
-            open: () => undefined,
           },
         },
       );

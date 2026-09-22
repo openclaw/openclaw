@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { THEME_TYPEFACES, syncTypefaceStylesheets } from "../../../app/typography.ts";
+import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import "../../../styles/base.css";
@@ -14,7 +14,7 @@ let host: HTMLDivElement;
 const originalTheme = document.documentElement.getAttribute("data-theme-mode");
 
 beforeEach(async () => {
-  const typefaces = THEME_TYPEFACES.claw;
+  const typefaces = resolveTypefaces("claw");
   syncTypefaceStylesheets(typefaces);
   await expect
     .poll(() =>
@@ -146,11 +146,16 @@ describe.each(cells)("reply attribution ($theme, $width px)", ({ theme, width })
         const rowBounds = row.getBoundingClientRect();
         expect(Math.abs(rowBounds.left - bounds.left)).toBeLessThanOrEqual(1);
         expect(Math.abs(rowBounds.right - bounds.right)).toBeLessThanOrEqual(1);
-        const content = group.querySelector(".chat-bubble")!.getBoundingClientRect();
+        const content = group.querySelector(".chat-bubble > .chat-text")!.getBoundingClientRect();
         expect(content.top - rowBounds.bottom).toBeCloseTo(8, 1);
         return;
       }
       expect(icon.getBoundingClientRect().width).toBe(0);
+      const speaker = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
+      const text = group.querySelector(".chat-bubble > .chat-text")!;
+      expect(
+        Math.abs(speaker.getBoundingClientRect().top - text.getBoundingClientRect().top),
+      ).toBeLessThanOrEqual(1);
       await expect
         .poll(() => {
           const path = group.querySelector<SVGPathElement>(".chat-reply-connector path")!;
@@ -248,3 +253,65 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
   }
   expect(onOpenReply).toHaveBeenCalledTimes(6);
 });
+
+it.each([1440, 390])(
+  "keeps a short own reply readable without overlapping its label at %d px",
+  async (width) => {
+    await page.viewport(width, 800);
+    const onOpenReply = vi.fn();
+    for (const direction of ["ltr", "rtl"]) {
+      host.dir = direction;
+      host.style.width = width - 32 + "px";
+      render(
+        renderMessageGroup(
+          {
+            kind: "group",
+            key: "own",
+            role: "user",
+            timestamp: 1,
+            isStreaming: false,
+            visibleContent: "text",
+            messages: [
+              {
+                key: "reply",
+                hasVisibleContent: true,
+                message: {
+                  role: "user",
+                  content: "OK",
+                  __openclaw: {
+                    id: "reply",
+                    replyToId: "source",
+                    replyToPreview: {
+                      senderLabel: "Casey Morgan",
+                      text: "Please review the release checklist. ".repeat(20),
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          { showReasoning: false, onOpenReply },
+        ),
+        host,
+      );
+      await document.fonts.ready;
+      const row = host.querySelector<HTMLElement>(".chat-reply-attribution--inline")!;
+      const name = row.querySelector<HTMLElement>(".chat-reply-attribution__name")!;
+      const label = row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
+      const button = row.querySelector<HTMLButtonElement>("button")!;
+      const excerpt = row.querySelector<HTMLElement>(".chat-reply-attribution__excerpt-text")!;
+      expect(name.scrollWidth - name.clientWidth).toBeLessThanOrEqual(1);
+      expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
+      expect(excerpt.scrollWidth).toBeGreaterThan(excerpt.clientWidth);
+      const a = label.getBoundingClientRect(),
+        b = button.getBoundingClientRect();
+      const bubble = row.closest(".chat-bubble")!.getBoundingClientRect();
+      // The padded hit area may extend past the row, but not its containing bubble.
+      expect(b.left).toBeGreaterThanOrEqual(bubble.left);
+      expect(b.right).toBeLessThanOrEqual(bubble.right);
+      expect(a.right <= b.left || b.right <= a.left).toBe(true);
+      button.click();
+      expect(onOpenReply).toHaveBeenLastCalledWith("source");
+    }
+  },
+);

@@ -241,7 +241,8 @@
 
 .chat-group.user .chat-group-footer-actions,
 .chat-group.assistant .chat-group-footer-actions,
-.chat-group.assistant .chat-message-actions-row {
+.chat-group.assistant .chat-message-actions-row,
+.chat-group.user.chat-group--peer .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
 }
@@ -254,11 +255,6 @@
   --chat-message-action-size: 24px;
   align-self: stretch;
   margin-top: 4px;
-}
-
-/* Overlaid peer actions retain the native row's space between messages. */
-.chat-message-actions-row--spacer {
-  min-height: var(--chat-message-action-size);
 }
 
 /* Keep long configurable sender names compact while footer actions retain
@@ -417,29 +413,18 @@
   pointer-events: auto;
 }
 
-/* Peer actions stay anchored to their owning bubble. */
-.chat-group.user.chat-group--peer .chat-bubble > .chat-message-actions-row {
-  position: absolute;
-  inset-inline-start: 0;
-  top: 100%;
-  z-index: 1;
-  justify-content: flex-start;
-  width: 100%;
-  margin: 0;
-  padding-block-start: calc(var(--chat-message-gap) + 4px);
-}
-
 .chat-group.user.chat-group--peer .chat-message-actions-row button,
 .chat-group.user.chat-group--peer .chat-group-footer-actions button {
   opacity: 0;
   pointer-events: none;
 }
 
-.chat-group.user.chat-group--peer .chat-bubble:hover > .chat-message-actions-row button,
+/* The native row owns both layout space and actions; no overlaid copy. */
 .chat-group.user.chat-group--peer
-  .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed)
-  > .chat-message-actions-row
-  button {
+  :is(.chat-bubble, .chat-message--reply):is(:hover, :focus-within, .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer .chat-message-actions-row:is(:hover, :focus-within) button {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -925,12 +910,12 @@ img.chat-avatar {
   margin-bottom: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap));
 }
 
-/* The reply header already separates the first flat content block. */
+/* Account for the native assistant bubble's 4px padding in the caption gap.
+   Changing bubble padding when attribution arrives shifts the reader anchor. */
 .chat-group.assistant:not(.chat-group--forwarded)
   > .chat-group-messages
-  > .chat-reply-attribution--reply
-  + .chat-bubble {
-  padding-top: 0;
+  > .chat-reply-attribution--reply {
+  margin-bottom: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap) - 4px);
 }
 
 /* Identity sizes short bubbles; only the excerpt yields its intrinsic width. */
