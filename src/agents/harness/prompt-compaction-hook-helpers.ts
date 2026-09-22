@@ -9,9 +9,9 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
-import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
+import type { CurrentInboundPromptContext } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 

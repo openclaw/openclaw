@@ -67,6 +67,90 @@ describe("runReplyAgent media path normalization", () => {
     },
   );
 
+  it.each(
+    [
+      {
+        origin: "unmarked user",
+        eventKind: undefined,
+        provenance: undefined,
+        isInboundUserMessage: true,
+      },
+      {
+        origin: "external user",
+        eventKind: "user_request" as const,
+        provenance: { kind: "external_user" as const },
+        isInboundUserMessage: true,
+      },
+      {
+        origin: "room event",
+        eventKind: "room_event" as const,
+        provenance: { kind: "external_user" as const },
+        isInboundUserMessage: false,
+      },
+      {
+        origin: "inter-session message",
+        eventKind: "user_request" as const,
+        provenance: { kind: "inter_session" as const },
+        isInboundUserMessage: false,
+      },
+    ].flatMap(({ origin, eventKind, provenance, isInboundUserMessage }) =>
+      [true, false].map((accepted) => ({
+        origin,
+        eventKind,
+        provenance,
+        isInboundUserMessage,
+        accepted,
+      })),
+    ),
+  )(
+    "preserves quoted context and $origin authority through steer admission (accepted: $accepted)",
+    async ({ accepted, eventKind, provenance, isInboundUserMessage }) => {
+      const followupRun = createMediaFollowupRun({ prompt: "Use the same color as before." });
+      followupRun.currentInboundEventKind = eventKind;
+      followupRun.run.inputProvenance = provenance;
+      followupRun.run.terminalReplyExpectation = "required";
+      followupRun.currentInboundContext = {
+        text: 'Replied message (untrusted, for context):\n{"body":"Which color for the invitation?"}',
+        fragments: [
+          { kind: "conversation-data", text: "Replied message: Which color for the invitation?" },
+        ],
+      };
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId) =>
+        accepted
+          ? { queued: true, sessionId, target: "embedded_run", gatewayHealth: "live" }
+          : { queued: false, sessionId, reason: "not_streaming", gatewayHealth: "live" },
+      );
+
+      await runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" },
+          shouldSteer: true,
+          shouldFollowup: true,
+          isActive: true,
+          followupRun,
+        }),
+      );
+
+      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
+        "session",
+        followupRun.prompt,
+        expect.objectContaining({
+          currentInboundContext: followupRun.currentInboundContext,
+          isInboundUserMessage,
+          terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
+        }),
+      );
+      expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+        "main",
+        followupRun,
+        { mode: "steer" },
+        expect.any(Function),
+      );
+      expect(parkedSteerFallbackMock).toHaveBeenCalledTimes(accepted ? 0 : 1);
+      expect(followupRun.prompt).toBe("Use the same color as before.");
+    },
+  );
+
   it.each([
     { label: "permission mode", run: { permissionMode: "guarded" } },
     { label: "tool overrides", run: { toolOverrides: { webSearch: false } } },

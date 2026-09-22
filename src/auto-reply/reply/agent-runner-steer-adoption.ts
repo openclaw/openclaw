@@ -182,6 +182,9 @@ export async function runActiveReplySteer(
         (followupRun.run.inputProvenance?.kind === undefined ||
           followupRun.run.inputProvenance.kind === "external_user"),
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
+      ...(followupRun.currentInboundContext
+        ? { currentInboundContext: followupRun.currentInboundContext }
+        : {}),
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       ...(params.pendingInputAuthorityFingerprint
         ? { pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint }

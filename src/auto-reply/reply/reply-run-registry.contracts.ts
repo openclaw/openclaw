@@ -1,4 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -32,6 +33,8 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** This turn's runtime context, separate from its literal answer and transcript. */
+  currentInboundContext?: CurrentInboundPromptContext;
   terminalReplyExpectation?: ReplyExpectation;
   /** Exact tool authority resolved for an inbound user turn before steering. */
   toolAuthorityFingerprint?: string;

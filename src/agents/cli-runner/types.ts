@@ -37,13 +37,11 @@ import type {
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
-import type {
-  CurrentInboundPromptContext,
-  ResolvedToolPromptFinalizer,
-} from "../embedded-agent-runner/run/params.js";
+import type { ResolvedToolPromptFinalizer } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { CurrentInboundPromptContext } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { EmbeddedRunTrigger } from "../run-trigger.js";
