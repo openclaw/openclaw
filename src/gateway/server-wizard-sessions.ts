@@ -18,7 +18,7 @@ export function canAccessWizardSession(
   return !owner || (owner === client && !owner.invalidated && !owner.connectionSignal?.aborted);
 }
 
-const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
+export const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 
 /** Creates the in-memory tracker used for active Gateway wizard sessions. */
 export function createWizardSessionTracker(options?: { now?: () => number }) {
