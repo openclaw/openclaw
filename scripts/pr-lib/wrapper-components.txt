@@ -679,6 +679,7 @@ src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
+src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts

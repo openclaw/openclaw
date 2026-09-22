@@ -324,24 +324,26 @@ function decodeSqliteWorkerCleanupError(job: Job, payload: OpenClawStateWorkerEr
   );
 }
 
+export type SqliteWorkerReplyOwner = {
+  fail(
+    reason: unknown,
+    currentError?: Error,
+    completed?: CompletedSqliteWorkerOutcome,
+    openOutcome?: "refused-before-agent-open",
+  ): void;
+  finish(
+    job: Job,
+    error?: unknown,
+    value?: unknown,
+    settlement?: SqliteWorkerOperationSettlement,
+  ): void;
+  dispatch(): void;
+};
+
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & { worker: Pick<Slot["worker"], "postMessage"> },
   reply: SqliteWorkerReply,
-  owner: {
-    fail(
-      reason: unknown,
-      currentError?: Error,
-      completed?: CompletedSqliteWorkerOutcome,
-      openOutcome?: "refused-before-agent-open",
-    ): void;
-    finish(
-      job: Job,
-      error?: unknown,
-      value?: unknown,
-      settlement?: SqliteWorkerOperationSettlement,
-    ): void;
-    dispatch(): void;
-  },
+  owner: SqliteWorkerReplyOwner,
   pumping = false,
 ): void {
   const job = slot.current;
