@@ -346,6 +346,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/user-profiles.test.ts",
   "src/commands/agents.commands.list.worker.test.ts",
   "src/state/openclaw-agent-worker-store.test.ts",
+  "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
   "src/sessions/session-state-events.test.ts",
