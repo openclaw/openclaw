@@ -2,6 +2,7 @@ import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-pr
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type { McpOAuthWriteOperations } from "../agents/mcp-oauth-store.types.js";
+import type { SandboxRegistryInsert } from "../agents/sandbox/registry.kernel.js";
 import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
@@ -29,7 +30,10 @@ import type {
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
-import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
+import type {
+  DeferredPluginMigration,
+  readDeferredPluginMigrationCompletions,
+} from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
@@ -119,6 +123,7 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
   OpenClawStateLeaseLifecycleOperations & {
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
+    "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "updateRuns.reconcileInterrupted": {
       input: InterruptedUpdateSettlement;
       output: InterruptedUpdateSettlementResult;
@@ -250,6 +255,10 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
       input: { artifactPreservingReadOnly: boolean };
       output: readonly DeferredPluginMigration[];
     };
+    "plugins.deferredMigrations.completions.read": {
+      input: undefined;
+      output: ReturnType<typeof readDeferredPluginMigrationCompletions>;
+    };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };
       output: ClawInstallSchemaVersionRow[] | undefined;
@@ -294,13 +303,14 @@ export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
     OpenClawStateWorkerCleanupOperations
 >;
 
-/** Commands dispatched after the lightweight lease and metadata bootstrap paths. */
+/** Commands dispatched after the lightweight lease, cleanup, and metadata paths. */
 export type OpenClawStateWorkerRuntimeCommand = Exclude<
   Parameters<OpenClawStateWorkerBackend["execute"]>[0],
   {
     type:
       | "plugins.metadata.read"
       | "database.inspectIdle"
+      | "agentDatabases.releaseExitedLease"
       | keyof OpenClawStateLeaseLifecycleOperations;
   }
 >;

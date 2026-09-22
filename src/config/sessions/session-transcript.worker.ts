@@ -1,23 +1,18 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
-import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import {
-  SessionTranscriptProjectionUnavailableError,
-  SessionTranscriptStorageUnavailableError,
-} from "./session-transcript-projection-error.js";
-import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
-} from "./session-transcript-read-fence.js";
+  encodeSessionTranscriptWorkerError,
+  SessionHistoryDeltaPreparationError,
+  sessionHistoryCleanupError,
+} from "./session-history-worker-errors.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerInput,
@@ -73,7 +68,11 @@ async function withHistoryDatabase<T>(
   }
 }
 
-serveWorkerTasks(
+let closeReadOnlyCandidates:
+  | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
+  | undefined;
+
+serveOwnedWorkerTasks(
   async (
     input,
     channel,
@@ -81,6 +80,9 @@ serveWorkerTasks(
   ): Promise<
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
+    // Install cleanup before this worker can acquire either a cached or explicit reader.
+    closeReadOnlyCandidates ??= (await import("../../state/openclaw-agent-db-readonly-scope.js"))
+      .closeOpenClawAgentDatabaseReadOnlyCandidates;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "sqlite-target") {
@@ -192,7 +194,8 @@ serveWorkerTasks(
         };
       }
       if (request.kind === "session-entry-list") {
-        const { listSessionEntriesReadOnly } = await import("./session-accessor.sqlite-entry.js");
+        const { listSessionEntriesReadOnly } =
+          await import("./session-accessor.sqlite-entry-list.read.js");
         return {
           ok: true,
           ...(await withHistoryDatabase(request.database, () => ({
@@ -415,10 +418,13 @@ serveWorkerTasks(
                     };
                   }
                   if (request.request.kind === "delta") {
+                    const { prepareSessionHistoryDelta } =
+                      await import("../../gateway/session-history-delta-visibility.js");
                     return {
                       kind: "delta",
-                      delta: options.readers.readTranscriptDisplayDelta(
-                        request.request.params.limits,
+                      ...prepareSessionHistoryDelta(
+                        options.readers.readTranscriptDisplayDelta(request.request.params.limits),
+                        options.readers.subagentCoordination,
                       ),
                     };
                   }
@@ -464,32 +470,56 @@ serveWorkerTasks(
       );
     } catch (error) {
       if (
+        error instanceof SessionHistoryDeltaPreparationError &&
+        request.kind === "history-page" &&
+        request.request.kind === "delta"
+      ) {
+        // Keep the failed-reply path: auxiliary readers may also need retirement.
+        // The host joins worker exit before consuming any partial visibility facts.
+        return {
+          ok: false,
+          error: { kind: "delta-visibility", partial: error.partial },
+        };
+      }
+      if (
         error instanceof SyntaxError &&
         request.kind === "history-page" &&
         request.request.kind === "message-lookup"
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }
-      if (error instanceof SessionTranscriptStorageUnavailableError) {
-        return { ok: false, error: { kind: "storage", reason: error.reason } };
-      }
-      if (error instanceof SessionTranscriptColdError) {
-        return { ok: false, error: { kind: "cold", sessionId: error.sessionId } };
-      }
-      if (error instanceof SessionTranscriptProjectionUnavailableError) {
-        return { ok: false, error: { kind: "projection", sessionId: error.sessionId } };
-      }
-      if (error instanceof SessionTranscriptReadFenceError) {
-        return { ok: false, error: { kind: "fence", message: error.message } };
-      }
-      const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-      if (payload) {
-        return {
-          ok: false,
-          error: { kind: "read-error", message: coerceErrorMessage(error), payload },
-        };
+      const encoded = encodeSessionTranscriptWorkerError(error);
+      if (encoded) {
+        return { ok: false, error: encoded };
       }
       throw error;
     }
+  },
+  {
+    closeResource: (key) => {
+      const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
+      if (
+        !Array.isArray(parsed) ||
+        !parsed.every(
+          (candidate) =>
+            isRecord(candidate) &&
+            typeof candidate.path === "string" &&
+            (candidate.scope === undefined || candidate.scope === "sibling-family"),
+        )
+      ) {
+        throw new Error("Session reader cleanup requires captured physical paths");
+      }
+      const candidates = parsed.map((candidate: { path: string; scope?: "sibling-family" }) =>
+        candidate.scope
+          ? { path: candidate.path, scope: candidate.scope }
+          : { path: candidate.path },
+      );
+      closeReadOnlyCandidates?.(candidates);
+      for (const [identity, retained] of historyDatabaseScopes) {
+        if (!retained.scope.hasRetainedConnection) {
+          historyDatabaseScopes.delete(identity);
+        }
+      }
+    },
   },
 );

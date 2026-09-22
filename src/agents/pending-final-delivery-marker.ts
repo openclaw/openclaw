@@ -16,6 +16,7 @@ import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
+  agentId: string;
   deliver: boolean;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -78,6 +79,7 @@ export async function persistPendingFinalDeliveryMarker(
   const intentId = randomUUID();
   const deliveryId = randomUUID();
   const persisted = await persistAgentSession({
+    agentId: params.agentId,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -119,6 +121,7 @@ export async function persistPendingFinalDeliveryMarker(
             }
           : {}),
         pendingFinalDeliveryCompletion: {
+          agentId: params.agentId,
           deliveryId,
           intentId,
           ...(entry.restartRecoveryDeliveryRunId

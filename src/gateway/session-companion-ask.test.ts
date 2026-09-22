@@ -51,7 +51,9 @@ vi.mock("../agents/internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: removeSession,
 }));
 vi.mock("../agents/sessions/index.js", () => ({
-  SessionManager: { open: () => ({ appendMessage, getSessionTarget: () => preparedTarget }) },
+  SessionManager: {
+    openAsync: async () => ({ appendMessage, getSessionTarget: () => preparedTarget }),
+  },
 }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   resolveSimpleCompletionSelectionForAgent: () => ({ provider: "test", modelId: "model-a" }),

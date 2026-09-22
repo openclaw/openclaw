@@ -10,11 +10,15 @@ import {
   redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import {
+  classifyUpdateOutcome,
+  UPDATE_FOREIGN_DESTINATION_REASON,
+} from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
@@ -254,6 +258,9 @@ async function renderBoundedDiagnostics(
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }
+  if (input.result.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    diagnostics.push(`Next step: ${UPDATE_DESTINATION_RECOVERY}`);
+  }
   for (const finding of normalizeUpdateDoctorLintFindings(
     input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
     context.env,
@@ -310,6 +317,7 @@ async function renderBoundedDiagnostics(
             formatUpdateFailureFact({
               ...(await projectPublicUpdateFailureIdentifiers(fact)),
               ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.destination ? { destination: fact.destination } : {}),
               ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
               ...(fact.message
                 ? {

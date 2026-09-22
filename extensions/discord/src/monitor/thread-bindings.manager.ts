@@ -60,24 +60,6 @@ import {
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
 
-function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
-  const accountId = normalizeAccountId(accountIdRaw);
-  return {
-    accountId,
-    getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-    getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
-    getByThreadId: () => undefined,
-    getBySessionKey: () => undefined,
-    listBySessionKey: () => [],
-    listBindings: () => [],
-    touchThread: () => null,
-    bindTarget: async () => null,
-    unbindThread: () => null,
-    unbindBySessionKey: () => [],
-    stop: () => {},
-  };
-}
-
 function isDirectConversationBindingId(value?: string | null): boolean {
   const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
@@ -534,10 +516,6 @@ export async function createThreadBindingManagerAsync(
 ): Promise<ThreadBindingManager> {
   await ensureBindingsLoadedAsync();
   return createThreadBindingManager(params);
-}
-
-export function createNoopThreadBindingManager(accountId?: string): ThreadBindingManager {
-  return createNoopManager(accountId);
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {

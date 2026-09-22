@@ -1706,11 +1706,13 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle through the runtime abort outcome instead of the RPC stop reason.
+  // Deletion can settle with its action or an admission/runtime abort reason.
+  // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
     terminalLifecycleStatus &&
-    (result.stopReason === "rpc" ||
+    (result.stopReason === "delete" ||
+      result.stopReason === "rpc" ||
       result.stopReason === "stop" ||
       result.stopReason === "aborted") &&
     typeof result.endedAt === "number"
