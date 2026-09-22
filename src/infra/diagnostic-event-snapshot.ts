@@ -1,44 +1,9 @@
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "./diagnostic-events.js";
-
-type TrustedOtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
-  Readonly<{
-    hostPluginId?: string;
-  }>;
-
-export function createDiagnosticMetadataForListener(
-  metadata: DiagnosticEventMetadata,
-): DiagnosticEventMetadata {
+export function createDiagnosticMetadataForListener<T extends object>(metadata: T): Readonly<T> {
   return Object.freeze({ ...metadata });
 }
 
-export function cloneDiagnosticEventForListener(
-  event: DiagnosticEventPayload,
-): DiagnosticEventPayload {
-  return deepFreezeDiagnosticValue(structuredClone(event));
-}
-
-export function cloneDiagnosticPrivateDataForListener(
-  privateData: DiagnosticEventPrivateData | undefined,
-): DiagnosticEventPrivateData {
-  if (!privateData) {
-    return Object.freeze({});
-  }
-  return deepFreezeDiagnosticValue(structuredClone(privateData));
-}
-
-export function cloneDiagnosticPrivateDataForOtelListener(
-  privateData: DiagnosticEventPrivateData | undefined,
-  hostPluginId: string | undefined,
-): TrustedOtelDiagnosticEventPrivateData {
-  // Keep the third-argument transport for independently updated official OTel installs.
-  // Only the marked OTel listener receives this host-owned field.
-  const cloned = structuredClone(privateData ?? {});
-  Reflect.deleteProperty(cloned, "hostPluginId");
-  return deepFreezeDiagnosticValue(hostPluginId ? Object.assign(cloned, { hostPluginId }) : cloned);
+export function cloneDiagnosticValueForListener<T extends object>(value: T): T {
+  return deepFreezeDiagnosticValue(structuredClone(value));
 }
 
 export function deepFreezeDiagnosticValue<T>(value: T, seen = new WeakSet<object>()): T {

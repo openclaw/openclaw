@@ -11,9 +11,7 @@ import {
   updateInternalDiagnosticEventInterest,
 } from "./diagnostic-event-listener-presence.js";
 import {
-  cloneDiagnosticEventForListener,
-  cloneDiagnosticPrivateDataForListener,
-  cloneDiagnosticPrivateDataForOtelListener,
+  cloneDiagnosticValueForListener,
   createDiagnosticMetadataForListener,
   deepFreezeDiagnosticValue,
 } from "./diagnostic-event-snapshot.js";
@@ -1160,7 +1158,7 @@ function dispatchDiagnosticEvent(
         }
         try {
           listener(
-            cloneDiagnosticEventForListener(enriched),
+            cloneDiagnosticValueForListener(enriched),
             createDiagnosticMetadataForListener(metadata),
           );
         } catch (err) {
@@ -1182,21 +1180,28 @@ function dispatchDiagnosticEvent(
         continue;
       }
       try {
-        const eventForListener = cloneDiagnosticEventForListener(enriched);
+        const eventForListener = cloneDiagnosticValueForListener(enriched);
         const metadataForListener = createDiagnosticMetadataForListener(metadata);
         if (interest?.includePrivateData === false) {
           listener(eventForListener, metadataForListener, EMPTY_DIAGNOSTIC_PRIVATE_DATA);
         } else if (isTrustedOtelDiagnosticListener(listener)) {
+          // Retain the host-owned transport for independently updated OTel installs.
+          const cloned = structuredClone(privateData ?? {});
+          Reflect.deleteProperty(cloned, "hostPluginId");
           listener(
             eventForListener,
             metadataForListener,
-            cloneDiagnosticPrivateDataForOtelListener(privateData, options.hostPluginId),
+            deepFreezeDiagnosticValue(
+              options.hostPluginId
+                ? Object.assign(cloned, { hostPluginId: options.hostPluginId })
+                : cloned,
+            ),
           );
         } else {
           listener(
             eventForListener,
             metadataForListener,
-            cloneDiagnosticPrivateDataForListener(privateData),
+            privateData ? cloneDiagnosticValueForListener(privateData) : Object.freeze({}),
           );
         }
       } catch (err) {
@@ -1393,7 +1398,7 @@ function emitDiagnosticEventWithTrust(
     state.asyncQueue.push({ event: enriched, metadata, privateData, hostPluginId });
     if (prepareTracePropagation) {
       prepareDiagnosticTracePropagation(
-        cloneDiagnosticEventForListener(enriched),
+        cloneDiagnosticValueForListener(enriched),
         createDiagnosticMetadataForListener(metadata),
       );
     }
@@ -1403,7 +1408,7 @@ function emitDiagnosticEventWithTrust(
 
   if (prepareTracePropagation) {
     prepareDiagnosticTracePropagation(
-      cloneDiagnosticEventForListener(enriched),
+      cloneDiagnosticValueForListener(enriched),
       createDiagnosticMetadataForListener(metadata),
     );
   }
@@ -1650,7 +1655,7 @@ export function hasPendingInternalDiagnosticEvent(
   for (const entry of state.asyncQueue) {
     let event: DiagnosticEventPayload;
     try {
-      event = cloneDiagnosticEventForListener(entry.event);
+      event = cloneDiagnosticValueForListener(entry.event);
     } catch {
       continue;
     }
