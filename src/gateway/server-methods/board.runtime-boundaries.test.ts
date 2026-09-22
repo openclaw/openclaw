@@ -22,10 +22,12 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -78,6 +80,40 @@ describe("board gateway runtime boundaries", () => {
     sessionList.mockReset();
     cronRun.mockReset();
   });
+
+  it.each(["agent:main:guarded", "agent:main:dashboard:incognito-guarded"])(
+    "reads current permission mode from its session owner: %s",
+    async (sessionKey) => {
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        ...(isIncognitoSessionKey(sessionKey)
+          ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }) }
+          : {}),
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: database.path },
+        { sessionId: "guarded-widget", updatedAt: 1, permissionMode: "guarded" },
+      );
+      const cfg = { tools: { exec: { mode: "auto" as const } } };
+      const store = new SqliteBoardStore({
+        resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+      });
+      const harness = createHarness(undefined, undefined, store, {
+        getRuntimeConfig: () => cfg,
+      });
+      const response = await harness.invoke("board.widget.put", {
+        sessionKey,
+        name: "health",
+        content: { kind: "html", html: "<p>health</p>" },
+        declared: { tools: ["health"] },
+      });
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ widgets: [expect.objectContaining({ grantState: "pending" })] }),
+      );
+      expect(reviewWidgetApproval).not.toHaveBeenCalled();
+    },
+  );
 
   afterEach(async () => {
     resetGatewayWorkAdmission();

@@ -110,6 +110,12 @@ export function createSessionRowAncestorReads(owner: {
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   placementFacts: ReturnType<typeof createSessionRowPlacementProjection>;
+  membership: {
+    prepare: () => Promise<void>;
+    needsPreparation: (
+      queries: (config: records.Inputs["cfg"]) => readonly records.Lookup[],
+    ) => boolean;
+  };
   isActive: () => boolean;
   projection: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
 }) {
@@ -119,7 +125,11 @@ export function createSessionRowAncestorReads(owner: {
         ...owner.state(),
         referenced: owner.referenced,
         prepare: (row) =>
-          records.hasEntry(row) && owner.placementFacts.isPrepared(row.entry.sessionId)
+          records.hasEntry(row) &&
+          owner.placementFacts.isPrepared(row.entry.sessionId) &&
+          !owner.membership.needsPreparation(() => [
+            { ...row, storePath: row.storeTarget.storePath },
+          ])
             ? owner.describe({ ...row, storePath: row.storeTarget.storePath }, row)
             : undefined,
       }),
@@ -153,13 +163,27 @@ export function createSessionRowAncestorReads(owner: {
             ]);
           }
         : queries;
-      return owner.placementFacts.withPreparedRows(
-        owner.projection(),
-        owner.isActive,
-        owner.lookup,
-        selected,
-        consume,
-      );
+      const membershipPending = Symbol("session-membership-pending");
+      while (owner.isActive()) {
+        while (owner.isActive() && owner.membership.needsPreparation(selected)) {
+          await owner.membership.prepare();
+        }
+        const prepared = await owner.placementFacts.withPreparedRows<T | typeof membershipPending>(
+          owner.projection(),
+          owner.isActive,
+          owner.lookup,
+          selected,
+          (read) =>
+            owner.membership.needsPreparation(selected) ? membershipPending : consume(read),
+        );
+        if (prepared.kind === "pending") {
+          return prepared;
+        }
+        if (prepared.value !== membershipPending) {
+          return { kind: "complete", value: prepared.value };
+        }
+      }
+      throw new Error("Session row projection is no longer active");
     },
   };
 }

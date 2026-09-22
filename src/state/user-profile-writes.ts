@@ -38,6 +38,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   type: Key,
   input: UserProfileWriteOperations[Key]["input"],
   options: ProfileWriteOptions,
+  onCommitted?: (publication: UserProfileMutationPublication) => void,
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
@@ -93,6 +94,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 }
                 entry.published = true;
                 entry.fence.settle(true);
+                onCommitted?.(facts);
               });
               if (
                 facts.changes.profiles.length &&
@@ -180,9 +182,17 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { onCommitted?: (profileId: string) => void } = {},
 ) {
-  return unwrap(await write("userProfiles.setRole", { profileId, role }, options));
+  const onCommitted = options.onCommitted;
+  return unwrap(
+    await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
+      // The validated receipt names the canonical profile even when the caller used an alias.
+      for (const [id] of publication.after) {
+        onCommitted?.(id);
+      }
+    }),
+  );
 }
 export async function linkCanonicalUserProfileEmail(
   email: string,

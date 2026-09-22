@@ -1,3 +1,4 @@
+import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -11,15 +12,23 @@ import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
   SessionModelContextWorkerInput,
+  SessionSqliteTargetWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
+// Bun loads one SQLite library per process; workers must inherit the parent's selection.
+function prepareSqliteReadWorker() {
+  ensureSqliteLibrarySelected();
+  return { options: {} };
+}
+
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 const modelContextReads = new WorkerTaskPool<
-  SessionModelContextWorkerInput,
-  SessionTranscriptWorkerReply<"model-context">
+  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput,
+  SessionTranscriptWorkerReply<"model-context" | "sqlite-target">
 >({
   workerUrl,
+  prepareWorker: prepareSqliteReadWorker,
   workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   // Preserve context-read admission order and avoid multiplying large SQLite scans.
   maxWorkers: 1,
@@ -31,6 +40,7 @@ const sessionEntries = new WorkerTaskPool<
   SessionTranscriptWorkerReply<"session-entry">
 >({
   workerUrl,
+  prepareWorker: prepareSqliteReadWorker,
   workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   maxWorkers: 1,
   sharedCompute: true,
@@ -42,6 +52,7 @@ const branchSummaries = new WorkerTaskPool<
   SessionTranscriptWorkerReply<"branch-summaries">
 >({
   workerUrl,
+  prepareWorker: prepareSqliteReadWorker,
   workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   maxWorkers: 1,
   sharedCompute: true,
@@ -55,12 +66,33 @@ export async function readSessionTranscriptModelContextAsync(
   limits?: SessionModelContextWorkerInput["limits"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
-  return unwrapSessionTranscriptWorkerReply<"model-context">(
+  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
     await modelContextReads.run(
       { kind: "model-context", target, admission, through, limits },
       { timeoutMs: 60_000, signal },
     ),
   );
+  if (!("events" in value)) {
+    throw new Error("Session context worker returned a database target instead of context");
+  }
+  return value;
+}
+
+export async function resolveSessionSqliteTargetInWorker(
+  input: Omit<SessionSqliteTargetWorkerInput, "kind">,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+    await modelContextReads.run(
+      { kind: "sqlite-target", ...input },
+      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
+    ),
+  );
+  if (!("target" in value)) {
+    throw new Error("Session context worker returned context instead of a database target");
+  }
+  return value.target;
 }
 
 export async function prepareSessionEntryInWorker(

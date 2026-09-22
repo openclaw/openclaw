@@ -26,6 +26,11 @@ import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import {
+  configRawPayload,
+  configWithGatewayTokenSecretRef,
+  makeRouteBinding,
+} from "./server.config-patch.test-support.js";
 import { startGatewayServer } from "./server.js";
 
 const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
@@ -224,23 +229,6 @@ async function sendConfigSet(params: { raw: string; baseHash?: string }, timeout
   return await rpcReq(requireClient(), "config.set", params, timeoutMs);
 }
 
-function configRawPayload(config: unknown, baseHash?: string) {
-  return {
-    raw: JSON.stringify(config, null, 2),
-    baseHash,
-  };
-}
-
-function configWithGatewayTokenSecretRef(config: Record<string, unknown>, envVar: string) {
-  const nextConfig = structuredClone(config);
-  const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-  gateway.auth = {
-    mode: "token",
-    token: { source: "env", provider: "default", id: envVar },
-  };
-  return nextConfig;
-}
-
 async function getCurrentConfigObject() {
   const current = await rpcReq<{
     raw?: string | null;
@@ -267,19 +255,6 @@ async function restoreConfigFileForTest(
   original: Awaited<ReturnType<typeof getCurrentConfigObject>>,
 ) {
   await writeJsonFile(original.path, original.config);
-}
-
-function makeRouteBinding(index: number) {
-  return {
-    agentId: "main",
-    match: {
-      channel: "telegram",
-      peer: {
-        kind: "direct",
-        id: `user-${index}`,
-      },
-    },
-  };
 }
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
@@ -409,32 +384,6 @@ describe("gateway config methods", () => {
           includeAuthStoreRefs: true,
         }),
       );
-    }
-  });
-
-  it("includes the active runtime config revision", async () => {
-    const { readConfigFileSnapshot } = await import("../config/config.js");
-    const { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } =
-      await import("../config/runtime-snapshot.js");
-    const current = await rpcReq<{
-      hash?: string;
-      configRevisionHash?: string;
-      appliedConfigHash?: string | null;
-    }>(requireClient(), "config.get", {});
-
-    expect(current.ok).toBe(true);
-    expect(current.payload).toHaveProperty("configRevisionHash");
-    expect(current.payload).toHaveProperty("appliedConfigHash");
-    const internal = await readConfigFileSnapshot();
-    expect(current.payload?.hash).not.toBe(internal.hash);
-    expect(current.payload?.configRevisionHash).not.toBe(
-      hashRuntimeConfigValue(internal.sourceConfig),
-    );
-    const internalAppliedHash = getRuntimeConfigAppliedHash();
-    if (internalAppliedHash === null) {
-      expect(current.payload?.appliedConfigHash).toBeNull();
-    } else {
-      expect(current.payload?.appliedConfigHash).not.toBe(internalAppliedHash);
     }
   });
 
@@ -1565,32 +1514,6 @@ describe("gateway config methods", () => {
     expect(res.error).toBeUndefined();
   });
 
-  it("returns config.set validation details in the top-level error message", async () => {
-    const res = await rpcReq<{
-      ok?: boolean;
-      error?: {
-        message?: string;
-      };
-    }>(requireClient(), "config.set", {
-      raw: JSON.stringify({ gateway: { bind: 123 } }),
-      baseHash: await getConfigHash(),
-    });
-    const error = res.error as
-      | {
-          message?: string;
-          details?: {
-            issues?: Array<{ path?: string; message?: string }>;
-          };
-        }
-      | undefined;
-
-    expect(res.ok).toBe(false);
-    expect(error?.message ?? "").toContain("invalid config:");
-    expect(error?.message ?? "").toContain("gateway.bind");
-    expect(error?.message ?? "").toContain("allowed:");
-    expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
-  });
-
   it.each(["config.set", "config.apply", "config.patch"] as const)(
     "preserves literal nulls in full replacements and patch deletion through %s",
     async (method) => {
@@ -1707,15 +1630,6 @@ describe("gateway config methods", () => {
       }
       invalidateConfigGetResponseCache();
     }
-  });
-
-  it("rejects config.patch when raw is null", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-      raw: "null",
-      baseHash: await getConfigHash(),
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("raw must be an object");
   });
 
   it("rejects config.patch that shrinks an existing array without replacePaths", async () => {
@@ -2116,23 +2030,6 @@ describe("gateway config.apply", () => {
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.error).toBeUndefined();
   });
-
-  it("rejects invalid raw config", async () => {
-    const currentHash = await getConfigHash();
-    const res = await sendConfigApply({ raw: "{", baseHash: currentHash });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
-  });
-
-  it("requires raw to be a string", async () => {
-    const currentHash = await getConfigHash();
-    const res = await sendConfigApply({
-      raw: { gateway: { mode: "local" } },
-      baseHash: currentHash,
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("raw");
-  });
 });
 
 describe("gateway config recovery errors", () => {
@@ -2231,6 +2128,109 @@ describe("gateway config recovery errors", () => {
       expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
     },
   );
+});
+
+function installReadOnlyConfigGatewayHooks() {
+  beforeAll(() => startConfigRpcGateway());
+  beforeEach(() => {
+    resetGatewayRestartStateForInProcessRestart();
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
+    hotReloadRecovery.mockClear();
+  });
+  afterEach(() =>
+    runQaGatewayFixture(
+      async () => resetGatewayRestartStateForInProcessRestart(),
+      () => vi.restoreAllMocks(),
+      () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
+    ),
+  );
+  afterAll(stopConfigRpcGateway);
+}
+
+describe("gateway config methods", () => {
+  installReadOnlyConfigGatewayHooks();
+
+  it("includes the active runtime config revision", async () => {
+    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } =
+      await import("../config/runtime-snapshot.js");
+    const current = await rpcReq<{
+      hash?: string;
+      configRevisionHash?: string;
+      appliedConfigHash?: string | null;
+    }>(requireClient(), "config.get", {});
+
+    expect(current.ok).toBe(true);
+    expect(current.payload).toHaveProperty("configRevisionHash");
+    expect(current.payload).toHaveProperty("appliedConfigHash");
+    const internal = await readConfigFileSnapshot();
+    expect(current.payload?.hash).not.toBe(internal.hash);
+    expect(current.payload?.configRevisionHash).not.toBe(
+      hashRuntimeConfigValue(internal.sourceConfig),
+    );
+    const internalAppliedHash = getRuntimeConfigAppliedHash();
+    if (internalAppliedHash === null) {
+      expect(current.payload?.appliedConfigHash).toBeNull();
+    } else {
+      expect(current.payload?.appliedConfigHash).not.toBe(internalAppliedHash);
+    }
+  });
+
+  it("returns config.set validation details in the top-level error message", async () => {
+    const res = await rpcReq<{
+      ok?: boolean;
+      error?: {
+        message?: string;
+      };
+    }>(requireClient(), "config.set", {
+      raw: JSON.stringify({ gateway: { bind: 123 } }),
+      baseHash: await getConfigHash(),
+    });
+    const error = res.error as
+      | {
+          message?: string;
+          details?: {
+            issues?: Array<{ path?: string; message?: string }>;
+          };
+        }
+      | undefined;
+
+    expect(res.ok).toBe(false);
+    expect(error?.message ?? "").toContain("invalid config:");
+    expect(error?.message ?? "").toContain("gateway.bind");
+    expect(error?.message ?? "").toContain("allowed:");
+    expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
+  });
+
+  it("rejects config.patch when raw is null", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
+      raw: "null",
+      baseHash: await getConfigHash(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("raw must be an object");
+  });
+});
+
+describe("gateway config.apply", () => {
+  installReadOnlyConfigGatewayHooks();
+
+  it("rejects invalid raw config", async () => {
+    const currentHash = await getConfigHash();
+    const res = await sendConfigApply({ raw: "{", baseHash: currentHash });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
+  });
+
+  it("requires raw to be a string", async () => {
+    const currentHash = await getConfigHash();
+    const res = await sendConfigApply({
+      raw: { gateway: { mode: "local" } },
+      baseHash: currentHash,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("raw");
+  });
 });
 
 describe("gateway config schema lookup", () => {

@@ -2,7 +2,7 @@ import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runt
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { RequestClient } from "../internal/discord.js";
+import { createChannelMessage, RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 
 function createPreviewController(
@@ -19,9 +19,6 @@ function createPreviewController(
     deliveryRest: rest,
     deliverChannelId: "c1",
     replyReference: { peek: () => undefined },
-    tableMode: "off",
-    maxLinesPerMessage: undefined,
-    chunkMode: "length",
     log: () => {},
     ...overrides,
   });
@@ -68,7 +65,7 @@ describe("Discord draft preview REST lifecycle", () => {
         { step: "Verify", status: "in_progress" as const },
       ];
       await controller.pushPlanProgress(plan);
-      controller.markFinalReplyStarted();
+      controller.freezeProgress();
       const adopt = vi.fn<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>(
         async (receipt) => {
           expect(receipt.messageId).toBe("1");
@@ -89,6 +86,7 @@ describe("Discord draft preview REST lifecycle", () => {
       await controller.cleanup();
       expect([...visible.keys()]).toEqual(accepted ? ["1"] : []);
       expect(adopt).toHaveBeenCalledOnce();
+      expect(controller.lifecycle.finalDelivered).toBe(false);
       if (accepted) {
         const retained = visible.get("1");
         controller.handleQueuedFollowupAdmitted();
@@ -101,6 +99,37 @@ describe("Discord draft preview REST lifecycle", () => {
     },
   );
 
+  it("keeps the queued preview independent of a late continuation handoff", async () => {
+    const { controller, visible } = createContinuationHarness();
+    const handoffStarted = createDeferred<void>();
+    const finishHandoff = createDeferred<boolean>();
+    await controller.pushPlanProgress([{ step: "Prior turn", status: "in_progress" }]);
+    const retained = visible.get("1");
+    const adopting = controller.adoptProgressContinuation(
+      { text: "Waiting for workers" },
+      {
+        kind: "final",
+        adoptProgressContinuation: async () => {
+          handoffStarted.resolve();
+          return await finishHandoff.promise;
+        },
+      },
+      { to: "channel:c1" },
+    );
+    await handoffStarted.promise;
+    controller.handleQueuedFollowupAdmitted();
+    await controller.pushPlanProgress([{ step: "Queued turn", status: "in_progress" }]);
+    await controller.flush();
+    finishHandoff.resolve(true);
+    expect(await adopting).toBe(true);
+
+    await controller.pushPlanProgress([{ step: "Queued result", status: "completed" }]);
+    await controller.flush();
+    expect(visible.get("2")).toContain("Queued result");
+    await controller.cleanup();
+    expect([...visible]).toEqual([["1", retained]]);
+  });
+
   it("publishes retained preamble data after the final gate without reopening parent progress", async () => {
     const { controller, visible } = createContinuationHarness();
     await controller.pushItemEvent({
@@ -109,7 +138,7 @@ describe("Discord draft preview REST lifecycle", () => {
       progressText: "Waiting for child verification.",
     });
     expect([...visible]).toEqual([]);
-    controller.markFinalReplyStarted();
+    controller.freezeProgress();
 
     expect(
       await controller.adoptProgressContinuation(
@@ -140,7 +169,7 @@ describe("Discord draft preview REST lifecycle", () => {
           },
         ]);
       }
-      controller.markFinalReplyStarted();
+      controller.freezeProgress();
       const adopt = vi.fn(async () => true);
 
       expect(
@@ -173,7 +202,7 @@ describe("Discord draft preview REST lifecycle", () => {
     const controller = createPreviewController(rest);
     const publishing = controller.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
     await started.promise;
-    controller.markFinalReplyStarted();
+    controller.freezeProgress();
     let current = true;
     const adopt = vi.fn(async () => true);
     const adopting = controller.adoptProgressContinuation(
@@ -286,13 +315,22 @@ describe("Discord draft preview REST lifecycle", () => {
 
     controller.draftStream?.update("🛠️ Exec: failed");
     await controller.flush();
-    controller.markFinalReplyStarted();
-    controller.markFinalReplyDelivered(true);
+    await controller.lifecycle.deliver({
+      kind: "final",
+      payload: { text: "Something failed", isError: true },
+      isError: true,
+      deliverNormally: async (payload) => {
+        const sent = await createChannelMessage<{ id: string }>(rest, "c1", {
+          body: { content: payload.text },
+        });
+        return { messageIds: [sent.id], visibleReplySent: true };
+      },
+    });
     controller.draftStream?.update("stale pending update");
     await controller.cleanup();
     await controller.flush();
 
-    expect(requests).toEqual(["POST /channels/c1/messages"]);
+    expect(requests).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
   });
 
   it.each([
@@ -349,8 +387,7 @@ describe("Discord draft preview REST lifecycle", () => {
 
         expect(controller.draftStream?.messageId()).toBe("2");
         expect(visibleMessages.get("2")).toBe("queued turn progress");
-        controller.markFinalReplyStarted();
-        controller.markFinalReplyDelivered(false);
+        await controller.lifecycle.observeDelivery({ visibleReplySent: true });
         await controller.cleanup();
       } else {
         const cleanup = controller.cleanup();

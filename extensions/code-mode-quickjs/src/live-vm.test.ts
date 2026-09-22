@@ -262,27 +262,54 @@ describe("Code Mode live VM", () => {
   it("checkpoints a slow host waiter under contention so queued cells can run within the same capacity", async () => {
     const workers = pool();
     const entered = Promise.withResolvers<void>();
-    const yielded = vi.fn();
-    const waiting = workers.run(await payload(`${sleep} return 1;`), {
-      timeoutMs: 15_000,
-      onRequest: async (_value, { yieldSignal }) => {
-        entered.resolve();
-        if (!yieldSignal.aborted) {
-          await new Promise<void>((resolve) => {
-            yieldSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        }
-        yielded();
-        return response({ kind: "checkpoint" });
-      },
+    const releaseHost = Promise.withResolvers<void>();
+    const events: string[] = [];
+    const hostCompleted = releaseHost.promise.then(() => {
+      events.push("host completed");
     });
+    const waiting = workers
+      .run(await payload(`${sleep} return 1;`), {
+        timeoutMs: 15_000,
+        onRequest: async (value, { yieldSignal }) => {
+          entered.resolve();
+          const checkpoint = new Promise<WorkerTaskResponse>((resolve) => {
+            const yieldVm = () => resolve(response({ kind: "checkpoint" }));
+            if (yieldSignal.aborted) {
+              yieldVm();
+            } else {
+              yieldSignal.addEventListener("abort", yieldVm, { once: true });
+            }
+          });
+          return Promise.race([
+            checkpoint,
+            hostCompleted.then(() => response(resume(boundary(value), performance.now() + 1000))),
+          ]);
+        },
+      })
+      .then((result) => {
+        events.push(`waiter ${result.status}`);
+        return result;
+      });
     await entered.promise;
-    const start = performance.now();
-    const quick = workers.run(await payload("return 2;"), { timeoutMs: 2000 });
-    expect(await waiting).toMatchObject({ status: "waiting" });
-    expect(await quick).toMatchObject({ status: "completed", value: { json: "2" } });
-    expect(yielded).toHaveBeenCalledTimes(1);
-    expect(performance.now() - start).toBeLessThan(2000);
+    const quick = workers.run(await payload("return 2;"), { timeoutMs: 2000 }).then((result) => {
+      events.push(`queued ${result.status}`);
+      return result;
+    });
+    try {
+      const [parked, completed] = await Promise.all([waiting, quick]);
+      expect(events).toEqual(["waiter waiting", "queued completed"]);
+      expect(parked).toMatchObject({
+        status: "waiting",
+        pendingRequests: [{ method: "sleep" }],
+        settlementMode: { kind: "awaiting" },
+      });
+      expect(completed).toMatchObject({ status: "completed", value: { json: "2" } });
+    } finally {
+      releaseHost.resolve();
+      await hostCompleted;
+      await workers.close();
+      await Promise.allSettled([waiting, quick]);
+    }
   });
 
   it("bounds concurrent live heaps to admitted worker capacity and keeps each cell isolated", async () => {

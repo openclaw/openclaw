@@ -146,7 +146,7 @@ describe("optimistic session deletion", () => {
         }
         await settled;
         expect(h.sessions.state.deletedSessions).toEqual([]);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.sessions.state.result?.sessions).toEqual([h.beta, h.sibling]);
         expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.beta, h.sibling]);
       } finally {

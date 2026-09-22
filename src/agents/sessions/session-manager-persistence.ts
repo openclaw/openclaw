@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptInitialWriter,
@@ -29,10 +30,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
-import {
-  SessionManagerCore,
-  type PreparedSessionTranscriptReload,
-} from "./session-manager-core.js";
+import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 import type {
   AppendPersistenceOptions,
@@ -40,6 +38,7 @@ import type {
   SessionEntry,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import type { SessionManagerWriteAdmission } from "./session-manager-write-admission.js";
 
 export type PersistRecordResult =
@@ -122,8 +121,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const identity = { ...target };
     const sessionId = this.getSessionId();
     const { database, options } = writeAdmission;
+    const { env: _env, ...writeTarget } = withOwnedSessionTranscriptWriterFence(target);
     const captured: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"] = {
-      ...withOwnedSessionTranscriptWriterFence(target),
+      ...writeTarget,
       storePath: database.path,
     };
     if (database.db.isTransaction) {
@@ -134,11 +134,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const assertBinding = () => {
       const current = this.persistenceTarget;
       if (
-        !current ||
         this.getSessionId() !== sessionId ||
-        (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
-          (key) => current[key] !== identity[key],
-        )
+        !sameSessionTranscriptTargetBinding(identity, current)
       ) {
         throw new SessionTranscriptWriterClaimReboundError();
       }

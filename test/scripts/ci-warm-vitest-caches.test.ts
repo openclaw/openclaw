@@ -18,13 +18,27 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
     ...actual,
     createVitestCacheWarmGroups: vi.fn((profile: "full" | "hybrid-hosted" = "full") => {
       const hosted = actual.createVitestCacheWarmGroups("hybrid-hosted");
-      // The planner suite owns full inventory. Two distinct Node envelopes are
-      // enough to prove this collector continues after a child failure.
+      // Keep one compatible file beside a Node-only file and a tooling file.
+      // The planner suite owns the production inventory; this proves partitioning.
+      const tooling = {
+        ...hosted[0]!,
+        includePatterns: [
+          "packages/media-core/src/mime.test.ts",
+          "packages/markdown-core/src/render-aware-chunking.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      };
       return profile === "hybrid-hosted"
-        ? hosted
-        : hosted.filter(
-            (group, index) => index < 2 || group.shard_name === "cache-warm:ui-package",
-          );
+        ? [tooling, ...hosted.slice(1)]
+        : [
+            {
+              ...tooling,
+              configs: ["test/vitest/vitest.unit-fast.config.ts"],
+              includePatterns: tooling.includePatterns.slice(0, 2),
+            },
+            hosted[1]!,
+            hosted.find((group) => group.shard_name === "cache-warm:ui-package")!,
+          ];
     }),
   };
 });
@@ -39,7 +53,7 @@ afterEach(() => {
 
 describe("protected Vitest cache collection", () => {
   it.each(["linux", "linux-hosted"])(
-    "collects both UI runtimes before final pruning and preserves an earlier failure (%s)",
+    "preserves Node and compatible Bun seeds before final UI pruning after a failure (%s)",
     async (platform) => {
       const root = tempDirs.make("openclaw-cache-warm-test-");
       const cacheRoot = join(root, "transforms");
@@ -52,7 +66,7 @@ describe("protected Vitest cache collection", () => {
         CACHE_WARM_PLATFORM: platform,
         NODE_OPTIONS: "--max-old-space-size=8192",
         NODE_COMPILE_CACHE: compileRoot,
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheRoot,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: cacheRoot,
         OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1",
         OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: "inherited-selection.json",
@@ -66,11 +80,16 @@ describe("protected Vitest cache collection", () => {
         "OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64",
         "OPENCLAW_NODE_TEST_ENV_JSON",
         "OPENCLAW_VITEST_MAX_WORKERS",
+        "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH",
       ]) {
         vi.stubEnv(name, undefined);
       }
       const invocations: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
-      const nodeGroups: string[][] = [];
+      const nonUiCollections: Array<{
+        configs: string[];
+        runtime: string | undefined;
+        files: string[];
+      }> = [];
       const uiCollections: Array<{
         args: string[];
         env: NodeJS.ProcessEnv;
@@ -101,9 +120,15 @@ describe("protected Vitest cache collection", () => {
               if (childArgs.includes("ui/vitest.config.ts")) {
                 recordUi(childArgs, childEnv);
               } else {
-                nodeGroups.push(childArgs.slice(0, childArgs.indexOf("--")));
+                nonUiCollections.push({
+                  configs: childArgs.slice(0, childArgs.indexOf("--")),
+                  runtime: childEnv.OPENCLAW_VITEST_RUNTIME,
+                  files: JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+                });
                 expect(childEnv.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-                return nodeGroups.length === 1 ? 19 : 0;
+                return childEnv.OPENCLAW_VITEST_RUNTIME === "node" && nonUiCollections.length === 1
+                  ? 19
+                  : 0;
               }
               return 0;
             },
@@ -134,12 +159,14 @@ describe("protected Vitest cache collection", () => {
       const [bun, node] = uiCollections;
       expect(bun!.env).toMatchObject(BUN_UI_TEST_ENV);
       expect(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
-      expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
         join(cacheRoot, "vitest-cache-bun-0"),
       );
-      expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
         join(cacheRoot, "vitest-cache-0"),
       );
+      expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+      expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
       expect(existsSync(bun!.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!)).toBe(false);
       expect(invocations.at(-1)!.args).toContain("scripts/ci-run-node-test-shard.mts");
       expect(
@@ -148,12 +175,25 @@ describe("protected Vitest cache collection", () => {
           env.OPENCLAW_NODE_COMPILE_CACHE_WRITER,
         ]),
       ).toEqual([...invocations.slice(0, -1).map(() => ["0", "0"]), ["1", "1"]]);
+      expect(nonUiCollections.filter(({ runtime }) => runtime === "bun")).toEqual([
+        {
+          configs: ["test/vitest/vitest.unit-fast.config.ts"],
+          runtime: "bun",
+          files: ["packages/media-core/src/mime.test.ts"],
+        },
+      ]);
       if (platform === "linux") {
         const nonUiGroups = groups.filter((group) => group !== ui);
         expect(JSON.parse(invocations[0]!.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual(
           nonUiGroups,
         );
-        expect(nodeGroups).toEqual(nonUiGroups.map((group) => group.configs));
+        expect(nonUiCollections.filter(({ runtime }) => runtime === "node")).toEqual(
+          nonUiGroups.map((group) => ({
+            configs: group.configs,
+            runtime: "node",
+            files: group.includePatterns,
+          })),
+        );
       } else {
         expect(invocations.slice(0, 3).map(({ args }) => args[0])).toEqual([
           "test",
@@ -163,6 +203,11 @@ describe("protected Vitest cache collection", () => {
         expect(
           invocations.slice(0, 3).map(({ env }) => env.OPENCLAW_TEST_PROJECTS_PARALLEL),
         ).toEqual(["3", "1", "4"]);
+        expect(invocations[0]!.args).toEqual([
+          "test",
+          ...groups[0]!.includePatterns!,
+          "--testNamePattern=(?!)",
+        ]);
       }
     },
   );

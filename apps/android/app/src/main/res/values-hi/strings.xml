@@ -1317,6 +1317,7 @@
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई मॉडल कॉन्फ़िगर नहीं किया गया है"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"डाउनलोड से पहले Gateway, ClawHub के ज़रिए इसी रिलीज़ का सत्यापन करता है. समीक्षा के निष्कर्ष इंस्टॉलेशन के परिणाम में दिखाई देते हैं. रिलीज़ ब्लॉक होने या सुरक्षा सत्यापन उपलब्ध न होने पर इंस्टॉलेशन नहीं हो पाता."</string>
     <string name="native_b7e3e4aa4257b9a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अक्षम करें"</string>
+    <string name="native_b82c89a18faf5200" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब को रोका नहीं जा सका। रीफ़्रेश करें और फिर से कोशिश करें।"</string>
     <string name="native_b8352b44a588721c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ऐप की भाषा"</string>
     <string name="native_b8380b8a2317b9fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway से पेयर किया जा रहा है"</string>
     <string name="native_b847ffdd0a1bfe55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चयन संबंधी कार्रवाइयाँ"</string>

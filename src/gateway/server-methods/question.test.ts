@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -688,7 +688,7 @@ describe("question gateway methods", () => {
       const id = await requestSecretQuestion();
       const value = "test-secret-value-gateway-diversion-123";
       const client = {
-        connect: { client: { displayName: "Trusted Operator" } },
+        connect: { client: { displayName: "Trusted Operator" }, scopes: ["operator.questions"] },
       } as GatewayClient;
 
       const resolved = await call(

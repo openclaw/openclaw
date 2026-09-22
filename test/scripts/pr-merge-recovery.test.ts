@@ -147,6 +147,16 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
+  // These refusals precede replacement validation, so keep the stronger prepared
+  // replacement input. Later admission cases retain both head paths.
+  const retainedIntentFaults = new Set([
+    "stale-outcome",
+    "accepted",
+    "auto-route",
+    "queue-route",
+    "admin-route",
+  ]);
+
   it.each(
     [
       "stale-outcome",
@@ -168,7 +178,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       "wrong-repo",
       "current-auto",
       "current-queued",
-    ].flatMap((fault) => [false, true].map((replacement) => ({ fault, replacement }))),
+    ].flatMap((fault) =>
+      (retainedIntentFaults.has(fault) ? [true] : [false, true]).map((replacement) => ({
+        fault,
+        replacement,
+      })),
+    ),
   )(
     "operator recovery refuses $fault without another dispatch (replacement=$replacement)",
     ({ fault, replacement }) => {
@@ -254,6 +269,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         approvedHead,
       );
       expect(result.status, result.output).toBe(1);
+      if (retainedIntentFaults.has(fault)) {
+        expect(result.output).toContain(
+          "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized",
+        );
+      }
       expect(f.state().mutations, result.output).toBe(1);
       expect(f.state().posts).toBe(0);
       expect(f.captures()).toEqual(captures);

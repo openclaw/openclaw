@@ -24,6 +24,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { createUiTestShardGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -5232,7 +5234,7 @@ server.listen(0, "127.0.0.1", () => {
                 "!**/node_modules/**",
                 "!.ci-harness/**",
               ]);
-              const prefix = `openclaw/openclaw-vitest-fs-v3-protected-${os}-X64-node-24.x-${generation}-`;
+              const prefix = `openclaw/openclaw-vitest-fs-v4-protected-${os}-X64-node-24.x-${generation}-`;
               expect(cacheInputs).toEqual({
                 path: "/var/tmp/openclaw-vitest-fs-cache",
                 key: `${prefix}10-2`,
@@ -5367,11 +5369,11 @@ server.listen(0, "127.0.0.1", () => {
     expect(readerStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(readerStep.if).toContain("runner.os != 'Windows'");
     expect(readerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(readerStep.with.key).toContain("vitest-fs-v3-protected-");
+    expect(readerStep.with.key).toContain("vitest-fs-v4-protected-");
     expect(readerStep.with.key).toContain("github.run_id");
     expect(readerStep.with.key).toContain("github.run_attempt");
     expect(configureStep.if).toContain("inputs.restore-test-caches == 'true'");
-    expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
+    expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
     expect(configureStep.env.CACHE_WRITER).toBe("0");
@@ -8723,12 +8725,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "retention-days": 7,
       },
     });
+    const uiGroups = createUiTestShardGroups({
+      includeReleaseOnlyTests: scenario.frozenTarget || scenario.compatibilityTarget,
+    }).ui;
     const context = {
       eventName: scenario.frozenTarget ? "workflow_dispatch" : "pull_request",
       frozenTarget: scenario.frozenTarget,
       preflightOutputs: {
         compatibility_target: String(scenario.compatibilityTarget),
         ui_test_runtime_policy: scenario.policy,
+        ui_test_groups_gzip_base64: encodeNodeTestGroups(uiGroups),
       },
       repository: "openclaw/openclaw",
       runAttempt: 1,
@@ -8825,7 +8831,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               forwarded.push(args);
               runtimes.push(childEnv.OPENCLAW_VITEST_RUNTIME);
               expect(childEnv.BUN_JSC_useFTLJIT).toBeUndefined();
-              expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
+              if (uiGroups[0]?.includePatterns) {
+                expect(
+                  JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+                ).toEqual(uiGroups[0].includePatterns);
+              } else {
+                expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
+              }
               const includeFile = childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
               if (
                 childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ||
@@ -8842,6 +8854,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
                 } else {
                   expect(included.length).toBeGreaterThan(1000);
                   expect(included.filter((file: string) => nodeFiles.includes(file))).toEqual([]);
+                  if (uiGroups[0]?.includePatterns) {
+                    expect(included.toSorted()).toEqual(
+                      uiGroups[0].includePatterns
+                        .filter((file) => !nodeFiles.includes(file))
+                        .toSorted(),
+                    );
+                  }
                 }
               } else {
                 expect(includeFile).toBeUndefined();
@@ -9373,14 +9392,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(step["continue-on-error"]).not.toBe(true);
     const root = tempDirs.make("openclaw-browser-proof-report-");
     const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
-    const fullName =
-      "native host registration launches with the exact custom installation context when Chrome has no selectors";
-    const assertion = {
-      fullName: state === "wrong-name" ? "another test" : fullName,
-      status: ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
-    };
-    const assertions =
-      state === "absent" ? [] : state === "duplicate" ? [assertion, assertion] : [assertion];
+    const names = [
+      "does not inspect or migrate configuration before rejecting a malformed native request",
+      "rejects an unauthorized bootstrap caller before config, keys or database creation",
+      "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+      'preserves invalid-config diagnostics for ordinary extension command "status"',
+      'preserves invalid-config diagnostics for ordinary extension command "setup"',
+      'preserves invalid-config diagnostics for ordinary extension command "pair"',
+      "launches launcher with the exact custom installation context when Chrome has no selectors",
+      "launches cli with the exact custom installation context when Chrome has no selectors",
+    ];
+    const assertions = names.map((name, index) => ({
+      fullName:
+        state === "wrong-name" && index === 0 ? "another test" : `native host registration ${name}`,
+      status:
+        index === 0 && ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
+    }));
+    if (state === "absent") {
+      assertions.pop();
+    } else if (state === "duplicate") {
+      assertions[1] = assertions[0]!;
+    }
     const report = {
       success: state !== "failed" && state !== "suite-failed",
       numFailedTestSuites: state === "suite-failed" ? 1 : 0,

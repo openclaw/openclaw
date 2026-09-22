@@ -134,11 +134,15 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     })),
   );
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  if (report.totals.issues === 0) {
+    report.migrationRun = {
+      manifestPath: failedRun.manifestPath,
+      runId: failedRun.manifest.runId,
+    };
+    return report;
+  }
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason:
-      report.totals.issues > 0
-        ? "doctor recover completed with remaining issues"
-        : "doctor recover completed validation of a failed session SQLite migration run",
+    reason: "doctor recover completed with remaining issues",
     recoveryTargets: report.targets,
     trustedTargets,
   });

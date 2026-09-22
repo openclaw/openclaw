@@ -14,6 +14,7 @@ import {
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { readSessionPreviewItemsFromTranscript } from "./session-transcript-preview.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -91,8 +92,10 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     storePath: workStorePath,
     messages: [{ role: "user", content: "Work global conversation" }],
   });
+  const backfilled = observeSessionRowBackfill(["global"]);
   const { ws } = await openClient();
   try {
+    await backfilled;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,

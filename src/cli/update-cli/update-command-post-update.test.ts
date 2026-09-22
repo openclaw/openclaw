@@ -185,6 +185,24 @@ describe("successful update finalization ordering", () => {
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
 
+  it("refuses same-schema finalization after requester revocation", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
+    const record = createUpdateRun({ trigger: "cli" }, { env });
+    await expect(
+      finishSuccessfulPackageSwitch({
+        run: {
+          runId: record.runId,
+          env,
+          executorFence: { assertCurrent() {} },
+          requesterAuthority: { requester: {}, isCurrent: () => false },
+        },
+      }),
+    ).rejects.toThrow("requester-revoked");
+    expect(mocks.updatePlugins).not.toHaveBeenCalled();
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+  });
+
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
     const env = { HOME: home, OPENCLAW_STATE_DIR: home };
