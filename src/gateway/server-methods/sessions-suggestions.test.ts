@@ -5,7 +5,7 @@ import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import {
   addSessionSuggestion,
   listSessionSuggestions,

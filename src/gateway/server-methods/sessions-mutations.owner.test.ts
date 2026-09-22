@@ -15,10 +15,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -41,6 +42,7 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   RespondFn,
+  SessionMutationAuthorization,
 } from "./types.js";
 
 afterEach(async () => {
@@ -91,6 +93,7 @@ async function invoke(params: {
   cfg: OpenClawConfig;
   client: GatewayClient;
   request: Record<string, unknown>;
+  authorizationOverride?: SessionMutationAuthorization;
 }) {
   const requestContext = context(params.cfg);
   const authorization = resolveSessionMutationAuthorization({
@@ -105,7 +108,7 @@ async function invoke(params: {
       params: params.request,
       client: params.client,
       context: requestContext,
-      sessionMutationAuthorization: authorization.authorization,
+      sessionMutationAuthorization: params.authorizationOverride ?? authorization.authorization,
       respond: (...response: Parameters<RespondFn>) => responses.push(response),
     } as never);
   }
@@ -148,9 +151,9 @@ describe("sessions.patch", () => {
           });
           expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({
-            boardFace: "chat",
+            boardFace: "dashboard",
             boardPresentation: "expanded",
           });
           const reopened = await tool.execute("reopened", { action: "read" });
@@ -669,6 +672,122 @@ describe("sessions.patch", () => {
 });
 
 describe("sessions.assignOwner", () => {
+  it("serializes assignment with an active session lifecycle mutation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:lifecycle-handoff";
+      const sessionId = "session-lifecycle-handoff";
+      await upsertSessionEntryCore(
+        { agentId: "main", env: state.env, sessionKey },
+        {
+          sessionId,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+        },
+      );
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      } as OpenClawConfig;
+      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+      if (!target) {
+        throw new Error("expected lifecycle assignment target");
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const lifecycle = runExclusiveSessionLifecycleMutation({
+        scope: target.storePath,
+        identities: [target.storeKey, sessionId],
+        run: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      await entered.promise;
+      const assignment = invoke({
+        cfg,
+        client: client("profile-viewer"),
+        request: { key: sessionKey, owner: { type: "agent", id: "research" } },
+      });
+      try {
+        await expect(
+          Promise.race([
+            assignment.then(() => "settled" as const),
+            new Promise<"blocked">((resolve) => {
+              setImmediate(() => resolve("blocked"));
+            }),
+          ]),
+        ).resolves.toBe("blocked");
+        expect(
+          loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+        ).toBeUndefined();
+      } finally {
+        release.resolve();
+        await lifecycle;
+      }
+      await expect(assignment).resolves.toMatchObject({
+        responses: [[true, { owner: { actor: { type: "agent", id: "research" } } }, undefined]],
+      });
+    });
+  });
+
+  it("rejects an assignment whose requester authority ends while queued", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:revoked-handoff";
+      const sessionId = "session-revoked-handoff";
+      await upsertSessionEntryCore(
+        { agentId: "main", env: state.env, sessionKey },
+        {
+          sessionId,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+        },
+      );
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      } as OpenClawConfig;
+      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+      if (!target) {
+        throw new Error("expected queued assignment target");
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const lifecycle = runExclusiveSessionLifecycleMutation({
+        scope: target.storePath,
+        identities: [target.storeKey, sessionId],
+        run: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      await entered.promise;
+      let requesterCurrent = true;
+      const assignment = invoke({
+        cfg,
+        client: client("profile-viewer"),
+        request: { key: sessionKey, owner: { type: "agent", id: "research" } },
+        authorizationOverride: {
+          assertCurrent: () => {
+            if (!requesterCurrent) {
+              throw new Error("assignment requester authority ended");
+            }
+          },
+          assertTargetCurrent: () => {},
+        },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      requesterCurrent = false;
+      release.resolve();
+      await lifecycle;
+      await expect(assignment).rejects.toThrow("assignment requester authority ended");
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+      ).toBeUndefined();
+    });
+  });
+
   it("records the trusted in-process agent tool caller as the assigning agent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:handoff";
@@ -722,90 +841,93 @@ describe("sessions.assignOwner", () => {
     });
   });
 
-  it("lets a write-scoped viewer assign a shared session without changing sharing authority", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:handoff";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId: "session-handoff",
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
-        },
-      );
-      const cfg = {
-        agents: {
-          list: [
-            { id: "main", default: true },
-            { id: "research", identity: { name: "Research" } },
+  it.each(["shared", "read-only", "suggest"] as const)(
+    "lets a write-scoped viewer assign a %s session without changing sharing authority",
+    async (visibility) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const sessionKey = "agent:main:handoff";
+        await upsertSessionEntryCore(
+          { agentId: "main", env: state.env, sessionKey },
+          {
+            sessionId: "session-handoff",
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "profile-creator" },
+          },
+        );
+        const cfg = {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "research", identity: { name: "Research" } },
+            ],
+          },
+        } as OpenClawConfig;
+        vi.spyOn(Date, "now").mockReturnValue(4242);
+
+        const result = await invoke({
+          cfg,
+          client: client("profile-viewer"),
+          request: { key: sessionKey, owner: { type: "agent", id: "research" } },
+        });
+
+        expect(result.authorization.error).toBeNull();
+        expect(result.responses).toMatchObject([
+          [
+            true,
+            {
+              ok: true,
+              key: sessionKey,
+              owner: {
+                actor: { type: "agent", id: "research", label: "Research" },
+                assignedBy: { type: "human", id: "profile-viewer" },
+                assignedAt: 4242,
+              },
+            },
+            undefined,
           ],
-        },
-      } as OpenClawConfig;
-      vi.spyOn(Date, "now").mockReturnValue(4242);
-
-      const result = await invoke({
-        cfg,
-        client: client("profile-viewer"),
-        request: { key: sessionKey, owner: { type: "agent", id: "research" } },
-      });
-
-      expect(result.authorization.error).toBeNull();
-      expect(result.responses).toMatchObject([
-        [
-          true,
-          {
-            ok: true,
+        ]);
+        expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner).toEqual({
+          actor: { type: "agent", id: "research" },
+          assignedBy: { type: "human", id: "profile-viewer" },
+          assignedAt: 4242,
+        });
+        const durableOwner = ensureProfileForEmail("next-owner@example.test");
+        const reassigned = await invoke({
+          cfg,
+          client: client("profile-viewer"),
+          request: {
             key: sessionKey,
-            owner: {
-              actor: { type: "agent", id: "research", label: "Research" },
-              assignedBy: { type: "human", id: "profile-viewer" },
-              assignedAt: 4242,
-            },
+            owner: { type: "human", id: durableOwner.id },
           },
-          undefined,
-        ],
-      ]);
-      expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner).toEqual({
-        actor: { type: "agent", id: "research" },
-        assignedBy: { type: "human", id: "profile-viewer" },
-        assignedAt: 4242,
-      });
-      const durableOwner = ensureProfileForEmail("next-owner@example.test");
-      const reassigned = await invoke({
-        cfg,
-        client: client("profile-viewer"),
-        request: {
-          key: sessionKey,
-          owner: { type: "human", id: durableOwner.id },
-        },
-      });
-      expect(reassigned.responses).toMatchObject([
-        [
-          true,
-          {
-            owner: {
-              actor: { type: "human", id: durableOwner.id },
-              assignedBy: { type: "human", id: "profile-viewer" },
+        });
+        expect(reassigned.responses).toMatchObject([
+          [
+            true,
+            {
+              owner: {
+                actor: { type: "human", id: durableOwner.id },
+                assignedBy: { type: "human", id: "profile-viewer" },
+              },
             },
-          },
-          undefined,
-        ],
-      ]);
-      expect(
-        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner?.actor,
-      ).toEqual({ type: "human", id: durableOwner.id });
+            undefined,
+          ],
+        ]);
+        expect(
+          loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner?.actor,
+        ).toEqual({ type: "human", id: durableOwner.id });
 
-      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
-      if (!target) {
-        throw new Error("expected assigned session target");
-      }
-      expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
-        "owner",
-      );
-      expect(resolveSessionSharingRole({ client: client("research"), target })).toBe("viewer");
-    });
-  });
+        const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+        if (!target) {
+          throw new Error("expected assigned session target");
+        }
+        expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
+          "owner",
+        );
+        expect(resolveSessionSharingRole({ client: client("research"), target })).toBe("viewer");
+      });
+    },
+  );
 
   it("rejects hidden viewers, unidentified callers, and unknown owner targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

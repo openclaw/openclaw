@@ -86,7 +86,7 @@ export function prepareProjectedSessionPresentation(
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
     const record = projection.describe(
-      { ...captured, storePath: captured.storeTarget.storePath },
+      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
       captured,
     );
     if (!record) {

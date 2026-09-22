@@ -38,7 +38,10 @@ import {
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
-import { inspectOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
+import {
+  inspectOwnedNodeWorkerTree,
+  waitForOwnedNodeWorkerTreeDeath,
+} from "./node-worker-tree-control.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
 
@@ -485,7 +488,26 @@ describe("node worker supervisor recovery", () => {
           initialization,
           closing,
           Promise.resolve().then(() => replacement.close()),
-          resumed.catch(() => undefined).then(() => waitForIdentityDeath(anchor)),
+          resumed
+            .catch(() => undefined)
+            .then(async () => {
+              if (operation !== "close") {
+                await waitForIdentityDeath(anchor);
+                return;
+              }
+              // Close releases the supervisor's observation, not the anchor's cleanup.
+              // Join its real retirement; loading the lineage writer can precede TERM grace.
+              expect(await waitForOwnedNodeWorkerTreeDeath(anchor)).toBe("dead");
+              expect(
+                await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(
+                  input.launchId,
+                ),
+              ).toMatchObject({
+                state: "running",
+                worker: anchor,
+                workerLineageSettled: true,
+              });
+            }),
         ])
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
       if (errors.length > 0) {

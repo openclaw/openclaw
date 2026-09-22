@@ -2,9 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { SessionMetadataUnavailableError } from "../../state/openclaw-agent-db-read-error.js";
+import {
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
@@ -79,7 +82,30 @@ export function readExactSessionEntriesWithLifecycle(
               const entry = selected.value.find(
                 ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
               )?.entry;
+              const identity = request.includeAuthorization
+                ? readOpenClawAgentDatabaseIdentity(database)
+                : undefined;
+              if (
+                identity &&
+                (typeof identity.identity !== "string" ||
+                  !isOpenClawAgentDatabasePathCurrent(database))
+              ) {
+                throw new Error("Session database physical identity changed");
+              }
               return {
+                ...(identity && typeof identity.identity === "string"
+                  ? { databaseIdentity: { ...identity, identity: identity.identity } }
+                  : {}),
+                ...(request.includeMembers
+                  ? {
+                      members: Object.fromEntries(
+                        selected.value.map(({ sessionKey }) => [
+                          sessionKey,
+                          listSessionMembersInDatabase(database, sessionKey),
+                        ]),
+                      ),
+                    }
+                  : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
                 lifecycleTimestamps: resolveSessionLifecycleTimestamps({
@@ -102,7 +128,7 @@ export function readExactSessionEntriesWithLifecycle(
   return { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} };
 }
 
-/** Entry, membership, board presence, and summary validity describe one committed snapshot. */
+/** Entry, board presence, and summary validity describe one committed snapshot. */
 export function readSessionRowDatabaseFacts(
   request: SessionRowFactsWorkerInput,
 ): SessionRowFactsWorkerResult {
@@ -131,9 +157,6 @@ export function readSessionRowDatabaseFacts(
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,
-                  memberIdentityIds: listSessionMembersInDatabase(database, sessionKey).map(
-                    (member) => member.identityId,
-                  ),
                   hasBoard: readBoardSessionKeys(database, sessionKey).length > 0,
                 };
                 if (readSessionActivitySummary(entry)) {

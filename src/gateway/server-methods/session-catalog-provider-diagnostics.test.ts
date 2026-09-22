@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe("session catalog provider diagnostics", () => {
   it("separates queue, provider and drain delay without exposing provider or host content", async () => {
-    const gates = Array.from({ length: 4 }, () => createDeferredCore<SessionCatalogHost[]>());
+    const gates = Array.from({ length: 16 }, () => createDeferredCore<SessionCatalogHost[]>());
     const active = gates.map((gate, index) =>
       listSessionCatalogProvider(
         provider(`blocker-${index}`, () => gate.promise),
@@ -135,7 +135,7 @@ describe("session catalog provider diagnostics", () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
     const activeOwner = new AbortController();
     const blocker = provider("active-catalog", () => gate.promise);
-    const active = Array.from({ length: 4 }, (_, index) =>
+    const active = Array.from({ length: 16 }, (_, index) =>
       listSessionCatalogProvider(
         { ...blocker, id: `active-catalog-${index}` },
         { signal: activeOwner.signal },
@@ -173,7 +173,7 @@ describe("session catalog provider diagnostics", () => {
       gate.resolve([]);
       await Promise.all([...active, successor]);
       expect(list).toHaveBeenCalledOnce();
-      expect(records.filter(({ fields }) => fields.providerInvoked)).toHaveLength(4);
+      expect(records.filter(({ fields }) => fields.providerInvoked)).toHaveLength(16);
       for (const record of records.slice(1)) {
         expect(record.fields).toMatchObject({
           outcome: "resolved",

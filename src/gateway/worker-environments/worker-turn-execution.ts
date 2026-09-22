@@ -112,15 +112,16 @@ export async function executeWorkerTurn(
     ? await SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal })
     : turn.userTurnTranscriptRecorder
       ? SessionManager.openModelContext(transcriptTarget)
-      : SessionManager.open(transcriptTarget);
-  if (readAsynchronously) {
+      : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+  const assertContextCurrent = () => {
     params.assertRunCurrent?.();
     turn.abortSignal?.throwIfAborted();
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Worker turn claim changed during context preparation");
     }
-    resolveWorkerTurnTranscriptTarget(turn);
-  }
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+  };
+  assertContextCurrent();
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
@@ -144,7 +145,14 @@ export async function executeWorkerTurn(
       baseLeafId = persisted.messageId;
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
+      const persistedView = await SessionManager.openAsync(
+        transcriptTarget,
+        undefined,
+        undefined,
+        turn.abortSignal,
+      );
+      assertContextCurrent();
+      baseLeafId = persistedView.getLeafId();
     } else if (turn.userTurnTranscriptRecorder) {
       throw new Error("Cloud worker turn could not persist its canonical user message");
     }
@@ -156,6 +164,7 @@ export async function executeWorkerTurn(
     model: modelRef.model,
   });
 
+  assertContextCurrent();
   const credential = await params.environments.acquireTurnCredential(params.turnClaim);
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
@@ -341,7 +350,7 @@ export async function executeWorkerTurn(
     }
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
     await prepareActiveNodeContext();
-    params.assertRunCurrent?.();
+    assertContextCurrent();
     const systemPrompt = [turn.extraSystemPrompt, buildActiveNodeContextText()]
       .filter(Boolean)
       .join("\n\n");
@@ -486,7 +495,12 @@ export async function executeWorkerTurn(
     }
     const workerTurnFailed = runtimeResult.status === "failed";
 
-    const completed = SessionManager.open(transcriptTarget);
+    // A terminal result settles under its pending-result owner, even after execution ends.
+    const completed = await SessionManager.openAsync(transcriptTarget);
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Cloud worker result lost its placement owner during transcript hydration");
+    }
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
     const currentPlacement = params.placements.get(placement.sessionId);
     if (
       runtimeResult.transcriptLeafId !== completed.getLeafId() ||

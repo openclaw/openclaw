@@ -103,6 +103,12 @@ An interrupted update is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
 
+After the target Doctor migrates shared state, the installed target runtime owns
+database validation, service finalization, and update-history writes, including
+rollback outcomes. The parent updater retains its live installation and requester
+checks without reopening migrated state through its older schema. A successful
+migration proceeds to finalization; it still prohibits code-only rollback.
+
 For versions that support checks before installation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the new version to run health checks
 (`doctor --lint --json --severity-min error`), config validation, and read-only
@@ -569,6 +575,17 @@ Gateway handoff remain supported.
 <a id="candidate-validation-and-service-definitions" />
 
 #### Update validation and service definitions
+
+Before restarting a writable managed service, update finalization uses the
+shared service audit and native installer to repair recognized stale policy.
+It backs up the definition, preserves supported custom settings, and records
+changed keys and backup paths in update warnings. Unknown operator edits remain
+unchanged. Update-time Doctor reports drift and leaves this rewrite to finalization.
+
+Candidate-owned rollback restores the verified definition backup before running
+the previous installer's recovery. When an older published updater owns rollback,
+that release's installer regenerates the definition with the settings it supports;
+the retained backup records the original bytes.
 
 With a local managed service and restart enabled, update validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`

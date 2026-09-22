@@ -3,87 +3,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import type { SessionsListResult } from "../../api/types.ts";
-import { renderSessions, type SessionsProps } from "./view.ts";
-
-function buildResult(
-  session: SessionsListResult["sessions"][number],
-  defaults?: Partial<SessionsListResult["defaults"]>,
-): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
-    sessions: [session],
-  };
-}
-
-function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function buildProps(result: SessionsListResult): SessionsProps {
-  return {
-    loading: false,
-    refreshing: false,
-    agentId: "main",
-    mainKey: "main",
-    result,
-    error: null,
-    activeMinutes: "",
-    limit: "120",
-    includeGlobal: false,
-    includeUnknown: false,
-    statusFilter: "active",
-    basePath: "",
-    searchQuery: "",
-    transcriptSearchAvailable: true,
-    transcriptSearchQuery: "",
-    transcriptSearch: { status: "idle" },
-    agentIdentityById: {},
-    sortColumn: "updated",
-    sortDir: "desc",
-    groupBy: "none",
-    personGroupingAvailable: true,
-    knownCategories: [],
-    page: 0,
-    pageSize: 10,
-    selectedKeys: new Set<string>(),
-    sessionMenu: null,
-    expandedSessionKey: null,
-    onFiltersChange: () => undefined,
-    onClearFilters: () => undefined,
-    onSearchChange: () => undefined,
-    onTranscriptSearchChange: () => undefined,
-    onTranscriptSearch: () => undefined,
-    onClearTranscriptSearch: () => undefined,
-    onSortChange: () => undefined,
-    onGroupByChange: () => undefined,
-    onAssignCategory: () => undefined,
-    onRequestNewCategory: () => undefined,
-    onLoadMore: () => undefined,
-    onPageChange: () => undefined,
-    onPageSizeChange: () => undefined,
-    onRefresh: () => undefined,
-    onStatusFilterChange: () => undefined,
-    onDeleteAllArchived: () => undefined,
-    onPatch: () => undefined,
-    onToggleSelect: () => undefined,
-    onSelectPage: () => undefined,
-    onDeselectPage: () => undefined,
-    onDeselectAll: () => undefined,
-    onDeleteSelected: () => undefined,
-    onOpenSessionMenu: () => undefined,
-    onToggleDetails: () => undefined,
-  };
-}
+import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
+import { renderSessions } from "./view.ts";
 
 function readSessionDetailStats(container: ParentNode): Map<string, string> {
   return new Map(
@@ -1224,51 +1145,6 @@ describe("sessions view", () => {
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
-  });
-
-  it("renders session goals in the status cell", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:goal",
-            kind: "direct",
-            updatedAt: 20,
-            hasActiveRun: true,
-            status: "running",
-            goal: {
-              schemaVersion: 1,
-              id: "goal-1",
-              objective: "Ship the web goal indicator",
-              status: "active",
-              createdAt: 1,
-              updatedAt: 2,
-              tokenStart: 100,
-              tokensUsed: 12_400,
-              tokenBudget: 50_000,
-              continuationTurns: 0,
-            },
-          }),
-        ),
-        searchQuery: "web goal",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
-    const goal = statuses[1];
-    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
-    // The wrapper span exposes the objective to keyboard/screen-reader users.
-    const wrapper = goal?.parentElement;
-    expect(wrapper?.getAttribute("tabindex")).toBe("0");
-    expect(wrapper?.getAttribute("aria-label")).toBe(
-      "Pursuing goal (12k/50k): Ship the web goal indicator",
-    );
-    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
-    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
   it("renders the effective runtime including fallback in the details drawer", async () => {

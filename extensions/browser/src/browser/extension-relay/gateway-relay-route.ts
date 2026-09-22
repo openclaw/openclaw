@@ -15,7 +15,7 @@ import {
 } from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
-import { resolveProfile } from "../config.js";
+import { resolveFirstExtensionProfileName, resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 import {
   BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
@@ -51,15 +51,6 @@ function requestedProfileName(resource: string, fallback: string): string {
   return new URL(resource, "http://127.0.0.1").searchParams.get("profile") ?? fallback;
 }
 
-function defaultExtensionProfileName(profiles: Record<string, { driver?: string }>): string {
-  for (const [name, profile] of Object.entries(profiles)) {
-    if (profile.driver === "extension") {
-      return name;
-    }
-  }
-  return "chrome";
-}
-
 async function resolveGatewayRelay(resource: string) {
   let state = getBrowserControlState();
   if (!state) {
@@ -70,7 +61,7 @@ async function resolveGatewayRelay(resource: string) {
   }
   const profileName = requestedProfileName(
     resource,
-    defaultExtensionProfileName(state.resolved.profiles),
+    resolveFirstExtensionProfileName(state.resolved) ?? "chrome",
   );
   const resolved = resolveProfile(state.resolved, profileName);
   if (!resolved || resolved.driver !== "extension") {

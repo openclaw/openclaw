@@ -528,8 +528,13 @@ Each invocation freezes one UTC upper bound and a lower bound seven days earlier
 Every run-list page uses both bounds. Returned run timestamps and successful job
 timestamps outside that window fail validation.
 
-The refit seeks up to five successful `ci.yml` push runs on `main` with parsed
-compact measurements. Docs-only runs and unparseable logs do not fill that quota.
+The refit seeks up to five completed `ci.yml` push runs on `main` with a success
+or failure conclusion and parsed compact measurements from successful jobs.
+Cancelled, timed-out, neutral, and other workflow outcomes are excluded.
+Docs-only runs and unparseable logs do not fill that quota. Failed workflows
+supply positive timing samples only: their missing jobs never count as evidence
+for pruning absent keys. Successful workflow cohorts retain their existing
+pruning policy, including when mixed with failed-workflow samples.
 It also reads the newest five successful `ci.yml` `pull_request` runs for the
 PR-only numbered tooling family. These tests execute the PR merge-ref, not a
 canonical main revision; that provenance is appropriate for PR-only tooling.
@@ -559,6 +564,8 @@ run `35506602947`; subsequent daily samples replace it under the ordinary rules.
 It also samples up to five successful manual runs of each release-check workflow
 that owns Gateway E2E. Run searches remain bounded by 25 pages and GitHub's
 1,000-result filtered-query limit. Incomplete pagination fails without writing.
+Main pages contain up to 100 runs so cancelled tips do not exhaust that search
+before contributing runs; the requested contributor quota remains unchanged.
 
 For each selected run, the refit captures `run_attempt` and enumerates attempts
 one through that value. It verifies each job's run ID, attempt and workflow SHA
@@ -573,12 +580,14 @@ Use `--runs <n>` to change the run quota, not the seven-day window.
 Use `--repo <owner/repo>` to select a repository, `--out <path>` to write elsewhere,
 or `--dry-run` to report changes without writing. The report separates main and
 release observations, including run IDs, attempts, workflow SHAs, creation dates,
-parsed profiles and timing-job counts.
+workflow conclusions, parsed profiles and timing-job counts.
 
 For a scoped repair using already downloaded main-job logs, use the same
 `refitTestTimings` reducer with verified successful job metadata and the current
-timing file. Preserve independent run IDs and runner labels. Two contributing
-runs refresh eligible keys without enabling the three-run pruning rule for
+timing file. Preserve independent run IDs and runner labels.
+Set each run's `completeInventory` fact explicitly: successful workflows may
+supply pruning evidence; failed or partial workflow inventories may not.
+Two contributing runs refresh eligible keys without enabling the three-run pruning rule for
 unobserved groups; do not substitute job totals or local timings for child spans.
 Keep the input run IDs and replacement table in the PR. The September 16 CLI
 refresh used successful jobs in runs `35042635751` and `35044335386`: complete
@@ -673,8 +682,10 @@ Measurements come only from successful UI E2E, Gateway E2E, and compact jobs; co
 also require an `exit 0` marker. Each entry needs at least two run samples;
 multiple attempts within one run still contribute only one sample per key and
 profile. Keys are pruned only when that profile has at least one observation in
-each of at least three sampled runs, and only if the key is absent from every
-contributing run. Profiles with fewer contributing runs retain all previous
+each of at least three sampled successful workflows, and only if the key is absent from every
+contributing run, including failed workflows. Duplicate run fragments with
+incomplete inventory cannot become pruning evidence by changing their order.
+Profiles with fewer complete-inventory contributing runs retain all previous
 keys; missing or unparseable logs do not count toward the threshold. Removals
 remain explicit in the dry-run and PR change tables.
 Samples above 2.5 times the key's median are discarded before taking the median,

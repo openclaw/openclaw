@@ -93,6 +93,7 @@ export async function prepareSessionMutationFacts(params: {
           "profiles",
           "catalog",
           "acp",
+          "agent-runs",
           "worker-placements",
           "worker-environments",
           "config",
@@ -125,6 +126,14 @@ export async function prepareSessionMutationFacts(params: {
       return;
     }
     if (
+      !change.factsInvalidated &&
+      (change.facts?.kind === "unchanged" ||
+        change.facts?.kind === "participants" ||
+        change.facts?.kind === "category")
+    ) {
+      return;
+    }
+    if (
       !facts ||
       !selectedPaths.has(path.resolve(change.storePath)) ||
       !isPreparedSessionSharingChange(change)
@@ -133,7 +142,7 @@ export async function prepareSessionMutationFacts(params: {
     }
   };
   releases.push(
-    sessionChanges.subscribe(changed),
+    sessionChanges.subscribeFacts(changed),
     onSessionIdentityMutation((change) => {
       if (change.agentId === agentId && change.previous.sessionKeys.includes(canonicalKey)) {
         invalidate();

@@ -38,7 +38,7 @@ import { sameWorkerBuild } from "../worker/worker-build-identity.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   NodeWorkerTransferHttpError,
-  openNodeWorkerTransferHttpRequest,
+  withNodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
@@ -136,29 +136,28 @@ async function acquireBundle(params: {
     }
   }
   params.signal?.throwIfAborted();
-  const response = await openNodeWorkerTransferHttpRequest({
-    gatewayUrl: params.gatewayUrl,
-    tlsFingerprint: params.gatewayTlsFingerprint,
-    cloudflareAccess: params.gatewayCloudflareAccess,
-    routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
-    method: "GET",
-    token: params.input.archive.token,
-    signal: params.signal,
-  });
-  if (response.statusCode !== 200) {
-    await responseBody(response);
-    throw new Error(`gateway returned ${response.statusCode ?? 0}`);
-  }
-  const contentLength = Number(response.headers["content-length"]);
-  if (contentLength !== params.input.archive.bytes) {
-    response.destroy();
-    throw new Error("gateway returned an unexpected worker bundle length");
-  }
-  try {
-    await writeBundleArchive({ ...params, source: response, archive: params.input.archive });
-  } finally {
-    response.destroy();
-  }
+  await withNodeWorkerTransferHttpRequest(
+    {
+      gatewayUrl: params.gatewayUrl,
+      tlsFingerprint: params.gatewayTlsFingerprint,
+      cloudflareAccess: params.gatewayCloudflareAccess,
+      routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
+      method: "GET",
+      token: params.input.archive.token,
+      signal: params.signal,
+    },
+    async (response) => {
+      if (response.statusCode !== 200) {
+        await responseBody(response);
+        throw new Error(`gateway returned ${response.statusCode ?? 0}`);
+      }
+      const contentLength = Number(response.headers["content-length"]);
+      if (contentLength !== params.input.archive.bytes) {
+        throw new Error("gateway returned an unexpected worker bundle length");
+      }
+      await writeBundleArchive({ ...params, source: response, archive: params.input.archive });
+    },
+  );
 }
 
 async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake | undefined> {

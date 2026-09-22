@@ -92,6 +92,9 @@ export function createSessionRowProjectionContext() {
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
+        if (change.scope === "runtime" && !change.facts && !change.factsInvalidated) {
+          return true;
+        }
         modelFactsDirty = true;
         return false;
       }

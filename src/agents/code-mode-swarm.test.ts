@@ -641,6 +641,7 @@ describe("Code Mode swarm host bridge", () => {
     expect(swarmMocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       reason: "swarm-note",
+      scope: "runtime",
       swarmGroupId: "swarm:agent:main:main:run-swarm",
       kind: "phase",
       text: "Plan",

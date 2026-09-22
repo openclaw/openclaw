@@ -150,7 +150,11 @@ class LabsPage extends OpenClawLightDomElement {
     void this.updateSetting("codeModeExecutor", executor, {
       tools: {
         codeMode: {
-          ...(typeof config === "boolean" || config === "auto" ? { enabled: config } : {}),
+          ...(config === undefined
+            ? { enabled: "auto" }
+            : typeof config === "boolean" || config === "auto"
+              ? { enabled: config }
+              : {}),
           executor: executor === "node" ? null : executor,
         },
       },

@@ -850,20 +850,12 @@ export function startDiagnosticStabilityRecorder(): void {
     return;
   }
   state.unsubscribe = onInternalDiagnosticEvent(
-    (event, metadata) => {
-      // Model-call instrumentation is trusted core telemetry required by recovery.
-      // Other trusted events retain their dedicated owners outside this ring.
-      if (
-        metadata.trusted &&
-        event.type !== "model.call.started" &&
-        event.type !== "model.call.completed" &&
-        event.type !== "model.call.error"
-      ) {
-        return;
-      }
+    (event) => {
       appendRecord(sanitizeDiagnosticEvent(event));
     },
     {
+      // Recovery needs model-call telemetry; other trusted events have dedicated owners.
+      includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
       exclude: [
         "log.record",
         "telemetry.exporter",

@@ -753,8 +753,15 @@ export async function updateMattermostPost(
   }
   if (params.props !== undefined) {
     payload.props = params.props;
+  } else if (params.message !== undefined && /\B@(channel|all|here)\b/i.test(params.message)) {
+    // PatchPost's mention suppression replaces omitted props with its own map.
+    const current = MattermostPostSchema.parse(await client.request<unknown>(`/posts/${postId}`));
+    if (current.id !== postId) {
+      throw new Error("Mattermost post lookup returned a different post id");
+    }
+    payload.props = current.props ?? {};
   }
-  return await client.request<MattermostPost>(`/posts/${postId}`, {
+  return await client.request<MattermostPost>(`/posts/${postId}/patch`, {
     method: "PUT",
     body: JSON.stringify(payload),
   });

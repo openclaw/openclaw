@@ -221,7 +221,7 @@ async function runCliAgentInternal(
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {
           sessionId: "",
-          provider: params.provider,
+          provider: params.modelProvider ?? params.provider,
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },

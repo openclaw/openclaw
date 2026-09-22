@@ -23,6 +23,7 @@ import type {
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import {
   getGatewayContextResolver,
@@ -39,16 +40,20 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/detached-task-runtime.test-support.js";
 import { findTaskByRunId } from "../../../tasks/runtime-internal.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import {
-  resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+  persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskOrThrow,
+  restoreSubagentRunsFromDisk,
+} from "../registry/subagent-registry-state.js";
+import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-execution-identity.js";
@@ -56,6 +61,12 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
+
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle:
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
+}));
+vi.mock("../registry/subagent-registry-state.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
@@ -136,12 +147,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    subagentRegistryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-      restoreSubagentRunsFromDisk: () => 0,
-    });
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
+    vi.mocked(persistSubagentRunsToDisk).mockImplementation(() => {});
+    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
+    vi.mocked(restoreSubagentRunsFromDisk).mockReturnValue(0);
 
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-swarm-gateway-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -188,7 +197,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    vi.mocked(persistSubagentRunsToDisk).mockReset();
+    vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
+    vi.mocked(restoreSubagentRunsFromDisk).mockReset();
     subagentSpawnTesting.setDepsForTest();
     resetDetachedTaskLifecycleRuntimeForTests();
     clearRuntimeConfigSnapshot();
@@ -396,6 +408,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
               sessionKey: "agent:main:main",
               operationalRunInstance,
               executionIdentityToken: parentToken,
+              receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
             },
             () =>
               spawnSubagentDirect(
@@ -440,7 +453,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       delegatedAuthority: authority,
       executionIdentityToken: parentToken,
       operationalRunInstance,
-      receiptAuthority: () => undefined,
+      receiptAuthority: () => {
+        if (!validateAgentRunDelegatedAuthority(authority)) {
+          throw new Error("worker execution authority is no longer active");
+        }
+      },
       sessionKey: "agent:main:main",
       turnClaim,
     };
@@ -478,6 +495,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
                 sessionKey: current.sessionKey,
                 operationalRunInstance: current.operationalRunInstance,
                 executionIdentityToken: current.executionIdentityToken,
+                receiptAuthority: current.receiptAuthority,
                 workerTurnClaim: current.turnClaim,
                 workerTurnExecutionIdentityCapability: capability,
               },
@@ -717,13 +735,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
     // The registry never takes ownership, which is exactly when the suppressed
     // gateway CLI row would have been the only record of the accepted run.
-    subagentRegistryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {
-        throw new Error("state db unavailable");
-      },
-      restoreSubagentRunsFromDisk: () => 0,
+    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      throw new Error("state db unavailable");
     });
 
     const result = await withPluginRuntimeGatewayRequestScope(
@@ -935,13 +948,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         } as T;
       },
     });
-    subagentRegistryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {
-        throw new Error("state db unavailable");
-      },
-      restoreSubagentRunsFromDisk: () => 0,
+    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      throw new Error("state db unavailable");
     });
 
     const result = await withPluginRuntimeGatewayRequestScope(

@@ -527,9 +527,13 @@ completed imports and unrelated files. Device backfill remains nonblocking at st
 monitor retirement cancels and joins it before releasing storage. Hosts without
 data-only comparison support retain the existing native metadata and import decisions
 under the declared plugin API floor. Worker failures never select that fallback.
+Monitor bot-account discovery awaits selected credential reads after authentication,
+then checks cancellation before acquiring the client or installing handlers. Each
+identity uses one observed credential and the shared account-readiness rules; no
+namespace scan or new bulk-read capability is required.
 Approval actor and reaction approver lists resolve from account configuration without
 reading credentials; native delivery eligibility still checks enabled and configured
-account readiness. Synchronous credential readiness and package auth-presence probes
+account readiness. Synchronous public account readiness and package auth-presence probes
 retain their separate SDK contracts.
 
 Node-host launch and turn journals execute on the same shared-state worker.
@@ -927,7 +931,9 @@ retains that pool for canonical cleanup retry. Path-specific close drains only
 operations admitted for that database.
 A best-effort quarantine read preserves the domain result, but unconfirmed
 quarantine reader cleanup also requires worker retirement before source release.
-Its original failures remain available if that retirement fails.
+Its original failures remain available if that retirement fails. Once validated,
+a quarantine decision remains a refusal even when its reader fails to close;
+the integrity error retains the cleanup failure as its cause.
 Ordinary fixed reads observe independently committed database
 state, even when an unrelated cached native cursor still sees an older snapshot.
 The cached writer stays open and retained through read settlement; its captured
@@ -1081,11 +1087,14 @@ Branch listing uses the same worker entrypoint with its own bounded background
 queue, separate from history and model-context reads. The worker reads one
 read-only SQLite snapshot and computes branch summaries; only compact results
 return to the Gateway. Both isolates reuse bounded compact caches only while the
-physical database identity and transcript watermark match. Queued worker reads
-validate a fresh snapshot before reuse, so concurrent requests do not repeat an
-unchanged scan. The host restores cold transcripts and rejects results after
-database or session ownership changes. Incognito branches use their process-held
-database locally.
+physical database identity and transcript watermark match. The Gateway checks
+cached summaries before restoration and shares in-flight reads only for the same
+database claim, session lifecycle, and transcript watermark. A cache miss reads
+in the transcript worker first; only a cold-storage response enters the existing
+archive-worker restoration owner. Each caller rejects results after database or
+session ownership changes and receives its own summary objects. Incognito
+branches use their process-held database locally. Stored rows, schemas, and
+update behavior are unchanged.
 
 The optional `tasks.async.managedFlows` creation and revision mutations use the
 same row kernels in the shared worker, with fresh owner, managed-mode, and
@@ -1341,6 +1350,13 @@ use its asynchronous integrity admission, and request authority is checked again
 schema setup and mutation. A changed route, closed request, or revoked session cannot
 publish a queued write. SQLite kernels remain synchronous inside their native transactions, with existing
 revision, grant, session-existence, and transaction semantics.
+
+Progress-card GET resolves its captured session store through the existing target
+preparation owner and reads the card on the session transcript worker. Reads do
+not create missing databases or unused card tables. The same worker custody joins
+native cleanup and rejects retired owners; Gateway authorization is rechecked
+before returning a delayed card. Incognito reads retain their process-held owner.
+Progress-card writes and reset clears keep their existing transaction owners.
 
 MCP App pinning retains its existing source-interaction checks. A delayed adapter must
 revalidate that source authority at its actual write admission; checking view registration
@@ -1730,6 +1746,21 @@ lifecycle owner. A future backend must supply equivalent product behavior or
 an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
+
+Session membership, participant display facts, and category membership are prepared
+in the existing session read worker and retained by the session-row projection.
+Store admission acquires a compact snapshot; committed session publications refresh
+exact keys and fence delayed results. List and broadcast readers reuse these facts
+without querying membership tables or transferring full session rows per viewer.
+Committed cache and membership facts settle before resident row projections refresh;
+ordinary observers run afterward, so even an earlier registered broadcaster sees
+current sharing policy and revocations while display rows are still dirty. Rolled-back
+savepoint changes never reach either phase. The group catalog similarly
+publishes its ordered snapshot from the shared-state worker. These projections do
+not authorize writes: live caller admission and transaction-held session and
+cross-store catalog checks remain with the mutation owners. Process-local
+incognito databases retain their native owner. Schema, stored bytes, retention,
+and update behavior are unchanged.
 
 ## Review checkpoint for material changes
 

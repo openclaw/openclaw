@@ -1466,7 +1466,7 @@ async function spawnManagedServiceUpdateHandoff(
     );
   owner.leaseDatabaseIdentity = updateLeaseDatabaseIdentity;
   const identityStore = createManagedHandoffLeaseStore({
-    databasePath: updateLeaseDatabasePath,
+    databasePath: updateLeaseDatabaseIdentity.databasePath,
     existingIdentity: updateLeaseDatabaseIdentity,
     serviceManagerEnv: resolveServiceManagerEnv(serviceEnv),
     onProcessIdentityWarning: (pid, message) => {

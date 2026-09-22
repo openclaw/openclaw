@@ -126,7 +126,10 @@ export async function restoreDoctorGatewayService(params: {
         installation = verdict;
       }
     }
-    if (installation?.kind === "owned" && installation.requiresInstallRootRefresh) {
+    if (
+      installation?.kind === "owned" &&
+      (installation.requiresInstallRootRefresh || writeConfig)
+    ) {
       if (!inspectionFailure) {
         // Reversing our stop cannot authorize an installation rewrite during another update.
         const assertInstallationCurrent = () => {
@@ -180,13 +183,25 @@ export async function restoreDoctorGatewayService(params: {
         );
         assertInstallationCurrent();
         if (repaired.kind === "owned" && !repaired.requiresInstallRootRefresh) {
-          return repairedState;
+          if (
+            installation.requiresInstallRootRefresh ||
+            repairedState.runtime?.status === "running"
+          ) {
+            return repairedState;
+          }
+          current = repairedState;
+        } else if (!installation.requiresInstallRootRefresh) {
+          throw new Error(
+            "Gateway service ownership changed during Doctor repair; inspect the service before restarting it.",
+          );
         }
       }
-      const message = `Gateway service still targets ${installation.root}; Doctor could not reconcile it with ${root}. The previous installation remains stopped because state compatibility is unverified. Run ${formatCliCommand("openclaw gateway install --force", env)} from the intended install.`;
-      warnings.push(message);
-      params.runtime.log(message);
-      return undefined;
+      if (installation.requiresInstallRootRefresh) {
+        const message = `Gateway service still targets ${installation.root}; Doctor could not reconcile it with ${root}. The previous installation remains stopped because state compatibility is unverified. Run ${formatCliCommand("openclaw gateway install --force", env)} from the intended install.`;
+        warnings.push(message);
+        params.runtime.log(message);
+        return undefined;
+      }
     }
     if (inspectionFailure) {
       const warning = `Warning: Gateway restoration inspection was inconclusive: ${formatErrorMessage(inspectionFailure)} Starting the managed Gateway stopped by Doctor and verifying readiness.`;

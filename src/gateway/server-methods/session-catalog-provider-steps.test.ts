@@ -25,7 +25,7 @@ describe("session catalog provider steps", () => {
   it("constructs a source only after initial admission and never for a retired queued request", async () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
     const blocker = provider({ list: () => gate.promise });
-    const active = Array.from({ length: 4 }, (_, index) =>
+    const active = Array.from({ length: 16 }, (_, index) =>
       listSessionCatalogProvider({ ...blocker, id: `blocking-${index}` }, {}),
     );
     const next = vi.fn(async () => ({ done: true as const, hosts: [] }));
@@ -61,7 +61,7 @@ describe("session catalog provider steps", () => {
 
   it("hands off after a settled step while keeping one publication registration lifetime", async () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
-    const active = Array.from({ length: 3 }, (_, index) =>
+    const active = Array.from({ length: 15 }, (_, index) =>
       listSessionCatalogProvider(
         provider({ id: `blocking-${index}`, list: () => gate.promise }),
         {},
@@ -134,7 +134,7 @@ describe("session catalog provider steps", () => {
     const before = getActiveGatewayRootWorkHolders();
     const root = tryBeginGatewayRootWorkAdmission("catalog-step-publication")!;
     const blocker = createDeferredCore<SessionCatalogHost[]>();
-    const active = Array.from({ length: 3 }, (_, index) =>
+    const active = Array.from({ length: 15 }, (_, index) =>
       listSessionCatalogProvider(
         provider({ id: `blocking-${index}`, list: () => blocker.promise }),
         {},

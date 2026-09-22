@@ -1,8 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createVitestCacheSlots } from "../../scripts/lib/vitest-cache-slots.mts";
-import type { VitestCacheAssignment } from "../../scripts/test-projects.test-support.mts";
+import {
+  applyDefaultVitestCachePaths,
+  type VitestCacheAssignment,
+} from "../../scripts/test-projects.test-support.mts";
 import { createDeferred } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { loadVitestPerformanceConfig } from "../vitest/vitest.performance-config.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const spec = {
   config: "test/vitest/vitest.tooling.config.ts",
@@ -13,6 +21,68 @@ const spec = {
 const cachePath = (assigned: typeof spec) => assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
 
 describe("Vitest cache slot ownership", () => {
+  it.skipIf(process.platform === "win32").each(["root", "default"] as const)(
+    "reuses separately warmed configs through %s in serial, reordered, and parallel project runs",
+    async (mode) => {
+      const root = tempDirs.make("vitest-cache-layout-");
+      const env: NodeJS.ProcessEnv =
+        mode === "root" ? { OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: root } : {};
+      const run = async (configs: string[], parallel: boolean, seed = false) => {
+        const lease = createVitestCacheSlots("linux");
+        const specs = applyDefaultVitestCachePaths(
+          configs.map((config) => ({ config, env, watchMode: false })),
+          { env, cwd: root },
+        );
+        const visit = (entry: (typeof specs)[number]) =>
+          lease(entry, async (assigned) => {
+            const directory = loadVitestPerformanceConfig(
+              assigned.env,
+              "linux",
+              root,
+            ).fsModuleCachePath!;
+            const file = path.join(directory, `${entry.config}.js`);
+            if (seed) {
+              fs.mkdirSync(directory, { recursive: true });
+              fs.writeFileSync(file, entry.config);
+            } else {
+              expect(fs.existsSync(file), `${entry.config} did not consume its warmed cache`).toBe(
+                true,
+              );
+              expect(fs.readFileSync(file, "utf8")).toBe(entry.config);
+            }
+            return { groupJoined: true };
+          });
+        if (parallel) {
+          await Promise.all(specs.map(visit));
+        } else {
+          for (const entry of specs) {
+            await visit(entry);
+          }
+        }
+      };
+      await run(["first.config.ts"], false, true);
+      await run(["second.config.ts"], false, true);
+      await run(["second.config.ts", "first.config.ts"], false);
+      await run(["first.config.ts", "first.config.ts"], false);
+      await run(["first.config.ts", "second.config.ts"], true);
+    },
+  );
+
+  it("preserves an explicit caller leaf alongside a shared root", async () => {
+    const env = {
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "/shared-cache",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/caller-owned-leaf",
+    };
+    const assigned = applyDefaultVitestCachePaths([{ ...spec, env, cacheAssignment: undefined }], {
+      env,
+    });
+    const lease = createVitestCacheSlots("linux");
+    await lease(assigned[0]!, async (entry) => {
+      expect(entry.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe("/caller-owned-leaf");
+      return { groupJoined: true };
+    });
+  });
+
   it("reuses an idle config cache while another config occupies its former scheduler slot", async () => {
     const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
@@ -104,7 +174,7 @@ describe("Vitest cache slot ownership", () => {
         paths.push(cachePath(assigned));
         return { groupJoined: true };
       });
-      expect(new Set(paths.map((value) => path.basename(path.dirname(value)))).size).toBe(3);
+      expect(new Set(paths.map((value) => path.basename(value))).size).toBe(3);
     } finally {
       first.resolve({ groupJoined: false });
       await pending;

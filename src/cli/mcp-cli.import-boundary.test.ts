@@ -1,7 +1,13 @@
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { mcpImportBoundaryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+
+const cliUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.cli);
+const catalogUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.catalog);
+const metadataUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.metadata);
 
 async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
   return withOpenClawTestState(
@@ -12,7 +18,7 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
     },
     async (state) => {
       // A fresh child keeps Vitest's shared module cache from bypassing the guard.
-      // Register after TSX and before dynamic imports so the guard sees original specifiers.
+      // The prepared graph preserves src paths and module boundaries for the guard.
       const script = String.raw`
         import assert from "node:assert/strict";
         import { registerHooks } from "node:module";
@@ -39,9 +45,15 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
         ${workload}
         console.log("MCP_IMPORT_BOUNDARY_OK");
       `;
+      const nodeExecutable = resolveTestNodeExecPath();
       const result = await runCliProcessChild({
-        nodeExecutable: resolveTestNodeExecPath(),
-        nodeArgs: ["--import", "tsx", "--input-type=module", "--eval", script],
+        nodeExecutable,
+        nodeArgs: [
+          ...resolveRuntimeWorkerArgv(cliUrl, nodeExecutable).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          script,
+        ],
         // Keep the child environment explicit; state.env includes Vitest and operator flags.
         env: {
           PATH: process.env.PATH,
@@ -72,13 +84,13 @@ it("keeps MCP client and catalog paths free of plugin tool construction and chan
     /\/src\/(?:plugins\/tools|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
       const { Command } = await import("commander");
-      const { registerMcpCli } = await import(${JSON.stringify(new URL("./mcp-cli.ts", import.meta.url).href)});
+      const { registerMcpCli } = await import(${JSON.stringify(cliUrl.href)});
       const program = new Command();
       program.exitOverride();
       registerMcpCli(program);
       assert.equal(await program.parseAsync(["mcp", "reload"], { from: "user" }), program);
 
-      const { buildBundleMcpToolsFromCatalog } = await import(${JSON.stringify(new URL("../agents/agent-bundle-mcp-materialize.ts", import.meta.url).href)});
+      const { buildBundleMcpToolsFromCatalog } = await import(${JSON.stringify(catalogUrl.href)});
       const tools = buildBundleMcpToolsFromCatalog({
         catalog: {
           version: 1,
@@ -114,7 +126,7 @@ it("keeps registry reads independent of agent tool materialization", async () =>
     /\/src\/agents\/agent-bundle-mcp-materialize\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
       const { Command } = await import("commander");
-      const { registerMcpCli } = await import(${JSON.stringify(new URL("./mcp-cli.ts", import.meta.url).href)});
+      const { registerMcpCli } = await import(${JSON.stringify(cliUrl.href)});
       const program = new Command();
       program.exitOverride();
       registerMcpCli(program);
@@ -129,7 +141,7 @@ it("keeps the metadata owner independent of plugin loading and channel serving",
   await runImportBoundaryChild(
     /\/src\/(?:plugins\/(?:tools|loader)|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
-      const { getPluginToolMeta } = await import(${JSON.stringify(new URL("../plugins/tool-metadata.ts", import.meta.url).href)});
+      const { getPluginToolMeta } = await import(${JSON.stringify(metadataUrl.href)});
       assert.equal(getPluginToolMeta({}), undefined);
     `,
   );
