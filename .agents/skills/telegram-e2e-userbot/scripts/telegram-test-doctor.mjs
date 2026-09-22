@@ -27,7 +27,16 @@ export async function runTelegramTestDoctor({
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
     const status = await runCommandImpl(
       "uv",
-      ["run", USER_DRIVER_PATH, "status", "--json", "--require-chat", credential.groupId],
+      [
+        "run",
+        USER_DRIVER_PATH,
+        "status",
+        "--json",
+        "--timeout-ms",
+        "25000",
+        "--require-chat",
+        credential.groupId,
+      ],
       {
         cwd: process.cwd(),
         env: driverEnv,

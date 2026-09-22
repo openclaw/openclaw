@@ -57,13 +57,39 @@ class PhotoContentTest(unittest.TestCase):
         self.assertEqual(current["use_test_dc"], True)
         self.assertEqual(current["database_encryption_key"], "database-key")
 
-    def test_missing_numeric_chat_fails_without_loading_the_chat_list(self):
+    def test_credential_check_accepts_chat_found_after_bounded_list_refresh(self):
         class FakeClient:
             def __init__(self):
                 self.requests = []
 
             def request(self, payload, timeout=20):
                 self.requests.append((payload, timeout))
+                if payload["@type"] == "getChat" and len(self.requests) == 1:
+                    raise driver.DriverError(
+                        "getChat failed (400): Chat not found",
+                        tdlib_code=400,
+                        tdlib_message="Chat not found",
+                        tdlib_method="getChat",
+                    )
+                if payload["@type"] == "getChat":
+                    return {"id": -1001}
+                return {"@type": "ok"}
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = FakeClient()
+        self.assertEqual(
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
+            -1001,
+        )
+        self.assertEqual(
+            [payload["@type"] for payload, _timeout in instance.client.requests],
+            ["getChat", "loadChats", "getChat"],
+        )
+        self.assertLessEqual(instance.client.requests[1][1], 10)
+
+    def test_credential_check_classifies_exhausted_chat_list(self):
+        class FakeClient:
+            def request(self, payload, timeout=20):
                 if payload["@type"] == "getChat":
                     raise driver.DriverError(
                         "getChat failed (400): Chat not found",
@@ -71,19 +97,81 @@ class PhotoContentTest(unittest.TestCase):
                         tdlib_message="Chat not found",
                         tdlib_method="getChat",
                     )
-                raise AssertionError(f'unexpected broad chat request: {payload["@type"]}')
+                raise driver.DriverError(
+                    "loadChats failed (404): Not Found",
+                    tdlib_code=404,
+                    tdlib_message="Not Found",
+                    tdlib_method="loadChats",
+                )
 
         instance = driver.UserDriver.__new__(driver.UserDriver)
         instance.client = FakeClient()
-        with self.assertRaisesRegex(driver.DriverError, "cold-restored TDLib state") as raised:
-            instance.resolve_chat("-1001", local_only=True)
+        with self.assertRaisesRegex(driver.DriverError, "exhausting") as raised:
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
         self.assertEqual(
             raised.exception.diagnostic_code, driver.CREDENTIAL_STATE_MISSING_GROUP
         )
+
+    def test_credential_check_loads_archived_chat_before_classifying_absence(self):
+        class FakeClient:
+            def __init__(self):
+                self.requests = []
+
+            def request(self, payload, timeout=20):
+                self.requests.append(payload)
+                if payload["@type"] == "getChat" and len(self.requests) == 1:
+                    raise driver.DriverError(
+                        "getChat failed (400): Chat not found",
+                        tdlib_code=400,
+                        tdlib_message="Chat not found",
+                        tdlib_method="getChat",
+                    )
+                if payload["@type"] == "loadChats" and payload["chat_list"]["@type"] == "chatListMain":
+                    raise driver.DriverError(
+                        "loadChats failed (404): Not Found",
+                        tdlib_code=404,
+                        tdlib_message="Not Found",
+                        tdlib_method="loadChats",
+                    )
+                if payload["@type"] == "getChat":
+                    return {"id": -1001}
+                return {"@type": "ok"}
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = FakeClient()
         self.assertEqual(
-            [payload["@type"] for payload, _timeout in instance.client.requests],
-            ["getChat"],
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20),
+            -1001,
         )
+        self.assertEqual(
+            [payload["@type"] for payload in instance.client.requests],
+            ["getChat", "loadChats", "loadChats", "getChat"],
+        )
+
+    def test_credential_check_preserves_list_load_timeout(self):
+        list_timeout = driver.DriverError(
+            "Timed out waiting for loadChats",
+            tdlib_method="loadChats",
+            tdlib_timed_out=True,
+        )
+
+        class FakeClient:
+            def request(self, payload, timeout=20):
+                if payload["@type"] == "getChat":
+                    raise driver.DriverError(
+                        "getChat failed (400): Chat not found",
+                        tdlib_code=400,
+                        tdlib_message="Chat not found",
+                        tdlib_method="getChat",
+                    )
+                raise list_timeout
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = FakeClient()
+        with self.assertRaises(driver.DriverError) as raised:
+            instance.resolve_chat("-1001", credential_deadline=driver.time.monotonic() + 20)
+        self.assertIs(raised.exception, list_timeout)
+        self.assertEqual(raised.exception.diagnostic_code, "")
 
     def test_ordinary_numeric_chat_can_load_from_the_main_chat_list(self):
         class FakeClient:

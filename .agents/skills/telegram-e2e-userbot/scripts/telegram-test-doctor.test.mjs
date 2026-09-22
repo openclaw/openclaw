@@ -86,7 +86,7 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
   assert.equal(released, true);
 });
 
-test("doctor rejects a cold-restored credential without its configured group", async () => {
+test("doctor rejects a credential whose configured group cannot be restored", async () => {
   let released = false;
   const credential = {
     driverEnv: {},
@@ -105,7 +105,7 @@ test("doctor rejects a cold-restored credential without its configured group", a
         status: 1,
         stdout: "",
         stderr:
-          "[credential_state_missing_group] Chat -1001 is missing from the cold-restored TDLib state.",
+          "[credential_state_missing_group] Chat -1001 could not be restored within the credential readiness boundary.",
         timedOut: false,
       }),
       startProxy: async () => {
