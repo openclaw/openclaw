@@ -49,7 +49,9 @@ function readBoundary(value: unknown): InformationBoundary {
     value !== "evidence-only" &&
     value !== "summary-only"
   ) {
-    throw new Error("dynamics.boundary must be isolated, artifact-only, evidence-only, or summary-only");
+    throw new Error(
+      "dynamics.boundary must be isolated, artifact-only, evidence-only, or summary-only",
+    );
   }
   return value;
 }
