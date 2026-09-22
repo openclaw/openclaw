@@ -47,6 +47,7 @@ import {
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
+import { buildCodexCurrentReplyAdditionalContext } from "./turn-params.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { buildCodexUserInput } from "./user-input.js";
 import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
@@ -382,6 +383,7 @@ export function activateCodexAttemptTurn(
           attachmentNote ? `${text}\n\n${attachmentNote}` : text,
           result.images,
         ),
+        additionalContext: buildCodexCurrentReplyAdditionalContext(options),
         message: {
           ...source,
           role: "user",

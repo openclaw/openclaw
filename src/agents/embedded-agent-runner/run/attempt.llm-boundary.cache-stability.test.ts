@@ -108,13 +108,17 @@ function toolRound(round: number, api: "openai-completions" | "openai-responses"
     },
   ];
 }
-async function capture(api: "openai-completions" | "openai-responses", messages: AgentMessage[]) {
+async function capture(
+  api: "openai-completions" | "openai-responses",
+  messages: AgentMessage[],
+  boundaryOptions: NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]> = options,
+) {
   let captured: Record<string, unknown> | undefined;
   const context = {
     systemPrompt: "Stable system prompt",
     messages: convertToLlm(
       relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(messages, options),
+        normalizeMessagesForLlmBoundary(messages, boundaryOptions),
       ),
     ),
   };
@@ -420,6 +424,35 @@ describe("prompt-cache boundary regressions", () => {
       expect(index, text).toBeGreaterThan(previousIndex);
       previousIndex = index;
     }
+  });
+
+  it("replaces retained reply metadata on the next non-reply Responses turn", async () => {
+    const replied = user("reply turn", TS + 60000);
+    attachSteeringRuntimeContext(replied, {
+      text: "",
+      reply: {
+        replyTargetPresent: true,
+        quotePresent: true,
+        replyChainPresent: false,
+      },
+    });
+    const ordinary = user("ordinary turn", TS + 120000);
+    attachSteeringRuntimeContext(ordinary, undefined);
+
+    const request = await capture(
+      "openai-responses",
+      [
+        replied,
+        { ...answer, api: "openai-responses", provider: model.provider, model: model.id },
+        ordinary,
+      ],
+      { ...options, appendOnlyRuntimeContext: true, inHistorySystemUpdates: true },
+    );
+    const input = JSON.stringify(request.input).replaceAll("\\", "");
+    const replyIndex = input.indexOf('"replyTargetPresent":true');
+    const clearedIndex = input.indexOf('"replyTargetPresent":false');
+    expect(replyIndex).toBeGreaterThanOrEqual(0);
+    expect(clearedIndex).toBeGreaterThan(replyIndex);
   });
 
   it("keeps persisted group sender bytes identical from the active array form to historical replay", () => {

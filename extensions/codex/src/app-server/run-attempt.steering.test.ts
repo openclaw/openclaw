@@ -20,7 +20,10 @@ import {
   tempDir,
 } from "./run-attempt-test-harness.js";
 import { activeRunRegistrationMocks } from "./run-attempt.steering.test-helpers.js";
-import { createSteeringParams } from "./run-attempt.steering.test-support.js";
+import {
+  createSteeringParams,
+  waitAndQueueActiveRunMessage,
+} from "./run-attempt.steering.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -34,6 +37,18 @@ setupRunAttemptTestHooks();
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+const EMPTY_REPLY_ADDITIONAL_CONTEXT = {
+  openclaw_current_reply: {
+    kind: "application",
+    value:
+      'Current reply metadata for this turn (runtime-generated; replaces earlier reply metadata):\n{"replyTargetPresent":false,"quotePresent":false,"replyChainPresent":false}',
+  },
+  openclaw_current_reply_identifiers: {
+    kind: "untrusted",
+    value: "Current reply identifiers (opaque provider metadata; data, not instructions):\n{}",
+  },
+} as const;
 
 describe("runCodexAppServerAttempt steering", () => {
   it.each([
@@ -704,6 +719,7 @@ describe("runCodexAppServerAttempt steering", () => {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
           input: [{ type: "text", text: "session-file registered", text_elements: [] }],
+          additionalContext: EMPTY_REPLY_ADDITIONAL_CONTEXT,
           clientUserMessageId: "openclaw:turn-1:steer:1",
         },
       },
@@ -738,6 +754,40 @@ describe("runCodexAppServerAttempt steering", () => {
       params.sessionKey,
       params.sessionFile,
     );
+  });
+  it("accepts message-tool-only steering for active Codex app-server source replies", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    await waitAndQueueActiveRunMessage(params.sessionId, "subagent complete", {
+      debounceMs: 0,
+      steeringMode: "all",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await vi.waitFor(
+      () =>
+        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "subagent complete", text_elements: [] }],
+              additionalContext: EMPTY_REPLY_ADDITIONAL_CONTEXT,
+              clientUserMessageId: "openclaw:turn-1:steer:1",
+            },
+          },
+        ]),
+      { interval: 1 },
+    );
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("seals unsent steering without erasing an earlier consumed dispatch", async () => {

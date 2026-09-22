@@ -4,6 +4,14 @@ import type { FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import type { ReasoningLevel, ThinkLevel } from "../thinking.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
+export function createCurrentReplyFacts(quotePresent: boolean) {
+  return {
+    replyTargetPresent: true,
+    quotePresent,
+    replyChainPresent: false,
+  } as const;
+}
+
 export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): FinalizedRuntimeMsgContext {
   return finalizeInboundContext({
     Provider: "telegram",

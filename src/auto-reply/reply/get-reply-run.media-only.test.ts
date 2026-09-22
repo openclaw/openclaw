@@ -41,6 +41,7 @@ import {
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerCurrentReplyContextCases } from "./get-reply-run.current-reply-context.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -1909,43 +1910,6 @@ describe("runPreparedReply media-only handling", () => {
 
     nextRun.complete();
   });
-  it("runs bare mention replies when the reply target is the current-turn context", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      [
-        "Reply target of current user message:",
-        "```json",
-        JSON.stringify({ sender_label: "Bot", body: "quoted status body" }, null, 2),
-        "```",
-      ].join("\n"),
-    );
-
-    const result = await runPrepared({
-      ...turn("", {
-        ...createProviderSurface("telegram"),
-        ChatType: "group",
-        RawBody: "@bot",
-        CommandBody: "@bot",
-        ReplyToBody: "quoted status body",
-        ReplyToSender: "Bot",
-      }),
-      command: {
-        ...baseParams().command,
-        rawBodyNormalized: "@bot",
-        commandBodyNormalized: "",
-      } as never,
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    const call = requireRunReplyAgentCall(-1);
-    expect(call?.transcriptCommandBody).toBe("");
-    expect(call?.followupRun.prompt).toBe("");
-    expect(call?.followupRun.transcriptPrompt).toBe("");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "Reply target of current user message",
-    );
-    expect(call?.followupRun.currentInboundContext?.text).toContain("quoted status body");
-  });
-
   it("runs room events as contextual events instead of direct user prompts", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
@@ -2706,5 +2670,6 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   registerSystemEventAdmissionCases({ runPrepared, requireRunReplyAgentCall });
+  registerCurrentReplyContextCases({ runPrepared, requireRunReplyAgentCall, turn });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

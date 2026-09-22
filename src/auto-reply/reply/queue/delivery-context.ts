@@ -13,6 +13,7 @@ import {
   resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
+import { collectCurrentInboundContext } from "./current-inbound-context.js";
 import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
@@ -306,40 +307,6 @@ type FollowupRuntimeMetadata = Pick<
   | "runObservers"
 >;
 
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
-  const contexts = items.flatMap((item, index) =>
-    item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
-  );
-  if (contexts.length <= 1) {
-    return contexts[0]?.context;
-  }
-  const renderField = (field: "text" | "resumableText") => {
-    const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
-      return value ? [`Queued #${index + 1} context:\n${value}`] : [];
-    });
-    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
-  };
-  const text = renderField("text");
-  if (!text) {
-    return undefined;
-  }
-  const resumableText = renderField("resumableText");
-  const injectedGoalContexts = [
-    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
-  ];
-  return {
-    text,
-    ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
-    promptJoiner: "\n\n",
-    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
-  };
-}
-
 function collectReplyDisposition(
   items: FollowupRun[],
 ): FollowupRun["queuedFollowupReplyDisposition"] {
@@ -378,16 +345,19 @@ function collectReplyDisposition(
   };
 }
 
+function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
+  return (
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true ||
+    Boolean(item.currentInboundContext)
+  );
+}
+
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
-  const currentTurnSource = items.find(
-    (item) =>
-      item.currentInboundEventKind === "room_event" ||
-      item.currentInboundAudio === true ||
-      Boolean(item.currentInboundContext),
-  );
+  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
