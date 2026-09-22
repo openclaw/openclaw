@@ -23,6 +23,7 @@ import type {
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import {
   getGatewayContextResolver,
@@ -396,6 +397,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
               sessionKey: "agent:main:main",
               operationalRunInstance,
               executionIdentityToken: parentToken,
+              receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
             },
             () =>
               spawnSubagentDirect(
@@ -440,7 +442,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       delegatedAuthority: authority,
       executionIdentityToken: parentToken,
       operationalRunInstance,
-      receiptAuthority: () => undefined,
+      receiptAuthority: () => {
+        if (!validateAgentRunDelegatedAuthority(authority)) {
+          throw new Error("worker execution authority is no longer active");
+        }
+      },
       sessionKey: "agent:main:main",
       turnClaim,
     };
@@ -478,6 +484,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
                 sessionKey: current.sessionKey,
                 operationalRunInstance: current.operationalRunInstance,
                 executionIdentityToken: current.executionIdentityToken,
+                receiptAuthority: current.receiptAuthority,
                 workerTurnClaim: current.turnClaim,
                 workerTurnExecutionIdentityCapability: capability,
               },
