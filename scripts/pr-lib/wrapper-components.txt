@@ -371,6 +371,7 @@ src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
+src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
 src/config/io.snapshot-preparation-scope.ts
 src/config/io.snapshot-preparation.ts
@@ -558,6 +559,7 @@ src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
+src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags.ts
 src/infra/diagnostic-model-request-provenance.ts
@@ -714,6 +716,7 @@ src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
+src/infra/sqlite-readonly-worker-context.ts
 src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
 src/infra/sqlite-readonly-worker.ts
@@ -1081,6 +1084,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/service-child-windows-job-native.ts

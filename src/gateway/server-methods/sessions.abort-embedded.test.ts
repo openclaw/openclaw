@@ -14,10 +14,7 @@ import {
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  writeSubagentSessionEntry,
-  settleSubagentRegistryPersistenceWork,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   enqueueSwarmRun,
@@ -276,7 +273,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
       status: "aborted",
     });
     expect(parentAbort).toHaveBeenCalledOnce();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     for (const id of ["running", "queued"]) {
       expect(getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
         endedReason: "subagent-killed",
@@ -471,7 +468,7 @@ it.each([
       ]);
       expect(registration.controller.signal.aborted).toBe(!finalizing);
       expect(parentAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect.soft(childAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
       expect(dispatch).not.toHaveBeenCalled();
       for (const id of ["running", "queued"]) {

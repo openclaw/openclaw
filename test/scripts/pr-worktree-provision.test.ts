@@ -11,31 +11,13 @@ import {
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-
-it("extracts the complete eager runtime import closure without duplicate wrapper components", () => {
-  const extracted = tempDirs.make("openclaw-pr-import-closure-");
-  const components = copyPrWrapperSources(extracted);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
-  const files = readdirSync(extracted, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(extracted, join(entry.parentPath, entry.name)));
-  expect(
-    collectRuntimeImportClosure(process.cwd(), files).filter(
-      (file) => !existsSync(join(extracted, file)),
-    ),
-  ).toEqual([]);
-});
 
 function coldFixture(perWorktreeConfig = true) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {

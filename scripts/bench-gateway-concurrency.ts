@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1763,7 +1764,7 @@ async function runGatewaySample(options: {
   if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
     throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
   }
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "openclaw-gateway-concurrency-"));
   const [port, mockPort] = await Promise.all([
     getFreePort(),
     options.provider === "mock" ? getFreePort() : Promise.resolve(0),

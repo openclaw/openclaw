@@ -26,7 +26,13 @@ export async function settleTaskRecordTransitionAsync(
   creation: TaskMutationContext,
   command: Extract<
     TaskInitialWorkerCommand,
-    { type: "tasks.settleUnstarted" | "tasks.finalizeActive" | "tasks.acknowledgeStateChange" }
+    {
+      type:
+        | "tasks.settleUnstarted"
+        | "tasks.finalizeActive"
+        | "tasks.acknowledgeStateChange"
+        | "tasks.updateNotificationDelivery";
+    }
   >,
   assertCurrent: () => void,
 ): Promise<{
@@ -37,7 +43,7 @@ export async function settleTaskRecordTransitionAsync(
   const { taskId } = command.input;
   assertCurrent();
   // Activity observers may reenter persistence, so flush before worker admission.
-  if (command.type !== "tasks.acknowledgeStateChange") {
+  if (command.type === "tasks.settleUnstarted" || command.type === "tasks.finalizeActive") {
     const { expectedTask } = command.input;
     try {
       assertTaskRegistryOwnerCurrent(context, store);

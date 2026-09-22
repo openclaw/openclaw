@@ -38,11 +38,14 @@ import {
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
 import { withEnv } from "../../src/test-utils/env.js";
-import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
-import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  isGatewayServerTestFile,
+} from "../vitest/vitest.gateway-server-paths.mjs";
 import {
   startupCorpusTestFiles,
   stateStartupCorpusTestFiles,
@@ -5096,7 +5099,15 @@ describe("scripts/test-projects full-suite sharding", () => {
       const targetedPlans = (config: string) =>
         plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
       expect(targetedPlans("test/vitest/vitest.agents-core.config.ts")).toHaveLength(6);
-      expect(targetedPlans("test/vitest/vitest.gateway-server.config.ts")).toHaveLength(4);
+      const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
+        (plan) => plan.forwardedArgs,
+      );
+      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+      expect(gatewayTargets.flat()).toEqual(
+        listGitTrackedFiles({ pathspecs: "src/gateway" })
+          ?.filter(isGatewayServerTestFile)
+          .toSorted((a, b) => a.localeCompare(b)),
+      );
     } finally {
       vi.unstubAllEnvs();
     }
