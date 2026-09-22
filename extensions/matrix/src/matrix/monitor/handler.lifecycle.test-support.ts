@@ -36,7 +36,9 @@ export function registerMatrixLifecycleTests({
     deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
     const redactEventMock = vi.fn(async () => "$redacted");
     let releaseFailure: (() => void) | undefined;
-    const failureGate = new Promise<void>((resolve) => (releaseFailure = resolve));
+    const failureGate = new Promise<void>((resolve) => {
+      releaseFailure = resolve;
+    });
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "quiet",
       client: { redactEvent: redactEventMock },
