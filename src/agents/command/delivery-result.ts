@@ -1,4 +1,10 @@
-import type { SerializedDurableMessagePayloadOutcome } from "../../channels/message/runtime.js";
+import {
+  sendDurableMessageBatchCore,
+  serializeDurableMessagePayloadOutcomes,
+  type SerializedDurableMessagePayloadOutcome,
+} from "../../channels/message/runtime.js";
+import { isDeliveryRecoveryOwnedRetry } from "../../infra/delivery-recovery.shared.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { projectOutboundPayloadPlanForJson } from "../../infra/outbound/payloads.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
@@ -20,8 +26,67 @@ export type AgentCommandDeliveryStatus = {
   reason?: string;
   resultCount?: number;
   sentBeforeError?: true;
+  /** Set only when the durable queue proved it retained the failed attempt for recovery. */
+  queueCustody?: "held";
   payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
 };
+
+export type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
+
+/** Derives the aggregate delivery status from a durable send batch result. */
+export function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDeliveryStatus {
+  const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
+    includeHookEffect: true,
+  });
+  switch (send.status) {
+    case "sent":
+      return {
+        requested: true,
+        attempted: true,
+        status: "sent",
+        succeeded: true,
+        resultCount: send.results.length,
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "suppressed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "suppressed",
+        succeeded: true,
+        reason: send.reason,
+        resultCount: 0,
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "partial_failed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "partial_failed",
+        succeeded: "partial",
+        error: true,
+        errorMessage: formatErrorMessage(send.error),
+        resultCount: send.results.length,
+        sentBeforeError: true,
+        ...(isDeliveryRecoveryOwnedRetry(send.error) ? { queueCustody: "held" as const } : {}),
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "failed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "failed",
+        succeeded: false,
+        error: true,
+        errorMessage: formatErrorMessage(send.error),
+        ...(send.stage ? { reason: send.stage } : {}),
+        ...(isDeliveryRecoveryOwnedRetry(send.error) ? { queueCustody: "held" as const } : {}),
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+  }
+  const exhaustive: never = send;
+  return exhaustive;
+}
 
 /** Agent command result after payload normalization and optional delivery. */
 export type AgentCommandDeliveryResult = Pick<

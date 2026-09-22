@@ -196,6 +196,7 @@ function normalizeTerminalDeliveryEvidenceResult(
           ? { resultCount: rawStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(rawStatus?.queueCustody === "held" ? { queueCustody: "held" as const } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
     : undefined;

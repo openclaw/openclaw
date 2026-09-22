@@ -25,10 +25,7 @@ import {
 } from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
-import {
-  sendDurableMessageBatchCore,
-  serializeDurableMessagePayloadOutcomes,
-} from "../../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -37,7 +34,7 @@ import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -64,13 +61,14 @@ import {
 } from "./delivery-authority.js";
 import {
   buildDeliveryResult,
+  deliveryStatusFromDurableSend,
   type AgentCommandDeliveryResult,
   type AgentCommandDeliveryStatus,
+  type DurableSendResult,
 } from "./delivery-result.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
-type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
@@ -149,58 +147,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDeliveryStatus {
-  const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
-    includeHookEffect: true,
-  });
-  switch (send.status) {
-    case "sent":
-      return {
-        requested: true,
-        attempted: true,
-        status: "sent",
-        succeeded: true,
-        resultCount: send.results.length,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "suppressed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "suppressed",
-        succeeded: true,
-        reason: send.reason,
-        resultCount: 0,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "partial_failed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "partial_failed",
-        succeeded: "partial",
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        resultCount: send.results.length,
-        sentBeforeError: true,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-    case "failed":
-      return {
-        requested: true,
-        attempted: true,
-        status: "failed",
-        succeeded: false,
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        ...(send.stage ? { reason: send.stage } : {}),
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
-  }
-  const exhaustive: never = send;
-  return exhaustive;
 }
 
 function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
