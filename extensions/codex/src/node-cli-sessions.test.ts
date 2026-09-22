@@ -1124,6 +1124,22 @@ describe("codex cli node sessions", () => {
       searchTruncated: true,
       unreadSpanCount: 1,
     });
+
+    // Same fixture, same filter, complete search: the record between the two windows is now read,
+    // so the session the bounded scan could only warn about is actually returned. Dropping the
+    // candidate ceiling alone would not have done this — the file was already opened.
+    const complete = await runSessionsList({
+      limit: 50,
+      filter: "needle-term",
+      searchAll: true,
+    });
+
+    expect(complete.sessions?.map((entry) => entry.sessionId)).toEqual([sessionId]);
+    expect(complete.sessions?.[0]).toMatchObject({ cwd: "/tmp/window-gap", messageCount: 2 });
+    expect(complete.sessions?.[0]).not.toHaveProperty("partialScan");
+    expect(complete).toMatchObject({ scannedFileCount: 1, sessionFileCount: 1 });
+    expect(complete).not.toHaveProperty("searchTruncated");
+    expect(complete).not.toHaveProperty("unreadSpanCount");
   });
 
   it("reports a search as cut when a history-backed row hid its rollout's unread span", async () => {
@@ -1159,6 +1175,41 @@ describe("codex cli node sessions", () => {
       searchTruncated: true,
       unreadSpanCount: 1,
     });
+  });
+
+  it("recovers a cwd past the metadata escalation when the complete search is asked for", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5272";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    await fs.mkdir(sessionDir, { recursive: true });
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    // `session_meta` wider than the 4 MiB escalation. No window reaches its `cwd`, and neither does
+    // the history-backed first-line lookup, so only a whole-file read recovers the directory.
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.000Z",
+          type: "session_meta",
+          payload: { id: sessionId, cwd: "/tmp/codex-deep", instructions: "x".repeat(5_000_000) },
+        }),
+        userMessage("2026-05-14T00:10:24.000Z", "deep ask"),
+      ].join("\n"),
+    );
+
+    const bounded = await runSessionsList({ limit: 50, filter: "/tmp/codex-deep" });
+    const complete = await runSessionsList({
+      limit: 50,
+      filter: "/tmp/codex-deep",
+      searchAll: true,
+    });
+
+    // Oversized directory metadata is the other half of the same reachability gap: the file is
+    // opened either way, and only the reader decides whether the `cwd` is ever seen.
+    expect(bounded.sessions).toEqual([]);
+    expect(bounded).toMatchObject({ searchTruncated: true, unreadSpanCount: 1 });
+    expect(complete.sessions?.map((entry) => entry.sessionId)).toEqual([sessionId]);
+    expect(complete.sessions?.[0]).toMatchObject({ cwd: "/tmp/codex-deep", messageCount: 1 });
+    expect(complete).not.toHaveProperty("searchTruncated");
   });
 
   it("keeps a session whose metadata and final record both outrun their windows", async () => {

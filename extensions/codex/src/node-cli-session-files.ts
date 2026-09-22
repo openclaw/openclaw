@@ -187,7 +187,7 @@ export async function hydrateSessionFiles(
  *
  * A filtered request gets every rollout as a candidate, in filename-match-then-recency order, up to
  * the file ceiling; the caller decides how far down that list it actually reads. `searchAll` drops
- * that ceiling so an explicitly complete search can reach a match the bounded one left behind.
+ * that ceiling so an explicitly complete search can open a rollout the bounded one left behind.
  */
 function selectSessionFilesToScan(
   files: CodexCliSessionFile[],
@@ -237,11 +237,14 @@ export type SessionFileScanOutcome = {
  * the row is dropped as a non-match. `unreadSpanCount` counts exactly those drops and also sets
  * `searchTruncated`, so "every file was opened" can never by itself report a search as complete.
  *
- * `searchAll` is the route back to a complete search when the bounded one reports it stopped short:
- * it drops the candidate ceiling, the byte budget, and the match early-out, so every rollout under
- * the codex-home is opened. That is the pre-bounding cost on demand rather than by default, which is
- * the point — the default keeps the measured improvement, and no rollout becomes permanently
- * unreachable by a directory or preview filter.
+ * `searchAll` is the route back to a complete search when the bounded one reports it stopped short.
+ * It has to clear *both* kinds of limit to mean anything: the candidate ceiling, the byte budget and
+ * the match early-out decide which rollouts are opened, and the read windows decide how much of each
+ * one is looked at. So it also swaps the windowed reader for `readWholeSessionFileSummary`, which
+ * covers every record — otherwise a `cwd` in an oversized `session_meta`, or a message sitting
+ * between the head and tail windows, would still be invisible with every file opened. That is the
+ * pre-bounding cost on demand rather than by default: the default keeps the measured improvement,
+ * and nothing becomes permanently unreachable by a directory or preview filter.
  */
 export async function hydrateSessionsFromSessionFiles(
   summaries: Map<string, CodexCliSessionSummary>,
@@ -295,7 +298,9 @@ export async function hydrateSessionsFromSessionFiles(
       }
     }
     scannedFileCount += 1;
-    const read = await readSessionFileSummary(file);
+    const read = searchAll
+      ? await readWholeSessionFileSummary(file)
+      : await readSessionFileSummary(file);
     spentBytes += read.bytesRead;
     const summary = read.summary;
     if (!summary) {
@@ -339,6 +344,46 @@ type SessionFileSummaryRead = {
   summary: CodexCliSessionSummary | null;
   bytesRead: number;
 };
+
+/**
+ * Summarize a rollout from every record in it, which is what an explicitly complete search asks for.
+ * Dropping the candidate ceiling alone does not restore reachability: the windowed reader skips the
+ * middle of any rollout over 768 KiB, so a `cwd` in an oversized `session_meta` or a message between
+ * the two windows stays invisible no matter how many files are opened.
+ *
+ * This is the released v2026.9.5 read path, reused rather than re-derived — `visitJsonlLines` slurps
+ * a rollout under 4 MiB and streams anything larger through a 1 MiB buffer, so covering a 281 MiB
+ * rollout costs its bytes in I/O but not in resident memory. Every field is exact and no summary
+ * built here is partial, so an exhaustive search reports no unread span.
+ */
+async function readWholeSessionFileSummary(
+  file: CodexCliSessionFile,
+): Promise<SessionFileSummaryRead> {
+  const scan: CodexCliSessionFileScan = { sessionId: "", messageCount: 0 };
+  const result = await visitJsonlLines(file.file, (line) => {
+    applySessionFileLine(scan, line);
+  });
+  // An unreadable rollout is not an empty one, and neither is a session: only a file that read
+  // cleanly and holds nothing yields no summary, matching the windowed reader's own empty-file exit.
+  if (!result.ok || file.size === 0) {
+    return { summary: null, bytesRead: result.ok ? file.size : 0 };
+  }
+  const sessionId = scan.sessionId || readSessionIdFromFilename(file.file);
+  if (!sessionId) {
+    return { summary: null, bytesRead: file.size };
+  }
+  return {
+    bytesRead: file.size,
+    summary: {
+      sessionId,
+      updatedAt: scan.updatedAt ?? new Date(file.mtimeMs).toISOString(),
+      lastMessage: scan.lastMessage,
+      cwd: scan.cwd,
+      sessionFile: file.file,
+      messageCount: scan.messageCount,
+    },
+  };
+}
 
 async function readSessionFileSummary(file: CodexCliSessionFile): Promise<SessionFileSummaryRead> {
   const head = await readSessionMetaHead(
@@ -407,38 +452,46 @@ type CodexCliSessionFileScan = {
 function scanSessionFileLines(lines: string[]): CodexCliSessionFileScan {
   const scan: CodexCliSessionFileScan = { sessionId: "", messageCount: 0 };
   for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) {
-      continue;
-    }
-    if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-      scan.updatedAt = parsed.timestamp.trim();
-    }
-    if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-        scan.sessionId = parsed.payload.id.trim();
-      }
-      if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-        scan.cwd = parsed.payload.cwd.trim();
-      }
-      continue;
-    }
-    const messageText = readResponseItemMessageText(parsed);
-    if (messageText) {
-      scan.messageCount += 1;
-      scan.lastMessage = truncateText(messageText, 140);
-    }
+    applySessionFileLine(scan, line);
   }
   return scan;
+}
+
+/**
+ * Fold one record into a scan. Shared so the windowed reader and the exhaustive reader recover the
+ * same fields from the same bytes; only how much of the file each one sees differs.
+ */
+function applySessionFileLine(scan: CodexCliSessionFileScan, line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return;
+  }
+  if (!isRecord(parsed)) {
+    return;
+  }
+  if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
+    scan.updatedAt = parsed.timestamp.trim();
+  }
+  if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
+    if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
+      scan.sessionId = parsed.payload.id.trim();
+    }
+    if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
+      scan.cwd = parsed.payload.cwd.trim();
+    }
+    return;
+  }
+  const messageText = readResponseItemMessageText(parsed);
+  if (messageText) {
+    scan.messageCount += 1;
+    scan.lastMessage = truncateText(messageText, 140);
+  }
 }
 
 export async function findSessionFiles(

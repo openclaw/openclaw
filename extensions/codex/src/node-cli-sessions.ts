@@ -137,10 +137,11 @@ export async function listCodexCliSessionsOnNode(params: {
   filter?: string;
   limit?: number;
   /**
-   * Opt out of the bounded scan and open every rollout under the codex-home. This is what a user
-   * reruns with after the bounded search reported it stopped short, so a directory or preview match
-   * older than the candidate ceiling stays reachable instead of being permanently dropped. It
-   * applies to a filtered request only; an unfiltered listing is a newest-first page, not a search.
+   * Opt out of the bounded scan: open every rollout under the codex-home and read each one whole.
+   * This is what a user reruns with after the bounded search reported it stopped short, so a
+   * directory or preview match past the candidate ceiling — or inside a span the read windows
+   * skipped — stays reachable instead of being permanently dropped. It applies to a filtered
+   * request only; an unfiltered listing is a newest-first page, not a search.
    */
   searchAll?: boolean;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
@@ -328,12 +329,10 @@ function formatSessionSearchTruncation(result: CodexCliSessionsListResult): stri
   sentences.push(
     "A session id is part of the rollout filename, so an id filter is read before the rest and reaches further back than a directory or message-text filter does.",
   );
-  // Files left unopened is the one cause a rerun can actually clear, so only offer the complete
-  // search when it would change the answer. An unread span inside an opened rollout is a window
-  // limit, not a candidate limit, and `--search-all` does not widen the windows.
-  if (scanned !== undefined && total !== undefined && scanned < total) {
-    sentences.push("Add --search-all to open every rollout on this node instead.");
-  }
+  // Both causes above are the bounded scan's, and the complete search clears both: it opens every
+  // rollout and reads each one whole. So the offer belongs on every truncated answer, not only on
+  // the ones that ran out of candidates.
+  sentences.push("Add --search-all to read every rollout on this node in full instead.");
   return [sentences.join(" ")];
 }
 

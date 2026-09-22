@@ -2079,10 +2079,12 @@ describe("codex command", () => {
     // Naming the rerun is what keeps a bounded scan from reading as a permanent loss: the 928
     // rollouts this one never opened are still reachable, and the notice has to say how.
     expect(result.text).toContain("Searched 2000 of 2928 rollouts");
-    expect(result.text).toContain("Add --search-all to open every rollout on this node instead.");
+    expect(result.text).toContain(
+      "Add --search-all to read every rollout on this node in full instead.",
+    );
   });
 
-  it("omits the complete-search offer when every rollout was already opened", async () => {
+  it("offers the complete search when an opened rollout went partly unread", async () => {
     const listCodexCliSessionsOnNode = vi.fn(async () => ({
       node: { nodeId: "mb-m5", displayName: "mb-m5" },
       result: {
@@ -2097,10 +2099,14 @@ describe("codex command", () => {
 
     const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
 
-    // An unread span is a window limit, not a candidate limit. `--search-all` opens more files; it
-    // does not widen the windows, so offering it here would promise an answer it cannot give.
+    // Every file was opened, so there is no "N of M" clause — but two of them were only windowed,
+    // and the complete search clears that cause too by reading each rollout whole. Suppressing the
+    // offer here would strand the one rerun that can still answer the question.
     expect(result.text).toContain("2 rollouts were too large to read whole");
-    expect(result.text).not.toContain("--search-all");
+    expect(result.text).not.toContain("Searched 12 of 12");
+    expect(result.text).toContain(
+      "Add --search-all to read every rollout on this node in full instead.",
+    );
   });
 
   it("forwards the Codex CLI complete-search request to the node", async () => {

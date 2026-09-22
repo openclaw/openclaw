@@ -29,9 +29,9 @@ type ParsedCodexCliSessionsArgs = {
   filter: string;
   limit?: number;
   /**
-   * Opt out of the bounded rollout scan so a filter reaches every rollout under the codex-home.
-   * Only a filtered request is a search; an unfiltered listing is a newest-first page and is
-   * unaffected.
+   * Opt out of the bounded rollout scan so a filter reaches every record of every rollout under the
+   * codex-home. Only a filtered request is a search; an unfiltered listing is a newest-first page
+   * and is unaffected.
    */
   searchAll?: boolean;
   help?: boolean;
