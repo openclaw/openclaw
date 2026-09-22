@@ -161,3 +161,87 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     ...overrides,
   };
 }
+
+export function createManagedRestartSequenceConfigs() {
+  // This fixture owns auth inputs throughout asynchronous restart checks.
+  vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
+  const initialConfig = {
+    gateway: {
+      port: 18789,
+      reload: {},
+      terminal: { enabled: true },
+    },
+  } as OpenClawConfig;
+  const deferredConfig = {
+    gateway: {
+      port: 18790,
+      reload: {},
+      terminal: { enabled: true },
+      auth: {
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "RESTART_A_TOKEN",
+        },
+      },
+    },
+  } as OpenClawConfig;
+  const invalidConfig = {
+    gateway: {
+      ...deferredConfig.gateway,
+      port: 18791,
+      auth: {
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "MISSING_RESTART_TOKEN",
+        },
+      },
+      terminal: { enabled: false },
+    },
+  } as OpenClawConfig;
+  const missingHotSecret = {
+    source: "env" as const,
+    provider: "default",
+    id: "MISSING_HOT_TOKEN",
+  };
+  const invalidHotConfig = {
+    ...deferredConfig,
+    models: {
+      providers: {
+        test: {
+          baseUrl: "https://example.com",
+          apiKey: missingHotSecret,
+          models: [],
+        },
+      },
+    },
+  } as OpenClawConfig;
+  const invalidNoopConfig = {
+    ...deferredConfig,
+    plugins: {
+      entries: {
+        brave: {
+          config: { webSearch: { apiKey: missingHotSecret } },
+        },
+      },
+    },
+  } as OpenClawConfig;
+  const replacementConfig = {
+    gateway: {
+      ...deferredConfig.gateway,
+      bind: "lan",
+    },
+  } as OpenClawConfig;
+  return {
+    initialConfig,
+    deferredConfig,
+    invalidConfig,
+    invalidHotConfig,
+    invalidNoopConfig,
+    replacementConfig,
+  };
+}

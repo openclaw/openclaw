@@ -20,6 +20,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
@@ -202,6 +203,23 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     // Origin/profile policy still enumerates clients; keep this invocation visible
     // after transport closure without adding it to presence or message fanout.
     const releaseAuthority = clients.retainRequest(client);
+    // Reserve receipt order before profile preparation can yield. A failed middle
+    // request must still carry the unfinished predecessor for later frames.
+    const credentialMutationBarrier = deviceCredentialMutationBarrier;
+    const mutationCompletion = DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)
+      ? createDeferredCore()
+      : undefined;
+    if (mutationCompletion) {
+      const barrier = Promise.allSettled([
+        credentialMutationBarrier,
+        mutationCompletion.promise,
+      ]).then(() => {
+        if (deviceCredentialMutationBarrier === barrier) {
+          deviceCredentialMutationBarrier = undefined;
+        }
+      });
+      deviceCredentialMutationBarrier = barrier;
+    }
     try {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
@@ -314,9 +332,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const executeRequest = async () => {
         diagnostics?.bindTrace();
         let entry: GatewayRequestEntry | undefined;
-        // Capture the predecessor before this request publishes its own mutation tail.
-        // Later frames wait on that tail, preserving credential mutation order.
-        const credentialMutationBarrier = deviceCredentialMutationBarrier;
         // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
         // without their requester there is no safe recipient for a late answer.
         const cancelOnDisconnect =
@@ -446,18 +461,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.connect.role === "node"
           ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
           : dispatchRequest();
-      if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
-        const barrier = requestDispatch.finally(() => {
-          if (deviceCredentialMutationBarrier === barrier) {
-            deviceCredentialMutationBarrier = undefined;
-          }
-        });
-        deviceCredentialMutationBarrier = barrier;
-      }
       await requestDispatch;
     } finally {
-      releaseAuthority();
-      clientAuthority.release();
+      try {
+        releaseAuthority();
+      } finally {
+        try {
+          clientAuthority.release();
+        } finally {
+          mutationCompletion?.resolve();
+        }
+      }
     }
   };
 

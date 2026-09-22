@@ -291,6 +291,7 @@ describe("gateway update action", () => {
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
           syntheticScopes: ["operator.admin"],
+          syntheticScopeMode: "minimum",
           resolveGatewayContext: expect.any(Function),
         },
       );

@@ -14,23 +14,10 @@ import {
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import type {
-  SessionBranchSummaryWorkerInput,
-  SessionEntryWorkerInput,
-  SessionEntryListWorkerInput,
-  SessionExactEntriesWorkerInput,
-  SessionStoreTargetWorkerInput,
-  SessionTargetInventoryWorkerInput,
-  SessionIdentityEvidenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionPreviewWorkerInput,
-  SessionTitleFieldsWorkerInput,
-  SessionModelContextWorkerInput,
-  SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
-  SessionUsageCacheWorkerInput,
-  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
@@ -90,23 +77,7 @@ serveWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as
-      | SessionModelContextWorkerInput
-      | SessionEntryWorkerInput
-      | SessionEntryListWorkerInput
-      | SessionExactEntriesWorkerInput
-      | SessionStoreTargetWorkerInput
-      | SessionTargetInventoryWorkerInput
-      | SessionIdentityEvidenceWorkerInput
-      | SessionTranscriptHistoryWorkerInput
-      | SessionPreviewWorkerInput
-      | SessionTitleFieldsWorkerInput
-      | SessionRowPresenceWorkerInput
-      | SessionMembersWorkerInput
-      | SessionUsageCacheWorkerInput
-      | SessionTranscriptSearchWorkerInput
-      | SessionBranchSummaryWorkerInput
-      | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "usage-cost") {
       const { executeUsageCostWorker, usageCostWorkerFailure } =
         await import("../../infra/session-cost-usage-worker.js");

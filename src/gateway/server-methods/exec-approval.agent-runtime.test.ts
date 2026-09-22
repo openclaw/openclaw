@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -81,6 +90,84 @@ function requestOptions(
 }
 
 describe("exec approval signed agent runtime", () => {
+  it("prepares retained approval lineage without synchronously loading full registry payloads", async (testContext) => {
+    await withOpenClawTestState(
+      {
+        scenario: "minimal",
+        env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
+      },
+      async () => {
+        clearSubagentRunsReadCacheForTest();
+        const child = "agent:main:subagent:incognito-approval-child";
+        const parent = "agent:main:dashboard:incognito-approval-parent";
+        const root = "agent:main:dashboard:incognito-approval-root";
+        const run = createSubagentRunRecord({
+          runId: "approval-retained-child",
+          childSessionKey: child,
+          requesterSessionKey: parent,
+          completion: { required: false },
+          delivery: { status: "not_required" },
+        });
+        subagentStore.saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: parent },
+          {
+            sessionId: "approval-incognito-parent",
+            updatedAt: 1,
+            parentSessionKey: root,
+            incognito: true,
+          },
+        );
+        const hostRegistryReads = trackSqliteStatementExecutions(
+          openOpenClawStateDatabase().db,
+          ["registryPayload"],
+          (sql) =>
+            /\bfrom\s+"?subagent_runs\b/iu.test(sql) && /\bpayload_json\b/iu.test(sql)
+              ? "registryPayload"
+              : null,
+        );
+        const registered = createDeferredCore<OperatorApprovalRecord>();
+        const fixture = await createPreparedTestApprovalManager(testContext, {
+          resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+          validateAgentRuntimeDelegatedAuthority: () => true,
+          onLifecycle: (event) => {
+            if (event.phase === "pending") {
+              registered.resolve(event.record);
+            }
+          },
+        });
+        const { manager } = fixture;
+        await fixture.run(async () => {
+          const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+          const opts = requestOptions({ ...identity(false), sessionKey: child });
+          const approvalId = "approval-prepared-lineage";
+          Object.assign(opts.params, {
+            id: approvalId,
+            timeoutMs: 60_000,
+            requireDeliveryRoute: false,
+            suppressDelivery: true,
+          });
+          const pending = fixture.track(Promise.resolve(handler(opts)));
+          try {
+            const approval = await Promise.race([
+              registered.promise,
+              pending.then(() => {
+                throw new Error("Approval request ended before registration");
+              }),
+            ]);
+            expect(approval.audienceSessionKeys).toEqual([child, parent, root]);
+            expect(hostRegistryReads.counts.registryPayload).toBe(0);
+          } finally {
+            hostRegistryReads.restore();
+            await manager.resolve(approvalId, "deny");
+            await pending;
+            clearSubagentRunsReadCacheForTest();
+          }
+        });
+      },
+    );
+  });
+
   it("rejects closed authority before creating an exec approval", async (testContext) => {
     const fixture = await createPreparedTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => false,

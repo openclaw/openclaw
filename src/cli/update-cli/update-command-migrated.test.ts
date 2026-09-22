@@ -16,6 +16,11 @@ import {
 } from "../../infra/package-update-integrity.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -39,6 +44,10 @@ import {
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  MIGRATED_FIXTURE_NO_SERVICE,
+  migratedFinalizeFixtureEntrypoint,
+} from "./update-command-migrated-fixture-entrypoint.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import {
   continueMigratedUpdateInFreshProcess,
@@ -481,19 +490,31 @@ it.each([
         ),
       );
     const before = legacy ? await family() : undefined;
-    if (checkWorkMs !== undefined) {
-      const nativeCommand = childCommands.runUtf8CommandWithTimeout;
-      vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
-        async (argv, options): ReturnType<typeof nativeCommand> => {
-          const child = await nativeCommand(argv, options);
-          const allowance = typeof options === "number" ? options : options.timeoutMs;
-          // Keep the native admission/cleanup flow; model cold-start work in this phase only.
-          return argv.at(-1) === "--check" && (allowance ?? Infinity) < checkWorkMs
-            ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
-            : child;
-        },
-      );
-    }
+    const nativeCommand = childCommands.runUtf8CommandWithTimeout;
+    vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+      async (argv, options): ReturnType<typeof nativeCommand> => {
+        const child = await nativeCommand(
+          legacy
+            ? argv
+            : [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
+                ),
+                JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+                ...argv.slice(2),
+              ],
+          options,
+        );
+        const allowance = typeof options === "number" ? options : options.timeoutMs;
+        // Keep the native admission/cleanup flow; model cold-start work in this phase only.
+        return checkWorkMs !== undefined &&
+          argv.at(-1) === "--check" &&
+          (allowance ?? Infinity) < checkWorkMs
+          ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
+          : child;
+      },
+    );
     const work = withUpdateCommandExecutor(run.runId, async (executor) => {
       const serviceRoot = retained ? path.join(stateDir, "service-A") : undefined;
       if (serviceRoot) {
@@ -642,6 +663,13 @@ it.each([
         }),
       );
       expect(result.result.recovery?.serviceRestartSafe).toBe(false);
+    } else {
+      expect(result.result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "gateway recovery verification",
+          failureFacts: [expect.objectContaining({ message: MIGRATED_FIXTURE_NO_SERVICE })],
+        }),
+      );
     }
     expect(rollback).not.toHaveBeenCalled();
     expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });

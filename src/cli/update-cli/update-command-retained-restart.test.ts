@@ -323,7 +323,11 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
-      const {grant,a,b,proceed,effect}=JSON.parse(fs.readFileSync(0,"utf8"));
+      // The parent binds child identity before sending the grant; stdin can be nonblocking.
+      process.stdin.setEncoding("utf8");
+      let input="";
+      for await(const chunk of process.stdin)input+=chunk;
+      const {grant,a,b,proceed,effect}=JSON.parse(input);
       try {
         await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
           assertRetainedUpdateCommandRoot(fence,a);

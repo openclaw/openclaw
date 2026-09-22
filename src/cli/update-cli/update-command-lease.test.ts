@@ -13,8 +13,6 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
-  adoptUpdateRun,
-  createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunStep,
@@ -82,6 +80,7 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   registerLeaseServiceRestorationTests,
+  registerLegacyResumeWarningTests,
   seedInterruptedPostCoreRun,
 } from "./update-command-lease-service.test-support.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
@@ -688,56 +687,15 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "legacy resume settles Doctor and retains its warnings before its result (changed=%s)",
-    async (changed) => {
-      const firstDoctorWarning = "Plugin fixture: first Doctor repair deferred.";
-      const secondDoctorWarning = "Plugin fixture: second Doctor repair deferred.";
-      await writeScenario("resume", { doctorWarnings: [firstDoctorWarning] });
-      await fs.rm(state.path("handoff.json"));
-      const parent = createUpdateRun({ trigger: "cli" });
-      adoptUpdateRun(parent.runId);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", parent.runId);
-      const resultPath = state.path("legacy-result.json");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-      mocks.plugins.mockImplementationOnce(async () => {
-        expect(await events()).toEqual(["post-attempt", "post-acquired"]);
-        expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
-        if (changed) {
-          await state.writeJson("scenario.json", {
-            lane: "resume",
-            doctorWarnings: [secondDoctorWarning],
-          } satisfies LeaseScenario);
-        }
-        return { ...pluginResult, changed };
-      });
-
-      await invoke("resume");
-
-      const doctorWarnings = [firstDoctorWarning, ...(changed ? [secondDoctorWarning] : [])];
-      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
-        status: "warning",
-        changed,
-        warnings: doctorWarnings.map((message) =>
-          expect.objectContaining({ reason: "doctor-advisory", message }),
-        ),
-      });
-      expect(
-        getUpdateRun(parent.runId)
-          ?.steps.filter((step) => step.step.startsWith("warning:finalize:plugins:"))
-          .map((step) => step.detail),
-      ).toEqual(doctorWarnings);
-      expect(await events()).toEqual([
-        "post-attempt",
-        "post-acquired",
-        ...(changed ? ["post-attempt", "post-acquired"] : []),
-        "validate",
-        "readiness",
-      ]);
-      expectDoctorDiagnostics();
-    },
-  );
+  registerLegacyResumeWarningTests({
+    context: () => ({ state, entrypoint }),
+    writeScenario: (scenario) => writeScenario("resume", scenario),
+    invoke: () => invoke("resume"),
+    plugins: mocks.plugins,
+    pluginResult,
+    events,
+    expectDoctorDiagnostics,
+  });
 
   it.each(
     (["resume", "candidate-runtime"] as const).flatMap((lane) =>
@@ -906,47 +864,6 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("resume preserves settled Doctor warnings when plugin convergence fails after releasing its lease", async () => {
-    const doctorWarnings = [
-      "Plugin fixture: repair deferred.",
-      "Plugin fixture: optional check failed.",
-    ];
-    await writeScenario("resume", { doctorWarnings });
-    await fs.rm(state.path("handoff.json"));
-    const parent = createUpdateRun({ trigger: "cli" });
-    adoptUpdateRun(parent.runId);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", parent.runId);
-    const resultPath = state.path("failed-post-core.json");
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-    mocks.plugins.mockRejectedValueOnce(new Error("plugin fixture failure"));
-    await expect(invoke("resume")).rejects.toThrow("plugin fixture failure");
-    const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
-    expect(result).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("plugin fixture failure"),
-    });
-    expect(result.error).not.toContain(state.root);
-    const recorded = getUpdateRun(parent.runId);
-    expect(recorded).toMatchObject({ status: "running", after: {} });
-    expect(
-      recorded?.steps.filter((step) => step.step.startsWith("warning:finalize:plugins:")),
-    ).toEqual(
-      doctorWarnings.map((detail, index) =>
-        expect.objectContaining({
-          step: `warning:finalize:plugins:${index}`,
-          status: "completed",
-          detail,
-        }),
-      ),
-    );
-    expect(recorded?.steps.some((step) => step.step === "finalize:installed-candidate")).toBe(
-      false,
-    );
-    const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
-    expect(probe.stdout).toBe("acquired");
   });
 
   it("continues restart handling with a warning after a final Doctor execution failure", async () => {

@@ -12,6 +12,7 @@ import {
 import { sameTaskBackingInstance } from "./task-backing-records.js";
 import {
   prepareTaskCancellationControl,
+  prepareTaskCancellationRead,
   withTaskCancellationControl,
   type TaskCancellationControl,
 } from "./task-cancellation-context.js";
@@ -67,6 +68,13 @@ export async function cancelTaskById(params: {
   taskId: string;
   reason?: string;
 }): Promise<TaskCancellationResult> {
+  for (
+    let pending = prepareTaskCancellationRead();
+    pending;
+    pending = prepareTaskCancellationRead()
+  ) {
+    await pending;
+  }
   const notCancelledFromCache = (reason: string): TaskCancellationResult => {
     const current = tasks.get(params.taskId.trim());
     return {
@@ -138,6 +146,8 @@ export async function cancelTaskById(params: {
     return prepared.result;
   }
   const { task, managedBacking, subagentBacking, control } = prepared;
+  const assertCurrentControl = () =>
+    (prepareTaskCancellationControl(tasks.get(task.taskId)) ?? control)?.assertCurrent();
   let isProvisionalSubagentKill = prepared.isProvisionalSubagentKill;
   const notCancelled = (reason: string) =>
     withTaskRegistryMutation(
@@ -203,7 +213,10 @@ export async function cancelTaskById(params: {
     if (isBackgroundExecTask(task)) {
       const processSessionId = task.sourceId?.trim();
       const { cancelBackgroundExecSession } = await loadTaskRegistryControlRuntime();
-      control?.assertCurrent();
+      for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
+        await pending;
+      }
+      assertCurrentControl();
       if (!processSessionId || !cancelBackgroundExecSession(processSessionId)) {
         return notCancelled("Background command has no active cancellation handle.");
       }
@@ -223,7 +236,10 @@ export async function cancelTaskById(params: {
     } else {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
-        control?.assertCurrent();
+        for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
+          await pending;
+        }
+        assertCurrentControl();
         if (
           !cancelActiveCronTaskRun({
             runId: task.runId,
@@ -248,6 +264,10 @@ export async function cancelTaskById(params: {
         );
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
+        for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
+          await pending;
+        }
+        assertCurrentControl();
         if (subagentBacking?.runtime !== "acp") {
           return notCancelled(
             "ACP task execution cannot be verified. Select its current task or use ACP session controls.",
@@ -282,6 +302,10 @@ export async function cancelTaskById(params: {
         }
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
+        for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
+          await pending;
+        }
+        assertCurrentControl();
         const reconcile = (result: Awaited<ReturnType<typeof killSubagentRunAdmin>>) =>
           withTaskRegistryMutation(
             () => {

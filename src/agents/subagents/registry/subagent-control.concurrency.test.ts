@@ -21,7 +21,7 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 
@@ -184,6 +184,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
         }
       },
       () => cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId }),
+      { selectedTask: task },
     );
     try {
       if (revocation === "before interruption") {
@@ -211,6 +212,159 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       releaseBlocker.resolve();
       admission.release();
       await Promise.all([blocker, pending]);
+      adminSpy.mockRestore();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+    }
+  },
+);
+
+it.each([
+  ...(["queued", "accepted"] as const).flatMap((phase) =>
+    (["ready", "failure"] as const).map((outcome) => ({ phase, outcome, terminal: false })),
+  ),
+  { phase: "accepted", outcome: "failure", terminal: true },
+] as const)(
+  "prepares inherited cancellation facts while $phase and settles $outcome (terminal=$terminal)",
+  async ({ phase, outcome, terminal }) => {
+    const sessionKey = "agent:main:subagent:readiness";
+    const sessionId = "readiness-session";
+    const runId = "readiness-run";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: sessionId,
+    });
+    registerSubagentRun({
+      runId,
+      childSessionKey: sessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      task: "Retain cancellation ownership during preparation",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+    const task = findTaskByRunId(runId)!;
+    const controller = new AbortController();
+    const aborted = vi.fn();
+    controller.signal.addEventListener("abort", aborted, { once: true });
+    const handle = createEmbeddedRunHandle({ runId, abort: () => controller.abort() });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    const interrupted = createDeferred();
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        controller.abort();
+        interrupted.resolve();
+        if (phase === "queued") {
+          admission.release();
+        }
+        return { runId };
+      },
+    });
+    const blockerEntered = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker =
+      phase === "queued"
+        ? runExclusiveSessionLifecycleMutation({
+            scope: storePath,
+            identities: [sessionKey, sessionId],
+            run: async () => {
+              blockerEntered.resolve();
+              await releaseBlocker.promise;
+            },
+          })
+        : Promise.resolve();
+    if (phase === "queued") {
+      await blockerEntered.promise;
+    }
+    const ownerEntered = createDeferred();
+    const runAdmin = killSubagentRunAdmin;
+    const adminSpy = vi
+      .spyOn(taskControlRuntime, "killSubagentRunAdmin")
+      .mockImplementation((params) => {
+        ownerEntered.resolve();
+        return runAdmin(params);
+      });
+    const readEntered = createDeferred();
+    const releaseRead = createDeferred();
+    const failure = new AggregateError([new Error("read cleanup failed")], "cancel read failed");
+    let needsRead = false;
+    const read = releaseRead.promise.then(() => {
+      needsRead = false;
+      if (outcome === "failure") {
+        throw failure;
+      }
+    });
+    void read.catch(() => {});
+    const pending = withTaskCancellationContext(
+      () => {
+        if (needsRead) {
+          throw new Error("Caller facts were not prepared.");
+        }
+      },
+      () =>
+        withTaskCancellationContext(
+          () => {},
+          () => cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId }),
+          { selectedTask: task },
+        ),
+      {
+        selectedTask: task,
+        prepareRead: () => {
+          if (!needsRead) {
+            return undefined;
+          }
+          readEntered.resolve();
+          return read;
+        },
+      },
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    try {
+      await (phase === "queued" ? ownerEntered.promise : interrupted.promise);
+      needsRead = true;
+      releaseBlocker.resolve();
+      admission.release();
+      await Promise.race([
+        readEntered.promise,
+        pending.then(() => {
+          throw new Error("Cancellation skipped pending caller preparation.");
+        }),
+      ]);
+      expect(settled).toBe(false);
+      expect(aborted).toHaveBeenCalledTimes(phase === "accepted" ? 1 : 0);
+      expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
+      if (terminal) {
+        expect(markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
+        expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+      }
+      releaseRead.resolve();
+      const result = await pending;
+      if (outcome === "failure") {
+        expect(result.cancelled).toBe(false);
+        expect(result.reason).toContain("cancel read failed");
+        expect(result.reason).not.toContain("Caller facts were not prepared");
+      } else {
+        expect(result.cancelled).toBe(true);
+      }
+      const stopped = phase === "accepted" || outcome === "ready";
+      expect(aborted).toHaveBeenCalledTimes(Number(stopped));
+      expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
+      expect(getTaskById(task.taskId)?.status).toBe(stopped ? "cancelled" : "running");
+    } finally {
+      releaseBlocker.resolve();
+      releaseRead.resolve();
+      admission.release();
+      await Promise.allSettled([blocker, pending]);
       adminSpy.mockRestore();
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);

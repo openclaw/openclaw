@@ -20,13 +20,11 @@ import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
-import { projectOperatorScopesForMethod } from "./method-scopes.js";
 import {
   authorizeGatewaySessionCreation,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { ADMIN_SCOPE, WRITE_SCOPE, isOperatorScope } from "./operator-scopes.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
@@ -44,6 +42,7 @@ import type {
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
+import { resolveInProcessGatewaySyntheticScopes } from "./server-plugin-in-process-scopes.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -157,16 +156,13 @@ export async function runWithOperatorToolGatewayContinuationContext<T>(
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return await runWithOperatorToolGatewayCleanupContext(run);
   }
-  const invocation = operatorToolGatewayAuthority.getStore();
-  const scopes =
-    caller?.operatorAuthority?.scopes ?? invocation?.scopes ?? scope?.client?.connect.scopes;
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
   const resolved = resolveInProcessGatewayDispatch("agent", undefined, {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" },
     resolveGatewayContext,
-    ...(scopes ? { syntheticScopes: [...scopes] } : {}),
+    syntheticScopeMode: "exact",
   });
   const captured = captureGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
@@ -226,6 +222,8 @@ type DispatchGatewayMethodInProcessOptions = {
   sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
+  /** Built-in adapters distinguish method minima from explicit or retained scope ceilings. */
+  syntheticScopeMode?: "minimum" | "exact";
   timeoutMs?: number;
   signal?: AbortSignal;
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
@@ -366,28 +364,35 @@ function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  const requestedSyntheticScopes = options?.syntheticScopes ?? [WRITE_SCOPE];
-  const operatorScopes =
+  // Built-in requests retain the explicit ceiling of a positively scoped System caller.
+  const scopedSystemScopes =
+    options?.syntheticScopeMode !== undefined && scopedActor?.kind === "system"
+      ? (scope?.client?.connect.scopes ?? [])
+      : undefined;
+  const sourceScopes =
     operatorRunAuthority && scope?.client && matchesOperatorSource
       ? intersectOperatorScopes(operatorRunAuthority.scopes, scope.client.connect.scopes ?? [])
       : (operatorRunAuthority?.scopes ??
         operatorAuthority?.scopes ??
+        (options?.syntheticScopeMode !== undefined
+          ? inheritedOperatorAuthority?.scopes
+          : undefined) ??
         (operatorRoleActor?.kind === "operator"
           ? (verifiedOperatorAuthority?.scopes ?? scope?.client?.connect.scopes ?? [])
           : undefined));
-  const registeredScope = context.getGatewayMethodRegistry?.().getScope(method);
-  const syntheticScopes = operatorScopes
-    ? projectOperatorScopesForMethod({
-        method,
-        requestParams: params,
-        requestedScopes: requestedSyntheticScopes,
-        allowedScopes: operatorScopes,
-        ...(isOperatorScope(registeredScope) ? { requiredScope: registeredScope } : {}),
-      })
-    : options?.syntheticScopes;
-  if (operatorScopes?.includes(ADMIN_SCOPE) && !syntheticScopes?.includes(ADMIN_SCOPE)) {
-    syntheticScopes?.push(ADMIN_SCOPE);
-  }
+  const operatorScopes =
+    scopedSystemScopes && sourceScopes
+      ? intersectOperatorScopes(sourceScopes, scopedSystemScopes)
+      : (scopedSystemScopes ?? sourceScopes);
+  const syntheticScopes = resolveInProcessGatewaySyntheticScopes({
+    method,
+    requestParams: params,
+    syntheticScopes: options?.syntheticScopes,
+    syntheticScopeMode: options?.syntheticScopeMode,
+    operatorScopes,
+    scopedClientScopes: scope?.client?.connect.scopes,
+    registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
+  });
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }

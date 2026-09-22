@@ -37,7 +37,7 @@ function createClockedStateStore<T>(
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     lookup: async (...args) => store.lookup(...args),
     consume: async (...args) => store.consume(...args),
-    delete: async (...args) => store.delete(...args),
+    delete: async (key) => store.delete(key),
     entries: async () => store.entries(),
     clear: async () => store.clear(),
   };

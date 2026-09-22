@@ -841,8 +841,32 @@ requests never rebuild the combined store or reload the subagent registry.
 External workers publish committed changes through their owning bridge. After
 projection readiness, selection, authorization, and presentation use the current
 caller identity in one synchronous boundary.
-Registry replacement and restoration replace its snapshot, while named writes
-patch it. Storage repair and retention remain with their existing owners.
+Cold compact subagent inventory loads through the shared-state read-only worker
+before projection readiness. Its resident snapshot belongs to the physical
+database generation, so publications from temporary maintenance scopes do not
+discard it. Registry replacement and restoration replace the snapshot; named
+writes patch it. Close, replacement, and first database creation invalidate old
+facts, and publications accepted during a pending read take precedence over its
+reply. Private database snapshots never populate canonical resident facts.
+
+Controlled-run listing selects the latest visible child generations before
+hydrating their physical payload IDs. Descendant counts use compact facts;
+yielded-child execution and prompt-result readers retain scoped session reads
+that include retained generations.
+Collector waits subscribe before preparing selected payloads. Their consuming
+frame reselects current ownership and completion together, so unrelated
+publications cannot postpone an elapsed deadline. Cancellation joins the pending
+read before releasing listeners. Optional history child hints may be omitted
+after an ordinary query failure settles; admission, cancellation, and cleanup
+failures still propagate. Storage repair, schemas, retention, and update behavior
+remain unchanged.
+
+Approval audience discovery also prepares compact subagent lineage before
+registration. Stored parent links retain their existing session reader, including
+incognito routing. An unavailable optional registry query preserves live-memory
+lineage and stored-parent fallback; admission, cancellation, and cleanup failures
+still propagate. Registration rechecks current authority after preparation and
+at write admission.
 
 Gateway `session.members.list` and `session.members.listEvidence` read full
 membership rows through the existing session-transcript read worker. Both methods

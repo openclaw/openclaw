@@ -25,9 +25,9 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentSessionListRunsSnapshotForSessions,
   getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   getSubagentRunsSnapshotForSessions,
@@ -74,23 +74,12 @@ export function listSubagentSessionListRunsForControllers(
   return controllerSessionKeys.flatMap((key) => listRunsForControllerFromRuns(runs, key));
 }
 
-/** Builds an O(1) latest-run lookup from one persisted and in-memory snapshot. */
-export function buildLatestSubagentRunReadIndex(
-  childSessionKeys?: readonly string[],
-): LatestSubagentRunReadIndex {
+export function buildLatestSubagentSessionListReadIndex(
+  childSessionKeys: readonly string[],
+): LatestSubagentRunReadIndex<SubagentRunReadRecord> {
   return buildLatestSubagentRunReadIndexFromRuns(
-    childSessionKeys
-      ? getSubagentRunsSnapshotForChildSessions(childSessionKeys)
-      : getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentSessionListRunsSnapshotForChildSessions(childSessionKeys),
   );
-}
-
-/** Builds a reusable index from the full readable registry snapshot. */
-export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
-  return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
-    now,
-  });
 }
 
 /** Lists runs controlled by a session key. */

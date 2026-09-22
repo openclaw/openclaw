@@ -89,6 +89,15 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: { ...command.identity } };
   }
+  if (command.type === "subagents.runs") {
+    return {
+      ...command,
+      scope:
+        command.scope.kind === "ids"
+          ? { kind: "ids", runIds: [...command.scope.runIds] }
+          : { ...command.scope },
+    };
+  }
   if (command.type === "mcpOAuth.statuses") {
     return { type: command.type, input: [...command.input] };
   }
@@ -181,6 +190,17 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "subagents.runs") {
+    return (
+      bytes +
+      (command.scope.kind === "session"
+        ? Buffer.byteLength(command.scope.sessionKey, "utf8")
+        : command.scope.runIds.reduce(
+            (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+            0,
+          ))
+    );
+  }
   if (command.type === "mcpOAuth.statuses") {
     return command.input.reduce((total, key) => total + Buffer.byteLength(key, "utf8"), bytes);
   }

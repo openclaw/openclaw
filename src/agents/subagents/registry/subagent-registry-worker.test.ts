@@ -5,6 +5,7 @@ import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worke
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
@@ -44,7 +45,6 @@ vi.mock("./subagent-registry.store.codec.js", () => ({
 }));
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: () => new Map(),
-  loadSubagentSessionListRunsFromSqlite: () => new Map(),
   loadSubagentMaintenanceRunsFromSqlite: () => new Map(),
   saveSubagentRegistryChangesToSqlite: mocks.save,
   saveSubagentRegistryToSqlite: mocks.save,
@@ -90,6 +90,9 @@ describe("queued registry worker publication", () => {
     process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
     original = context();
     mocks.context.mockReturnValue(original);
+    vi.spyOn(databaseCache, "captureOpenClawStateDatabaseReadAdmission").mockImplementation(
+      () => mocks.context().admission,
+    );
     mocks.save.mockReset();
     clearSubagentRunsReadCacheForTest();
     reply = createDeferredCore();
@@ -114,6 +117,7 @@ describe("queued registry worker publication", () => {
   });
   afterEach(() => {
     clearSubagentRunsReadCacheForTest();
+    vi.restoreAllMocks();
     if (previous === undefined) {
       delete process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
     } else {

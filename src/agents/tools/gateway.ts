@@ -676,7 +676,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           signal: extra?.signal,
           expectFinal: extra?.expectFinal,
           assertDispatchCurrent: dispatchAuthority?.assertCurrent,
-          scopes,
+          ...(Array.isArray(extra?.scopes) ? { scopes } : {}),
         },
         runtimeIdentity,
       ),

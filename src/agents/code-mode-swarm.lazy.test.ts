@@ -18,8 +18,8 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       typeof import("./subagents/registry/subagent-registry.js").getSwarmRunByLaunchReplayKey
     >();
   const initialize = vi.fn();
-  const readCollectors =
-    vi.fn<typeof import("./subagents/registry/subagent-registry.js").getSubagentRunsByRunIds>();
+  const prepareCollectors =
+    vi.fn<typeof import("./subagents/registry/subagent-registry.js").prepareSubagentRunsByRunIds>();
   const wait = vi.fn<typeof import("./tools/agents-wait-tool.js").waitForCollectorCompletion>();
   const subscribe =
     vi.fn<
@@ -39,7 +39,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   vi.doMock("./subagents/registry/subagent-registry.js", () => ({
     getSwarmRunByLaunchReplayKey: lookup,
     initSubagentRegistry: initialize,
-    getSubagentRunsByRunIds: readCollectors,
+    prepareSubagentRunsByRunIds: prepareCollectors,
   }));
   vi.doMock("./tools/agents-wait-tool.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./tools/agents-wait-tool.js")>();
@@ -109,17 +109,6 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
     };
     lookup.mockReturnValue(reservation);
-    readCollectors.mockReturnValue({
-      entries: new Map([
-        [
-          "collector",
-          {
-            ...reservation,
-            collectorCompletion: { status: "done", structured: { answer: 42 } },
-          },
-        ],
-      ]),
-    });
 
     function createRun() {
       const catalogRef = createToolSearchCatalogRef();
@@ -234,7 +223,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     expect(initialize).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(wait).not.toHaveBeenCalled();
-    expect(readCollectors).not.toHaveBeenCalled();
+    expect(prepareCollectors).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledExactlyOnceWith({
       sessionKey: "agent:main:main",

@@ -253,6 +253,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot-message-dispatch.progress-command-detail.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.reply-targets.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.auth.test.ts",
+  "extensions/telegram/src/bot-native-command-dispatch.concurrency.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.delivery.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.routing.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",

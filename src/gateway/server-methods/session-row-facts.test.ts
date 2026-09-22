@@ -200,7 +200,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         hasCurrentDeviceRunner: () => runnerAvailable,
       }),
     };
-    const preparedPlacements = createSessionRowPlacementProjection(placements);
+    const preparedPlacements = createSessionRowPlacementProjection(placements, () => undefined);
     preparedPlacements.register(identity.sessionId);
     await preparedPlacements.prepare();
     const facts = readSessionRowFacts({

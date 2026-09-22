@@ -405,7 +405,8 @@ describe("operator approval store", () => {
       .mockImplementation(() => {});
     const releaseWriter = vi.fn(() => {
       writer.exec("COMMIT");
-      clock.mockReturnValue(3_000);
+      // Retain the getter's exact-deadline boundary after the real lock wait.
+      clock.mockReturnValue(expiresAtMs);
     });
     try {
       writer.exec("BEGIN IMMEDIATE");
