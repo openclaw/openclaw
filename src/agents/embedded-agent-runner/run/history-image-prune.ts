@@ -344,14 +344,14 @@ export function installHistoryImagePruneContextTransform(
     if (mediaOptions) {
       const config = mediaOptions.config ?? {};
       for (const [index, message] of prunedInput.entries()) {
+        const liveTranscript = liveTranscripts?.[index];
         // Live prompt preparation already owns enrichment. Its structural marker
         // survives clones; never infer ownership from user-supplied file markup.
         if (
           message.role !== "user" ||
           getTranscriptPromptText(message) !== undefined ||
-          (liveTranscripts?.[index] &&
-            readFirstUserText(message.content) !==
-              readFirstUserText(liveTranscripts[index]?.content))
+          (liveTranscript?.role === "user" &&
+            readFirstUserText(message.content) !== readFirstUserText(liveTranscript.content))
         ) {
           continue;
         }
