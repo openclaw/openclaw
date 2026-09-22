@@ -30,6 +30,13 @@ import { hasPendingCanonicalSessionValidation } from "./session-canonical-valida
 const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
 const CONTENTION_BACKOFF_MS = [0, 25, 100, 250] as const;
+// Active sessions with ongoing canonical-field writes (entry_json, current_session_id, …)
+// legitimately never certify within a single drain pass: each two-phase read→certify
+// snapshot mismatches and yields certifiedRows=0 while hasMore stays true. Bound the
+// stall so the drain terminates this round, marks canonicalReady, and leaves the
+// remaining pending rows for the next request's incremental pass instead of looping
+// forever on a 250ms backoff (the historical 100%+ CPU storm root cause).
+const MAX_STALL_BATCHES = 4;
 const log = createSubsystemLogger("sessions/canonical-validation");
 
 /** Certify dirty persisted rows before startup maintenance reads their full entries. */
@@ -155,8 +162,23 @@ export async function certifySessionCanonicalValidationPending(
               continue;
             }
             if (result.certifiedRows === 0) {
-              const waitMs = CONTENTION_BACKOFF_MS[contendedBatches] ?? 250;
-              contendedBatches = Math.min(contendedBatches + 1, CONTENTION_BACKOFF_MS.length - 1);
+              contendedBatches += 1;
+              // After bounded consecutive stall rounds, accept that the remaining pending
+              // rows belong to active sessions whose writes cannot settle within this pass.
+              // Mark canonicalReady so request paths stop re-entering a non-converging drain;
+              // already-certified rows are persisted and the leftover pending set is carried
+              // forward for the next incremental drain. This preserves the consistency check
+              // (pending semantics are unchanged) while ending the permanent 250ms backoff.
+              if (contendedBatches >= MAX_STALL_BATCHES) {
+                if (
+                  !isOpenClawAgentDatabasePathCurrent(database) ||
+                  !markOpenClawAgentCanonicalValidation(database)
+                ) {
+                  throw new Error("SQLite session reclamation database owner is no longer current");
+                }
+                return;
+              }
+              const waitMs = CONTENTION_BACKOFF_MS[contendedBatches - 1] ?? 250;
               await delay(waitMs);
             } else {
               contendedBatches = 0;
