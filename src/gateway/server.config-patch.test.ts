@@ -836,15 +836,10 @@ describe("gateway config methods", () => {
     type Receipt = { config: Record<string, unknown>; hash: string };
     const pending: Array<ReturnType<typeof rpcReq<Receipt>>> = [];
     try {
-      const first = rpcReq<Receipt>(
-        requireClient(),
-        "config.set",
-        {
-          raw: JSON.stringify({ ...draft.config, logging: { level: "debug" } }),
-          baseHash: draft.hash,
-        },
-        2_000,
-      );
+      const first = rpcReq<Receipt>(requireClient(), "config.set", {
+        raw: JSON.stringify({ ...draft.config, logging: { level: "debug" } }),
+        baseHash: draft.hash,
+      });
       pending.push(first);
       await withTestTimeout(
         Promise.race([
@@ -872,18 +867,13 @@ describe("gateway config methods", () => {
       });
 
       observeCompetingLock = true;
-      const second = rpcReq<Receipt>(
-        requireClient(),
-        "config.set",
-        {
-          raw: JSON.stringify({
-            ...canonical.config,
-            logging: { level: "debug", consoleLevel: "warn" },
-          }),
-          baseHash: canonical.hash,
-        },
-        2_000,
-      );
+      const second = rpcReq<Receipt>(requireClient(), "config.set", {
+        raw: JSON.stringify({
+          ...canonical.config,
+          logging: { level: "debug", consoleLevel: "warn" },
+        }),
+        baseHash: canonical.hash,
+      });
       pending.push(second);
       await withTestTimeout(
         Promise.race([
