@@ -1,5 +1,6 @@
 import {
   readAssistantStreamSegmentIdentity,
+  readSessionTerminalReplyDisplayContent,
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -194,7 +195,7 @@ export function appendTerminalAssistantMessage(
     ...(terminalRunId ? { runId: terminalRunId } : {}),
     ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
   });
-  const terminalText = extractText(message)?.trim() ?? "";
+  const terminalText = readSessionTerminalReplyDisplayContent(message).text.trim();
   const removedIndexes = new Set<number>();
   const currentFallbackIndexes: number[] = [];
   let terminalCursor = 0;
@@ -455,7 +456,7 @@ export function terminalMessageReplacesVisibleStream(
   state: StreamReconciliationState,
   opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
 ): boolean {
-  const terminalText = extractText(message)?.trim();
+  const terminalText = readSessionTerminalReplyDisplayContent(message).text.trim();
   if (!terminalText) {
     return false;
   }
