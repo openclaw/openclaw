@@ -91,9 +91,9 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     }),
   ),
   runtimeSyntheticAuthProviderRefs: [] as string[],
-  resolveAgentEffectiveModelPrimary: vi.fn<
-    typeof import("./agent-scope.js").resolveAgentEffectiveModelPrimary
-  >(() => undefined),
+  resolveNativeModelPrimary: vi.fn<typeof import("./agent-scope.js").resolveNativeModelPrimary>(
+    () => undefined,
+  ),
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
@@ -240,7 +240,7 @@ const agentScopeMocks = vi.hoisted(() => ({
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     config.agents?.list?.find((entry) => entry.id === agentId),
-  resolveAgentEffectiveModelPrimary: preparedModelRuntimeMocks.resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary: preparedModelRuntimeMocks.resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride: () => undefined,
   resolveEffectiveModelFallbacks: () => undefined,
   resolveModelFallbackAvailability: () => ({
@@ -540,9 +540,7 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     routeVariants: [],
   });
   preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
-  preparedModelRuntimeMocks.resolveAgentEffectiveModelPrimary
-    .mockReset()
-    .mockReturnValue(undefined);
+  preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver

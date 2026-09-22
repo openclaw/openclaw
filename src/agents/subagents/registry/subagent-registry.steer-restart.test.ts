@@ -13,6 +13,7 @@ import {
 } from "../../../tasks/task-runtime.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -353,6 +354,7 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await settleSubagentRegistryPersistenceWork();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     runSubagentEndedHookMock.mockReset();

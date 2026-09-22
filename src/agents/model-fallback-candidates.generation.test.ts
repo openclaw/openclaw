@@ -19,6 +19,34 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 describe("fallback candidates across provider generations", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it("refreshes native candidates when an agent switches to and from ACP", () => {
+    const agent: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] = {
+      model: "agent/pinned",
+    };
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "native/primary", fallbacks: ["native/backup"] } },
+        entries: { worker: agent },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
+    const resolve = () =>
+      resolveModelCandidateChain({
+        cfg,
+        agentId: "worker",
+        provider: "native",
+        model: "primary",
+        allowPluginNormalization: false,
+      }).map(({ provider, model }) => `${provider}/${model}`);
+    withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+      agent.runtime = { type: "acp" };
+      expect(resolve()).toEqual(["native/primary", "native/backup"]);
+      agent.runtime = undefined;
+      expect(resolve()).toEqual(["native/primary", "agent/pinned"]);
+    });
+  });
+
   it.each(["defaults", "agent"])(
     "refreshes cached primary candidates when %s utility selection or separation changes",
     (scope) => {

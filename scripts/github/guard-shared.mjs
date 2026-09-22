@@ -48,6 +48,8 @@ export class GitHubStatusPublicationError extends Error {
   }
 }
 
+export class GitHubDiffDataError extends Error {}
+
 export async function withSecurityReviewRecovery(evaluate) {
   const recorded = process.env[recoveryDeadlineEnv];
   const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
@@ -62,7 +64,8 @@ export async function withSecurityReviewRecovery(evaluate) {
       return await evaluate();
     } catch (error) {
       const rateLimited = error instanceof GitHubRateLimitError;
-      if (!rateLimited && !(error instanceof GitHubStatusPublicationError)) {
+      const inconsistentDiff = error instanceof GitHubDiffDataError;
+      if (!rateLimited && !inconsistentDiff && !(error instanceof GitHubStatusPublicationError)) {
         throw error;
       }
       // Do not resume a status write with stale authority after waiting. The
@@ -71,15 +74,19 @@ export async function withSecurityReviewRecovery(evaluate) {
         ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
           1_000 +
           Math.floor(Math.random() * 15_000)
-        : githubApiRetryDelaysMs[attempt];
+        : inconsistentDiff
+          ? 60_000 * 2 ** attempt
+          : githubApiRetryDelaysMs[attempt];
       if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
         throw new Error(
-          "GitHub API recovery budget exhausted; security review remains incomplete.",
+          inconsistentDiff
+            ? `GitHub diff-data recovery budget exhausted; security review remains incomplete. ${error.message}`
+            : "GitHub API recovery budget exhausted; security review remains incomplete.",
           { cause: error },
         );
       }
       console.warn(
-        `${rateLimited ? `GitHub API rate limited (${error.status})` : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff ? error.message : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
       await wait(delay);
     }

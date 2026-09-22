@@ -177,6 +177,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
+  // review.sh invokes the corrected-candidate review validator by path.
+  "scripts/pr-lib/correction-review.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -300,6 +302,9 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Documented core-only Decision Labs foundation entry. No automatic consumers
+  // ship with the gate; remove this root when the first consumer imports it.
+  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.

@@ -64,6 +64,12 @@ describe("Anthropic plugin manifest", () => {
 
   it.each([
     {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "claude-opus-5",
       name: "Claude Opus 5",
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },

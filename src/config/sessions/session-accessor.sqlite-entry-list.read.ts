@@ -1,12 +1,14 @@
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
-import {
-  readSessionEntryCache,
-  type SessionEntryCacheSnapshot,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   cloneSessionEntry,
   resolveSqliteScope,
@@ -40,6 +42,30 @@ export function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
   options: { deferParticipants?: true } = {},
 ): SessionEntrySummary[] {
+  if (scope.expiredCronRuns) {
+    const { agentId, updatedBefore } = scope.expiredCronRuns;
+    const requestedOwner = normalizeAgentId(agentId);
+    return withSqlitePostCommitPublications(database.db, () =>
+      runSqliteDeferredTransactionSync(database.db, () => {
+        const selectedKeys = new Set<string>();
+        const snapshot = readSessionEntryCache(database, {
+          cache: false,
+          retainFullEntry: (sessionKey, entry) => {
+            const selected =
+              isCronRunSessionKey(sessionKey) &&
+              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
+              !((entry.updatedAt ?? 0) >= updatedBefore);
+            if (selected) {
+              selectedKeys.add(sessionKey);
+            }
+            return selected;
+          },
+        });
+        // Sibling metadata and participants still cross complete listing validation.
+        return Array.from(iterateSessionEntriesForListing(snapshot, false, selectedKeys));
+      }),
+    );
+  }
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
     agentId: database.agentId,

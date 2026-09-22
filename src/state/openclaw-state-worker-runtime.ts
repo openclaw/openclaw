@@ -13,6 +13,7 @@ import {
   isMcpOAuthWorkerCommand,
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
+import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
@@ -42,7 +43,7 @@ import {
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
-import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
@@ -123,7 +124,6 @@ import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
-import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -177,13 +177,6 @@ export function executeSharedStateCommand(
   }
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
-  }
-  if (command.type === "agentDatabases.releaseExitedLease") {
-    return executeAgentDatabaseCleanupCommand(
-      command,
-      open(),
-      getSqliteWorkerStateContext().environment,
-    );
   }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());
@@ -344,11 +337,13 @@ export function executeSharedStateCommand(
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
   }
-  if (command.type === "plugins.deferredMigrations.read") {
-    return readDeferredPluginMigrations({
+  if (
+    command.type === "plugins.deferredMigrations.read" ||
+    command.type === "plugins.deferredMigrations.completions.read"
+  ) {
+    return readDeferredPluginMigrationsInWorker(command, {
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
-      artifactPreservingReadOnly: command.input.artifactPreservingReadOnly,
     });
   }
   if (command.type === "claws.install-schema-versions") {
@@ -508,6 +503,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "sandboxRegistry.insertIfMissing") {
+    return importSandboxRegistryRow(command.input, writeOptions);
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }

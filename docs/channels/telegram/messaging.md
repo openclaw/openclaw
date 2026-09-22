@@ -41,6 +41,18 @@ Changes to `replyToMode`, `streaming`, and `textChunkLimit` apply to the next
 assembled turn without reconnecting Telegram, including account overrides.
 Active turns keep their captured delivery settings.
 
+## Inbound text batching
+
+Telegram batches rapid text messages from the same sender into one agent turn by default. Ordinary text waits for a 300ms quiet window; a non-forwarded message of at least 4000 characters allows up to 1500ms for likely long-paste continuations.
+
+- Short and long text share one batch, so a short introduction, long paste, and short follow-up can arrive as one turn. Message IDs do not need to be consecutive.
+- Batches stay isolated by bot account, sender, chat, and topic. Reply metadata and source message IDs are preserved.
+- `messages.inbound.byChannel.telegram` overrides `messages.inbound.debounceMs`, which overrides the 300ms ordinary-text default. An explicit `0` disables ordinary burst batching but keeps automatic long-paste assembly.
+- Control commands bypass batching and dispatch immediately. Stop/abort commands cancel pending text for their target conversation.
+- Forwarded messages use a separate 80ms collection window, but share the sender's dispatch queue so they cannot overtake earlier text.
+
+Ordinary text batches are bounded to 12 messages and 50,000 characters. Their collection deadline is 7.5 seconds from the first message, or the configured quiet window if longer. Messages arriving after a batch flushes cannot join it. This heuristic does not guarantee that Telegram delivers every paste fragment together. See [Inbound debouncing](/concepts/messages#inbound-debouncing) for hot-reload behavior.
+
 ## Message behavior
 
 <AccordionGroup>

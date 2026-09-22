@@ -135,7 +135,7 @@ describe("system.info", () => {
     expect(refreshed.eventLoop?.cpuCoreRatio).toBe(0.6);
     expect(refreshed.cpuCount).toBe(payload.cpuCount);
     expect(refreshed.cpuModel).toBe(payload.cpuModel);
-    expect(readCpus).toHaveBeenCalledTimes(1);
+    expect(readCpus).not.toHaveBeenCalled();
     expect(refreshed.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(getEventLoopHealth).toHaveBeenCalledTimes(2);
     expect(payload).toHaveProperty("disks", [
@@ -143,11 +143,15 @@ describe("system.info", () => {
       { path: "/Volumes/Data", totalBytes: 2_048_000, availableBytes: 1_536_000 },
     ]);
 
-    vi.mocked(Date.now).mockReturnValue(sampleTime + 2_000);
+    sampleTime += 24 * 60 * 60_000;
+    vi.mocked(Date.now).mockReturnValue(sampleTime);
     await handler(request);
-    expect(readCpus).toHaveBeenCalledTimes(2);
-    expect(respond.mock.calls[2]?.[1]).toMatchObject({ cpuCount: 0 });
-    expect(respond.mock.calls[2]?.[1]).not.toHaveProperty("cpuModel");
+    expect(readCpus).not.toHaveBeenCalled();
+    expect(respond.mock.calls[2]?.[1]).toMatchObject({
+      cpuCount: payload.cpuCount,
+      cpuModel: payload.cpuModel,
+      eventLoop: { cpuCoreRatio: 0.6 },
+    });
   });
 
   it.each(["throw", "mount-exit", "statfs-error", "empty"])(

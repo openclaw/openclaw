@@ -4,6 +4,7 @@ export const uiTimingTestFiles = ["ui/src/components/markdown.progress.node.test
 // These files launch Playwright from Node; all other .browser tests run in Chromium.
 export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-responsive.browser.test.ts",
+  "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-working-indicator.browser.test.ts",
   "ui/src/pages/chat/chat-composer-undo-redo.browser.test.ts",
