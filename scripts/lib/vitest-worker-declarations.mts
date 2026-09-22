@@ -73,6 +73,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/agents/command/cli-compaction-runtime.test-support.ts",
   "agents/sessions/bash-output-spill-entrypoints.test-support":
     "src/agents/sessions/bash-output-spill-entrypoints.test-support.ts",
+  "agents/worktrees/service-gc-runtime.test-support":
+    "src/agents/worktrees/service-gc-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
   "gateway/session-child-cache-retention-entrypoint.test-support":
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
