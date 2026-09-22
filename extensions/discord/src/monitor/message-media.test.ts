@@ -459,9 +459,9 @@ describe("resolveMediaList", () => {
     ]);
   });
 
-  it("lets native Discord voice metadata override a conflicting definitive MIME", async () => {
-    const attachment = attachmentFixture("att-voice-conflicting-mime", "voice", {
-      content_type: "video/ogg",
+  it("preserves definitive visual MIME over Discord voice metadata", async () => {
+    const attachment = attachmentFixture("att-video-voice-metadata", "clip.mp4", {
+      content_type: "video/mp4",
       duration_secs: 1.5,
       waveform: "AAAA",
     });
@@ -469,7 +469,20 @@ describe("resolveMediaList", () => {
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
-    expect(result).toEqual([{ contentType: undefined, kind: "audio" }]);
+    expect(result).toEqual([{ contentType: "video/mp4" }]);
+  });
+
+  it("preserves definitive image MIME over Discord voice metadata", async () => {
+    const attachment = attachmentFixture("att-image-voice-metadata", "image.png", {
+      content_type: "image/png",
+      duration_secs: 1.5,
+      waveform: "AAAA",
+    });
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([{ contentType: "image/png" }]);
   });
 
   it.each(["application/octet-stream", "application/ogg"])(

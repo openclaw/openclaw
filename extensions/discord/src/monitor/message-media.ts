@@ -115,11 +115,13 @@ function resolveDiscordMediaClassification(params: {
     fetchedContentType: params.fetchedContentType,
   });
   const mime = normalizeMimeType(contentType);
+  const definitiveVisual = mime?.startsWith("video/") || mime?.startsWith("image/");
   const audioKind =
     mime?.startsWith("audio/") ||
-    hasDiscordVoiceAttachmentFields(params.attachment) ||
-    (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
-      !isDefinitiveMediaType(contentType))
+    (!definitiveVisual &&
+      (hasDiscordVoiceAttachmentFields(params.attachment) ||
+        (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
+          !isDefinitiveMediaType(contentType))))
       ? "audio"
       : undefined;
   const kind =

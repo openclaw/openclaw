@@ -131,6 +131,32 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     });
   });
 
+  it("does not preflight visual attachments with voice metadata", async () => {
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/clip.mp4",
+            content_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_secs: 1.5,
+            waveform: "AAAA",
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      hasAudioAttachment: false,
+      hasTypedText: false,
+    });
+  });
+
   it("does not preflight typed direct-message audio", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: {

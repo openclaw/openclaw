@@ -627,6 +627,39 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
+  it("does not route visual attachments with voice metadata through audio preflight", async () => {
+    const result = await runDmPreflight({
+      channelId: "dm-channel-video-1",
+      message: createDiscordMessage({
+        id: "m-dm-video-1",
+        channelId: "dm-channel-video-1",
+        content: "",
+        attachments: [
+          {
+            id: "att-dm-video-1",
+            url: "https://cdn.discordapp.com/attachments/clip.mp4",
+            content_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_secs: 11.2,
+            waveform: "AAAA",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    const preflight = expectPreflightResult(result);
+    expect(preflight.preflightAudioTranscript).toBeUndefined();
+  });
+
   it("downloads attachments during preflight, before the message reaches the run queue", async () => {
     // Regression for #96165: Discord CDN attachment URLs expire. Downloading
     // must happen at receipt time (preflight), not after a possible run-queue

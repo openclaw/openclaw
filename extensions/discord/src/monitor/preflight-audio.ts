@@ -25,7 +25,11 @@ const AUDIO_ATTACHMENT_MIME_BY_EXT = new Map([
 
 function inferAudioAttachmentMime(attachment: DiscordAudioAttachment): string | undefined {
   const contentType = normalizeOptionalString(attachment.content_type);
-  if (contentType?.startsWith("audio/")) {
+  const normalizedContentType = contentType?.toLowerCase();
+  if (normalizedContentType?.startsWith("video/") || normalizedContentType?.startsWith("image/")) {
+    return undefined;
+  }
+  if (normalizedContentType?.startsWith("audio/")) {
     return contentType;
   }
   if (
