@@ -253,20 +253,22 @@ describe("Matrix account state Doctor migration", () => {
           await expect(reopenedStore.getSavedSyncToken()).resolves.toBe("cursor-after-repair");
         } catch (error) {
           bodyFailure = { error };
-          throw error;
-        } finally {
-          // Join database work before removal, retaining the fixture if cleanup cannot be verified.
-          try {
-            await lifetime.verifyCleanup(resetMatrixTestStores);
-          } catch (cleanupError) {
-            if (bodyFailure) {
-              throw new AggregateError(
-                [bodyFailure.error, cleanupError],
-                "Matrix Doctor fixture and cleanup failed",
-              );
-            }
-            throw cleanupError;
+        }
+        // Join database work before removal, retaining the fixture if cleanup cannot be verified.
+        try {
+          await lifetime.verifyCleanup(resetMatrixTestStores);
+        } catch (cleanupError) {
+          if (bodyFailure) {
+            throw new AggregateError(
+              [bodyFailure.error, cleanupError],
+              "Matrix Doctor fixture and cleanup failed",
+              { cause: cleanupError },
+            );
           }
+          throw cleanupError;
+        }
+        if (bodyFailure) {
+          throw bodyFailure.error;
         }
       }),
     getCliProcessTestTimeout(MATRIX_DOCTOR_CHILD_TIMEOUT_MS),
