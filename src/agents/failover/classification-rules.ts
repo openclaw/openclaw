@@ -83,6 +83,43 @@ const RAW_402_MARKER_RE =
 const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
+
+const EXPLICIT_CREDENTIAL_AUTH_RE =
+  /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9])))|invalid token|incorrect api key|no api key found|no credentials found|oauth token refresh failed)/i;
+
+function isXaiProvider(provider: string | undefined): boolean {
+  return provider?.trim().toLowerCase() === "xai";
+}
+
+function isXaiContentPolicyRefusalMessage(message: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(message) ?? "";
+  return (
+    normalized.includes("i can't help with that request") ||
+    normalized.includes("i cannot help with that request")
+  );
+}
+
+function isExplicitCredentialAuthMessage(message: string | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return isAuthPermanentErrorMessage(message) || EXPLICIT_CREDENTIAL_AUTH_RE.test(message);
+}
+
+function isXaiTransientAuthenticationRequired(
+  message: string | undefined,
+  provider: string | undefined,
+): boolean {
+  if (!isXaiProvider(provider)) {
+    return false;
+  }
+  const normalized = normalizeOptionalLowercaseString(message) ?? "";
+  if (!normalized.includes("authentication required") || normalized.includes("proxy")) {
+    return false;
+  }
+  return !isExplicitCredentialAuthMessage(message);
+}
+
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   return hints.some((hint) => text.includes(hint));
 }
@@ -229,6 +266,13 @@ export function classifyFailoverClassificationFromHttpStatus(
     // take precedence over generic auth.
     if (messageReason === "billing") {
       return toReasonClassification("billing");
+    }
+    if (status === 403 && isXaiProvider(provider) && isXaiContentPolicyRefusalMessage(message)) {
+      // Non-null so classifyFailoverSignalCore does not restore the "403" auth match.
+      return toReasonClassification("unclassified");
+    }
+    if (status === 401 && isXaiTransientAuthenticationRequired(message, provider)) {
+      return toReasonClassification("timeout");
     }
     return toReasonClassification("auth");
   }
