@@ -45,6 +45,14 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.completedTurn?.status;
   }
 
+  /** Prose and HTTP 429 are not evidence of exhausted account quota. */
+  hasCompletedQuotaExhaustion(): boolean {
+    return (
+      this.completedTurn?.status === "failed" &&
+      this.completedTurn.error?.codexErrorInfo === "usageLimitExceeded"
+    );
+  }
+
   /** Native completion owns the answer independently of unfinished host projection. */
   recoverCompletedAnswer(): boolean {
     const completed = this.settlement.completedAnswer;

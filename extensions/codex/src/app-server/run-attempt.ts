@@ -19,6 +19,7 @@ import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import { assertCodexManagedRequirementsDoNotOverrideToolPolicy } from "./thread-requests.js";
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
@@ -52,6 +53,32 @@ export async function runCodexAppServerAttempt(
 
         const turnRuntime = createCodexAttemptTurnState(resources);
         try {
+          if (
+            params.isFinalFallbackAttempt === false &&
+            params.pluginHarnessToolPolicyRestricted === true &&
+            !runtime.nativeToolSurfaceEnabled &&
+            !runtime.configuredMcpSurface &&
+            !connection.usesSupervisionConnection &&
+            !params.expectedSessionRuntimeOwnership &&
+            !resources.state.nativeHookRelay
+          ) {
+            try {
+              const signal = AbortSignal.any([
+                connection.runAbortController.signal,
+                AbortSignal.timeout(5_000),
+              ]);
+              await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+                resources.state.client,
+                { restrictedToolSurface: true },
+                signal,
+              );
+              connection.assertCurrent();
+              signal.throwIfAborted();
+              turnRuntime.state.quotaContinuationNativeWorkExcluded = true;
+            } catch {
+              // Managed hooks remain permitted for ordinary execution, not for handoff proof.
+            }
+          }
           const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
           const notifications = createCodexAttemptNotificationController(
             resources,
@@ -114,22 +141,28 @@ export async function runCodexAppServerAttempt(
               await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
             }
           } catch (error) {
-            if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
-              throw error;
+            if (finalizedResult && turnRuntime.state.quotaContinuationPending) {
+              // A failed optional handoff is the original quota failure, not a
+              // replayable thrown error that could lose its completed effects.
+              delete finalizedResult.settledQuotaContinuation;
+            } else {
+              if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
+                throw error;
+              }
+              // A failed handoff still owns completed effects. Return their replay
+              // evidence rather than throwing them away at the cleanup boundary.
+              const original = attemptTerminal.project(finalizedResult.terminal).promptError;
+              finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
+                kind: "failed",
+                source: "prompt",
+                error: new AggregateError(
+                  original ? [original, error] : [error],
+                  "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
+                ),
+              });
+              delete finalizedResult.pluginRuntimeRefreshMessages;
+              delete finalizedResult.settledTurnFinalizationContext;
             }
-            // A failed handoff still owns completed effects. Return their replay
-            // evidence rather than throwing them away at the cleanup boundary.
-            const original = attemptTerminal.project(finalizedResult.terminal).promptError;
-            finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
-              kind: "failed",
-              source: "prompt",
-              error: new AggregateError(
-                original ? [original, error] : [error],
-                "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
-              ),
-            });
-            delete finalizedResult.pluginRuntimeRefreshMessages;
-            delete finalizedResult.settledTurnFinalizationContext;
           }
           // Cleanup retires the execution lease; only then can device loss no longer
           // race the final result captured during asynchronous terminal processing.

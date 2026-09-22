@@ -46,6 +46,9 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   params: CliBackendDispatchParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
   const dispatch = resolveEmbeddedCliBackendDispatch(params);
+  if (dispatch && params.quotaContinuation) {
+    throw new Error("Settled quota continuation cannot dispatch a CLI replay");
+  }
   return dispatch ? await runEmbeddedAgentViaCliBackend(params, dispatch) : undefined;
 }
 

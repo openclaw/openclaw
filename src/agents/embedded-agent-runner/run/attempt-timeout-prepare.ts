@@ -3,11 +3,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import { remainingQuotaContinuationMs } from "../quota-continuation.js";
 import {
   resolveRunTimeoutDuringCompaction,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedRunAttemptInternalParams as EmbeddedRunAttemptParams } from "./internal-params.js";
 
 type ExecutionDeadline =
   | { kind: "bounded"; deadlineAtMs: number; compactionGraceUsed: boolean }
@@ -17,7 +18,12 @@ type ExecutionDeadline =
 
 type EmbeddedAttemptTimeoutParams = Pick<
   EmbeddedRunAttemptParams,
-  "onAttemptDeadlineChanged" | "onAttemptTimeoutArmed" | "runId" | "sessionId" | "timeoutMs"
+  | "onAttemptDeadlineChanged"
+  | "onAttemptTimeoutArmed"
+  | "runId"
+  | "sessionId"
+  | "timeoutMs"
+  | "activeQuotaContinuation"
 >;
 
 export function prepareEmbeddedAttemptTimeout(input: {
@@ -72,7 +78,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
         };
         const timeoutAction = resolveRunTimeoutDuringCompaction({
           ...compaction,
-          graceAlreadyUsed: armed.compactionGraceUsed,
+          graceAlreadyUsed: armed.compactionGraceUsed || Boolean(attempt.activeQuotaContinuation),
         });
         if (timeoutAction === "extend") {
           if (!input.isProbeSession) {
@@ -129,10 +135,19 @@ export function prepareEmbeddedAttemptTimeout(input: {
       scheduleAbortTimer(deadline.remainingMs, deadline.compactionGraceUsed);
     }
   };
-  if (attempt.timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+  const availableMs = attempt.activeQuotaContinuation
+    ? remainingQuotaContinuationMs(attempt.activeQuotaContinuation, attempt.timeoutMs)
+    : attempt.timeoutMs;
+  if (availableMs <= 0) {
+    clearTimers();
+    input.markTimedOutByRunBudget();
+    input.abortRun(true);
+    return timeout;
+  }
+  if (availableMs >= MAX_TIMER_TIMEOUT_MS) {
     attempt.onAttemptDeadlineChanged?.({ kind: "unlimited" });
   } else {
-    scheduleAbortTimer(attempt.timeoutMs, false);
+    scheduleAbortTimer(availableMs, false);
   }
   if (!runAbortSignal.aborted) {
     attempt.onAttemptTimeoutArmed?.();

@@ -79,6 +79,7 @@ import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maint
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
+import { settleQuotaContinuation } from "./quota-continuation.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -698,6 +699,7 @@ async function runEmbeddedAgentInternal(
             await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
           }
         }
+        await settleQuotaContinuation(result, generationCleanup);
         refresh.mergeTerminalReceipt(result);
         if (
           result.meta.executionTrace?.runner !== "cli" &&

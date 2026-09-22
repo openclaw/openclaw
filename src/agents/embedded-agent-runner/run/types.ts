@@ -365,6 +365,17 @@ export type EmbeddedRunAttemptResult = {
   providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /**
+   * Producer-owned offer, not replay permission. Emit only for structural exhausted-quota
+   * evidence after native execution is quiescent and every current-turn tool result is
+   * durably mirrored. Unknown/native hidden work, async tools, approvals and yield veto it.
+   * The host independently checks the transcript, closes old capabilities, joins cleanup,
+   * and reuses the exact live admission before selecting a turn-local continuation.
+   */
+  settledQuotaContinuation?: {
+    readonly reason: "quota_exhausted";
+    readonly messages: readonly AgentMessage[];
+  };
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
   settledTurnFinalizationContext?:
     | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }

@@ -115,6 +115,13 @@ export function createCodexAttemptServerRequestController(
     requestSignal: AbortSignal = new AbortController().signal,
     setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
+    // The settlement owner seals admission synchronously before its first await.
+    // Closing transcript projection alone must never leave new execution admitted.
+    if (state.quotaRequestAdmissionClosed) {
+      throw new Error("Codex turn has sealed new request admission for settlement");
+    }
+    const admittedRequest = createDeferred<void>();
+    state.admittedRequestCompletions.add(admittedRequest.promise);
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
@@ -421,6 +428,8 @@ export function createCodexAttemptServerRequestController(
         unsubscribeToolDiagnosticObserver();
       }
     } finally {
+      state.admittedRequestCompletions.delete(admittedRequest.promise);
+      admittedRequest.resolve();
       if (requestCountsAsTurnActivity) {
         state.activeAppServerTurnRequests -= 1;
         noteProgress(`request:${request.method}:response`);

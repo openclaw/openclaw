@@ -19,7 +19,6 @@ import {
   getBeforeToolCallFailureDisposition,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
-  getChannelAgentToolMeta,
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -81,6 +80,13 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
+import {
+  isAsyncStartedToolResult,
+  isReplaySafeToolInstance,
+  isToolResultYield,
+  captureSettledCoreFileResult,
+  markSettledCoreFileResponse,
+} from "./dynamic-tool-ownership.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -360,13 +366,6 @@ export function createCodexDynamicToolBridge(params: {
     runtime: "codex",
     ...toolResultHookContext,
   });
-  const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
-    const pluginMeta = getPluginToolMeta(tool);
-    if (pluginMeta) {
-      return pluginMeta.replaySafe === true;
-    }
-    return getChannelAgentToolMeta(tool as never) === undefined;
-  };
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   type ExecutionSnapshot = {
@@ -586,6 +585,12 @@ export function createCodexDynamicToolBridge(params: {
               deliveredPayload: rawResult,
             }),
           });
+        const settledReceipt = captureSettledCoreFileResult(
+          toolName,
+          tool,
+          executedArgs,
+          rawResult,
+        );
         // Delivery is committed before result middleware; presentation changes
         // cannot erase the source owner's confirmation or infer a new one.
         if (toolName === "message" && messageDelivery?.sourceReplyDelivered) {
@@ -733,6 +738,7 @@ export function createCodexDynamicToolBridge(params: {
         response.executionStarted = didStartExecution && !executionPrevented;
         response.replaySafe = replaySafe;
         response.sideEffectEvidence = !replaySafe || undefined;
+        markSettledCoreFileResponse(settledReceipt, response);
         return response;
       } catch (error) {
         const trustedNoStart = consumeTrustedToolNoStartError(error);
@@ -1076,17 +1082,6 @@ function collectToolTelemetry(params: {
     });
   }
   return record;
-}
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
-}
-function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  return isRecord(details) && details.async === true && details.status === "started";
 }
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0

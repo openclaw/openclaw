@@ -382,6 +382,28 @@ serveWorkerTasks(
               ),
             };
           }
+          if (request.kind === "context-messages") {
+            const { readSessionTranscriptContextMessages } =
+              await import("./session-accessor.sqlite-model-context.js");
+            return {
+              ok: true,
+              value: readSessionTranscriptContextMessages(request.target, (history) => {
+                const messages = [];
+                let bytes = 0;
+                for (const message of history) {
+                  bytes += Buffer.byteLength(JSON.stringify(message));
+                  if (
+                    messages.length >= request.limits.maxMessages ||
+                    bytes > request.limits.maxBytes
+                  ) {
+                    return { kind: "limit-exceeded" as const };
+                  }
+                  messages.push(message);
+                }
+                return { kind: "ok" as const, messages };
+              }),
+            };
+          }
           if (request.kind === "history-page") {
             return {
               ok: true,

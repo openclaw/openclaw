@@ -9,6 +9,7 @@ import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normali
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
+import { withProviderRequestAuthority } from "../provider-request-authority.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -266,7 +267,9 @@ function wrapEmbeddedAgentStreamFn(
   if (!params.authStorage && !params.resolvedApiKey) {
     return (m, context, options) => {
       params.assertCurrent?.();
-      return inner(m, transformContext(context), mergeRunSignal(options));
+      return withProviderRequestAuthority(params.assertCurrent, () =>
+        inner(m, transformContext(context), mergeRunSignal(options)),
+      );
     };
   }
   const { authStorage, providerId, resolvedApiKey } = params;
@@ -279,9 +282,11 @@ function wrapEmbeddedAgentStreamFn(
     });
     params.assertCurrent?.();
     const selectedApiKey = apiKey ?? options?.apiKey;
-    return inner(m, transformContext(context), {
-      ...mergeRunSignal(options),
-      apiKey: selectedApiKey,
-    });
+    return withProviderRequestAuthority(params.assertCurrent, () =>
+      inner(m, transformContext(context), {
+        ...mergeRunSignal(options),
+        apiKey: selectedApiKey,
+      }),
+    );
   };
 }

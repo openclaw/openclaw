@@ -30,6 +30,7 @@ import {
 import type { Api, AssistantMessage, Context, Model, StreamOptions, Usage } from "../types.js";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { getProviderPayloadAdmission } from "../utils/provider-payload.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -240,6 +241,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       return request;
     };
     const requestParams = await buildRequest("checkpoint");
+    const assertPayloadAdmitted = getProviderPayloadAdmission(options?.onPayload);
 
     const firstEvent = createFirstStreamEventAbortController(options?.signal);
     firstEventAbort = firstEvent;
@@ -248,6 +250,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const { stream: hookedOpenAIStream } = await createResponsesStreamWithEncryptedContentRetry({
       client: client as never,
       request: requestParams as never,
+      assertRequest: assertPayloadAdmitted
+        ? (request) => assertPayloadAdmitted(request, model)
+        : undefined,
       requestOptions: {
         ...buildResponsesRequestOptions(options),
         signal: firstEvent.signal,

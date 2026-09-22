@@ -8,6 +8,10 @@ import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import {
+  applyProviderPayloadHook,
+  getProviderPayloadAdmission,
+} from "../utils/provider-payload.js";
+import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
@@ -72,7 +76,7 @@ import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   createOpenAIResponsesWebSocketStream,
-  type OpenAIResponsesWebSocketMode,
+  resolveNativeOpenAIResponsesWebSocketMode,
   supportsNativeOpenAIResponsesEndpoint,
 } from "./openai-responses-websocket.js";
 import {
@@ -104,25 +108,6 @@ import {
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
-
-function resolveNativeOpenAIResponsesWebSocketMode(
-  model: Model,
-  transport: OpenAIResponsesOptions["transport"],
-): OpenAIResponsesWebSocketMode | undefined {
-  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
-    return undefined;
-  }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
-    return undefined;
-  }
-  return supportsNativeOpenAIResponsesEndpoint({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  })
-    ? transport
-    : undefined;
-}
 
 function combineWebSocketTimeoutSignal(
   signal: AbortSignal,
@@ -188,6 +173,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
+    const assertPayloadAdmitted = getProviderPayloadAdmission(options?.onPayload);
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output = createOpenAIResponsesAssistantOutput(model, config.outputApi);
@@ -196,10 +182,21 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
       const requestLifecycle = responsesRequestLifecycle.get(options);
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
-          model,
-          responsesOptions?.transport,
-        );
+        // Exact custody uses full-history HTTP, not socket/response-id projections.
+        // Ordinary requests retain their existing transport and continuation policy.
+        if (
+          assertPayloadAdmitted &&
+          (responsesOptions?.transport === "websocket" ||
+            responsesOptions?.transport === "websocket-cached")
+        ) {
+          throw new Error("Quota continuation requires an exact full-history HTTP request");
+        }
+        const websocketMode = assertPayloadAdmitted
+          ? undefined
+          : resolveNativeOpenAIResponsesWebSocketMode(model, responsesOptions?.transport);
+        if (compactRequest && assertPayloadAdmitted) {
+          throw new Error("Quota continuation cannot substitute a compact-endpoint request");
+        }
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId: options?.sessionId,
           turnId: randomUUID(),
@@ -247,48 +244,48 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           nativeAstra &&
           options?.asyncToolExecution === true &&
           !responsesOptions?.openclawCodeModeToolSurface;
-        const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) => {
-          let params = request;
-          const nextParams = await options?.onPayload?.(params, model);
-          if (nextParams !== undefined) {
-            params = nextParams as typeof params;
-          }
-          if (!isOpenAICodexResponsesModel(model)) {
-            params = mergeTransportMetadata(params, turnState?.metadata);
-          }
-          params = sanitizeOpenAICodexResponsesParams(
-            model,
-            params as Record<string, unknown>,
-          ) as typeof params;
-          params = sanitizeResponsesImagePayload(
-            params as Record<string, unknown>,
-          ) as typeof params;
-          if (
-            (options as { openclawCodeModeToolSurface?: unknown } | undefined)
-              ?.openclawCodeModeToolSurface === true
-          ) {
-            const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
-            const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
-            enforceCodeModeResponsesToolSurface(
-              params,
-              visibleToolNames,
-              allowedHostedToolTypes,
-              codeModeToolSurfaceObserver.get(options),
-            );
-            assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
-          }
-          if (
-            asyncToolExecutionEligible &&
-            params.model === "gpt-6-astra" &&
-            params.multi_agent?.enabled !== true &&
-            params.tools
-          ) {
-            params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
-            );
-          }
-          return params;
-        };
+        const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) =>
+          (await applyProviderPayloadHook(options?.onPayload, request, model, (payload) => {
+            // SAFETY: The hook's opaque replacement keeps the existing SDK request contract;
+            // the same sanitizer/policy guards below still own its normalization.
+            let params = payload as typeof request;
+            if (!isOpenAICodexResponsesModel(model)) {
+              params = mergeTransportMetadata(params, turnState?.metadata);
+            }
+            params = sanitizeOpenAICodexResponsesParams(
+              model,
+              params as Record<string, unknown>,
+            ) as typeof params;
+            params = sanitizeResponsesImagePayload(
+              params as Record<string, unknown>,
+            ) as typeof params;
+            if (
+              (options as { openclawCodeModeToolSurface?: unknown } | undefined)
+                ?.openclawCodeModeToolSurface === true
+            ) {
+              const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+              const allowedHostedToolTypes =
+                responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
+              enforceCodeModeResponsesToolSurface(
+                params,
+                visibleToolNames,
+                allowedHostedToolTypes,
+                codeModeToolSurfaceObserver.get(options),
+              );
+              assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
+            }
+            if (
+              asyncToolExecutionEligible &&
+              params.model === "gpt-6-astra" &&
+              params.multi_agent?.enabled !== true &&
+              params.tools
+            ) {
+              params.tools = params.tools.map((tool) =>
+                tool.type === "function" ? { ...tool, async: true } : tool,
+              );
+            }
+            return params;
+          })) as typeof request; // SAFETY: Normalization returns the same SDK request shape; private admission only snapshots it.
         const buildRequest = (replayMode: OpenAIResponsesReplayMode, requestContext = context) =>
           prepareRequest(
             config.buildRequest(
@@ -322,6 +319,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         // Custom routes require an explicit capability; native routes retain
         // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
+          !assertPayloadAdmitted &&
           config.httpContinuation &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
@@ -395,6 +393,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             requestOptions,
             model,
             observePrompt,
+            assertRequest: assertPayloadAdmitted
+              ? (request) => assertPayloadAdmitted(request, model)
+              : undefined,
             initialAttemptKind,
             initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),

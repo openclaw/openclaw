@@ -1,23 +1,15 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   captureAgentRunLifecycleGeneration,
   emitAgentEvent,
   emitAgentEventForRunContext,
 } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import {
-  createAssistantErrorTranscript,
-  type AssistantErrorTranscript,
-} from "../assistant-error-transcript.js";
-import { resolveModelFallbackError } from "../failover-error.js";
-import {
-  createContextEngineLogicalTurnLease,
-  type ContextEngineLogicalTurnLease,
-} from "../harness/context-engine-logical-turn.js";
+import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
+import { recordModelFallbackStop, resolveModelFallbackError } from "../failover-error.js";
+import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import {
   discardContextEngineTurnAttemptIntent,
   finalizeAcceptedContextEngineTurn,
@@ -27,14 +19,8 @@ import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
-import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type {
-  FallbackAttempt,
-  ModelFallbackAttemptProvenance,
-  ModelFallbackRouteResolution,
-} from "../model-fallback.types.js";
-import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import type { ModelFallbackCandidate } from "../model-fallback.types.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
@@ -49,104 +35,28 @@ import {
   resolveEmbeddedCyberFailoverConfig,
   resolveEmbeddedCyberFailoverTarget,
 } from "./embedded-cyber-failover.js";
+import { isQuotaContinuationClaimed, type QuotaContinuation } from "./quota-continuation.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
+import { runQuotaContinuation } from "./run-entry-quota-continuation.js";
 import {
   buildRunEntryTerminal,
   canAdvanceContextEngineTurn,
   mergeRunEntryExecutionTrace,
   preserveFollowupResultForDelivery,
   resolveRunEntryTerminalOutcome,
-  type EmbeddedAgentRunEntryTerminal,
-  type RunEntryTerminalBehavior,
 } from "./run-entry-terminal.js";
-import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
+import type {
+  RunEntryCandidate,
+  EmbeddedAgentRunEntryParams,
+  EmbeddedAgentRunEntryResult,
+} from "./run-entry.types.js";
+import { createQuotaContinuationBudget } from "./run/quota-continuation-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
-
-type RunEntryCandidateOptions = {
-  agentHarnessRuntimeOverride: string | undefined;
-  assistantErrorTranscript: AssistantErrorTranscript;
-  authProfileFailurePolicy?: AuthProfileFailurePolicy;
-  classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
-  allowTransientCooldownProbe?: boolean;
-  isFinalFallbackAttempt?: boolean;
-  isFallbackRetry: boolean;
-  modelRoutingProvenance: ModelFallbackAttemptProvenance;
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
-};
-
-type RunEntryCandidate<T> = {
-  result: T;
-  classification?: ModelFallbackResultClassification;
-  turnAttempt?: ContextEngineTurnAttemptFacts;
-};
-
-type RunEntryHarnessPreparation =
-  | { kind: "direct" }
-  | {
-      kind: "measured";
-      run: (prepare: () => Promise<void>) => Promise<void>;
-    };
-
-type RunEntrySessionOverride =
-  | { kind: "preserve" }
-  | {
-      kind: "reconcile-completed";
-      reconcile: (candidate: { provider: string; model: string }) => Promise<void>;
-    };
-
-type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
-  outcome: "completed" | "exhausted";
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-  terminal: EmbeddedAgentRunEntryTerminal;
-  settleSessionOverride: () => Promise<void>;
-};
-
-type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
-  preparedRunAdmission?: PreparedAgentRunAdmission;
-  selection: {
-    cfg: OpenClawConfig;
-    provider: string;
-    model: string;
-    requestedRouteResolution?: ModelFallbackRouteResolution;
-    fallbacksOverride?: string[];
-    agentDir?: string;
-    userLockedAuthProfileId?: string;
-  } & ModelManifestNormalizationContext;
-  identity: {
-    runId: string;
-    agentId: string;
-    sessionId: string;
-    sessionKey?: string;
-    lane?: string;
-  };
-  harness: {
-    workspaceDir: string;
-    sessionKey?: string;
-    preparation: RunEntryHarnessPreparation;
-    resolveRuntimeOverride: (provider: string, model: string) => string | undefined;
-    resolveContextEngineHost?: (
-      provider: string,
-      model: string,
-      agentHarnessRuntimeOverride: string | undefined,
-    ) => ContextEngineHostSupport | undefined;
-  };
-  behavior: RunEntryTerminalBehavior;
-  sessionOverride: RunEntrySessionOverride;
-  abortSignal?: AbortSignal;
-  onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
-  /** Runs once after the successful winner is accepted, before post-turn context commit. */
-  onAcceptedTerminal?: () => void | (() => void) | Promise<void | (() => void)>;
-  runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
-};
 
 /** Runs one logical turn across model candidates and advances only the accepted winner. */
 export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
@@ -268,11 +178,18 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         }
       : undefined;
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
+  const quotaBudget = createQuotaContinuationBudget(params.identity);
   try {
     let capturedCyberRefusal: { provider: string; model: string } | undefined;
+    let continuationCandidates: readonly ModelFallbackCandidate[] = [];
+    const consumedContinuationCandidates = new Set<string>();
     const runFallbackSearch = (
       selection: EmbeddedAgentRunEntryParams<T>["selection"],
-      runOptions: { captureCyberRefusal?: boolean; forceFallbackRetry?: boolean } = {},
+      runOptions: {
+        captureCyberRefusal?: boolean;
+        forceFallbackRetry?: boolean;
+        quotaContinuation?: QuotaContinuation;
+      } = {},
     ) =>
       runWithModelFallback<RunEntryCandidate<T>>({
         ...selection,
@@ -280,6 +197,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {
+          if (runOptions.captureCyberRefusal) {
+            continuationCandidates = candidates;
+          }
           for (const candidate of candidates) {
             try {
               const agentHarnessRuntimeOverride = resolveRuntimeOverride(
@@ -357,6 +277,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               }),
             }),
         run: async (provider, model, options) => {
+          if (runOptions.captureCyberRefusal) {
+            consumedContinuationCandidates.add(JSON.stringify([provider, model]));
+          }
           assistantErrorTranscript.clear();
           if (!options) {
             throw new Error("Model fallback attempt is missing routing provenance");
@@ -368,6 +291,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
             | undefined;
           const classifyResult = (result: EmbeddedAgentRunResult) => {
+            // A continuation is not a replayable attempt, including when it fails.
+            if (runOptions.quotaContinuation) {
+              return undefined;
+            }
             // Custody can settle between classification and finalization; never cache its veto.
             if (canFallback?.() === false) {
               if (runOptions.captureCyberRefusal) {
@@ -418,13 +345,18 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             return classified.value;
           };
           try {
+            if (runOptions.quotaContinuation && quotaBudget.remainingMs() <= 0) {
+              throw new Error("Quota continuation has no logical-turn execution budget remaining");
+            }
             const result = await params.runCandidate(provider, model, {
               agentHarnessRuntimeOverride: resolveRuntimeOverride(provider, model),
+              quotaBudget,
+              quotaContinuation: runOptions.quotaContinuation,
               assistantErrorTranscript,
               // The original OpenAI refusal proves this turn's credential already
               // reached the provider. Keep a target-only entitlement rejection from
               // poisoning shared auth health for ordinary OpenAI model selection.
-              ...(runOptions.forceFallbackRetry
+              ...(runOptions.forceFallbackRetry && !runOptions.quotaContinuation
                 ? { authProfileFailurePolicy: "local" as const }
                 : {}),
               classifyResult,
@@ -435,7 +367,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 ? {
                     ...options.modelRoutingProvenance,
                     stage: "fallback",
-                    fallbackReason: "unknown",
+                    fallbackReason: runOptions.quotaContinuation ? "rate_limit" : "unknown",
                   }
                 : options.modelRoutingProvenance,
               contextEngineLogicalTurnLease,
@@ -449,6 +381,19 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               classification: classifyResult(result),
               turnAttempt: contextEngineTurnCandidate,
             };
+          } catch (error) {
+            if (
+              runOptions.quotaContinuation &&
+              isQuotaContinuationClaimed(runOptions.quotaContinuation)
+            ) {
+              const stopped =
+                error instanceof Error
+                  ? error
+                  : new Error(formatErrorMessage(error), { cause: error });
+              recordModelFallbackStop(stopped);
+              throw stopped;
+            }
+            throw error;
           } finally {
             clearObservedModel();
           }
@@ -459,7 +404,21 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       captureCyberRefusal: true,
     });
     const originalErrorTranscript = assistantErrorTranscript.snapshot();
-    let fallbackResult = originalFallbackResult;
+    const quotaOutcome = await runQuotaContinuation({
+      params,
+      originalFallbackResult,
+      continuationCandidates,
+      consumedContinuationCandidates,
+      quotaBudget,
+      canFallback,
+      runFallbackSearch,
+      discardSourceAttempt: (facts) => {
+        discardContextEngineTurnAttemptIntent({ facts, lease: contextEngineLogicalTurnLease });
+        unsettledContextEngineTurnAttempt = undefined;
+      },
+    });
+    let fallbackResult = quotaOutcome.fallbackResult;
+    const quotaContinued = quotaOutcome.quotaContinued;
     let policyEscalated = false;
     const cyberFailover = resolveEmbeddedCyberFailoverConfig(params.selection.cfg);
     const target =
@@ -679,6 +638,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       sessionOverrideSettled = true;
       if (
         !policyEscalated &&
+        !quotaContinued &&
         settledResult.outcome === "completed" &&
         params.sessionOverride.kind === "reconcile-completed"
       ) {
@@ -690,6 +650,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     };
     return { ...settledResult, terminal, settleSessionOverride };
   } finally {
+    quotaBudget.dispose();
     if (unsettledContextEngineTurnAttempt) {
       discardContextEngineTurnAttemptIntent({
         facts: unsettledContextEngineTurnAttempt,

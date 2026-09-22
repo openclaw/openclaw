@@ -40,6 +40,10 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import {
+  assertQuotaContinuationProviderPayload,
+  bindQuotaContinuationSuccessor,
+} from "../quota-continuation.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -73,10 +77,12 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
+import { CONTINUATION_PROMPT } from "./continuation-prompt.js";
 import { materializeProviderContext } from "./images.js";
+import type { EmbeddedRunAttemptInternalParams as EmbeddedRunAttemptParams } from "./internal-params.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 /**
  * Settles async tools and compaction, then snapshots the completed stream.
@@ -553,12 +559,48 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
   });
+  const quotaContinuation = attempt.activeQuotaContinuation;
+  if (
+    quotaContinuation &&
+    streamStrategy !== "stream-simple" &&
+    !streamStrategy.startsWith("boundary-aware:")
+  ) {
+    throw new Error(
+      "Quota continuation requires a built-in transport with final-payload admission",
+    );
+  }
+  if (quotaContinuation) {
+    const record = bindQuotaContinuationSuccessor(quotaContinuation);
+    const afterCall = session.agent.afterToolCall;
+    const afterOutcome = session.agent.afterToolOutcome;
+    session.agent.afterToolCall = async (context, signal) => {
+      record(context);
+      return afterCall?.(context, signal);
+    };
+    session.agent.afterToolOutcome = async (context, signal) => {
+      if (!context.executionStarted) {
+        record(context);
+      }
+      return afterOutcome?.(context, signal);
+    };
+  }
   session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    ...(quotaContinuation
+      ? {
+          assertFinalPayload: (payload: unknown, api: string) =>
+            assertQuotaContinuationProviderPayload(
+              quotaContinuation,
+              payload,
+              api,
+              CONTINUATION_PROMPT,
+            ),
+        }
+      : {}),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,

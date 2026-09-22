@@ -22,7 +22,6 @@ import {
   usesFoundryBearerAuth,
 } from "../providers/anthropic-auth-headers.js";
 import {
-  applyClaudeRequestContract,
   buildAnthropicClaudeCodeIdentity,
   defaultsClaudeAdaptiveThinking,
   prepareClaudeNoPrefillRequestContext,
@@ -34,11 +33,11 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
+import { finalizeAnthropicRequestPayload } from "../providers/anthropic-request-payload.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
 } from "../providers/anthropic-server-fallback.js";
-import { applyAnthropicThinkingBindingControls } from "../providers/anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
   type AnthropicToolProjection,
@@ -61,7 +60,6 @@ import {
   buildAnthropicSystemBlocks,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
   resolveAnthropicCacheOptions,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
@@ -753,22 +751,17 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions,
           directApiKeyBetaHeader,
         );
-        const nextParams = await transportOptions.onPayload?.(params, model);
-        if (nextParams !== undefined) {
-          params = nextParams as Record<string, unknown>;
-        }
-        applyClaudeRequestContract(params, model);
-        const betaHeader = resolveAnthropicContextManagementBetaHeader(
+        const finalized = await finalizeAnthropicRequestPayload(
           params,
+          model,
+          transportOptions.onPayload,
           directApiKeyBetaHeader,
         );
-        const bindingHeaders =
-          applyAnthropicThinkingBindingControls(params, betaHeader) ??
-          (betaHeader ? { "anthropic-beta": betaHeader } : undefined);
-        const { response, stream: anthropicStream } = await client.messages.stream(
-          { ...params, stream: true },
-          { signal: transportOptions.signal, headers: bindingHeaders },
-        );
+        params = finalized.payload as Record<string, unknown>;
+        const { response, stream: anthropicStream } = await client.messages.stream(params, {
+          signal: transportOptions.signal,
+          headers: finalized.headers,
+        });
         await notifyProviderHttpResponse({ options: transportOptions, response, model });
         if (!response.ok) {
           const errorBody = await readAnthropicMessagesErrorBody(response);

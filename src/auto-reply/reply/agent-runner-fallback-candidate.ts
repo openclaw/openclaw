@@ -284,6 +284,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             runAbortSignal: params.runAbortSignal,
             runLane,
             isFallbackRetry: runOptions.isFallbackRetry,
+            quotaBudget: runOptions.quotaBudget,
+            quotaContinuation: runOptions.quotaContinuation,
             isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             suppressQueuedUserPersistenceForCandidate:
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -312,6 +314,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             deferredLifecycle: params.state.deferredLifecycle,
           } satisfies AgentFallbackCandidateCommonParams;
           if (runtime.useCliExecution) {
+            if (runOptions.quotaContinuation) {
+              throw new Error(
+                "Settled quota continuation requires the embedded runtime, not a CLI replay",
+              );
+            }
             const candidate = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,

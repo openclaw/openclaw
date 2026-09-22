@@ -5,10 +5,8 @@ import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
-import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -17,6 +15,7 @@ import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
+import { offerQuotaContinuation } from "./quota-continuation.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
@@ -29,25 +28,20 @@ import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-st
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
-import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
+import { buildErrorAgentMeta } from "./run/helpers.js";
 import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn-recovery.js";
+import { prepareQuotaRunParams, resolveEmbeddedLoopPolicy } from "./run/loop-initial-policy.js";
+import { prepareLoopRuntime } from "./run/loop-runtime-preparation.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
-import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
-import {
-  beginRunAttempt,
-  createRunRetryBudget,
-  isRunRetryBudgetExhausted,
-  recordRunRetry,
-} from "./run/retry-budget.js";
+import { beginRunAttempt, isRunRetryBudgetExhausted, recordRunRetry } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
-import { settleEmbeddedRun } from "./run/run-settlement.js";
-import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
+import { settleEmbeddedLoop } from "./run/run-settlement.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
 import {
@@ -65,9 +59,10 @@ export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
   let { runParams: params, provider, modelId } = input;
+  const quotaContinuation = params.quotaContinuation;
+  params = prepareQuotaRunParams(params);
   const {
     agentDir,
-    workspaceDir: resolvedWorkspace,
     globalLane,
     hookRunner,
     hookContext: hookCtx,
@@ -81,28 +76,14 @@ export async function runPreparedEmbeddedLoop(
   } = input;
   const { notifyExecutionPhase } = input.progressController;
   let startupStagesEmitted = false;
-  const preparedRuntime = await measureEmbeddedAgentPreparation(
-    "runtime",
-    () =>
-      prepareEmbeddedRunRuntime({
-        assertCurrent: input.laneController.throwIfAborted,
-        runParams: params,
-        sessionAdmission: input.sessionAdmission,
-        provider,
-        modelId,
-        agentDir,
-        workspaceDir: resolvedWorkspace,
-        globalLane,
-        hookRunner,
-        hookContext: hookCtx,
-        markStartupStage: (stage) => startupStages.mark(stage),
-        notifyExecutionPhase,
-        fallbackConfigured,
-        preparedModelRuntime: input.preparedModelRuntime,
-      }),
-    { config: params.config },
+  const preparedRuntime = await prepareLoopRuntime(
+    params,
+    input,
+    provider,
+    modelId,
+    quotaContinuation,
   );
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  params = preparedRuntime.runParams;
   const abortSignal = params.abortSignal;
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
@@ -146,19 +127,12 @@ export async function runPreparedEmbeddedLoop(
     traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
     )?.reason ?? lastRetryFailoverReason;
-  const { sessionKey, config, agentId } = params;
-  const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
-  const strictAgenticActive = isStrictAgenticExecutionContractActive({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+  const { sessionAgentId, executionContract, runRetryBudget } = resolveEmbeddedLoopPolicy(
+    params,
     provider,
     modelId,
-  });
-  const executionContract = strictAgenticActive ? "strict-agentic" : "default";
-
-  const runRetryBudget = createRunRetryBudget(
-    resolveMaxRunRetryIterations(profileCandidates.length),
+    profileCandidates.length,
+    quotaContinuation,
   );
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
@@ -215,6 +189,9 @@ export async function runPreparedEmbeddedLoop(
     assertCurrent: assertAdmittedActive,
   });
   input.onInitialWriterPrepared(sessionPromptState);
+  if (quotaContinuation) {
+    sessionPromptState.continueFromCurrentTranscript();
+  }
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
     params.sessionPersistence !== "detached" &&
@@ -249,7 +226,9 @@ export async function runPreparedEmbeddedLoop(
       sessionPromptState,
     });
     let authRetryPending = false;
-    let accumulatedReplayState = createEmbeddedRunReplayState();
+    let accumulatedReplayState = createEmbeddedRunReplayState(
+      quotaContinuation ? { replayInvalid: true, hadPotentialSideEffects: true } : undefined,
+    );
     const attemptCarryover = createAttemptCarryover();
     while (true) {
       // Every retry keeps its exact admission; only transcript mutation requires a writer claim.
@@ -668,26 +647,29 @@ export async function runPreparedEmbeddedLoop(
       if (terminalResolution.action === "retry") {
         continue;
       }
+      if (!quotaContinuation && settledTurnFinalizationOutcome === "not-attempted") {
+        await offerQuotaContinuation({
+          params,
+          attempt: terminalAttempt,
+          result: terminalResolution.result,
+          tainted: turnTaintState.isTainted(),
+        });
+      }
       return providerReview.finish(terminalResolution.result);
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit
     // must restore terminal suppression before asynchronous settlement begins.
-    contextRecoveryState.restoreTimeoutRecoveryAbandonment();
-    permissionChanges.close();
-    await settleEmbeddedRun({
-      runInput: admittedRunInput,
-      runtime: preparedRuntime,
-      compaction: {
-        state: contextRecoveryState,
-        session: sessionPromptState,
-        originalTarget: originalCompactionTarget,
-        durable: durableCompactionAccounting,
-        authority: accountingAuthority,
-      },
-      ownedContextEngineLease: ownsContextEngineLogicalTurnLease
-        ? contextEngineLogicalTurnLease
-        : undefined,
-    });
+    await settleEmbeddedLoop(
+      admittedRunInput,
+      preparedRuntime,
+      contextRecoveryState,
+      permissionChanges,
+      sessionPromptState,
+      originalCompactionTarget,
+      durableCompactionAccounting,
+      accountingAuthority,
+      ownsContextEngineLogicalTurnLease ? contextEngineLogicalTurnLease : undefined,
+    );
   }
 }

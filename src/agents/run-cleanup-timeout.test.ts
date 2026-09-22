@@ -31,6 +31,44 @@ describe("agent cleanup timeout", () => {
     vi.useRealTimers();
   });
 
+  it("required cleanup preserves a failed owner outcome through the logging wrapper", async () => {
+    await expect(
+      runAgentCleanupStep({
+        runId: "required",
+        sessionId: "session",
+        step: "sandbox-release",
+        settlement: "required",
+        cleanup: async () => {
+          throw new Error("still owned");
+        },
+        log,
+      }),
+    ).rejects.toThrow("still owned");
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("required cleanup stays failed when a timed-out owner later resolves", async () => {
+    let finish = () => {};
+    const operation = runAgentCleanupStep({
+      runId: "required",
+      sessionId: "session",
+      step: "sandbox-release",
+      settlement: "required",
+      timeoutMs: 5,
+      cleanup: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+      log,
+    });
+    const rejected = expect(operation).rejects.toThrow("Required cleanup did not settle");
+    await vi.advanceTimersByTimeAsync(5);
+    await rejected;
+    finish();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(operation).rejects.toThrow("Required cleanup did not settle");
+  });
+
   it.each<{
     name: string;
     step: string;

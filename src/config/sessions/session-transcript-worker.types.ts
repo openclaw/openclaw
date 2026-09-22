@@ -4,6 +4,7 @@ import type {
   SessionFileEntry,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type {
@@ -121,6 +122,17 @@ export type SessionSqliteTargetWorkerInput = {
   env: NodeJS.ProcessEnv;
   registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
 };
+
+export type SessionContextMessagesWorkerInput = {
+  kind: "context-messages";
+  target: SessionTranscriptRuntimeTarget;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  limits: { maxMessages: number; maxBytes: number };
+};
+
+type SessionContextMessagesWorkerResult =
+  | { kind: "ok"; messages: AgentMessage[] }
+  | { kind: "limit-exceeded" };
 
 export type SessionEntryWorkerInput = {
   kind: "session-entry";
@@ -337,6 +349,7 @@ export type SessionTranscriptWorkerInput =
   | SessionSqliteTargetWorkerInput
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
+  | SessionContextMessagesWorkerInput
   | SessionEntryWorkerInput
   | SessionBranchSummaryWorkerInput;
 
@@ -367,6 +380,7 @@ export type SessionTranscriptWorkerValues = {
   "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
+  "context-messages": SessionContextMessagesWorkerResult;
   "session-entry": {
     entry: SessionFileEntry | null;
     resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;

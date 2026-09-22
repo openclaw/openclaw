@@ -29,6 +29,12 @@ class CodexAttemptState {
   completed = false;
   abortCleanup = Promise.resolve();
   pluginRuntimeRefreshStop?: Promise<void>;
+  /** Requires confirmed subscription/binding release before returning a continuation offer. */
+  quotaContinuationPending = false;
+  quotaRequestAdmissionClosed = false;
+  readonly admittedRequestCompletions = new Set<Promise<void>>();
+  /** Captured before turn/start; a later config read cannot certify earlier hidden work. */
+  quotaContinuationNativeWorkExcluded = false;
   // Only completed native cleanup can advance this state to confirmed.
   permissionChangeRestart?: "requested" | "confirmed";
   localCompletionRequested = false;
@@ -86,6 +92,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       return;
     }
     state.completed = true;
+    if (state.quotaContinuationNativeWorkExcluded) {
+      state.quotaRequestAdmissionClosed = true;
+    }
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
     resolveCompletion();

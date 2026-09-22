@@ -5,6 +5,7 @@ import {
   type CodexHistoryRejectionReason,
 } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
+import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 
@@ -66,4 +67,24 @@ export async function captureCodexSettledTurnFinalizationContext(
   // Capture follows settled side effects; a rejected read must preserve the incomplete turn.
   embeddedAgentLog.warn("codex settled-turn finalization context capture failed", { reason });
   return undefined;
+}
+
+/** Keep the existing unavailable-context diagnostic beside its capture owner. */
+export function warnCodexContextUnavailable(
+  context: { source: string } | undefined,
+  resources: CodexAttemptResources,
+  turnId: string,
+): void {
+  if (context?.source !== "unavailable") {
+    return;
+  }
+  const { params, usesSupervisionConnection } = resources.prompt.context.runtime.connection;
+  embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+    runId: params.runId,
+    threadId: resources.state.thread.threadId,
+    turnId,
+    reason: usesSupervisionConnection
+      ? "native_auth_finalization_unsupported"
+      : "context_unavailable",
+  });
 }

@@ -24,6 +24,8 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
 export type AgentFallbackCandidateCommonParams = {
+  quotaBudget?: import("../../agents/embedded-agent-runner/run/quota-continuation-budget.js").QuotaContinuationBudget;
+  quotaContinuation?: import("../../agents/embedded-agent-runner/quota-continuation.js").QuotaContinuation;
   preparedRunAdmission: PreparedAgentRunAdmission;
   messageActionTurnCapability?: string;
   turn: AgentTurnParams;
