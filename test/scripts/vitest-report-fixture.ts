@@ -289,14 +289,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
       targets = ["test/vitest/vitest.extension-telegram.config.ts"];
     }
+    // Generated configs need no transforms. The real-home case imports the
+    // repository config and retains its source-aware loader.
+    const configLoader = `--configLoader=${realHomeReplay ? "runner" : "native"}`;
     const args = [
       "--reporter=verbose",
       "--reporter=json",
-      "--configLoader=runner",
+      configLoader,
       mode === "dotted" ? `--outputFile.json=${output}` : `--outputFile=${output}`,
     ];
     if (options.report === false) {
-      args.splice(0, args.length, "--configLoader=runner");
+      args.splice(0, args.length, configLoader);
     }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {

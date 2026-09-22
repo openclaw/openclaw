@@ -549,16 +549,17 @@ async function createAgentSessionImpl(
     appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
       sessionManager.appendThinkingLevelChange(thinkingLevel),
     );
-  const initializeMetadata = () =>
-    withSessionManagerWrite(sessionManager, async () => {
+  const initializeMetadata = () => {
+    // Prepared history needs no write permit when its initial metadata already exists.
+    // Otherwise restoration waits behind unrelated writes, including reclamation.
+    if (hasExistingSession && hasThinkingEntry) {
+      return Promise.resolve();
+    }
+    return withSessionManagerWrite(sessionManager, async () => {
       assertInitialSessionCurrent();
-      // Restore messages if session has existing data.
       if (hasExistingSession) {
-        if (!hasThinkingEntry) {
-          await appendInitialThinking();
-          assertInitialSessionCurrent();
-        }
-        agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
+        await appendInitialThinking();
+        assertInitialSessionCurrent();
       } else {
         // Persist initial settings before exposing the new session to callers.
         if (model) {
@@ -571,6 +572,7 @@ async function createAgentSessionImpl(
         await appendInitialThinking();
       }
     });
+  };
   try {
     await (initialTarget
       ? withSessionTranscriptWriteAssertion(
@@ -581,6 +583,9 @@ async function createAgentSessionImpl(
       : initializeMetadata());
     // Cleanup can yield after the last append, before this factory exposes its session.
     assertInitialSessionCurrent();
+    if (hasExistingSession) {
+      agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
+    }
   } catch (cause) {
     if (cause instanceof SessionMetadataCommittedError || !metadataCommit) {
       throw cause;

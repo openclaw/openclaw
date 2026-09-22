@@ -175,6 +175,7 @@ function hasEventScope(
   client: GatewayWsClient,
   event: string,
   explicitPluginScope?: GatewayPluginEventScope,
+  ownRunQuestion = false,
 ): boolean {
   if (client.connectionKind === "worker") {
     return false;
@@ -192,7 +193,9 @@ function hasEventScope(
   }
   return (
     required.length === 0 ||
-    (role === "operator" && required.some((scope) => operatorScopeSatisfied(scope, scopes)))
+    (role === "operator" &&
+      (required.some((scope) => operatorScopeSatisfied(scope, scopes)) ||
+        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
   );
 }
 
@@ -407,7 +410,17 @@ export function createGatewayBroadcaster(params: {
       ) {
         continue;
       }
-      if (!hasEventScope(c, event, explicitPluginScope)) {
+      const questionRecipient =
+        event === "question.requested" || event === "question.resolved"
+          ? opts?.questionRecipient
+          : undefined;
+      const ownRunQuestion =
+        questionRecipient !== undefined &&
+        !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
+      if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion)) {
+        continue;
+      }
+      if (questionRecipient && !isCurrent(() => questionRecipient(c))) {
         continue;
       }
       const requiresSessionSubscription =
@@ -444,6 +457,8 @@ export function createGatewayBroadcaster(params: {
         }
       }
       if (
+        // The question owner already checked the narrow recipient's exact retained session facts.
+        !ownRunQuestion &&
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
         !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)

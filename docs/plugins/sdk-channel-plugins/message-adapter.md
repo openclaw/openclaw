@@ -57,13 +57,18 @@ contract test failure:
 | `message.live.capabilities`           | `draftPreview`, `previewFinalization`, `progressUpdates`, `nativeStreaming`, `quietFinalization` |
 | `message.live.finalizer.capabilities` | `finalEdit`, `normalFallback`, `discardPending`, `previewReceipt`, `retainOnAmbiguousFailure`    |
 
-Channels that finalize a draft preview in place should route the runtime logic
-through `defineFinalizableLivePreviewAdapter(...)` plus
-`deliverWithFinalizableLivePreviewAdapter(...)`, and keep the declared
-capabilities backed by `verifyChannelMessageLiveCapabilityAdapterProofs(...)`
-and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
-progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
-silently.
+Channels with previews should use `createLivePreviewLifecycle(...)` from
+`openclaw/plugin-sdk/channel-outbound` for final acceptance, promotion, and
+cleanup. Supply real transport operations and explicit delivery results instead
+of keeping channel-local final/cleanup flags. Native streaming and persistent
+cards retain their transport-specific finalization; they are not required to
+pretend to be deletable drafts. See
+[Progress and preview delivery ownership](/plugins/sdk-channel-outbound#progress-and-preview-delivery-ownership).
+
+Keep declared capabilities backed by
+`verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+`verifyChannelMessageLiveFinalizerProofs(...)` tests so native progress, edit,
+fallback/retention, cleanup, and receipt behavior cannot drift silently.
 
 ### Progress visibility acceptance
 

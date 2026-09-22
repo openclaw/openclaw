@@ -398,7 +398,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved terminal-reply classifier for A2A task completion.
       // +1: approved native workspace worker argv resolver for node adapters.
       // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
-      4565,
+      // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
+      4568,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -555,7 +556,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved terminal-reply classifier for A2A task completion.
       // +1: approved native workspace worker argv resolver for node adapters.
       // +6: shared Code Mode source preparation, output capture, and source-location helpers.
-      2679,
+      // +1: approved shared preview lifecycle factory.
+      2680,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -27,6 +27,10 @@ import {
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { resolveChangedDockerSeedLanes } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  decodeNodeTestGroups,
+  encodeNodeTestGroups,
+} from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   BOUNDARY_CHECKS,
@@ -207,6 +211,7 @@ function runCiManifestFixture(options: {
   runnerProfile?: "blacksmith" | "github" | "hybrid";
   targetHostedRunnerProfileContract?: boolean;
   uiE2eProjectsCapability?: boolean;
+  uiReleaseTier?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
 }) {
@@ -294,6 +299,15 @@ function runCiManifestFixture(options: {
       appendFileSync(
         path.join(scriptsDir, "ci-node-test-plan.mts"),
         `\nexport { isToolingTestOwnerPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
+      );
+    }
+    if (options.uiReleaseTier) {
+      appendFileSync(
+        path.join(scriptsDir, "ci-node-test-plan.mts"),
+        `\nexport const createUiTestShardGroups = (options) => ({
+          ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", env: {fixtureTier: JSON.stringify(options)}}],
+          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", env: {fixtureTier: JSON.stringify(options)}}],
+        });\n`,
       );
     }
     if (options.startupCorpusCoverage) {
@@ -1287,6 +1301,85 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
+    {
+      name: "pull requests",
+      eventName: "pull_request" as const,
+      changedPaths: ["ui/src/components/app-sidebar.ts"],
+      includeReleaseOnlyTests: false,
+    },
+    {
+      name: "main pushes",
+      eventName: "push" as const,
+      changedPaths: ["ui/src/components/app-sidebar.ts"],
+      includeReleaseOnlyTests: false,
+    },
+    {
+      name: "direct matrix edits",
+      eventName: "pull_request" as const,
+      changedPaths: ["ui/src/e2e/chat-session-entry.e2e.test.ts"],
+      includeReleaseOnlyTests: false,
+    },
+    {
+      name: "full release dispatches",
+      eventName: "workflow_dispatch" as const,
+      changedPaths: ["ui/src/components/app-sidebar.ts"],
+      includeReleaseOnlyTests: true,
+    },
+  ])("forwards the UI release-tier selection for $name to both test jobs", (scenario) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      uiReleaseTier: true,
+      historicalCompatibility: false,
+      eventName: scenario.eventName,
+      changedPaths: scenario.changedPaths,
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: scenario.eventName,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+      steps: { manifest: { outputs: manifest.outputs } },
+    };
+    for (const [name, config, output, job, stepName] of [
+      ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
+      [
+        "e2e",
+        "test/vitest/vitest.ui-e2e.config.ts",
+        "ui_e2e_test_groups_gzip_base64",
+        "checks-ui-e2e",
+        "Test Control UI end-to-end",
+      ],
+    ] as const) {
+      const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
+      expect(decodeNodeTestGroups(packed)).toEqual([
+        {
+          configs: [config],
+          shard_name: name,
+          env: {
+            fixtureTier: JSON.stringify({
+              includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
+              changedPaths: scenario.changedPaths,
+            }),
+          },
+        },
+      ]);
+      expect(evaluateWorkflowExpression(workflow.jobs.preflight.outputs[output], context)).toBe(
+        packed,
+      );
+      const step = expectDefined(
+        workflow.jobs[job].steps.find((candidate: WorkflowStep) => candidate.name === stepName),
+        `${name} test command`,
+      );
+      expect(
+        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, context),
+      ).toBe(packed);
+    }
+  });
+
+  it.each([
     { eventName: "push" as const },
     { eventName: "workflow_dispatch" as const, historicalCompatibility: false },
     { eventName: "workflow_dispatch" as const, historicalCompatibility: true },
@@ -1370,6 +1463,7 @@ describe("ci workflow guards", () => {
           : {
               smoke: [
                 "Swift lint",
+                ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
               ],
@@ -1377,6 +1471,7 @@ describe("ci workflow guards", () => {
               tests: [
                 "Test Watch RTC engine",
                 "Swift lint",
+                "Prepare iOS simulator",
                 "Build iOS app",
                 "Run focused iOS voice cleanup simulator tests",
                 "Run focused iOS lifecycle simulator tests",
@@ -6069,10 +6164,13 @@ describe("ci workflow guards", () => {
           historicalCompatibility: false,
           runnerBackend,
           uiE2eProjectsCapability,
+          scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
         });
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.frozen_target).toBe("true");
         expect(manifest.outputs.compatibility_target).toBe("false");
+        expect(manifest.outputs.ui_test_groups_gzip_base64).toBe("");
+        expect(manifest.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
         expect(
           JSON.parse(
             expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} UI E2E matrix`),
@@ -6099,26 +6197,32 @@ describe("ci workflow guards", () => {
     const commandRoot = tempDirs.make("openclaw-ui-e2e-project-command-");
     const commandBin = path.join(commandRoot, "bin");
     const commandArgs = path.join(commandRoot, "args");
+    const commandInclude = path.join(commandRoot, "include-path");
     mkdirSync(commandBin);
-    writeFileSync(
-      path.join(commandBin, "node"),
-      '#!/bin/sh\nprintf "%s\\n" "$@" > "$UI_E2E_COMMAND_ARGS"\n',
-      { mode: 0o755 },
-    );
+    writeExecutable(path.join(commandBin, "node"), [
+      "#!/bin/sh",
+      'printf "%s\\n" "$@" > "$UI_E2E_COMMAND_ARGS"',
+      'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$UI_E2E_COMMAND_INCLUDE"',
+    ]);
     const runCommand = (env: Record<string, string>) => {
       const result = runWorkflowShellScript(expectDefined(scenario.run, "UI E2E command"), {
         cwd: commandRoot,
         env: {
           ...process.env,
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
+          RUNNER_TEMP: commandRoot,
           ...env,
           PATH: `${commandBin}:${process.env.PATH ?? ""}`,
           UI_E2E_COMMAND_ARGS: commandArgs,
+          UI_E2E_COMMAND_INCLUDE: commandInclude,
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
       return readFileSync(commandArgs, "utf8").trim().split("\n");
     };
-    expect(runCommand({ VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" })).toEqual([
+    const shardEnv = { VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" };
+    const expectedArgs = [
       "scripts/run-vitest.mjs",
       "run",
       "--config",
@@ -6127,7 +6231,40 @@ describe("ci workflow guards", () => {
       "runner",
       "--shard",
       "1/3",
-    ]);
+    ];
+    expect(runCommand(shardEnv)).toEqual(expectedArgs);
+    expect(readFileSync(commandInclude, "utf8")).toBe("");
+
+    const codec = "scripts/lib/ci-node-test-groups-codec.mts";
+    mkdirSync(path.dirname(path.join(commandRoot, codec)), { recursive: true });
+    copyFileSync(codec, path.join(commandRoot, codec));
+    const group = {
+      configs: ["test/vitest/vitest.ui-e2e.config.ts"],
+      shard_name: "test/vitest/vitest.ui-e2e.config.ts",
+    };
+    const includePatterns = [
+      "ui/src/e2e/chat-flow.navigation-presentation.e2e.test.ts",
+      "ui/src/e2e/chat-session-entry.e2e.test.ts",
+    ];
+    expect(
+      runCommand({
+        ...shardEnv,
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups([
+          { ...group, includePatterns },
+        ]),
+      }),
+    ).toEqual(expectedArgs);
+    const includeFile = readFileSync(commandInclude, "utf8");
+    expect(includeFile).toBe(path.join(commandRoot, "ui-e2e-include.json"));
+    expect(JSON.parse(readFileSync(includeFile, "utf8"))).toEqual(includePatterns);
+    expect(
+      runCommand({
+        ...shardEnv,
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups([group]),
+        OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+      }),
+    ).toEqual(expectedArgs);
+    expect(readFileSync(commandInclude, "utf8")).toBe("");
 
     expect(
       evaluateWorkflowExpression(`\${{ ${uiE2E.if} }}`, {
@@ -6419,6 +6556,8 @@ describe("ci workflow guards", () => {
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
       VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
+        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
     expect(scenario.run).not.toContain("--project");
     const timeoutDiagnostics = expectDefined(

@@ -24,8 +24,10 @@ import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs"
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  controlUiE2eTestGlobs,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  isUiTestTarget,
   uiTimingTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -1395,6 +1397,37 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
+const RELEASE_ONLY_UI_TEST_FILES = new Set([
+  "ui/src/e2e/native-embed-settings.e2e.test.ts",
+  "ui/src/e2e/chat-session-entry.e2e.test.ts",
+  "ui/src/components/app-sidebar.stress.browser.test.ts",
+]);
+
+export function createUiTestShardGroups(
+  options: { includeReleaseOnlyTests?: boolean; changedPaths?: readonly string[] } = {},
+) {
+  const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
+  const changedPaths = new Set(options.changedPaths ?? []);
+  const files = includeReleaseOnlyTests
+    ? undefined
+    : listTrackedTestFiles(".").filter(
+        (file) => !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file),
+      );
+  const group = (config: string, ownsFile: (file: string) => boolean) => [
+    {
+      configs: [config],
+      shard_name: config,
+      ...(files ? { includePatterns: files.filter(ownsFile) } : {}),
+    },
+  ];
+  return {
+    ui: group("ui/vitest.config.ts", isUiTestTarget),
+    e2e: group("test/vitest/vitest.ui-e2e.config.ts", (file) =>
+      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
+    ),
+  };
+}
+
 export const RELEASE_ONLY_TOOLING_CONFIGS = new Set(
   fullSuiteVitestShards
     .filter((shard) => RELEASE_ONLY_TOOLING_SHARDS.has(shard.name))

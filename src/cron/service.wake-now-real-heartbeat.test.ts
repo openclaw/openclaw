@@ -26,7 +26,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { getQueueSize } from "../process/command-queue.js";
+import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -370,6 +370,112 @@ async function runMainCronCase(
 }
 
 describe("main cron with the real heartbeat runner", () => {
+  it.each([
+    { busy: false, reason: "no-route" },
+    { busy: true, reason: "requests-in-flight" },
+  ])(
+    "settles a routeless monitor as $reason without delaying restart",
+    async ({ busy, reason }) => {
+      vi.useFakeTimers();
+      const sandbox = makeSandbox();
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: sandbox.dir } },
+        session: { store: sandbox.sessionStorePath },
+      };
+      const getReply = vi.fn().mockResolvedValue({ text: "unexpected heartbeat" });
+      const sendTelegram = vi.fn();
+      const attempts: Awaited<ReturnType<typeof runHeartbeatOnce>>[] = [];
+      const heartbeatRunner = startHeartbeatRunner({
+        cfg,
+        runOnce: async (opts) => {
+          const result = await runHeartbeatOnce({
+            ...opts,
+            cfg,
+            deps: { getReplyFromConfig: getReply, telegram: sendTelegram },
+          });
+          attempts.push(result);
+          return result;
+        },
+      });
+      const events: CronEvent[] = [];
+      const deps: CronServiceDeps = {
+        storePath: sandbox.cronStorePath,
+        cronEnabled: true,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: queueHeartbeat,
+        requestHeartbeatAndWait: (wake, lifecycle) =>
+          requestHeartbeatAndWait({ ...wake, coalesceMs: 0 }, lifecycle),
+        resolveHeartbeatTimeoutMs: () => 100,
+        runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+          status: "ok",
+        })),
+        onEvent: (event) => events.push(structuredClone(event)),
+      };
+      const foreground = createDeferred();
+      const foregroundRun = busy
+        ? enqueueCommandInLane(CommandLane.Main, () => foreground.promise)
+        : Promise.resolve();
+      let cron = new CronService(deps);
+      try {
+        await cron.start();
+        const everyMs = 30 * 60_000;
+        const job = await cron.add(
+          {
+            declarationKey: "heartbeat:main",
+            name: "heartbeat-main",
+            agentId: "main",
+            enabled: true,
+            schedule: { kind: "every", everyMs, anchorMs: Date.now() + 250 },
+            payload: { kind: "heartbeat" },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+          },
+          { enabledExplicit: true, systemOwned: true },
+        );
+        await vi.waitFor(() => {
+          expect(events.findLast((event) => event.action === "finished")).toMatchObject({
+            jobId: job.id,
+            status: "skipped",
+            error: `heartbeat skipped: ${reason}`,
+          });
+        });
+        expect(attempts).toEqual([{ status: "skipped", reason }]);
+        const completed = cron.getJob(job.id)!;
+        expect(completed.state.runningAtMs).toBeUndefined();
+        expect(completed.state.consecutiveErrors).toBe(0);
+        expect(completed.state.nextRunAtMs).toBe(job.state.nextRunAtMs! + everyMs);
+        await expect(waitForActiveCronJobs(0)).resolves.toEqual({ drained: true, active: 0 });
+
+        cron.stop();
+        cron = new CronService(deps);
+        await cron.start();
+        const restored = cron.getJob(job.id)!;
+        expect(restored.state).toEqual(completed.state);
+        expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
+
+        // A finished ambient poll leaves no retry or cron run to delay shutdown.
+        foreground.resolve();
+        await foregroundRun;
+        if (busy) {
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(attempts).toHaveLength(1);
+          expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
+        }
+        expect(getReply).not.toHaveBeenCalled();
+        expect(sendTelegram).not.toHaveBeenCalled();
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      } finally {
+        foreground.resolve();
+        await foregroundRun;
+        cron.stop();
+        heartbeatRunner.stop();
+        await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { mode: "direct", scheduleKind: "at" },
     { mode: "queued", scheduleKind: "at" },

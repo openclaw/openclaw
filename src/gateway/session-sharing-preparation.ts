@@ -93,6 +93,7 @@ export async function prepareSessionMutationFacts(params: {
           "profiles",
           "catalog",
           "acp",
+          "agent-runs",
           "worker-placements",
           "worker-environments",
           "config",

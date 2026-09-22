@@ -2,6 +2,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
+import {
+  policyTimeoutCapture,
+  policyTimeoutQualification,
+} from "./pr-merge-policy-timeout.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
@@ -22,11 +26,12 @@ const historicalRefusals = {
 
 function qualifiedAutoRefusal(
   f: ReturnType<typeof fixture>,
-  version: keyof typeof historicalRefusals = "0.6.10",
+  version: keyof typeof historicalRefusals | "policy-timeout" = "0.6.10",
 ) {
   f.save({
     ...f.state(),
     mode: "octopool-refusal",
+    refusalCapture: version === "policy-timeout" ? policyTimeoutCapture : f.state().refusalCapture,
     pr: { ...f.state().pr, mergeStateStatus: "BEHIND" },
   });
   const refused = f.run(true);
@@ -41,20 +46,24 @@ function qualifiedAutoRefusal(
     outcome,
     capture: f.git(["hash-object", "--stdin"], contents),
     inspected: true,
-    ...historicalRefusals[version],
-    args: [
-      "pr",
-      "merge",
-      "123",
-      "--repo",
-      "https://github.com/fixture/repo",
-      "--squash",
-      "--auto",
-      "--match-head-commit",
-      f.head,
-      "--body-file",
-      ".local/merge-body.fixture",
-    ],
+    ...(version === "policy-timeout"
+      ? policyTimeoutQualification
+      : {
+          ...historicalRefusals[version],
+          args: [
+            "pr",
+            "merge",
+            "123",
+            "--repo",
+            "https://github.com/fixture/repo",
+            "--squash",
+            "--auto",
+            "--match-head-commit",
+            f.head,
+            "--body-file",
+            ".local/merge-body.fixture",
+          ],
+        }),
   };
   writeFileSync(join(directory, "qualification.json"), JSON.stringify(qualification));
   f.recover();
@@ -63,7 +72,7 @@ function qualifiedAutoRefusal(
 }
 
 describePosix("qualified pre-dispatch merge recovery", () => {
-  it.each(["0.6.10", "0.7.1"] as const)(
+  it.each(["0.6.10", "0.7.1", "policy-timeout"] as const)(
     "recovers a qualified %s pre-dispatch refusal with retained evidence",
     (version) => {
       const f = fixture();
@@ -126,7 +135,7 @@ describePosix("qualified pre-dispatch merge recovery", () => {
 
   it("preserves a pre-dispatch outcome across incomplete checks and ineligible admission", () => {
     const f = fixture();
-    const proof = qualifiedAutoRefusal(f);
+    const proof = qualifiedAutoRefusal(f, "policy-timeout");
     const replacement = f.replacePreparedHead();
     writeFileSync(
       join(f.worktree, ".local/gates.env"),

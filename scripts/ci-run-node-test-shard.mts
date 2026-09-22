@@ -600,7 +600,15 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             if (selection.includeAfterShard) {
               childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE =
                 childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
-              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+              const includePatterns = entry.kind === "group" ? entry.plan.includePatterns : null;
+              if (includePatterns?.length) {
+                // Tier selection precedes native sharding; runtime membership follows it.
+                const includeFile = join(scratchDir, `node-test-pre-shard-include-${index}.json`);
+                writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
+                childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+              } else {
+                delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+              }
             }
             Object.assign(childEnv, selection.env);
             const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;

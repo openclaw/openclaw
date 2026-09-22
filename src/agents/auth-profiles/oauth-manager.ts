@@ -20,12 +20,11 @@ import {
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
-import { formatRedactedOAuthRefreshError } from "./oauth-refresh-error-format.js";
 import {
+  OAuthManagerRefreshError,
   OAuthRefreshFailureError,
   appendOAuthRefreshCleanupErrors,
-  readOAuthRefreshInitiatingError,
-  readProviderOAuthRefreshFailure,
+  markOAuthRefreshFailureSettled,
 } from "./oauth-refresh-failure.js";
 import {
   isExactOAuthCredential,
@@ -96,92 +95,6 @@ type ResolvedOAuthAccess = {
 
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
 
-function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
-  if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
-    // The structured error retains diagnostics; public cause traversal must not expose lock paths.
-    return new Error(cause.message);
-  }
-  return cause;
-}
-
-/** Refresh failure that preserves a redacted refreshed store and credential. */
-export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
-  override readonly profileId: string;
-  readonly code?: string;
-  readonly lockPath?: string;
-  readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
-
-  constructor(params: {
-    credential: OAuthCredential;
-    attemptedCredentials?: OAuthCredential[];
-    profileId: string;
-    refreshedStore: AuthProfileStore;
-    cause: unknown;
-  }) {
-    const initiatingCause = readOAuthRefreshInitiatingError(params.cause);
-    const structuredCause =
-      typeof initiatingCause === "object" && initiatingCause !== null
-        ? (initiatingCause as { code?: unknown; lockPath?: unknown; cause?: unknown })
-        : undefined;
-    const surfacedCause = createOAuthRefreshUserFacingCause(initiatingCause);
-    const storedCredential = params.refreshedStore.profiles[params.profileId];
-    const secrets = collectOAuthCredentialSecrets(
-      params.credential,
-      ...(params.attemptedCredentials ?? []),
-      storedCredential?.type === "oauth" ? storedCredential : undefined,
-    );
-    const presentation = readProviderOAuthRefreshFailure(initiatingCause);
-    const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
-    super({
-      provider: params.credential.provider,
-      profileId: params.profileId,
-      message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
-      cause: createRedactedOAuthRefreshCause(params.cause, secrets),
-      errorType: presentation?.errorType,
-      reason: presentation?.reason,
-      status: presentation?.status,
-      summary: presentation?.summary
-        ? formatRedactedOAuthRefreshError(presentation.summary, secrets)
-        : undefined,
-    });
-    this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
-    this.profileId = params.profileId;
-    this.#refreshedStore = params.refreshedStore;
-    if (structuredCause) {
-      this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
-      if (typeof structuredCause.lockPath === "string") {
-        this.lockPath = structuredCause.lockPath;
-      } else if (
-        typeof structuredCause.cause === "object" &&
-        structuredCause.cause !== null &&
-        "lockPath" in structuredCause.cause &&
-        typeof structuredCause.cause.lockPath === "string"
-      ) {
-        this.lockPath = structuredCause.cause.lockPath;
-      }
-    }
-  }
-
-  getRefreshedStore(): AuthProfileStore {
-    return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
-  }
-
-  toJSON(): { name: string; message: string; profileId: string; provider: string } {
-    return {
-      name: this.name,
-      message: this.message,
-      profileId: this.profileId,
-      provider: this.provider,
-    };
-  }
-}
-
 function canReuseOAuthCredentialAfterRefreshFailure(params: {
   forceRefresh?: boolean;
   attempted: OAuthCredential;
@@ -193,40 +106,6 @@ function canReuseOAuthCredentialAfterRefreshFailure(params: {
       params.attempted.access !== params.candidate.access &&
       hasMatchingOAuthIdentity(params.attempted, params.candidate))
   );
-}
-
-function collectOAuthCredentialSecrets(
-  ...credentials: Array<OAuthCredential | undefined>
-): string[] {
-  const secrets = new Set<string>();
-  for (const credential of credentials) {
-    for (const secret of [credential?.access, credential?.refresh, credential?.idToken]) {
-      if (secret) {
-        secrets.add(secret);
-      }
-    }
-  }
-  return Array.from(secrets).toSorted((a, b) => b.length - a.length);
-}
-
-function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Error {
-  if (cause instanceof AggregateError) {
-    const errors = cause.errors.map((error) => createRedactedOAuthRefreshCause(error, secrets));
-    const sanitized = new AggregateError(
-      errors,
-      formatRedactedOAuthRefreshError(cause.message, secrets),
-      errors.length > 0 ? { cause: errors[0] } : undefined,
-    );
-    sanitized.name = cause.name;
-    return sanitized;
-  }
-  const surfacedCause = createOAuthRefreshUserFacingCause(cause);
-  const redacted = formatRedactedOAuthRefreshError(surfacedCause, secrets);
-  const sanitized = new Error(redacted);
-  if (surfacedCause instanceof Error && surfacedCause.name) {
-    sanitized.name = surfacedCause.name;
-  }
-  return sanitized;
 }
 
 function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): AuthProfileStore {
@@ -1050,6 +929,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
     const settleFailure = async (failure?: {
       error: unknown;
+      externalRefresh?: boolean;
     }): Promise<ResolvedOAuthAccess | null> => {
       claim.observation.beginSettlement();
       const initiatingError = failure
@@ -1079,7 +959,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
       }
       if (initiatingError !== undefined) {
-        throw appendOAuthRefreshCleanupErrors(initiatingError, cleanupErrors);
+        const error = appendOAuthRefreshCleanupErrors(initiatingError, cleanupErrors);
+        if (failure?.externalRefresh && cleanupErrors.length === 0) {
+          const settled = new OAuthRefreshFailureError({
+            provider: params.provider,
+            profileId: params.profileId,
+            message: error.message,
+            cause: error,
+          });
+          markOAuthRefreshFailureSettled(settled, error);
+          throw settled;
+        }
+        throw error;
       }
       if (cleanupErrors.length === 0) {
         return null;
@@ -1095,7 +986,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           agentDir: params.agentDir,
         });
       } catch (error) {
-        return await settleFailure({ error });
+        return await settleFailure({ error, externalRefresh: true });
       }
       claim.observation.beginSettlement();
       if (!refreshed) {
@@ -1400,8 +1291,8 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               return recovered;
             }
           }
-        } catch {
-          // keep the original refresh error below
+        } catch (cleanupError) {
+          refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);
         }
       }
       throw new OAuthManagerRefreshError({

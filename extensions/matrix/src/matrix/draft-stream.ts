@@ -130,6 +130,7 @@ export function createMatrixDraftStream(params: {
     update,
     stop: stopDraft,
     discardPending,
+    seal,
   } = createFinalizableDraftStreamControlsForState({
     throttleMs: DEFAULT_THROTTLE_MS,
     state: streamState,
@@ -200,11 +201,30 @@ export function createMatrixDraftStream(params: {
     resetCurrentMessage();
   };
 
+  const clear = async (): Promise<boolean> => {
+    const eventId = currentEventId;
+    if (!eventId) {
+      return true;
+    }
+    try {
+      await client.redactEvent(roomId, eventId);
+      if (currentEventId === eventId) {
+        resetCurrentMessage();
+      }
+      return true;
+    } catch (error) {
+      log?.(`draft-stream: redact failed: ${String(error)}`);
+      return false;
+    }
+  };
+
   return {
     update,
     flush: loop.flush,
     stop,
     discardPending,
+    seal,
+    clear,
     deleteCurrentMessage,
     finalizeLive,
     reset,

@@ -476,11 +476,14 @@ export function createSessionReconciliation(host: Host) {
           eventInfo.sessionId,
           eventInfo.agentId ?? state.agentId,
         ));
+    const notifyEvent = (event: GatewayEventFrame) =>
+      eventObservation.deliver(event, eventIsCurrent);
     const staleEvent = () => {
       const reconciled: SessionChangedResult = { applied: false, result: host.readState().result };
       return {
         eventInfo: null,
         reconciled,
+        notifyEvent,
       };
     };
     if (!eventIsCurrent()) {
@@ -677,12 +680,7 @@ export function createSessionReconciliation(host: Host) {
       reconciled,
       claimChanged,
       notifyManaged,
-      notifyEvent: (event: Parameters<typeof eventObservation.deliver>[0]) => {
-        // Shared publication can replace the incarnation before pane delivery.
-        if (eventIsCurrent()) {
-          eventObservation.deliver(event);
-        }
-      },
+      notifyEvent,
     };
   };
 

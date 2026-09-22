@@ -68,7 +68,8 @@ export type SessionPatchRowFact = {
         | "thinkingLevel"
         | "thinkingLevels"
       >
-    | { boardPresentation: GatewaySessionRow["boardPresentation"] };
+    | { boardPresentation: GatewaySessionRow["boardPresentation"] }
+    | { boardFace: GatewaySessionRow["boardFace"] };
 };
 export type PendingRowTarget = Readonly<{
   identity: string;

@@ -28,6 +28,11 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "question.request",
+  "question.waitAnswer",
+  "question.resolve",
+  "question.get",
+  "question.list",
   "chat.send",
   "chat.abort",
   "sessions.create",

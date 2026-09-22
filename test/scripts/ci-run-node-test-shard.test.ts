@@ -135,6 +135,50 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     ).toThrow();
   });
 
+  it.each(["bun-compatible", "dual"] as const)(
+    "preserves selected UI discovery before runtime partitioning under %s",
+    async (policy) => {
+      const bunFile = "ui/src/pages/skills/view.test.ts";
+      const nodeFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const includePatterns = [bunFile, nodeFile];
+      const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
+      await expect(
+        runShardPlans(
+          [
+            {
+              kind: "group",
+              name: "selected-ui",
+              plan: { configs: ["ui/vitest.config.ts"], includePatterns },
+            },
+          ],
+          {
+            env: {
+              OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+              OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/3"]),
+            },
+            scratchDir: makeScratchDir(),
+            runChild: async (_args, env) => {
+              expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual(
+                includePatterns,
+              );
+              seen.push({
+                runtime: env.OPENCLAW_VITEST_RUNTIME,
+                membership: env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE
+                  ? JSON.parse(readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE, "utf8"))
+                  : undefined,
+              });
+              return 0;
+            },
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", membership: policy === "dual" ? undefined : [nodeFile] },
+        { runtime: "bun", membership: [bunFile] },
+      ]);
+    },
+  );
+
   it.each([
     { policy: undefined, expected: ["eligible", "mixed", "unknown", bunTarget] },
     {
@@ -432,7 +476,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { vitestArgs: ["--shard=4/3"] },
     { vitestArgs: ["--reporter=custom.mts"] },
     { vitestArgs: ["--maxWorkers"] },
-    { includePatterns: ["ui/src/pages/skills/view.test.ts"] },
     { targets: ["ui/src/pages/skills/view.test.ts"] },
     { configs: [], targets: ["ui/src/pages/skills/view.test.ts"], env: {} },
     { configs: ["ui/vitest.config.ts", bunConfig] },

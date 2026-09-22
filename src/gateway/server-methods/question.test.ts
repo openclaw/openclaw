@@ -688,7 +688,7 @@ describe("question gateway methods", () => {
       const id = await requestSecretQuestion();
       const value = "test-secret-value-gateway-diversion-123";
       const client = {
-        connect: { client: { displayName: "Trusted Operator" } },
+        connect: { client: { displayName: "Trusted Operator" }, scopes: ["operator.questions"] },
       } as GatewayClient;
 
       const resolved = await call(

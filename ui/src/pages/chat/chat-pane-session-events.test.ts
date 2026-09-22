@@ -185,7 +185,7 @@ describe("mounted pane session event ownership", () => {
   );
 
   it.each([false, true])(
-    "keeps a same-key successor and its first message after retirement (reentrant publication: %s)",
+    "keeps a same-key successor when its old descriptor retires (reentrant publication: %s)",
     async (reentrant) => {
       const previous: GatewaySessionRow = {
         key: "agent:main:replaced",
@@ -201,8 +201,21 @@ describe("mounted pane session event ownership", () => {
         updatedAt: 3,
         label: "Newest session",
       };
+      const message = {
+        role: "user",
+        content: "First message in the successor session",
+        __openclaw: { id: "successor-first-message", seq: 1 },
+      };
       const listed = [previous];
-      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed);
+      const history = () => ({
+        messages: listed[0]?.sessionId === next.sessionId ? [message] : [],
+        sessionInfo: listed[0],
+        sessionId: listed[0]?.sessionId,
+      });
+      const { sessions, mount, emitGatewayEvent } = createMountedPanes(listed, "main", undefined, {
+        "chat.history": history,
+        "chat.startup": history,
+      });
       let armed = false;
       const unsubscribe = sessions.subscribe((state) => {
         if (armed && state.result?.sessions.some((row) => row.sessionId === next.sessionId)) {
@@ -220,25 +233,20 @@ describe("mounted pane session event ownership", () => {
       listed.splice(0, 1, next);
       await sessions.refresh({ agentId: "main", force: true });
       expect(selectedChatSessionRow(pane.state)).toMatchObject(reentrant ? newest : next);
-      await pane.updateComplete;
-
       emitGatewayEvent("session.message", {
         sessionKey: next.key,
         agentId: "main",
         sessionId: next.sessionId,
-        hasActiveRun: true,
-        messageId: "successor-user",
+        messageId: "successor-first-message",
         messageSeq: 1,
-        message: {
-          role: "user",
-          content: "First successor prompt",
-          __openclaw: { id: "successor-user", seq: 1 },
-        },
-        session: { ...next, updatedAt: 4, hasActiveRun: true, status: "running" },
+        message,
+        session: { ...(reentrant ? newest : next), updatedAt: 4 },
       });
-      expect(pane.state.chatMessages).toContainEqual(
-        expect.objectContaining({ role: "user", content: "First successor prompt" }),
-      );
+      expect.soft(pane.state.currentSessionId).toBe(previous.sessionId);
+      expect.soft(pane.state.chatMessages).toEqual([]);
+      await refreshPane(pane);
+      expect(pane.state.currentSessionId).toBe(next.sessionId);
+      expect(pane.state.chatMessages).toContainEqual(expect.objectContaining(message));
     },
   );
 
@@ -300,8 +308,8 @@ describe("mounted pane session event ownership", () => {
     vi.spyOn(sessions, "observeRow").mockImplementation((target, listener, options) => {
       const observation = observeRow(
         target,
-        (row) => {
-          listener(row);
+        (row, notification) => {
+          listener(row, notification);
           if (
             options?.onEvent &&
             row !== null &&
@@ -950,13 +958,14 @@ describe("mounted pane session event ownership", () => {
           }
         };
         assertProjection();
+        expect(delivered).toHaveBeenCalledOnce();
         if (generation === "stale") {
-          expect(delivered).not.toHaveBeenCalled();
-        } else {
-          expect(delivered).toHaveBeenCalledOnce();
-          if (generation === "rowless" || reentrant) {
-            expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
-          }
+          expect(delivered.mock.calls[0]?.[1]).toEqual({
+            applied: false,
+            generationRejected: true,
+          });
+        } else if (generation === "rowless" || reentrant) {
+          expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
         }
         laterHistory.reject(new Error("Incarnation history temporarily unavailable"));
         await refresh;

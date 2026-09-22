@@ -301,7 +301,7 @@ export function createGatewayAuxHandlers(
           );
         });
       }
-      questionManager.cancelClosedAuthorities();
+      questionManager.cancelClosedAuthorities(authority.operationalRunInstance);
       params.onAgentRunAuthorityClosed?.(authority, approvalReason);
     },
   );
@@ -317,7 +317,7 @@ export function createGatewayAuxHandlers(
           params.log.error?.(`${kind} approvals: worker-claim settlement failed: ${String(error)}`);
         });
       }
-      questionManager.cancelClosedAuthorities();
+      questionManager.cancelClosedAuthorities({ runId: claim.runId });
     },
   );
   const unregisterApprovalAuthorityObserver = () => {

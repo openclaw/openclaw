@@ -190,7 +190,10 @@ function isGatewaySignalRestartResult(
 }
 
 async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
-  const { emit, fail } = createDaemonActionContext({ action: "restart", json: Boolean(opts.json) });
+  const { emitMessage, fail } = createDaemonActionContext({
+    action: "restart",
+    json: Boolean(opts.json),
+  });
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
   if (!lockIdentity?.ownerId) {
@@ -238,14 +241,11 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     return false;
   }
 
-  emit({
+  emitMessage({
     ok: true,
     result: signaled.result,
     message: signaled.message,
   });
-  if (!opts.json) {
-    defaultRuntime.log(signaled.message);
-  }
   return true;
 }
 

@@ -89,10 +89,17 @@ export function publishCommittedSessionIdentity(
     const previousTarget = toSessionIdentityTarget(previousEntry, [sessionKey]);
     if (currentEntry) {
       const currentTarget = toSessionIdentityTarget(currentEntry, [sessionKey]);
-      if (previousTarget.sessionId !== currentTarget.sessionId) {
+      // Same-ID resets replace lifecycle ownership while retaining transcript identity.
+      const kind =
+        previousTarget.sessionId !== currentTarget.sessionId
+          ? "replace"
+          : previousEntry.lifecycleRevision !== currentEntry.lifecycleRevision
+            ? "reset"
+            : undefined;
+      if (kind) {
         emitSessionIdentityMutation({
           agentId,
-          kind: "replace",
+          kind,
           previous: previousTarget,
           current: currentTarget,
         });

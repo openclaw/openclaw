@@ -24,6 +24,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { createUiTestShardGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -8723,12 +8725,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "retention-days": 7,
       },
     });
+    const uiGroups = createUiTestShardGroups({
+      includeReleaseOnlyTests: scenario.frozenTarget || scenario.compatibilityTarget,
+    }).ui;
     const context = {
       eventName: scenario.frozenTarget ? "workflow_dispatch" : "pull_request",
       frozenTarget: scenario.frozenTarget,
       preflightOutputs: {
         compatibility_target: String(scenario.compatibilityTarget),
         ui_test_runtime_policy: scenario.policy,
+        ui_test_groups_gzip_base64: encodeNodeTestGroups(uiGroups),
       },
       repository: "openclaw/openclaw",
       runAttempt: 1,
@@ -8825,7 +8831,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               forwarded.push(args);
               runtimes.push(childEnv.OPENCLAW_VITEST_RUNTIME);
               expect(childEnv.BUN_JSC_useFTLJIT).toBeUndefined();
-              expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
+              if (uiGroups[0]?.includePatterns) {
+                expect(
+                  JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+                ).toEqual(uiGroups[0].includePatterns);
+              } else {
+                expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
+              }
               const includeFile = childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
               if (
                 childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ||
@@ -8842,6 +8854,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
                 } else {
                   expect(included.length).toBeGreaterThan(1000);
                   expect(included.filter((file: string) => nodeFiles.includes(file))).toEqual([]);
+                  if (uiGroups[0]?.includePatterns) {
+                    expect(included.toSorted()).toEqual(
+                      uiGroups[0].includePatterns
+                        .filter((file) => !nodeFiles.includes(file))
+                        .toSorted(),
+                    );
+                  }
                 }
               } else {
                 expect(includeFile).toBeUndefined();

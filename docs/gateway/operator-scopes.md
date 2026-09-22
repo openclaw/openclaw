@@ -61,6 +61,15 @@ RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
 
+`question.*` also accepts `operator.sessions.write` for ordinary questions
+bound to the caller's own admitted run and owned session. The Gateway records
+that binding from trusted run authority, never from caller-supplied session or
+run identifiers. The same ownership check filters question events and recovery
+reads. Session visibility or membership alone does not grant this access.
+`operator.sessions.read` alone cannot answer questions. Sessionless questions,
+secret prompts, and other privileged question workflows retain their existing
+`operator.questions` and administrative checks.
+
 ## Named operator roles
 
 Team Gateways can bind authenticated durable profiles to named operator roles.
