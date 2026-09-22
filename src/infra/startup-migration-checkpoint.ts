@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   parseStateLeaseProcessOwner,
@@ -100,8 +101,9 @@ function resolveStartupMigrationBuildIdentity(moduleUrl: string = import.meta.ur
 function withStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
   callback: (db: DatabaseSync) => T,
+  atomic = false,
 ): T {
-  return withOpenClawStateStartupMigrationCheckpointDatabase(callback, { env });
+  return withOpenClawStateStartupMigrationCheckpointDatabase(callback, { env, atomic });
 }
 
 function writeStartupMigrationCheckpointDatabase<T>(
@@ -187,21 +189,27 @@ function formatStartupMigrationCheckpoint(params: {
   ].join(STARTUP_MIGRATION_BUILD_SEPARATOR);
 }
 
+function readMigrationCheckpointsFromDatabase(
+  db: DatabaseSync,
+  metaKeys: MigrationCheckpointMetaKey[],
+): Array<{ metaKey: string; appVersion: string | null }> {
+  const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
+  return executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("schema_meta")
+      .select(["meta_key as metaKey", "app_version as appVersion"])
+      .where("meta_key", "in", metaKeys),
+  ).rows;
+}
+
 function readMigrationCheckpoints(
   env: NodeJS.ProcessEnv,
   metaKeys: MigrationCheckpointMetaKey[],
 ): Array<{ metaKey: string; appVersion: string | null }> {
-  return withStartupMigrationCheckpointDatabase(env, (db) => {
-    const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-    const result = executeSqliteQuerySync(
-      db,
-      stateDb
-        .selectFrom("schema_meta")
-        .select(["meta_key as metaKey", "app_version as appVersion"])
-        .where("meta_key", "in", metaKeys),
-    );
-    return result.rows;
-  });
+  return withStartupMigrationCheckpointDatabase(env, (db) =>
+    readMigrationCheckpointsFromDatabase(db, metaKeys),
+  );
 }
 
 export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -255,25 +263,30 @@ export function hasActiveStartupMigrationLease(
   );
 }
 
-export function readMigrationCheckpointStatus(
-  params: MigrationCheckpointParams = {},
-): "stale" | "state-current" | "startup-current" {
-  const env = params.env ?? process.env;
+export type MigrationCheckpointStatus = "stale" | "state-current" | "startup-current";
+
+function resolveMigrationCheckpoint(params: MigrationCheckpointParams): string | null {
   const buildIdentity =
     params.buildIdentity === undefined
       ? resolveStartupMigrationBuildIdentity()
       : params.buildIdentity;
-  const checkpoint = formatStartupMigrationCheckpoint({
+  return formatStartupMigrationCheckpoint({
     buildIdentity,
     identity: params.identity,
     version: params.version ?? VERSION,
   });
+}
+
+function readMigrationCheckpointStatusFromDatabase(
+  db: DatabaseSync,
+  checkpoint: string | null,
+): MigrationCheckpointStatus {
   if (checkpoint === null) {
     return "stale";
   }
   // A legacy gateway checkpoint also proves state migrations completed. The inverse is false:
   // state-only commands never certify gateway plugin convergence.
-  const current = readMigrationCheckpoints(env, [
+  const current = readMigrationCheckpointsFromDatabase(db, [
     STATE_MIGRATION_META_KEY,
     STARTUP_MIGRATION_META_KEY,
   ]).filter((row) => row.appVersion === checkpoint);
@@ -283,8 +296,32 @@ export function readMigrationCheckpointStatus(
   return current.length > 0 ? "state-current" : "stale";
 }
 
+export function readMigrationCheckpointStatus(
+  params: MigrationCheckpointParams = {},
+): MigrationCheckpointStatus {
+  const checkpoint = resolveMigrationCheckpoint(params);
+  if (checkpoint === null) {
+    return "stale";
+  }
+  return withStartupMigrationCheckpointDatabase(params.env ?? process.env, (db) =>
+    readMigrationCheckpointStatusFromDatabase(db, checkpoint),
+  );
+}
+
 export function acquireStartupMigrationLease(
   params: StartupMigrationLeaseParams = {},
+): StartupMigrationLease {
+  const env = params.env ?? process.env;
+  const nowMs = params.nowMs ?? Date.now();
+  const owner = params.owner ?? randomUUID();
+  return withStartupMigrationCheckpointDatabase(env, (db) =>
+    acquireStartupMigrationLeaseFromDatabase(db, { ...params, env, nowMs, owner }),
+  );
+}
+
+function acquireStartupMigrationLeaseFromDatabase(
+  connection: DatabaseSync,
+  params: StartupMigrationLeaseParams,
 ): StartupMigrationLease {
   const env = params.env ?? process.env;
   const nowMs = params.nowMs ?? Date.now();
@@ -297,7 +334,13 @@ export function acquireStartupMigrationLease(
   };
   const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
 
-  writeStartupMigrationCheckpointDatabase(env, (db) => {
+  runSqliteImmediateTransactionSync(connection, () => {
+    const db = connection;
+    assertOpenClawStateWriteAllowed({
+      database: db,
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      env,
+    });
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     executeSqliteQuerySync(
       db,
@@ -385,9 +428,11 @@ export function acquireStartupMigrationLease(
   };
 }
 
-export async function acquireStartupMigrationLeaseWithWait(
-  params: StartupMigrationLeaseWaitParams = {},
-): Promise<StartupMigrationLease> {
+function waitForStartupMigrationLease<T>(
+  params: StartupMigrationLeaseWaitParams,
+  acquire: (attempt: StartupMigrationLeaseParams) => T,
+  options: { retryDatabaseContention?: boolean } = {},
+): Promise<T> {
   const now = params.now ?? Date.now;
   const monotonicNow = params.monotonicNow ?? performance.now.bind(performance);
   const timeoutMs = Math.max(
@@ -405,15 +450,68 @@ export async function acquireStartupMigrationLeaseWithWait(
     now: monotonicNow,
     sleep: params.sleep,
     acquire: () =>
-      acquireStartupMigrationLease({
+      acquire({
         env: params.env,
         nowMs: now(),
         owner,
         ownerPid: params.ownerPid,
       }),
     shouldRetry: (error) =>
-      error instanceof StartupMigrationLeaseConflictError && error.canWaitForSameHostOwner,
+      (error instanceof StartupMigrationLeaseConflictError && error.canWaitForSameHostOwner) ||
+      (options.retryDatabaseContention === true && sqlitePrimaryResultCode(error) === 5),
   });
+}
+
+export function acquireStartupMigrationLeaseWithWait(
+  params: StartupMigrationLeaseWaitParams = {},
+): Promise<StartupMigrationLease> {
+  return waitForStartupMigrationLease(params, acquireStartupMigrationLease);
+}
+
+/** Inspect and, when needed, claim through one integrity-proven physical connection. */
+export function inspectStartupMigrationCheckpointWithLease(
+  params: MigrationCheckpointParams &
+    StartupMigrationLeaseWaitParams & {
+      stateMigrations: boolean;
+      startupMigrations: boolean;
+      forceLease: boolean;
+    },
+): Promise<{ status: MigrationCheckpointStatus; lease?: StartupMigrationLease }> {
+  if (!params.stateMigrations && !params.startupMigrations && !params.forceLease) {
+    return Promise.resolve({ status: "stale" });
+  }
+  const checkpoint = resolveMigrationCheckpoint(params);
+  const env = params.env ?? process.env;
+  const now = params.now ?? Date.now;
+  // Once admission requires a lease, keep acquiring it even if another startup
+  // completes while we wait. The caller still refreshes every input after acquisition.
+  let leaseRequired = false;
+  return waitForStartupMigrationLease(
+    params,
+    (attempt) =>
+      withStartupMigrationCheckpointDatabase(
+        env,
+        (db) => {
+          const status = readMigrationCheckpointStatusFromDatabase(db, checkpoint);
+          leaseRequired ||=
+            params.forceLease ||
+            (params.stateMigrations && status === "stale") ||
+            (params.startupMigrations && status !== "startup-current");
+          return {
+            status,
+            // Verification can outlast a lease: start its lifetime at the actual claim.
+            lease: leaseRequired
+              ? acquireStartupMigrationLeaseFromDatabase(db, { ...attempt, nowMs: now() })
+              : undefined,
+          };
+        },
+        true,
+      ),
+    // BUSY (including BUSY_SNAPSHOT) cannot promote this read snapshot. The failed
+    // attempt rolls back; every retry opens and fully verifies a fresh transaction,
+    // including any schema repair. No proof survives a writer or lease conflict.
+    { retryDatabaseContention: true },
+  );
 }
 
 function recordSuccessfulMigrationCheckpoints(

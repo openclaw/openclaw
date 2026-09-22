@@ -1,36 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
+import type { AssistantMessage, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import type { SessionTreeEntry } from "../types.js";
 import { compact, generateSummary, prepareCompaction } from "./compaction.js";
-
-function createSummaryModel(): Model {
-  return {
-    id: "summary-model",
-    name: "Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 100_000,
-    maxTokens: 8_000,
-  };
-}
+import {
+  createCompactionModel as createSummaryModel,
+  createContextUsage,
+  createMessageEntry as messageEntry,
+} from "./compaction.test-support.js";
 
 function createUsage(): Usage {
-  return {
-    input: 1,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    contextUsage: { state: "available", promptTokens: 1, totalTokens: 1 },
-    totalTokens: 1,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  return createContextUsage(1);
 }
 
 function assistantText(text: string, timestamp: number): AssistantMessage {
@@ -43,16 +24,6 @@ function assistantText(text: string, timestamp: number): AssistantMessage {
     usage: createUsage(),
     stopReason: "stop",
     timestamp,
-  };
-}
-
-function messageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
   };
 }
 

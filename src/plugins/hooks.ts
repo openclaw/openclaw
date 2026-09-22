@@ -11,7 +11,6 @@ import {
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -24,6 +23,7 @@ import {
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginHookAfterToolCallEvent,
@@ -36,7 +36,6 @@ import type {
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
-  PluginHookReplyPayload,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -384,43 +383,6 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
-    return structuredClone(visiblePayload);
-  };
-  const areMediaUrlArraysEqual = (
-    left: readonly string[] | undefined,
-    right: readonly string[] | undefined,
-  ): boolean => {
-    const normalizedLeft = left ?? [];
-    const normalizedRight = right ?? [];
-    return (
-      normalizedLeft.length === normalizedRight.length &&
-      normalizedLeft.every((value, index) => value === normalizedRight[index])
-    );
-  };
-  const preservesTrustedMediaRefs = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): boolean => {
-    return (
-      previous.trustedLocalMedia === true &&
-      previous.mediaUrl === next.mediaUrl &&
-      areMediaUrlArraysEqual(previous.mediaUrls, next.mediaUrls)
-    );
-  };
-  const acceptPluginReplyPayload = (
-    previous: ReplyPayload,
-    next: PluginHookReplyPayload,
-  ): ReplyPayload => {
-    const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
-    const clonedPayload = structuredClone(safePayload);
-    const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
-      ? { ...clonedPayload, trustedLocalMedia: true }
-      : clonedPayload;
-    return copyReplyPayloadMetadata(previous, acceptedPayload);
-  };
-
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,

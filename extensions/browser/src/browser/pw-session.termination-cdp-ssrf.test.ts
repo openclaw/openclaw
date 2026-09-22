@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Browser tests cover pw session termination CDP SSRF guard plugin behavior.
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +73,7 @@ function installBrowserMock() {
     url: vi.fn(() => "https://example.com"),
   } as unknown as import("playwright-core").Page;
   const context = {
+    browser: () => browser,
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(async () => ({
@@ -91,7 +93,7 @@ function installBrowserMock() {
   getChromeWebSocketEndpointSpy.mockResolvedValue({
     url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
   });
-  return { browserClose };
+  return { browserClose, page };
 }
 
 afterEach(async () => {
@@ -103,8 +105,41 @@ afterEach(async () => {
 });
 
 describe("pw-session termination CDP SSRF guard", () => {
+  it("does not terminate execution after its connection loses ownership during discovery", async () => {
+    const cdpUrl = "http://127.0.0.1:18792";
+    const { page } = installBrowserMock();
+    await listPagesViaPlaywright({ cdpUrl });
+    const discovery = createDeferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValue(discovery.promise);
+    try {
+      const termination = forceDisconnectPlaywrightForTarget({
+        cdpUrl,
+        page,
+        targetId: "TARGET_1",
+      });
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+      await closePlaywrightBrowserConnection({ cdpUrl });
+      const replacement = installBrowserMock();
+      await listPagesViaPlaywright({ cdpUrl });
+      discovery.resolve(
+        new Response(
+          JSON.stringify([
+            { id: "TARGET_1", webSocketDebuggerUrl: "ws://127.0.0.1:18792/devtools/page/TARGET_1" },
+          ]),
+        ),
+      );
+      await termination;
+
+      expect(wsMockState.constructorUrls).toEqual([]);
+      expect(replacement.browserClose).not.toHaveBeenCalled();
+    } finally {
+      discovery.resolve(new Response("[]"));
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("blocks discovered target WebSocket URLs before best-effort termination opens a socket", async () => {
-    const { browserClose } = installBrowserMock();
+    const { browserClose, page } = installBrowserMock();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify([
@@ -124,6 +159,7 @@ describe("pw-session termination CDP SSRF guard", () => {
       });
 
       await forceDisconnectPlaywrightForTarget({
+        page,
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -140,7 +176,7 @@ describe("pw-session termination CDP SSRF guard", () => {
   });
 
   it("uses the discovered target lookup pin for best-effort termination sockets", async () => {
-    installBrowserMock();
+    const { page } = installBrowserMock();
     const lookup = vi.fn((_hostname: string, options: unknown, callback?: unknown) => {
       const cb = typeof options === "function" ? options : callback;
       if (typeof cb === "function") {
@@ -177,6 +213,7 @@ describe("pw-session termination CDP SSRF guard", () => {
       });
 
       await forceDisconnectPlaywrightForTarget({
+        page,
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
         ssrfPolicy: {},

@@ -9,10 +9,12 @@ import * as launchdExec from "../../daemon/launchd-exec.js";
 import * as launchdRuntime from "../../daemon/launchd-runtime.js";
 import { stopLaunchAgent } from "../../daemon/launchd-stop.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as ports from "../../infra/ports-inspect.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as pidAlive from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
@@ -28,6 +30,10 @@ it
     "ordinary nested caller",
     "unrecorded helper",
     "revoked at native stop",
+    "revoked after inspection",
+    "revoked after inspection with disable",
+    "revoked after disable",
+    "revoked before port cleanup",
   ] as const)("enforces live handoff authority in the real LaunchAgent stop: %s", (scenario) =>
   withServiceHome(async (home) => {
     const root = await fs.realpath(process.cwd());
@@ -53,26 +59,58 @@ it
       new Set([process.pid, process.ppid, gatewayPid]),
     );
     // The native manager and port are the external boundaries; stopLaunchAgent stays real.
-    vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockResolvedValue({
-      env: {},
-      port: null,
-      probeHosts: [],
+    const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
+    vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
+      port: 43210,
+      status: "free",
+      listeners: [],
+      hints: [],
     });
+    vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(async () => {
+      if (scenario === "revoked before port cleanup") {
+        expect(store.release(claim.lease)).toBe(true);
+      }
+      return {
+        env: {},
+        port: scenario === "revoked before port cleanup" ? 43210 : null,
+        probeHosts: [],
+      };
+    });
+    let loaded = true;
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation(
+      (pid) => pid === gatewayPid && !loaded,
+    );
     const nativeCalls: string[][] = [];
+    let inspections = 0;
     vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
       nativeCalls.push(args);
       if (args[0] === "print") {
-        if (scenario === "revoked at native stop") {
+        inspections += 1;
+        if (
+          scenario === "revoked at native stop" ||
+          (inspections === 2 &&
+            (scenario === "revoked after inspection" ||
+              scenario === "revoked after inspection with disable"))
+        ) {
           expect(store.release(claim.lease)).toBe(true);
         }
-        return {
-          code: 0,
-          termination: "exit",
-          stdout: `state = running\npid = ${gatewayPid}`,
-          stderr: "",
-        };
+        return loaded
+          ? {
+              code: 0,
+              termination: "exit",
+              stdout: `state = running\npid = ${gatewayPid}`,
+              stderr: "",
+            }
+          : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
+      }
+      if (args[0] === "disable") {
+        if (scenario === "revoked after disable") {
+          expect(store.release(claim.lease)).toBe(true);
+        }
+        return { code: 0, termination: "exit", stdout: "", stderr: "" };
       }
       expect(args[0]).toBe("bootout");
+      loaded = false;
       return { code: 0, termination: "exit", stdout: "", stderr: "" };
     });
     await withEnvAsync(
@@ -93,14 +131,18 @@ it
             programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
             environment: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
           }),
-          readRuntime: async () => ({ status: "running", pid: gatewayPid }),
-          isLoaded: async () => true,
+          readRuntime: async () =>
+            loaded ? { status: "running", pid: gatewayPid } : { status: "stopped" },
+          isLoaded: async () => loaded,
           stop: stopLaunchAgent,
         });
         mocks.service.mockReturnValue(service);
         const nativeArgs = {
           env: process.env,
           stdout: output,
+          disable:
+            scenario === "revoked after inspection with disable" ||
+            scenario === "revoked after disable",
           ...(scenario === "ordinary nested caller" ? {} : { updateHandoff: { root, runId } }),
         };
         const stop = () =>
@@ -119,14 +161,20 @@ it
           await stop();
         } else {
           await expect(stop()).rejects.toThrow(
-            `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
+            `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
           );
         }
         const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
-        expect(nativeCalls).toEqual([
-          ["print", target],
-          ...(authorized ? [["bootout", target]] : []),
-        ]);
+        const bootedOut = authorized || scenario === "revoked before port cleanup";
+        expect(nativeCalls.filter(([command]) => command !== "print")).toEqual(
+          bootedOut
+            ? [["bootout", target]]
+            : scenario === "revoked after disable"
+              ? [["disable", target]]
+              : [],
+        );
+        expect(loaded).toBe(!bootedOut);
+        expect(cleanup).not.toHaveBeenCalled();
       },
     );
   }),

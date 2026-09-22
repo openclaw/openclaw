@@ -2,6 +2,7 @@ import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -102,7 +103,7 @@ function createGatewayContext(gateway: ApplicationGateway): ApplicationContext {
     basePath: "",
     agentSelection: { state: { selectedId: null } },
     config: { current: { terminalEnabled: false } },
-    theme: { resolvedMode: "dark" },
+    theme: { resolvedMode: "dark", branding: resolveThemeBranding(undefined) },
   } as unknown as ApplicationContext;
 }
 

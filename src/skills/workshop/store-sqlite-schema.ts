@@ -7,6 +7,7 @@ import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase as StateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 
@@ -112,6 +113,13 @@ export function databaseOptions(
 export function ensureSkillWorkshopSchema(options: SkillWorkshopStoreOptions = {}): void {
   const dbOptions = databaseOptions(options);
   const database = openOpenClawStateDatabase(dbOptions);
+  ensureSkillWorkshopSchemaInDatabase(database, dbOptions);
+}
+
+export function ensureSkillWorkshopSchemaInDatabase(
+  database: StateDatabase,
+  dbOptions: OpenClawStateDatabaseOptions,
+): void {
   if (ensuredDatabases.has(database.db)) {
     return;
   }

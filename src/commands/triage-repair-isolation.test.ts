@@ -10,11 +10,27 @@ import { triageCommand } from "./triage.js";
 import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  agentExecCommand: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
   oracle: vi.fn(),
   serviceStop: vi.fn(),
 }));
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
+vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: async (params: {
+    selection: { provider: string; model: string };
+    runCandidate: (
+      provider: string,
+      model: string,
+      options: { agentHarnessRuntimeOverride: string },
+    ) => Promise<unknown>;
+  }) => {
+    const { provider, model } = params.selection;
+    const result = await params.runCandidate(provider, model, {
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+    return { result, provider, model, terminal: { outcome: { status: "ok" } } };
+  },
+}));
 vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: async () => [] }));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
@@ -91,7 +107,7 @@ describe("manual triage repair isolation", () => {
             findings: repaired ? [] : [{ severity: "error", message: "Synthetic repair needed" }],
           }),
         }));
-        mocks.agentExecCommand.mockImplementation(async () => {
+        mocks.runEmbeddedAgent.mockImplementation(async () => {
           observedPolicy = {
             service: doctorPolicy.resolveServiceRepairPolicy(),
             activation: doctorPolicy.resolveUpdateParentGatewayActivation(process.env),
@@ -104,7 +120,6 @@ describe("manual triage repair isolation", () => {
           expect(maintenance).toBeDefined();
           try {
             await fs.writeFile(marker, "repaired");
-            repaired = true;
             await maintenance?.finish(config);
           } finally {
             await maintenance?.release();
@@ -112,13 +127,12 @@ describe("manual triage repair isolation", () => {
           if (throws) {
             throw new Error("Synthetic executor failure");
           }
+          repaired = true;
           return {
-            exitCode: 0,
-            toolCalls: 1,
-            envelope: {
-              status: "ok",
-              final: 'REPAIR_RESULT: {"status":"fixed","summary":"Synthetic repair completed"}',
-            },
+            payloads: [
+              { text: 'REPAIR_RESULT: {"status":"fixed","summary":"Synthetic repair completed"}' },
+            ],
+            meta: { durationMs: 1 },
           };
         });
         const run = withTriageTerminal(true, () =>
@@ -132,7 +146,7 @@ describe("manual triage repair isolation", () => {
             "Embedded repair repaired: Doctor lint reports no errors.",
           );
         }
-        expect(mocks.agentExecCommand).toHaveBeenCalledOnce();
+        expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
         expect(await fs.readFile(marker, "utf8")).toBe("repaired");
         expect(mocks.serviceStop).not.toHaveBeenCalled();
         expect(observedPolicy).toEqual({ service: "external", activation: false });

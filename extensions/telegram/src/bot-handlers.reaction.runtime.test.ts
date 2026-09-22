@@ -1,4 +1,5 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -21,6 +22,7 @@ import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 const FIRE_EMOJI = "\u{1F525}";
@@ -176,6 +178,7 @@ function systemEventOptions(): { sessionKey?: string; contextKey?: string } {
 
 describe("registerTelegramReactionHandler forum topic recovery", () => {
   beforeEach(() => {
+    setTelegramRuntime(createPluginRuntimeMock());
     resetSystemEventsForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     enqueueRoutedSystemEvent.mockReset();

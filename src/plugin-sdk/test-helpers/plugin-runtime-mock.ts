@@ -1,6 +1,5 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.shared.js";
@@ -10,6 +9,11 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
+import {
+  createChannelIngressPolicyResolver,
+  resolveChannelIngressPolicy,
+  resolveStableChannelIngressPolicy,
+} from "../../channels/message-access/runtime.js";
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
@@ -24,7 +28,10 @@ import {
   mergePluginRuntimeMockOverrides,
   type PluginRuntimeMockOverrides,
 } from "./plugin-runtime-mock-overrides.js";
+import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
+import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
+import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
 type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
@@ -457,6 +464,11 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
   };
   const inboundRuntime = {
+    ingress: {
+      createResolver: createChannelIngressPolicyResolver,
+      resolve: resolveChannelIngressPolicy,
+      resolveStable: resolveStableChannelIngressPolicy,
+    },
     run: runChannelTurnMock,
     dispatch: dispatchChannelTurnPlanMock,
     dispatchReply: dispatchAssembledChannelTurnMock,
@@ -465,6 +477,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
   } satisfies PluginRuntime["channel"]["inbound"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
     gateway: {
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),
@@ -894,12 +907,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       },
       inbound: inboundRuntime,
       turn: inboundRuntime,
-      threadBindings: {
-        setIdleTimeoutBySessionKey:
-          vi.fn<PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"]>(),
-        setMaxAgeBySessionKey:
-          vi.fn<PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"]>(),
-      },
+      threadBindings: createPluginThreadBindingsRuntimeMock(),
       runtimeContexts: {
         register: vi.fn<PluginRuntime["channel"]["runtimeContexts"]["register"]>(
           runtimeContexts.register,
@@ -929,56 +937,8 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         debug: vi.fn(),
       })),
     },
-    state: {
-      resolveStateDir: vi.fn(() => "/tmp/openclaw"),
-      openBlobStore: createGenericMock<PluginRuntime["state"]["openBlobStore"]>(() => {
-        throw new Error("openBlobStore mock is not configured");
-      }),
-      openKeyedStore: createGenericMock<PluginRuntime["state"]["openKeyedStore"]>(() => {
-        throw new Error("openKeyedStore mock is not configured");
-      }),
-      openSyncKeyedStore: createGenericMock<PluginRuntime["state"]["openSyncKeyedStore"]>(() => {
-        throw new Error("openSyncKeyedStore mock is not configured");
-      }),
-      openChannelIngressQueue: createGenericMock<PluginRuntime["state"]["openChannelIngressQueue"]>(
-        () => {
-          throw new Error("openChannelIngressQueue mock is not configured");
-        },
-      ),
-      openChannelIngressDrain: createGenericMock<PluginRuntime["state"]["openChannelIngressDrain"]>(
-        () => {
-          throw new Error("openChannelIngressDrain mock is not configured");
-        },
-      ),
-    },
+    state: createPluginStateRuntimeMock(),
     tasks: createPluginTasksRuntimeMock(),
-    modelConfig: {
-      resolveDefaultModelForAgent:
-        vi.fn<PluginRuntime["modelConfig"]["resolveDefaultModelForAgent"]>(),
-      resolveAllowedModelRef: vi.fn<PluginRuntime["modelConfig"]["resolveAllowedModelRef"]>(),
-      resolveModelRuntimePolicy: vi.fn(resolveModelRuntimePolicy),
-    },
-    modelAuth: {
-      resolveProviderIdForAuth: vi.fn<PluginRuntime["modelAuth"]["resolveProviderIdForAuth"]>(
-        (provider) => provider,
-      ),
-      ensureAuthProfileStore: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStore"]>(() => ({
-        version: 1,
-        profiles: {},
-      })),
-      resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
-        () => [],
-      ),
-      listProfilesForProvider: vi.fn<PluginRuntime["modelAuth"]["listProfilesForProvider"]>(
-        () => [],
-      ),
-      isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
-        () => false,
-      ),
-      getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
-      getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
-      resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),
-    },
     subagent: {
       complete: vi.fn(),
       run: vi.fn(),
@@ -999,21 +959,6 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
-    },
-    llm: {
-      acquireLocalService: vi.fn(),
-      complete: vi.fn().mockResolvedValue({
-        text: "{}",
-        provider: DEFAULT_PROVIDER,
-        model: DEFAULT_MODEL,
-        agentId: "main",
-        usage: {},
-        execution: {
-          mode: "direct-provider",
-          owner: { kind: "provider", id: DEFAULT_PROVIDER },
-        },
-        audit: { caller: { kind: "plugin", id: "test" } },
-      }),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

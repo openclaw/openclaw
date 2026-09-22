@@ -31,7 +31,12 @@ type MemorySearchAuthorization = Parameters<
 type WorkspaceMemoryPathClassification = Parameters<
   NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
 >[0];
-type MemoryRuntimeOwner = { runtime: MemoryRuntime; standalone?: true };
+type MemoryRuntimeOwner = {
+  runtime?: MemoryRuntime;
+  standalone?: true;
+  searchRuntimeRegistered?: boolean;
+  error?: string;
+};
 const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryRuntime>();
 let standaloneMemoryRegistrySlot:
   | { runtime?: MemoryRuntime; retiredRuntimes: Set<MemoryRuntime> }
@@ -106,10 +111,6 @@ function resolveMemoryRuntimeWorkspaceDir(
   return resolveUserPath(dir);
 }
 
-function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
-  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.runtime;
-}
-
 function listCurrentMemoryRuntimes(): MemoryRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
   const current = getMemoryRuntime();
@@ -128,7 +129,7 @@ function ensureMemoryRuntime(params?: {
 }): MemoryRuntimeOwner | undefined {
   const current = getMemoryRuntime();
   if (current || !params) {
-    return current ? { runtime: current } : undefined;
+    return current ? { runtime: current, searchRuntimeRegistered: true } : undefined;
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {
@@ -141,10 +142,22 @@ function ensureMemoryRuntime(params?: {
     workspaceDir,
     activate: false,
   });
-  const runtime = resolveMemoryRuntimeFromRegistry(registry);
+  const runtime = resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability
+    .runtime;
+  const record = runtime
+    ? undefined
+    : registry.plugins.find((entry) => entry.id === onlyPluginIds[0]);
+  // Only a successfully loaded slot owner can establish that search is not provided.
+  const owner: MemoryRuntimeOwner | undefined = runtime
+    ? { runtime, standalone: true, searchRuntimeRegistered: true }
+    : record?.status === "error"
+      ? { error: record.error ?? `Memory plugin "${record.id}" failed to load` }
+      : record?.status === "loaded" && record.memorySlotSelected === true
+        ? { searchRuntimeRegistered: false }
+        : undefined;
   const previousSlot = standaloneMemoryRegistrySlot;
   if (previousSlot?.runtime === runtime) {
-    return runtime ? { runtime, standalone: true } : undefined;
+    return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
   if (previousSlot?.runtime) {
@@ -165,7 +178,7 @@ function ensureMemoryRuntime(params?: {
       enrolledStandaloneMemoryRuntimes.add(runtime);
     }
   }
-  return runtime ? { runtime, standalone: true } : undefined;
+  return owner;
 }
 
 /** Returns the active plugin-backed memory search manager for an agent. */
@@ -176,8 +189,12 @@ export async function getActiveMemorySearchManagerCore(params: {
   inspectSources?: boolean;
 }) {
   const owner = ensureMemoryRuntime(params);
-  if (!owner) {
-    return { manager: null, error: "memory plugin unavailable" };
+  if (!owner?.runtime) {
+    return {
+      manager: null,
+      error: owner?.error ?? "memory plugin unavailable",
+      searchRuntimeRegistered: owner?.searchRuntimeRegistered,
+    };
   }
   if (owner.standalone) {
     setStandaloneMemoryManagerActive(true);
@@ -186,6 +203,7 @@ export async function getActiveMemorySearchManagerCore(params: {
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+    searchRuntimeRegistered: true,
   };
 }
 
@@ -194,7 +212,7 @@ export async function authorizeActiveMemorySearchHits(
   params: MemorySearchAuthorization,
 ): Promise<MemorySearchAuthorization["hits"]> {
   const owner = ensureMemoryRuntime(params);
-  if (!owner) {
+  if (!owner?.runtime) {
     // Session artifacts need plugin-owned identity mapping before they are safe
     // to expose. Runtimes without that capability may still return memory hits.
     return params.hits.filter((hit) => hit.source !== "sessions");
@@ -216,7 +234,7 @@ export async function classifyActiveMemoryWorkspacePaths(
     }
 > {
   const owner = ensureMemoryRuntime(params);
-  if (!owner) {
+  if (!owner?.runtime) {
     return { status: "unavailable" };
   }
   if (
@@ -232,7 +250,7 @@ export async function classifyActiveMemoryWorkspacePaths(
 /** Resolves current memory backend config without constructing a manager. */
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
   const owner = ensureMemoryRuntime(params);
-  return owner ? owner.runtime.resolveMemoryBackendConfig(params) : null;
+  return owner?.runtime ? owner.runtime.resolveMemoryBackendConfig(params) : null;
 }
 
 /** Closes all active plugin-backed memory search managers. */

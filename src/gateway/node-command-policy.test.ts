@@ -53,57 +53,78 @@ describe("gateway/node-command-policy", () => {
     return registry;
   }
 
-  it("keeps desktop streaming dangerous, advertised, explicitly allowed, and deny-wins", () => {
-    const node = {
-      platform: "linux",
-      deviceFamily: "Linux",
-      commands: [NODE_DESKTOP_STREAM_COMMAND],
-      approvedCommands: [NODE_DESKTOP_STREAM_COMMAND],
-    };
-    expect(
-      resolveNodeCommandAllowlist({} as OpenClawConfig, node).has(NODE_DESKTOP_STREAM_COMMAND),
-    ).toBe(false);
-    expect(
-      resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
-        platform: node.platform,
-        deviceFamily: node.deviceFamily,
-        commands: node.commands,
-      }).has(NODE_DESKTOP_STREAM_COMMAND),
-    ).toBe(false);
+  it.each([
+    ["macos", "Mac"],
+    ["linux", "Linux"],
+    ["windows", "Windows"],
+  ])(
+    "allows paired desktop streaming on %s without a persistent allow and keeps deny-wins",
+    (platform, deviceFamily) => {
+      const node = {
+        platform,
+        deviceFamily,
+        commands: [NODE_DESKTOP_STREAM_COMMAND],
+        approvedCommands: [NODE_DESKTOP_STREAM_COMMAND],
+      };
+      expect(
+        resolveNodeCommandAllowlist({} as OpenClawConfig, node).has(NODE_DESKTOP_STREAM_COMMAND),
+      ).toBe(true);
+      expect(
+        resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+          platform: node.platform,
+          deviceFamily: node.deviceFamily,
+          commands: node.commands,
+        }).has(NODE_DESKTOP_STREAM_COMMAND),
+      ).toBe(true);
 
-    const allowedConfig = {
-      gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
-    } as OpenClawConfig;
-    const allowed = resolveNodeCommandAllowlist(allowedConfig, node);
-    expect(
-      isNodeCommandAllowed({
-        command: NODE_DESKTOP_STREAM_COMMAND,
-        declaredCommands: node.commands,
-        allowlist: allowed,
-      }),
-    ).toEqual({ ok: true });
-    expect(
-      isNodeCommandAllowed({
-        command: NODE_DESKTOP_STREAM_COMMAND,
-        declaredCommands: [],
-        allowlist: allowed,
-      }),
-    ).toEqual({ ok: false, reason: "node did not declare commands" });
+      const allowed = resolveNodeCommandAllowlist({}, node);
+      expect(
+        isNodeCommandAllowed({
+          command: NODE_DESKTOP_STREAM_COMMAND,
+          declaredCommands: node.commands,
+          allowlist: allowed,
+        }),
+      ).toEqual({ ok: true });
+      expect(
+        isNodeCommandAllowed({
+          command: NODE_DESKTOP_STREAM_COMMAND,
+          declaredCommands: [],
+          allowlist: allowed,
+        }),
+      ).toEqual({ ok: false, reason: "node did not declare commands" });
+      expect(
+        resolveNodeCommandAllowlist({}, { ...node, approvedCommands: [] }).has(
+          NODE_DESKTOP_STREAM_COMMAND,
+        ),
+      ).toBe(false);
 
-    const denied = resolveNodeCommandAllowlist(
-      {
-        gateway: {
-          nodes: {
-            commands: {
-              allow: [NODE_DESKTOP_STREAM_COMMAND],
-              deny: [NODE_DESKTOP_STREAM_COMMAND],
+      const denied = resolveNodeCommandAllowlist(
+        {
+          gateway: {
+            nodes: {
+              commands: {
+                allow: [NODE_DESKTOP_STREAM_COMMAND],
+                deny: [NODE_DESKTOP_STREAM_COMMAND],
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      node,
-    );
-    expect(denied.has(NODE_DESKTOP_STREAM_COMMAND)).toBe(false);
+        } as OpenClawConfig,
+        node,
+      );
+      expect(denied.has(NODE_DESKTOP_STREAM_COMMAND)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["ios", "iPhone"],
+    ["android", "Android"],
+    ["unknown", "unknown"],
+  ])("does not add desktop streaming to %s pairing", (platform, deviceFamily) => {
+    expect(
+      resolveNodePairingCommandAllowlist({}, { platform, deviceFamily }).has(
+        NODE_DESKTOP_STREAM_COMMAND,
+      ),
+    ).toBe(false);
   });
 
   it("normalizes declared node commands against the allowlist", () => {

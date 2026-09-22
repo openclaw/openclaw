@@ -267,7 +267,7 @@ function setupDeps(params: {
     runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
+      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({

@@ -41,7 +41,7 @@ export type ExecPolicyOverrides = {
 
 // Gather the shared config state once so exec resolution applies one
 // agent/global/session precedence order.
-function resolveExecConfigState(params: {
+export function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;

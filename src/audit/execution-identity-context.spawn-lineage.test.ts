@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
 } from "./execution-identity-admission.js";
-import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
+import { processExecutionIdentityAdmissionWorkInDatabase } from "./execution-identity-context.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 afterEach(() => {
@@ -68,10 +71,12 @@ function prepareContext(
   if (!envelope) {
     throw new Error("expected admission envelope");
   }
-  return processExecutionIdentityAdmissionWork(
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-lineage-") } };
+  return processExecutionIdentityAdmissionWorkInDatabase(
     { kind: "capture", envelope },
     {
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-lineage-") },
+      ...options,
+      database: openOpenClawStateDatabase(options),
       ...(ids.now !== undefined ? { now: ids.now } : {}),
     },
   );

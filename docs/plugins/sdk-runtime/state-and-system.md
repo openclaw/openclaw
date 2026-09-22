@@ -136,6 +136,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    For command-owned writes, `store.register(key, value, { assertCurrent })`
+    and `store.delete(key, { assertCurrent })` carry the captured owner assertion
+    through worker preparation and admission. The assertion remains in the host;
+    it is never serialized into stored data. Revocation prevents a pending write
+    from being admitted, while a write already accepted by the worker still
+    settles normally.
+
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
@@ -173,6 +180,8 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `next-plugin-sdk-major` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
+
+    Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
@@ -212,6 +221,40 @@ const store = api.runtime.state.openKeyedStore<MyRecord>({
 await store.register("key-1", { value: "hello" });
 const value = await store.lookup("key-1");
 ```
+
+For writes on behalf of a current tool invocation or other revocable action,
+require `store.withCurrent` before starting effects. Bind the host-provided
+assertion together with any action-specific permission check:
+
+```typescript
+if (!store.withCurrent) {
+  throw new Error("Update OpenClaw to authorize this state mutation.");
+}
+const actionStore = store.withCurrent({
+  assertCurrent: () => {
+    context.assertInvocationCurrent();
+    assertActionAllowed();
+  },
+});
+await actionStore.register("key-1", { value: "hello" });
+```
+
+The returned `PluginStateKeyedStore<T, 2>` is an immutable binding to the same
+namespace, settings, and plugin lifetime. It exposes the data-only operations;
+it has no `update`, `deleteIf`, or rebinding method. The assertion stays on the
+host and is checked after reads and at both transaction and final commit
+admission for writes, including bounded stores. Create a separate view for each
+action; do not keep one caller's authority on a shared service. The legacy
+`PluginStateKeyedStore<T>` keeps this capability optional for older hosts and
+adapters. An action requiring it must refuse when it is absent.
+
+`observe` and a comparison conflict return observations without committing the
+requested mutation; they also require current authority when returning that data.
+
+A refusal before the commit grant rolls back the mutation. Once commit is
+authorized, later revocation does not turn the settled write into a refusal.
+Recheck authority before the next external effect, and preserve the recorded
+result; never retry a committed or unknown write to compensate for revocation.
 
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
@@ -282,6 +325,13 @@ Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
 instead of risking deletion of a newer reservation.
 
+FaceTime persists pending dial snapshots in invocation order and uses worker
+comparisons to clear only the matching dial. Helper dispatch waits for durable
+intent, and shutdown joins accepted persistence. Its supported 2026.9.4 hosts
+without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
+never selects that compatibility path. The namespace, stored records, and
+retention remain unchanged, so this cutover requires no data migration.
+
 This deprecation adds editor annotations, documentation, and compatibility
 inventory metadata. It adds no runtime warning and changes no trust eligibility:
 the runtime openers remain limited to bundled plugins and trusted official
@@ -305,9 +355,36 @@ Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay
 repair, and tool-result cleanup await their writes before publishing dependent
 results or disposing their resources. Model-selection hooks run after write
-admission releases. Synchronous SessionManager and extension APIs, including
-`setThinkingLevel`, retain their existing synchronous contracts and still need
-an appropriate caller-owned write boundary.
+admission releases. SessionManager `appendModelChange` and
+`appendThinkingLevelChange` return promises for their committed entry IDs;
+AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
+operations before using the resulting model or thinking state. Other synchronous
+SessionManager operations still need an appropriate caller-owned write boundary.
+
+`SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
+as an absolute lexical locator before reading the transcript or invoking
+`onTruncated`. Relative locators resolve against the process working directory
+at entry; `getSessionTarget()` returns that captured locator. Later working
+directory changes leave the manager bound to its original store. The binding also
+captures the resolved state directory and supervisor mode; environment changes
+cannot redirect later writes. Existing `sessions.json` and custom-store routing
+and symlink spelling are preserved.
+
+File-backed model and thinking transcript writes execute through the canonical
+agent database worker. Queued extension actions retain their original runtime
+and session authority through transaction and commit admission. Synchronous session
+opening, final model-context validation, and incognito transcript persistence still use
+their native owners; an asynchronous method does not imply that every storage
+operation in the enclosing session flow runs off-thread.
+
+Committed metadata updates the bound session's model or thinking state alongside
+transcript-view adoption, before asynchronous cleanup. Settings setters retain
+their existing persistence queue. If view reconstruction, local publication, or
+a dependent thinking change fails after the append commits, the error preserves
+the committed entry and prevents model fallback from replaying it. A failed view
+reconstruction makes the existing manager refuse further transcript access;
+discard it and reopen through the session owner after resolving the read failure.
+Retrying the append would duplicate a write that already committed.
 
 The signature is `withOpenClawAgentDatabaseWrite(options, operation, expectedDatabase?)`.
 `options` uses the existing agent database options, including the required
@@ -323,20 +400,39 @@ argument. After waiting, the helper rejects a closed or replaced handle rather
 than opening a replacement on its behalf. Keep the original borrow alive until
 the operation settles. The caller still owns transactions and authorization.
 For large native publications, `openOpenClawAgentSqliteWorkerStore(options, borrowedDb, { moduleUrl, input })`
-retains the original borrowed handle, physical identity, and a separate agent lease
-for a pooled SQLite Worker connection. Its `run(operation, assertCurrent)` joins
-the existing agent writer queue. The operation receives only the retained store's
-`execute` method; finish it before calling `close()`. Close revokes new work,
-drains accepted operations, closes native storage, and then releases custody.
+retains the original borrowed handle and physical identity. Its
+`run(operation, assertCurrent)` joins the existing agent writer queue and borrows
+the canonical agent executor for the complete operation. The module exports
+`bindSqliteWorkerBackend(input, { databasePath, database, admit })`; it uses the
+supplied connection and closes only its own temporary state. It must not open or
+close the agent database. The operation receives only the bound backend's
+`execute` method; finish it before calling `close()`. Client close revokes new work,
+drains its accepted operations, and releases its original borrow. The canonical
+executor owns the native connection, lease, idle reuse, and final close.
 
 A backend used with this owner requests `transaction` admission after BEGIN and
-`commit` admission immediately before COMMIT through
-`requestSqliteWorkerOperationAdmission`. The host checks current authority at
+`commit` admission immediately before COMMIT through the supplied `admit` callback.
+The host checks the canonical connection and current caller authority at
 both points without waiting synchronously for the native transaction. An accepted
 commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
 Private file owners can use `runSqliteWorkerStoreWrite` with their own admission
 and lifetime; it does not supply the shared agent queue or lease.
+
+`runSqliteWorkerStoreOperation(store, operation, undefined, assertCurrent)` retains
+one existing worker actor and checks the supplied authority through broker
+admission. Use it when a private store has prepared a command asynchronously;
+checking only before worker opening leaves pending work authorized by an old
+snapshot. This operation helper preserves accepted native settlement and does
+not add a transaction/commit handshake to backends that do not implement one.
+
+Worker backends can load module prerequisites asynchronously in `prepare(command)`.
+Preparation carries captured state/runtime facts and performs no native work.
+After it settles, `execute(command)` enters fresh synchronous authority scopes;
+connection-bound execution revalidates authority before native work. Extension
+loading, transactions, and domain callbacks remain synchronous. Agent connection policy, including TEMP
+storage, belongs to the canonical connection owner and cannot be reset when a
+publication binds.
 
 Backends whose failure handling can leave an unusable native connection implement
 synchronous `assertSettled()`. The broker calls it after a command returns or

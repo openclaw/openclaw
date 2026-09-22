@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover durable retry recovery through full handler replacement.
 import fs from "node:fs/promises";
 import os from "node:os";

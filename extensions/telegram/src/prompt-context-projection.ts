@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import {
+  copyReplyPayloadMetadata,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -63,7 +64,7 @@ export function withTelegramPromptContextSource(
     return payload;
   }
   const telegram = payload.channelData?.telegram;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     channelData: {
       ...payload.channelData,
@@ -75,7 +76,7 @@ export function withTelegramPromptContextSource(
         },
       },
     },
-  };
+  });
 }
 
 export function createTelegramPromptContextProjectionCursor(source: TelegramPromptContextSource) {

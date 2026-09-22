@@ -6,6 +6,7 @@ import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  updateSchemaRehearsal?: { runId: string; updaterVersion: string };
 };
 
 /** Prepare fleet facts through the artifact-preserving schema readers. */

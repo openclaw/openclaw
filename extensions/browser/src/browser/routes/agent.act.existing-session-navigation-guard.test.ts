@@ -47,14 +47,18 @@ const chromeMcpMocks = vi.hoisted(() => ({
     async (_params: ChromeMcpOperationOptions) => "https://example.com",
   ),
   fillChromeMcpElement: vi.fn(async (_params: ChromeMcpOperationOptions) => {}),
+  selectChromeMcpOption: vi.fn(async (_params: ChromeMcpOperationOptions) => {}),
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   pressChromeMcpKey: vi.fn(async (_params: ChromeMcpOperationOptions) => {}),
   withChromeMcpDocument: vi.fn(
-    async (_params: unknown, task: (document: { evaluate: (fn: string) => unknown }) => unknown) =>
+    async (
+      _params: ChromeMcpOperationOptions,
+      task: (document: { evaluate: (fn: string) => unknown }) => unknown,
+    ) =>
       await task({
         evaluate: async (fn) =>
-          fn.includes("globalThis.location.href")
+          fn.includes("return boundDocument")
             ? "https://example.com"
             : { kind: "result", ready: true },
       }),
@@ -100,6 +104,7 @@ vi.mock("../chrome-mcp.js", () => ({
   dragChromeMcpElement: chromeMcpMocks.dragChromeMcpElement,
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
+  selectChromeMcpOption: chromeMcpMocks.selectChromeMcpOption,
   fillChromeMcpForm: chromeMcpMocks.fillChromeMcpForm,
   hoverChromeMcpElement: chromeMcpMocks.hoverChromeMcpElement,
   pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
@@ -189,7 +194,7 @@ describe("existing-session interaction navigation guard", () => {
       ) =>
         await task({
           evaluate: async (fn) =>
-            fn.includes("globalThis.location.href")
+            fn.includes("return boundDocument")
               ? "https://example.com"
               : { kind: "result", ready: true },
         }),
@@ -270,7 +275,7 @@ describe("existing-session interaction navigation guard", () => {
     chromeMcpMocks.withChromeMcpDocument.mockImplementation(async (_params, task) =>
       task({
         evaluate: async (fn) =>
-          fn.includes("globalThis.location.href")
+          fn.includes("return boundDocument")
             ? "https://example.com"
             : { kind: "result", ready: Date.now() >= readyAt },
       }),
@@ -580,6 +585,40 @@ describe("existing-session interaction navigation guard", () => {
     },
   );
 
+  it("preserves the condition timeout while cancelling an outstanding snapshot", async () => {
+    let snapshotSignal: AbortSignal | undefined;
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(async (params) => {
+      snapshotSignal = params.signal;
+      await sleep(1_000, undefined, { signal: params.signal });
+      return false;
+    });
+    const request = await startClientAction({ kind: "wait", selector: "#missing", timeoutMs: 250 });
+    await vi.advanceTimersByTimeAsync(249);
+    expect(snapshotSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(snapshotSignal?.aborted).toBe(true);
+    expect(snapshotSignal?.reason).toEqual(new Error("Timed out waiting for condition"));
+    expect(await request.completion).toMatchObject({
+      error: expect.objectContaining({
+        message: expect.stringContaining("Timed out waiting for condition"),
+      }),
+    });
+  });
+
+  it("rejects a condition that finishes after its deadline before the timer runs", async () => {
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 251);
+      return true;
+    });
+    const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });
+    expect(request.settled).toHaveBeenCalledOnce();
+    expect(await request.completion).toMatchObject({
+      error: expect.objectContaining({
+        message: expect.stringContaining("Timed out waiting for condition"),
+      }),
+    });
+  });
+
   it("checks navigation after click and key-driven submit paths", async () => {
     const clickResponse = await runAction({ kind: "click", ref: "btn-1" });
     const typeResponse = await runAction({
@@ -654,7 +693,7 @@ describe("existing-session interaction navigation guard", () => {
       let urlReads = 0;
       return await task({
         evaluate: async (fn) => {
-          if (!fn.includes("globalThis.location.href")) {
+          if (!fn.includes("return boundDocument")) {
             return { kind: "result", ready: true };
           }
           urlReads += 1;

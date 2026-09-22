@@ -5,6 +5,8 @@
   z-index: 1990;
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 16px;
   border: 1px solid var(--overlay-border);
   border-radius: var(--radius-lg);
@@ -41,6 +43,7 @@
 }
 
 .link-reader-hovercard__header {
+  flex-wrap: wrap;
   gap: 9px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -57,11 +60,13 @@
   font-weight: 600;
 }
 
-.link-reader-hovercard__state[data-tone="positive"] {
+.link-reader-hovercard__state[data-tone="positive"],
+.link-reader-hovercard__metric[data-tone="positive"] {
   color: var(--ok);
 }
 
-.link-reader-hovercard__state[data-tone="negative"] {
+.link-reader-hovercard__state[data-tone="negative"],
+.link-reader-hovercard__metric[data-tone="negative"] {
   color: var(--danger);
 }
 
@@ -80,11 +85,10 @@
 /* The repo reference and author are links too, but the title owns the card's
    only underline; the rest stay text until hovered or focused. */
 .link-reader-hovercard__subtitle {
+  flex: 1;
   min-width: 0;
   color: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .link-reader-hovercard__subtitle:hover,
@@ -117,8 +121,9 @@
 }
 
 .link-reader-hovercard__footer {
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px 16px;
 }
 
 .link-reader-hovercard__author,
@@ -132,9 +137,8 @@
   gap: 8px;
   color: var(--muted);
   font-size: var(--control-ui-text-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .link-reader-hovercard__image {
@@ -148,19 +152,80 @@
 }
 
 .link-reader-hovercard__metadata {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: auto;
 }
 
 .link-reader-hovercard__metric {
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
+  min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.link-reader-hovercard__author-name {
+  min-width: 0;
+}
+
+.link-reader-hovercard__coauthors {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.link-reader-hovercard__coauthor {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--bg-muted);
+  box-shadow: 0 0 0 2px var(--card);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.link-reader-hovercard__coauthor + .link-reader-hovercard__coauthor {
+  margin-inline-start: -7px;
+}
+.link-reader-hovercard__coauthor .link-reader-hovercard__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.link-reader-hovercard__coauthor .link-reader-hovercard__image[hidden] {
+  display: none;
+}
+.link-reader-hovercard__coauthors-more {
+  margin-inline-start: 5px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.link-reader-hovercard__error {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-subtle);
+  color: var(--warn);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .link-reader-hovercard__skeleton .skeleton {
@@ -214,12 +279,6 @@
 
   .link-reader-hovercard__title {
     margin: 13px 0 15px;
-  }
-
-  .link-reader-hovercard__footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
   }
 }
 

@@ -396,7 +396,7 @@ describe("host-owned current admission annotation", () => {
             .all(f.target.sessionId);
         const searchBefore = searchRows();
         const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-          sql.includes("session_transcript_fts")
+          /\bsession_transcript_fts\b/i.test(sql)
             ? "fts"
             : sql.includes("octet_length")
               ? "size"
@@ -855,7 +855,7 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it.each(["unpersisted", "suppressed", "internal", "copied"] as const)(
+  it.each(["unpersisted", "suppressed", "excluded", "copied"] as const)(
     "does not issue current-row authority for %s recorders",
     async (kind) => {
       await withAdmission(
@@ -881,7 +881,10 @@ describe("host-owned current admission annotation", () => {
         {
           persist: kind !== "unpersisted",
           suppress: kind === "suppressed",
-          input: kind === "internal" ? { display: false, text: "prompt" } : undefined,
+          input:
+            kind === "excluded"
+              ? { display: false, excludeFromContext: true, text: "prompt" }
+              : undefined,
         },
       );
     },

@@ -77,6 +77,9 @@ describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
       await child.ready();
       expect(child.stdout!.readableEnded).toBe(false);
       expect(child.stderr!.readableEnded).toBe(false);
+      if (child.stdin) {
+        expect(child.stdin).toHaveProperty("readable", false);
+      }
       const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
       child.stdout!.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
       child.stderr!.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));

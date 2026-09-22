@@ -4,9 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  CronCompactJob,
+  CronJob,
+  CronJobsListResult,
+  ModelAuthStatusResult,
+} from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
-import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createApplicationOverlays } from "../app/overlays.ts";
 import {
@@ -18,23 +22,18 @@ import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "../test-helpers/application-context.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import {
-  dismissSidebarAttention,
-  dismissalStoreKey,
-  isSidebarAttentionDismissed,
-  loadDismissals,
-  reconcileSidebarAttentionDismissals,
-  resolveUpdateAttentionDismissal,
-  type SidebarAttentionKind,
-} from "./sidebar-attention-dismissals.ts";
-import { buildScopeUpgradeInboxEntry, buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
+import { resolveUpdateAttentionDismissal } from "./sidebar-attention-dismissals.ts";
+import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import "./sidebar-attention.ts";
+
+const ATTENTION_KEY = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
 
 function cronJob(id: string): CronJob {
   return {
@@ -51,9 +50,9 @@ function cronJob(id: string): CronJob {
   };
 }
 
-function cronListResponse(jobs: CronJob[]): CronJobsListResult {
+function cronListResponse(jobs: CronJob[]): CronJobsListResult<CronCompactJob> {
   return {
-    jobs,
+    jobs: jobs.map(compactCronJobFixture),
     snapshotRevision: "sidebar-attention-cron-fixture",
     total: jobs.length,
     offset: 0,
@@ -81,6 +80,7 @@ type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   dismissPanel: () => boolean;
+  onNavigate?: ApplicationContext["navigate"];
 };
 
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
@@ -231,7 +231,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("updates the closed Inbox badge for mentions outside the selected agent", async () => {
+  it("updates cross-agent mentions and opens them through shell navigation", async () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const responses: Record<string, unknown> = {
       "cron.list": cronListResponse([]),
@@ -248,6 +248,7 @@ describe("sidebar attention refresh ownership", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
     harness.update({
       hello: {
         type: "hello-ok",
@@ -274,6 +275,17 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
     );
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    const onNavigate = vi.fn();
+    element.onNavigate = onNavigate;
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/writer/review" }),
+    );
+    await element.updateComplete;
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
@@ -306,6 +318,7 @@ describe("sidebar attention refresh ownership", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
     const { element, provider } = await mountAttention({
       gateway: harness.gateway,
       agentSelection: {
@@ -337,6 +350,7 @@ describe("sidebar attention refresh ownership", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
 
     const { element } = await mountAttention({ gateway: harness.gateway });
 
@@ -425,6 +439,7 @@ describe("sidebar attention refresh ownership", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(mockClient(request));
+    harness.update({ selfUser: { id: "alice", name: "Alice" } });
     const overlays = createApplicationOverlays(harness.gateway);
     const decideApproval = vi.spyOn(overlays, "decideApproval");
     try {
@@ -507,6 +522,7 @@ describe("sidebar attention refresh ownership", () => {
         snapshot: {
           client,
           phase: "connected",
+          selfUser: { id: "alice", name: "Alice" },
           hello: {
             auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
             features: { methods: ["update.run"] },
@@ -547,7 +563,7 @@ describe("sidebar attention refresh ownership", () => {
       } as unknown as ApplicationContext["agentSelection"];
       vi.stubGlobal("localStorage", createTestStorageMock());
       localStorage.setItem(
-        dismissalStoreKey(gateway.connection.gatewayUrl),
+        ATTENTION_KEY,
         JSON.stringify({
           cronFailed: ["dismissed-cron"],
           modelAuthExpired: ["agent:writer\nold-provider"],
@@ -602,9 +618,7 @@ describe("sidebar attention refresh ownership", () => {
             ?.textContent?.replace(/\s+/g, " "),
         ).toContain("writer"),
       );
-      const storedDismissals = localStorage.getItem(
-        dismissalStoreKey(gateway.connection.gatewayUrl),
-      );
+      const storedDismissals = localStorage.getItem(ATTENTION_KEY);
 
       now = 300_000;
       staleCron.resolve(cronListResponse([cronJob("stale")]));
@@ -624,9 +638,7 @@ describe("sidebar attention refresh ownership", () => {
           .querySelector('[data-attention-kind="modelAuthExpired"]')
           ?.textContent?.replace(/\s+/g, " "),
       ).toContain("writer");
-      expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).toBe(
-        storedDismissals,
-      );
+      expect(localStorage.getItem(ATTENTION_KEY)).toBe(storedDismissals);
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull();
       expect(element.querySelector('[data-attention-kind="updateAvailable"]')).not.toBeNull();
       expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull();
@@ -653,6 +665,7 @@ describe("sidebar attention refresh ownership", () => {
     const snapshot = {
       client,
       phase: "connected",
+      selfUser: { id: "alice", name: "Alice" },
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.chat"] },
@@ -858,192 +871,5 @@ describe("update attention", () => {
     });
 
     expect(Boolean(entry?.dismissal)).toBe(dismissible);
-  });
-});
-
-describe("reconcileSidebarAttentionDismissals", () => {
-  const chip = (kind: SidebarAttentionKind, signature: string) => ({
-    kind,
-    signature,
-  });
-  const gatewayUrl = "ws://gateway.test";
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  const reconcile = (
-    dismissals: Record<string, string[]>,
-    active: Array<{ kind: SidebarAttentionKind; signature: string }>,
-    scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
-  ) => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    localStorage.setItem(dismissalStoreKey(gatewayUrl), JSON.stringify(dismissals));
-    return reconcileSidebarAttentionDismissals({
-      active,
-      gatewayUrl,
-      ...(scope ? { scope } : {}),
-    });
-  };
-
-  it("keeps a dismissal while the same entity set is still affected", () => {
-    const dismissals = { cronFailed: ["alpha", "beta"] };
-    expect(
-      reconcile(dismissals, [chip("cronFailed", "alpha"), chip("cronFailed", "beta")]),
-    ).toEqual(dismissals);
-  });
-
-  it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
-    expect(
-      reconcile({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }, [
-        chip("cronFailed", "beta"),
-        chip("modelAuthExpired", "openai"),
-      ]),
-    ).toEqual({ modelAuthExpired: ["openai"] });
-  });
-
-  it("preserves dismissals outside a selected agent's partial inventory", () => {
-    expect(
-      reconcile(
-        {
-          cronFailed: ["main-job", "writer-job"],
-          modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
-        },
-        [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
-        { cronInventoryComplete: false, modelAuthAgentId: "main" },
-      ),
-    ).toEqual({
-      cronFailed: ["main-job", "writer-job"],
-      modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
-    });
-  });
-});
-
-describe("scope upgrade dismissal fact", () => {
-  const cases: Array<{
-    dismissible: boolean;
-    state: ScopeUpgradeState;
-  }> = [
-    { state: { phase: "hidden" }, dismissible: false },
-    { state: { phase: "guidance" }, dismissible: true },
-    { state: { phase: "available" }, dismissible: true },
-    { state: { phase: "requesting" }, dismissible: false },
-    { state: { phase: "pending", requestId: "request-1" }, dismissible: false },
-    {
-      state: { phase: "rejected", requestId: "request-1", expired: false },
-      dismissible: false,
-    },
-    { state: { phase: "error", message: "request failed", retryable: false }, dismissible: false },
-  ];
-
-  it.each(cases)(
-    "projects $state.phase with explicit dismissal policy",
-    ({ state, dismissible }) => {
-      const entry = buildScopeUpgradeInboxEntry({
-        scopes: ["operator.write", "operator.read"],
-        state,
-      });
-
-      expect(Boolean(entry?.dismissal)).toBe(dismissible);
-    },
-  );
-
-  it("resurfaces when manual guidance becomes an actionable upgrade", () => {
-    const scopes = ["operator.write", "operator.read"];
-    const guidance = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "guidance" } });
-    const available = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "available" } });
-
-    expect(guidance?.dismissal).not.toEqual(available?.dismissal);
-  });
-});
-
-describe("dismissSidebarAttention", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("merges with the persisted map so another tab's dismissal survives", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const key = dismissalStoreKey("ws://gateway.test");
-    // Another tab dismissed a cron chip after this tab last loaded.
-    localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
-
-    const next = dismissSidebarAttention("ws://gateway.test", {
-      kind: "cronFailed",
-      signature: "beta",
-    });
-
-    const expected = { cronFailed: ["alpha", "beta"] };
-    expect(next).toEqual(expected);
-    expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(expected);
-  });
-
-  it("preserves released single-signature dismissals during upgrade", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const gatewayUrl = "ws://gateway.test";
-    localStorage.setItem(
-      dismissalStoreKey(gatewayUrl),
-      JSON.stringify({ cronFailed: "legacy-signature" }),
-    );
-
-    expect(loadDismissals(gatewayUrl)).toEqual({ cronFailed: ["legacy-signature"] });
-  });
-});
-
-describe("update dismissal fact", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("uses the canonical package target and persists the literal boot binding", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const dismissal = resolveUpdateAttentionDismissal({
-      gatewayBootId: "boot-a",
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "latest",
-      },
-      updateSchedule: {
-        channel: "stable",
-        autoEnabled: false,
-        target: { kind: "package", version: "2026.8.3" },
-      },
-    });
-    expect(dismissal).toEqual({
-      kind: "updateAvailable",
-      signature: '["2026.8.3","boot-a"]',
-    });
-    const stored = dismissSidebarAttention("ws://gateway.test", dismissal!);
-    expect(isSidebarAttentionDismissed(stored, dismissal!)).toBe(true);
-    expect(
-      JSON.parse(localStorage.getItem(dismissalStoreKey("ws://gateway.test")) ?? "null"),
-    ).toEqual({ updateAvailable: ['["2026.8.3","boot-a"]'] });
-  });
-
-  it("uses the git target SHA instead of an unchanged package version", () => {
-    expect(
-      resolveUpdateAttentionDismissal({
-        gatewayBootId: "boot-a",
-        updateAvailable: {
-          currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
-        },
-        updateSchedule: {
-          channel: "dev",
-          autoEnabled: true,
-          target: {
-            kind: "git",
-            upstreamRef: "origin/main",
-            upstreamSha: "abcdef1234567890",
-            commitsBehind: 2,
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "updateAvailable",
-      signature: '["abcdef1234567890","boot-a"]',
-    });
   });
 });

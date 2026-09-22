@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { renderChatTypingIndicator } from "./components/chat-typing-indicator.ts";
+import { scheduleCommittedChatScroll } from "./scroll.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -15,6 +16,65 @@ afterEach(() => {
 });
 
 describe("chat pane typing presence", () => {
+  it.each(["auto", "manual"] as const)(
+    "remote typing preserves the viewport with a pending %s scroll",
+    (source) => {
+      vi.useFakeTimers();
+      const { pane, state } = createTestChatPane({
+        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      state.sessionKey = "agent:main:main";
+      state.sessionsResult = {
+        count: 1,
+        path: "",
+        sessions: [
+          { key: state.sessionKey, kind: "direct", sessionId: "typing-scroll", updatedAt: 1 },
+        ],
+      } as never;
+      pane.presencePayload = {
+        presence: [{ user: { id: "owner" } }, { user: { id: "writer" } }],
+      };
+      const scrollport = document.createElement("div");
+      let extent = 2000;
+      Object.defineProperties(scrollport, {
+        scrollHeight: { get: () => extent },
+        clientHeight: { value: 500 },
+      });
+      scrollport.scrollTop = 1500;
+      state.chatScrollElement = () => scrollport;
+      state.chatScrollToEnd = () => {
+        scrollport.scrollTop = scrollport.scrollHeight - scrollport.clientHeight;
+        return true;
+      };
+      state.chatHasAutoScrolled = true;
+      state.chatUserNearBottom = true;
+      scheduleCommittedChatScroll(state, false, true, { source });
+      const typing = {
+        sessionKey: state.sessionKey,
+        sessionId: "typing-scroll",
+        agentId: "main",
+        actor: { type: "human", id: "writer", label: "Writer" },
+        typing: true,
+        preview: "A draft that has not been submitted",
+        ts: 1,
+      } as const;
+      pane.handleSessionTypingEvent(typing);
+      expect(pane.typingActorViews()).toHaveLength(1);
+      extent += 83;
+      vi.advanceTimersToNextFrame();
+      expect(scrollport.scrollTop).toBe(source === "manual" ? 1583 : 1500);
+      scheduleCommittedChatScroll(state, false, false, { source: "manual" });
+      vi.advanceTimersToNextFrame();
+      expect(scrollport.scrollTop).toBe(1583);
+      pane.handleSessionTypingEvent({ ...typing, preview: "Updated draft" });
+      scheduleCommittedChatScroll(state, false, false);
+      extent += 83;
+      vi.advanceTimersToNextFrame();
+      expect(scrollport.scrollTop).toBe(1666);
+    },
+  );
+
   it("sender provenance clears only the exact profile sender and expires remaining actors", () => {
     vi.useFakeTimers();
     const { pane, state } = createTestChatPane({

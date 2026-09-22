@@ -50,10 +50,12 @@ import {
   resolveEdgeAuthHeaders,
   type EdgeAuthHeadersConfig,
 } from "../gateway/edge-auth.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
@@ -65,12 +67,14 @@ import type {
   TuiModelChoice,
   TuiApprovalDecision,
   TuiSessionList,
+  TuiSessionDescription,
   TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
+import { isListedTuiSession } from "./tui-session-list-policy.js";
 
 type GatewayConnectionOptions = {
   url?: string;
@@ -429,6 +433,42 @@ export class GatewayChatClient implements TuiBackend {
 
   async resolveSession(opts: HandoffSessionResolveParams): Promise<SessionsResolveResult> {
     return await this.client.request<SessionsResolveResult>("sessions.resolve", opts);
+  }
+
+  async describeSession(
+    opts: Parameters<TuiBackend["describeSession"]>[0],
+  ): Promise<TuiSessionDescription> {
+    const agentId = opts.agentId ?? parseAgentSessionKey(opts.sessionKey)?.agentId;
+    const signal = this.historyLifetime.signal;
+    for (;;) {
+      signal.throwIfAborted();
+      const connection = this.readyPromise;
+      const hello = this.hello;
+      const isCurrentConnection = () => connection === this.readyPromise && hello === this.hello;
+      try {
+        const [description, listing] = await Promise.all([
+          this.client.request<Pick<TuiSessionDescription, "session">>(
+            "sessions.describe",
+            { key: opts.sessionKey, ...(opts.agentId ? { agentId: opts.agentId } : {}) },
+            { signal },
+          ),
+          this.client.request<TuiSessionList>("sessions.list", { agentId, limit: 1 }, { signal }),
+        ]);
+        signal.throwIfAborted();
+        if (isCurrentConnection()) {
+          const session = description.session;
+          return {
+            session: session && isListedTuiSession(session) ? session : null,
+            defaults: listing.defaults,
+          };
+        }
+      } catch (error) {
+        if (signal.aborted || isCurrentConnection()) {
+          throw error;
+        }
+      }
+      await racePromiseWithAbortSignal(this.readyPromise, signal);
+    }
   }
 
   async listAgents() {

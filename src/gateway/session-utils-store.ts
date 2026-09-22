@@ -136,14 +136,14 @@ function readAcpMetaForDeletedAgentCheck(params: {
 function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
   readOnly: boolean,
+  cfg: OpenClawConfig = getRuntimeConfig(),
 ) {
-  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
@@ -151,6 +151,7 @@ function loadSessionEntryWithMode(
     exactRead: true,
     readOnly,
     projection: opts?.projection,
+    env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -186,9 +187,10 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, false);
+  return loadSessionEntryWithMode(sessionKey, opts, false, cfg);
 }
 
 export function loadGatewaySessionEntryReadOnly(
@@ -196,9 +198,10 @@ export function loadGatewaySessionEntryReadOnly(
   opts?: {
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, true);
+  return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */

@@ -13,6 +13,7 @@ import {
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -21,6 +22,7 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import { admitUpdateCommandRun } from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -35,7 +37,7 @@ afterEach(() => {
 it.each([
   "owned",
   "owned-pending",
-  "foreign",
+  "stale-install",
   "absent",
   "unloaded-local",
   "unloaded-global",
@@ -126,16 +128,16 @@ it.each([
       scenario === "native-value-rejection"
         ? { detail: "inspection-secret-canary" }
         : new Error("inspection-secret-canary");
-    const rootFailure = new Error("later ownership resolution failed");
+    const rootFailure = new Error("installation classification failed");
     if (scenario === "root-probe-error") {
-      vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockRejectedValue(rootFailure);
+      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockRejectedValue(rootFailure);
     }
     const command =
       scenario === "unresolved-root"
         ? ["opaque-launcher"]
         : [
             process.execPath,
-            path.join(scenario === "foreign" ? foreignRoot : root, "dist", "entry.js"),
+            path.join(scenario === "stale-install" ? foreignRoot : root, "dist", "entry.js"),
             "gateway",
           ];
     const response = (values: { type: string; data: unknown }[]) => ({
@@ -209,15 +211,16 @@ it.each([
       ...service,
       readCommand: (...args) => readSystemdServiceExecStart(...args),
     });
-    if (scenario === "owned" || scenario === "foreign" || scenario === "absent") {
+    if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
       const run = await admitUpdateCommandRun({ opts: {}, root });
-      const expectedState = scenario === "owned" ? serviceState : callerState;
+      const usesServiceState = scenario !== "absent";
+      const expectedState = usesServiceState ? serviceState : callerState;
       expect(run.env.OPENCLAW_STATE_DIR).toBe(expectedState);
-      expect(run.env.OPENCLAW_PROFILE).toBe(scenario === "owned" ? "service" : "caller");
+      expect(run.env.OPENCLAW_PROFILE).toBe(usesServiceState ? "service" : "caller");
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
-      expect(
-        fs.existsSync(path.join(scenario === "owned" ? callerState : serviceState, "state")),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(usesServiceState ? callerState : serviceState, "state"))).toBe(
+        false,
+      );
     } else if (scenario === "owned-pending" || scenario === "root-probe-error") {
       const failure: unknown = await admitUpdateCommandRun({ opts: {}, root }).then(
         () => "admitted",
@@ -266,14 +269,19 @@ it.each([
       expect(inspected.serviceEnv === undefined).toBe(true);
       expect(inspected.serviceDefinitionEnv === undefined).toBe(true);
       expect(inspected.serviceNodeRunner).toBeUndefined();
-      const facts = servicePlan.collectServiceInspectionFailureFacts(
-        inspected.serviceUpdateVerdict,
-      );
+      const facts = collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict);
       expect(facts).toEqual([
         expect.objectContaining({
           check: "managed-service",
-          code: "service-inspection-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          code:
+            scenario === "timeout"
+              ? "systemd-inspection-deadline-exceeded"
+              : "service-inspection-unavailable",
+          message: expect.stringContaining(
+            scenario === "timeout"
+              ? "The systemd manager inspection deadline expired"
+              : "Restart the Gateway you launched manually",
+          ),
         }),
       ]);
       expect(JSON.stringify({ inspected, facts })).not.toContain("inspection-secret-canary");
@@ -293,7 +301,11 @@ it.each([
     ]) {
       expect(mutation).not.toHaveBeenCalled();
     }
-    expect(bus).toHaveBeenCalled();
+    if (scenario === "root-probe-error") {
+      expect(bus).not.toHaveBeenCalled();
+    } else {
+      expect(bus).toHaveBeenCalled();
+    }
     expect(bus.mock.calls.every(([, args]) => !args.includes("LoadUnit"))).toBe(true);
   },
 );

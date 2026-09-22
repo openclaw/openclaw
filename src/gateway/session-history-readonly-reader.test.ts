@@ -246,7 +246,14 @@ it.each(["missing", "successor", "retained"] as const)(
 it("keeps canonical key validation on each admitted reader handle", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+    const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await firstScope.run(target.database, () =>
+        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
+      );
+    } finally {
+      firstScope.close();
+    }
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) SELECT ?, current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",

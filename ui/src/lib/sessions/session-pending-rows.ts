@@ -23,6 +23,16 @@ type PendingRowPatch<T> = {
   canonical: T;
 };
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
+export const optimisticSessionRowFields = [
+  "pinned",
+  "pinnedAt",
+  "unread",
+  "category",
+  "thinkingLevel",
+  "fastMode",
+  "effectiveFastMode",
+  "contextWindow",
+] as const;
 type SessionReadFields = {
   unread: boolean;
   lastReadAt: number | undefined;
@@ -45,6 +55,7 @@ export type SessionPatchRowFact = {
     | SessionReadFields
     | (SessionPinFields & SessionReadFields)
     | SessionArchiveFields
+    | Pick<GatewaySessionRow, "fastMode">
     | Pick<
         GatewaySessionRow,
         | "model"
@@ -57,7 +68,8 @@ export type SessionPatchRowFact = {
         | "thinkingLevel"
         | "thinkingLevels"
       >
-    | { boardPresentation: GatewaySessionRow["boardPresentation"] };
+    | { boardPresentation: GatewaySessionRow["boardPresentation"] }
+    | { boardFace: GatewaySessionRow["boardFace"] };
 };
 export type PendingRowTarget = Readonly<{
   identity: string;
@@ -101,10 +113,31 @@ export function pendingRowIdentity(
   return resolvePendingConversation(snapshot, row.key, ownerAgentId)?.identity ?? null;
 }
 
+/** Resolve the physical row from the captured conversation before an operation can queue. */
+export function resolvePendingRowTarget(
+  host: Pick<PendingRowHost, "findRow">,
+  snapshot: UiSessionDefaultsHost,
+  conversation: Omit<PendingRowTarget, "sessionId"> | null,
+  expectedSessionId?: string,
+): PendingRowTarget | null {
+  const sessionId = conversation
+    ? expectedSessionId !== undefined
+      ? expectedSessionId.trim()
+      : host
+          .findRow(
+            (row, sourceAgentId) =>
+              pendingRowIdentity(snapshot, row, sourceAgentId) === conversation.identity,
+          )
+          ?.sessionId?.trim()
+    : undefined;
+  return conversation && sessionId ? { ...conversation, sessionId } : null;
+}
+
 export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow) => T;
+    canonical?: (previous: T, next: T) => T;
     write: (row: GatewaySessionRow, next: T) => GatewaySessionRow;
     observe: (previous: T, row: GatewaySessionRow, names: readonly string[]) => T;
   },
@@ -124,12 +157,14 @@ export function createOptimisticRowPatches<T>(
       const token = Symbol("session-row-patch");
       const current = pending.get(target.identity);
       const next = nextValue(row);
+      const previous =
+        current?.sessionId === target.sessionId ? current.previous : fields.read(row);
       pending.set(target.identity, {
         token,
         sessionId: target.sessionId,
-        previous: current?.sessionId === target.sessionId ? current.previous : fields.read(row),
+        previous,
         next,
-        canonical: next,
+        canonical: fields.canonical ? fields.canonical(previous, next) : next,
       });
       host.redecorateLists();
       return token;

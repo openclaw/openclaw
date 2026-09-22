@@ -10,7 +10,6 @@ import type {
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -95,7 +94,9 @@ const CATALOG_CONTROL_SELECTORS = [
   ".sidebar-recent-session__link",
   "[data-child-session-toggle]",
   "[data-sidebar-session-pin]",
-  "[data-catalog-session-menu], [data-session-menu]",
+  "[data-sidebar-session-archive]",
+  "[data-sidebar-session-menu]",
+  "[data-catalog-session-menu]",
 ] as const;
 
 function catalogRowRef(
@@ -123,13 +124,18 @@ function catalogRowRef(
     if (menuOpen) {
       params.onCatalogMenuTriggerRendered(
         catalogKey,
-        element.querySelector(CATALOG_CONTROL_SELECTORS[3]) ?? undefined,
+        element.querySelector("[data-catalog-session-menu]") ??
+          element.querySelector(".sidebar-recent-session__link") ??
+          undefined,
       );
     }
     if (restoreFocus) {
       queueMicrotask(() => {
         if (element.isConnected && document.activeElement === document.body) {
-          element.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+          (
+            element.querySelector<HTMLElement>(selector) ??
+            element.querySelector<HTMLElement>(".sidebar-recent-session__link")
+          )?.focus({ preventScroll: true });
         }
       });
     }
@@ -534,7 +540,6 @@ function renderCatalogSessionRow(
   if (adoptedRow) {
     return params.renderLiveRow(adoptedRow, {
       catalogIdentityKey: identityKey,
-      catalogMenuOpen: menuOpen,
       catalogMenu,
       ...(rowRef ? { rowRef } : {}),
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
@@ -576,7 +581,7 @@ function renderCatalogSessionRow(
       @keydown=${openMenuFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(href)}
+        href=${href}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
         @click=${(event: MouseEvent) => {

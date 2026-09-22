@@ -93,6 +93,7 @@ export function createThreadBindingSessionAdapter(params: {
       placements: ["current", "child"],
     },
     bind: async (input) => {
+      const assertCurrent = input.assertCurrent;
       if (input.conversation.channel !== "discord") {
         return null;
       }
@@ -152,6 +153,7 @@ export function createThreadBindingSessionAdapter(params: {
         boundBy,
         introText,
         metadata,
+        ...(assertCurrent ? { assertCurrent } : {}),
       });
       return bound ? serializeBinding(bound) : null;
     },

@@ -1,8 +1,5 @@
 // Nostr plugin module implements gateway behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
@@ -113,7 +110,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     rawBody: string,
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
   ) =>
-    await resolveStableChannelMessageIngress({
+    await channelRuntime.inbound.ingress.resolveStable({
       channelId: "nostr",
       accountId: account.accountId,
       identity: nostrIngressIdentity,

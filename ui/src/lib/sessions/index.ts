@@ -4,7 +4,6 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
@@ -13,6 +12,7 @@ import { createSessionGitHubPublication } from "./session-github-publication.ts"
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import { createSessionMutations } from "./session-mutations.ts";
+import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { createSessionReconciliation } from "./session-reconciliation.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
@@ -185,7 +185,7 @@ export function createSessionCapability(
   };
 
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
-    isCurrent: (scope) => connection.isCurrent(scope),
+    isCurrent: connection.isCurrent,
     retryDelayMs: sessionRetryDelayMs,
     onError: (scope, error) => {
       if (!connection.isCurrent(scope)) {
@@ -245,7 +245,7 @@ export function createSessionCapability(
         if (source) {
           mutations.observePendingFields(
             source.row,
-            source.select(row, ["pinned", "pinnedAt", "unread", "category"]),
+            source.select(row, optimisticSessionRowFields),
             agentId,
           );
         }
@@ -296,11 +296,12 @@ export function createSessionCapability(
     readState: () => state,
     publish: publishMutation,
     copyRow: roster.copyRow,
+    stageManagedResults: roster.stageManagedResults,
     reconcileMutation: roster.reconcileMutation,
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     archiveFields: roster,
     readRevision: () => roster.requestRevision,
-    redecorateLists: () => roster.redecorateLists(),
+    redecorateLists: roster.redecorateLists,
     notifyCreated,
     clearThink: thinkingClaims.clear,
     claimPermissionProjection: permissions.claim,
@@ -314,9 +315,9 @@ export function createSessionCapability(
     requestRevision: () => roster.requestRevision,
     readState: () => state,
     publish: publishMutation,
-    publishedRow: (matches) => roster.publishedRow(matches),
-    redecorateLists: () => roster.redecorateLists(),
-    invalidateLists: () => roster.scheduleEvent(),
+    publishedRow: roster.publishedRow,
+    redecorateLists: roster.redecorateLists,
+    invalidateLists: roster.scheduleEvent,
     reconcileMutation: roster.reconcileMutation,
     reconcilePreviousConnection: mutations.reconcileConfirmedPreviousConnection,
     retire: mutations.retireDeletedSession,
@@ -386,49 +387,9 @@ export function createSessionCapability(
     );
   };
 
-  const reconcileChanged = (
-    payload: unknown,
-    options?: SessionReconcileOptions,
-  ): SessionChangedResult => {
-    const eventObservation = roster.captureEvent(payload);
-    const {
-      reconciled: base,
-      claimChanged,
-      notifyManaged,
-    } = reconcileChangedEvent(payload, options, eventObservation);
-    const result = decorateRows(base.result);
-    const reconciled =
-      result === base.result
-        ? base
-        : {
-            ...base,
-            result,
-            row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
-          };
-    let primaryPublished = false;
-    if (
-      claimChanged ||
-      (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey))
-    ) {
-      publishReconciledState({
-        ...state,
-        result: reconciled.result,
-        agentId: options?.resultAgentId?.trim()
-          ? normalizeAgentId(options.resultAgentId)
-          : state.agentId,
-      });
-      primaryPublished = true;
-    }
-    notifyManaged?.(primaryPublished);
-    if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
-      return { applied: false, result: state.result };
-    }
-    return reconciled;
-  };
-
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
-    const event = roster.captureEvent(terminal);
-    if (event.scope && !connection.isCurrent(event.scope)) {
+    const captured = roster.captureReconciliation();
+    if (captured.scope && !connection.isCurrent(captured.scope)) {
       return false;
     }
     for (const key of terminal.sessionKeys) {
@@ -439,7 +400,7 @@ export function createSessionCapability(
       }
     }
     const previous = state.result;
-    const { result, changed, notify } = roster.stageRunTerminal(terminal, event);
+    const { result, changed, notify } = roster.stageRunTerminal(terminal, captured);
     if (result !== previous) {
       publishReconciledState({ ...state, result });
     }
@@ -564,16 +525,17 @@ export function createSessionCapability(
     } | null;
     // Recaps are opt-in Activity data; shared session queries never include them.
     if (event.event === "sessions.changed" && payload?.reason === "activity-summary") {
+      roster.captureEvent(event.payload).deliver(event);
       return;
     }
     const canApplySnapshot = roster.canApplyPrimarySnapshot(event.payload);
     const eventObservation = roster.captureEvent(event.payload);
     const swarmChanged = swarmActivity.observe(event.payload);
-    const { eventInfo, reconciled, claimChanged, notifyManaged } = reconcileChangedEvent(
-      event.payload,
-      { resultAgentId: state.agentId, archivedFilter: roster.lastOptions().archivedFilter },
-      eventObservation,
-    );
+    const { eventInfo, reconciled, claimChanged, notifyManaged, notifyEvent } =
+      reconcileChangedEvent(event.payload, eventObservation, {
+        resultAgentId: state.agentId,
+        archivedFilter: roster.lastOptions().archivedFilter,
+      });
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
@@ -588,6 +550,9 @@ export function createSessionCapability(
       claimChanged ||
       swarmChanged ||
       (eventInfo?.archived !== null && !isTerminalMessage) ||
+      (!isTerminalMessage &&
+        reconciled.applied &&
+        (reconciled.result !== state.result || reconciled.deletedKey)) ||
       primarySnapshotApplied
     ) {
       const result = decorateRows(reconciled.result);
@@ -607,6 +572,7 @@ export function createSessionCapability(
       void background(groups.load, () => groups.load());
     }
     if (event.event === "session.message" && !runEnded) {
+      notifyEvent?.(event);
       return;
     }
     roster.scheduleEvent({
@@ -615,8 +581,10 @@ export function createSessionCapability(
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
       primarySnapshotApplied,
-      event: event.payload,
+      affectsPrimary: eventObservation.affectsPrimary,
+      affectedLists: eventObservation.lists,
     });
+    notifyEvent?.(event);
   });
 
   return {
@@ -633,11 +601,11 @@ export function createSessionCapability(
     },
     githubPublication,
     whenCachedRosterSettled: () => cacheLifecycle.settled,
-    captureConnectionScope: () => connection.capture(),
-    isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
+    captureConnectionScope: connection.capture,
+    isConnectionScopeCurrent: connection.isCurrent,
     list: roster.list,
     observeList: roster.observeList,
-    listSnapshot: (scope) => roster.listSnapshot(scope),
+    listSnapshot: roster.listSnapshot,
     subscribeList(scope, listener) {
       if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
@@ -646,13 +614,12 @@ export function createSessionCapability(
       listeners.add(notify);
       return () => listeners.delete(notify);
     },
-    refreshList: (options) => roster.refreshList(options),
+    refreshList: roster.refreshList,
     reconcile,
     captureReconcile,
     observeRow,
     inheritRow: roster.inheritRow,
     projectRows: roster.projectRows,
-    reconcileChanged,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,

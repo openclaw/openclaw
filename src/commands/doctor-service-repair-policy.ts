@@ -1,4 +1,6 @@
 /** Doctor policy for native gateway service ownership and repair. */
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
@@ -15,6 +17,24 @@ export const SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
 
 const EXTERNAL_SERVICE_REPAIR_NOTE =
   "Gateway service is managed externally; skipped service install/start repair. Start or repair the gateway through your supervisor.";
+
+export function assertDoctorServiceSelection(
+  env: NodeJS.ProcessEnv,
+  serviceEnv: NodeJS.ProcessEnv,
+): void {
+  const selection = (candidate: NodeJS.ProcessEnv) => {
+    const stateDir = resolveStateDir(candidate);
+    return [stateDir, resolveConfigPath(candidate, stateDir)].map((value) =>
+      resolvePathViaExistingAncestorSync(value),
+    );
+  };
+  const before = selection(env);
+  if (selection(serviceEnv).some((value, index) => value !== before[index])) {
+    throw new Error(
+      "Doctor and the managed Gateway select different config or state directories. Run doctor with the Gateway's installation and profile; the service was left unchanged.",
+    );
+  }
+}
 
 /** Missing activation policy belongs to legacy parents, not an explicit denial. */
 export function resolveUpdateParentGatewayActivation(env: NodeJS.ProcessEnv): boolean | undefined {

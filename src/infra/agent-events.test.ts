@@ -96,6 +96,7 @@ describe("agent-events sequencing", () => {
       expect(changed).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:projected",
         agentId: undefined,
+        scope: "runtime",
       });
       changed.mockClear();
       registerAgentRunContext("projected-run", update);

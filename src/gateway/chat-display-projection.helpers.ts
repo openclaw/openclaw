@@ -92,12 +92,14 @@ export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
 export function truncateChatHistoryText(
   text: string,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  preserveExactPrefix = false,
 ): { text: string; truncated: boolean } {
   if (text.length <= maxChars) {
     return { text, truncated: false };
   }
+  const prefix = truncateUtf16Safe(text, maxChars);
   return {
-    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
+    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }

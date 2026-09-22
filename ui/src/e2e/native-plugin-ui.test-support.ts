@@ -1,5 +1,18 @@
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+
+export async function captureNativePluginUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  name: string,
+  options: { fullPage?: boolean } = {},
+): Promise<void> {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
+}
 
 export type NativePluginWindow = Window & {
   nativePluginProof?: { release?: () => void };

@@ -19,6 +19,32 @@ import { createReplyOperation } from "./reply-run-registry.js";
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
 
+  it("rejects owner revocation while compaction waits for the active run to drain", async () => {
+    let ownerCurrent = true;
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockImplementationOnce(async () => {
+      ownerCurrent = false;
+      return true;
+    });
+    await expect(
+      handleCompactCommand(
+        {
+          ...buildCompactParams("/compact", {}),
+          sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+        },
+        true,
+        () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      ),
+    ).rejects.toThrow("Command owner was revoked");
+    expect(abortEmbeddedAgentRun).toHaveBeenCalledOnce();
+    expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expect(incrementCompactionCount).not.toHaveBeenCalled();
+  });
+
   it("does not abort a run after the bound session changes", async () => {
     vi.mocked(resolveCurrentSessionEntry).mockReturnValueOnce(undefined);
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
@@ -196,6 +222,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     "uses the host-accepted successor before accounting, with owner replacement=%s",
     async (replaceBeforeAccounting) => {
       const initial = { sessionId: "native-session", updatedAt: 1, lifecycleRevision: "lifecycle" };
+      let ownerCurrent = true;
       let currentSessionId = initial.sessionId;
       vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
         expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
@@ -209,6 +236,7 @@ describe("handleCompactCommand lifecycle authority", () => {
         return 1;
       });
       vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (params, host) => {
+        host?.assertActive?.();
         const storePath = params.sessionTarget?.storePath;
         if (!storePath) {
           throw new Error("expected manual compaction store");
@@ -226,6 +254,8 @@ describe("handleCompactCommand lifecycle authority", () => {
           entry: { ...initial, sessionId: currentSessionId },
           previousSessionId: initial.sessionId,
         });
+        ownerCurrent = false;
+        host?.assertActive?.();
         return {
           ok: true,
           compacted: true,
@@ -249,6 +279,11 @@ describe("handleCompactCommand lifecycle authority", () => {
           sessionEntry: initial,
         } as HandleCommandsParams,
         true,
+        () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
       );
 
       expect(result?.sessionCompaction).toMatchObject(

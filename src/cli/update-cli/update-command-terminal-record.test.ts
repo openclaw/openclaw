@@ -12,7 +12,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -185,7 +185,7 @@ describe("owned completed update publication", () => {
     expect(captured).toBeUndefined();
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const settled = await resolveSettledUpdateCommandResult(f.params, pending, undefined, captured);
-    const reported = publishUpdateCommandTerminalResult(f.params, settled.result, {
+    const reported = await publishUpdateCommandTerminalResult(f.params, settled.result, {
       rolledBack: false,
     });
     expect(reported).toMatchObject({ status: "skipped", reason: "gateway-readiness-unverified" });
@@ -259,25 +259,32 @@ describe("owned completed update publication", () => {
         .mockImplementation(() => {
           throw new Error("live database is changing");
         });
-      const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const textOutput = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const reportPath = path.join(root, "update-reports", `${f.params.opts.run.runId}.md`);
+      let savedAtPublication: string | undefined;
+      const captureReport = () => {
+        savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
+      };
+      const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+      const textOutput = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
       const settled = await resolveSettledUpdateCommandResult(
         f.params,
         f.result,
         undefined,
         captured,
       );
-      const result = publishUpdateCommandTerminalResult(f.params, settled.result, {
+      const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
         rolledBack: false,
         captured: settled.captured,
       });
       expect(result.status).toBe("ok");
+      expect(savedAtPublication).toContain(after.version);
       expect(takeSnapshot).not.toHaveBeenCalled();
       expect(fs.readFileSync(f.databasePath)).toEqual(before);
       if (json) {
         expect(jsonOutput).toHaveBeenCalledWith(
           expect.objectContaining({
             status: "ok",
+            reportPath,
             run: expect.objectContaining({ status: "succeeded" }),
           }),
         );

@@ -32,6 +32,7 @@ import {
   createTaskProgressContinuation,
   withTaskProgressRequesterContinuation,
 } from "./task-progress-requester.js";
+import type { sendMessage as SendMessage } from "./task-registry-delivery-runtime.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import {
   registerTaskProgressAuthorityTests,
@@ -40,7 +41,6 @@ import {
 import type * as ProgressRuntime from "./task-registry-progress-runtime.js";
 import type { TaskProgressPublication } from "./task-registry-progress-runtime.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
-import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import { runTaskRegistryWorkerMutation, tasks } from "./task-registry-state.js";
 import {
   createTaskRecord,
@@ -53,9 +53,7 @@ import type { TaskNotifyPolicy } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -67,6 +65,7 @@ const runtime = vi.hoisted(() => ({
   adoptTaskProgressMessage: vi.fn<typeof ProgressRuntime.adoptTaskProgressMessage>(),
   readTaskProgressSnapshot: vi.fn<typeof ProgressRuntime.readTaskProgressSnapshot>(),
   publishTaskProgressMessage: vi.fn<typeof ProgressRuntime.publishTaskProgressMessage>(),
+  deleteTaskProgressMessage: vi.fn<typeof ProgressRuntime.deleteTaskProgressMessage>(),
   startTaskProgressTyping: vi.fn(() => false),
 }));
 vi.mock("./task-registry-progress-runtime.js", () => runtime);
@@ -81,8 +80,12 @@ const origin = {
 };
 const receipts = new Map<string, ProgressContinuationReceipt>();
 const publications: Array<TaskProgressPublication & { messageId: string }> = [];
-const sendMessage = vi.fn<TaskRegistryDeliveryRuntime["sendMessage"]>();
-const notifications: Array<Parameters<TaskRegistryDeliveryRuntime["sendMessage"]>[0]> = [];
+const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage,
+  resolveTaskControlUiSessionUrl: () => undefined,
+}));
+const notifications: Array<Parameters<typeof SendMessage>[0]> = [];
 const runContextClaims: Array<{ runId: string; claim: string }> = [];
 
 function receipt(messageId = "existing-parent-card"): ProgressContinuationReceipt {
@@ -243,7 +246,6 @@ beforeEach(async () => {
       deliveryStatus: "sent",
     };
   });
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
   runtime.adoptTaskProgressMessage.mockReset().mockImplementation(async (params) => {
     params.assertCurrent();
     receipts.set(params.operationId, structuredClone(params.receipt));
@@ -269,6 +271,11 @@ beforeEach(async () => {
     card.text = params.content;
     return "sent";
   });
+  runtime.deleteTaskProgressMessage.mockReset().mockImplementation(async (params) => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    return receipts.delete(params.operationId) ? "sent" : "unknown";
+  });
   // Await real module readiness, not timer ticks, before exercising the lazy coordinator.
   await Promise.all([
     import("./task-progress-presentation.js"),
@@ -279,7 +286,6 @@ beforeEach(async () => {
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  resetTaskRegistryDeliveryRuntimeForTests();
   for (const { runId, claim } of runContextClaims) {
     releaseAgentRunContext(runId, claim);
   }
@@ -799,6 +805,7 @@ describe("adopted requester progress", () => {
             progressText: "The verified results are ready.",
           },
         });
+        return { delivered: true, path: "direct" };
       },
     );
     const final = publications.at(-1)!;
@@ -824,6 +831,7 @@ describe("adopted requester progress", () => {
         const next = child("Next", { turn: "resumed-requester" });
         expect(settle([next])).toBe(true);
         tool(next.entry, 2);
+        return { delivered: true, path: "direct", requesterVisibleFinalDelivered: true };
       },
     );
     first.entry.requesterSettleWake = undefined;
@@ -1000,33 +1008,7 @@ describe("adopted requester progress", () => {
     adopt,
     runtime,
     publications,
-  });
-
-  it("rechecks authority at publication and preserves newer activity arriving during transport", async () => {
-    const first = child("First");
-    await adopt([first]);
-    const publish = runtime.publishTaskProgressMessage.getMockImplementation()!;
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      first.entry.killIntent = { requestedAt: Date.now(), reason: "cancelled at handoff" };
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toEqual([]);
-    const second = child("Second", { turn: "second-turn" });
-    await adopt([second]);
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      tool(second.entry, 2);
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(2);
-    expect(publications[1]!.content).toContain("public-notes-2.txt");
-    expect(publications[1]!.content).toContain("Check release gates");
-    expect(publications.every((display) => display.messageId === "existing-parent-card")).toBe(
-      true,
-    );
-    expect(publications.map((display) => display.origin)).toEqual([origin, origin]);
+    receipts,
+    tool,
   });
 });

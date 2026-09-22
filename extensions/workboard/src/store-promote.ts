@@ -25,7 +25,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     status: unknown,
     position: unknown,
     scope?: WorkboardMutationScope,
-    options: { expectedUpdatedAt?: number } = {},
+    options: { expectedUpdatedAt?: number; assertOwnerCurrent?: () => void } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const result = await this.updateLatestCard(
@@ -43,7 +43,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         },
       );
       return result.card;
-    });
+    }, options.assertOwnerCurrent);
   }
 
   async promote(

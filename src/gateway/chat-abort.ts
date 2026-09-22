@@ -173,6 +173,7 @@ export function registerChatAbortController(params: {
   providerId?: string;
   authProviderId?: string;
   controlUiVisible?: boolean;
+  projectSessionActive?: boolean;
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
@@ -298,7 +299,7 @@ export function registerChatAbortController(params: {
     controlUiVisible: params.controlUiVisible,
     isAbortable: params.isAbortable,
     onRemoved: params.onRemoved,
-    projectSessionActive: true,
+    projectSessionActive: params.projectSessionActive ?? true,
     kind: params.kind,
     turnKind: params.turnKind,
   };

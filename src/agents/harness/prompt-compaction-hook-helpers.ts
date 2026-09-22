@@ -10,6 +10,8 @@ import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
+import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -33,6 +35,7 @@ type AgentHarnessDeveloperInstructionBuilder = {
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
+  currentInboundContext?: CurrentInboundPromptContext;
   currentUserMessage?: string;
   currentUserMessageId?: string;
   developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
@@ -45,6 +48,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     assertActive: () => void;
   };
 }): Promise<AgentHarnessPromptBuildResult> {
+  const inputPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
+    prompt: params.prompt,
+  });
   const hookRunner = getGlobalHookRunner();
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
   // (e.g. the Codex app-server) build the prompt through this helper rather than
@@ -57,14 +64,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   if (!hasHeartbeatContribution && !hasPromptBuildHooks) {
     const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
     return {
-      prompt: params.prompt,
+      prompt: inputPrompt,
       developerInstructions,
-      promptInputRange: { start: 0, end: params.prompt.length },
+      promptInputRange: { start: 0, end: inputPrompt.length },
     };
   }
   const hookCtx = buildAgentHookContext(params.ctx);
   const promptEvent = {
-    prompt: params.prompt,
+    prompt: inputPrompt,
     ...(typeof params.currentUserMessage === "string"
       ? { currentUserMessage: params.currentUserMessage }
       : {}),
@@ -145,10 +152,9 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);
-  const prompt =
-    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const prompt = joinPresentTextSegments([promptPrefix, inputPrompt, promptSuffix]) ?? inputPrompt;
   const promptInputStart =
-    params.prompt.length === 0
+    inputPrompt.length === 0
       ? (promptPrefix?.length ?? 0)
       : promptPrefix
         ? promptPrefix.length + 2
@@ -166,7 +172,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ]) ?? systemPrompt,
     promptInputRange: {
       start: promptInputStart,
-      end: promptInputStart + params.prompt.length,
+      end: promptInputStart + inputPrompt.length,
     },
   };
 }

@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-utility-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 export function escapeTelegramHtml(text: string): string {
   if (!/[&<>]/.test(text)) {
