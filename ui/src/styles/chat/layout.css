@@ -33,6 +33,19 @@ openclaw-pending-session-create {
   animation: chat-error-enter 0.25s var(--ease-out);
 }
 
+.chat-error__run {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.chat-error__run p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+}
+
 @keyframes chat-error-enter {
   from {
     opacity: 0;
@@ -413,6 +426,12 @@ openclaw-pending-session-create {
   background: var(--chat-composer-surface, var(--popover));
   box-shadow: none;
   animation: none;
+}
+
+.chat-error.chat-error--historical {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
 }
 
 /* General pane notices share the header plane, so their appearance never

@@ -17,7 +17,6 @@ import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptUpdateVersion,
 } from "../sessions/transcript-events.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -216,7 +215,6 @@ export async function handleSessionHistoryHttpRequest(
     sendInvalidRequest(res, "cursor must be a positive integer");
     return true;
   }
-  const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const historyTarget = {
     agentId: target.agentId,
     sessionEntry: entry,
@@ -288,7 +286,6 @@ export async function handleSessionHistoryHttpRequest(
       cursor,
       target: historyTarget,
       limit,
-      maxChars: effectiveMaxChars,
     });
   } catch (error) {
     const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
@@ -341,7 +338,6 @@ export async function handleSessionHistoryHttpRequest(
 
   const sseState = SessionHistorySseState.fromSnapshot({
     target: historyTarget,
-    maxChars: effectiveMaxChars,
     limit,
     cursor,
     snapshot: historySnapshot,

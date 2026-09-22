@@ -104,6 +104,7 @@ it.each([
   { canonicalKey: "agent:main:other" },
   { maxHistoryBytes: 512 },
   { effectiveMaxChars: 20 },
+  { effectiveMaxChars: undefined },
   { offset: 2 },
   { messageId: "anchor" },
   { storePath: "/tmp/another-history-worker-fixture/sessions.json" },

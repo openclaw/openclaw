@@ -1,5 +1,7 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
+import { RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE } from "../../../../src/shared/session-run-error.js";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
@@ -16,7 +18,12 @@ type PreparedChatItem =
 function collapseDuplicateSourceKey(
   identity: ReturnType<typeof readChatThreadMessageIdentity>,
   role: string,
+  customType: unknown,
 ): string | null {
+  // Identical diagnostics from different runs must keep both log references.
+  if (role === "custom" && customType === RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE) {
+    return identity?.runId ? `custom:${customType}:${identity.runId}` : null;
+  }
   if (role !== "assistant" && role !== "user") {
     return null;
   }
@@ -118,7 +125,9 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
     const pending = isPendingSendMessage(item.message);
     const parts = pending ? null : textOnlyMessageParts(normalized, role);
     const identity = readChatThreadMessageIdentity(item.message);
-    const sourceKey = pending ? null : collapseDuplicateSourceKey(identity, role);
+    const sourceKey = pending
+      ? null
+      : collapseDuplicateSourceKey(identity, role, asRecord(item.message)?.customType);
     const sourceIsUnprovenImport =
       sourceKey === null &&
       identity?.isImported === true &&

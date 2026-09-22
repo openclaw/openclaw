@@ -350,7 +350,7 @@ export async function handleChatHistoryRequest({
                 canonicalKey,
                 max,
                 maxHistoryBytes,
-                effectiveMaxChars,
+                effectiveMaxChars: maxChars,
                 offset,
                 messageId,
               },

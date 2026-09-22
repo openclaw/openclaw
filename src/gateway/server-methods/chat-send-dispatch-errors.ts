@@ -5,6 +5,7 @@ import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { logRunError } from "../../logging/run-error.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
@@ -95,6 +96,10 @@ export async function handleChatSendSetupError(params: {
   const failureDisposition = classifyAcceptedChatSendFailure({
     error: params.error,
     phase: "pre-ack",
+  });
+  logRunError(params.context.logGateway, "chat.send setup failed", {
+    runId: clientRunId,
+    error: params.error,
   });
   if (restartSafeAdmission) {
     const terminalized = await params
@@ -196,6 +201,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
   let publishDispatchError: (() => void) | undefined;
 
   const handleError = async (err: unknown) => {
+    logRunError(context.logGateway, "chat.send dispatch failed", {
+      runId: clientRunId,
+      error: err,
+    });
     const errorMessage = formatChatSendError(err);
     const failureDisposition =
       params.classifyFailure?.(err) ??

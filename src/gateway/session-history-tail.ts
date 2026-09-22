@@ -172,7 +172,7 @@ export async function readIncrementalChatHistoryTail(params: {
   entry: SessionEntry | undefined;
   readScope: SessionTranscriptReadScope;
   readers: SessionTranscriptReader;
-  effectiveMaxChars: number;
+  effectiveMaxChars: number | undefined;
   max: number;
   maxBytes: number;
   offset?: number;

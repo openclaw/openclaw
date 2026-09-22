@@ -62,26 +62,33 @@ describe("chat content context copy", () => {
     await copy("Copy table", "Name\tCount\nAlpha\t2");
   });
 
-  it.each(["user", "assistant"])(
-    "copies %s source without a footer or reply callback",
-    async (role) => {
-      const source = "**Exact source** " + "x".repeat(520);
-      const bubble = document.createElement("div");
-      bubble.className = "chat-bubble";
-      Object.assign(bubble, {
-        messageActions: resolveMessageActionDetails(
-          prepareChatMessageRender({ role, content: source }),
-          {
-            messageId: "commentary",
-            senderLabel: role,
-          },
-        ),
-      });
-      owner.append(bubble);
-      open(bubble);
-      await copy("Copy as markdown", source);
-    },
-  );
+  it.each([
+    { role: "user" },
+    { role: "assistant" },
+    { role: "custom", customType: "run-failed-before-reply" },
+  ])("copies $role source without a footer or reply callback", async (message) => {
+    const source =
+      "**Exact source** password=synthetic-password\n  at /workspace/example.ts:12\n" +
+      "x".repeat(520);
+    const expected =
+      message.role === "custom"
+        ? source.replace("password=synthetic-password", "password=[redacted]")
+        : source;
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    Object.assign(bubble, {
+      messageActions: resolveMessageActionDetails(
+        prepareChatMessageRender({ ...message, content: source }),
+        {
+          messageId: "commentary",
+          senderLabel: message.role,
+        },
+      ),
+    });
+    owner.append(bubble);
+    open(bubble);
+    await copy("Copy as markdown", expected);
+  });
 
   it("copies selected text in tool output without message actions", async () => {
     owner.innerHTML = '<div class="chat-tool-msg-body">selected output</div>';

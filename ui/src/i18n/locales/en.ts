@@ -3306,6 +3306,10 @@ export const en: TranslationMap & {
     errorDetails: "Error details",
     details: "Details",
     copyError: "Copy error",
+    errorRunId: "Run ID",
+    copyErrorRunId: "Copy run ID",
+    errorRunLogHint:
+      "Search Gateway logs for this Run ID. More detail may be available while the logs are retained.",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
     providerReview: {},

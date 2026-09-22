@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE } from "../../../../../src/shared/session-run-error.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
@@ -34,6 +35,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import { renderChatErrorNotice } from "./chat-error-notice.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -223,6 +225,32 @@ export function renderGroupedMessage(
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
+  }
+  const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
+  const duplicateBadge =
+    duplicateCount > 1
+      ? html`<div
+          class="chat-duplicate-count"
+          aria-label=${t("chat.messages.duplicatesCollapsed", { count: String(duplicateCount) })}
+        >
+          ×${duplicateCount}
+        </div>`
+      : nothing;
+  if (sourceRole === "custom" && m.customType === RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE) {
+    return html`<div
+      class="chat-bubble"
+      data-message-id=${messageKey}
+      data-entry-id=${opts.entryId || nothing}
+      data-message-text=${displayMarkdown || nothing}
+      .messageActions=${opts.messageActions}
+    >
+      ${renderChatErrorNotice({
+        error: displayMarkdown,
+        runId: readSessionMessageIdentity(message)?.runId ?? undefined,
+        historical: true,
+      })}
+      ${duplicateBadge}
+    </div>`;
   }
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
@@ -434,7 +462,6 @@ export function renderGroupedMessage(
         )}`
       : nothing;
 
-  const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
   const duplicateSuffix =
     duplicateCount > 1
       ? {
@@ -658,18 +685,7 @@ export function renderGroupedMessage(
               )
             : renderBody()
       }
-      ${
-        duplicateCount > 1 && (!markdown || jsonResult)
-          ? html`<div
-              class="chat-duplicate-count"
-              aria-label=${t("chat.messages.duplicatesCollapsed", {
-                count: String(duplicateCount),
-              })}
-            >
-              ×${duplicateCount}
-            </div>`
-          : nothing
-      }
+      ${!markdown || jsonResult ? duplicateBadge : nothing}
     </div>
     ${renderMessageWorkContext(message)}
   `;

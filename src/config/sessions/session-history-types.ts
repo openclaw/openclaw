@@ -33,7 +33,8 @@ export type ChatHistoryPageParams = {
   canonicalKey: string;
   max: number;
   maxHistoryBytes: number;
-  effectiveMaxChars: number;
+  // Undefined lets the display owner apply each message type's default cap.
+  effectiveMaxChars: number | undefined;
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;

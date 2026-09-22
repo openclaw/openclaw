@@ -176,10 +176,11 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
-            .locator(".chat-error__content > strong")
+            .locator(".chat-error__summary strong")
             .getByText(renderedDiagnostic)
             .waitFor();
-          expect(await alert.locator("details").count()).toBe(0);
+          expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+          expect(await alert.locator(".chat-error__run code").textContent()).toBe("failed-run");
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

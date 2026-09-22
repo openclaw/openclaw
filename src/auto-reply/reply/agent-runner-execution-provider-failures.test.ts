@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
@@ -5,6 +8,9 @@ import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
+import { toSandboxProvisioningError } from "../../agents/sandbox/provisioning-error.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { testApi as loggingTestApi } from "../../logging/logger.test-support.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -77,6 +83,61 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it("logs original sandbox startup and cleanup diagnostics when execution resolves a failure", async () => {
+    const followupRun = createFollowupRun();
+    const runId = "sandbox-startup-failure";
+    const file = path.join(followupRun.run.workspaceDir, "run-error.log");
+    const startup = new Error(
+      `IPAM allocation failed password=synthetic-startup-secret\n${"worker startup log line\n".repeat(500)}last startup detail`,
+    );
+    const cleanup = new Error("Partial sandbox cleanup failed");
+    const failure = toSandboxProvisioningError(
+      new AggregateError([startup, cleanup], "Sandbox creation and cleanup failed", {
+        cause: startup,
+      }),
+      "docker",
+    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(failure);
+    setLoggerOverride({ level: "error", consoleLevel: "silent", file });
+    try {
+      const result = await executeTestTurn({
+        followupRun,
+        opts: { runId },
+        sessionCtx: createDirectFailureSessionCtx(),
+      });
+
+      // A resolved error reply bypasses the Gateway's rejected-dispatch catch.
+      expect(result).toMatchObject({ kind: "final", payload: { isError: true } });
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      await loggingTestApi.flushFileLogQueueForTests();
+      const records = fs
+        .readFileSync(file, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const failures = records.filter((record) => record.message === "agent run failed");
+      expect(failures).toHaveLength(1);
+      const metadata = Object.values(failures[0]).find(
+        (value): value is Record<string, unknown> => isRecord(value) && value.runId === runId,
+      );
+      expect(metadata).toMatchObject({ runId, diagnosticTruncated: false });
+      const diagnostic = String(metadata?.diagnostic);
+      expect(diagnostic.length).toBeGreaterThan(10_000);
+      expect(diagnostic).toContain("last startup detail");
+      expect(diagnostic).not.toContain("synthetic-startup-secret");
+      expect(JSON.parse(diagnostic).stacks).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Error: IPAM allocation failed"),
+          expect.stringContaining("Error: Partial sandbox cleanup failed"),
+        ]),
+      );
+    } finally {
+      await loggingTestApi.flushFileLogQueueForTests();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  });
+
   it.each(
     [
       "Handoff refused after 529 OVERLOADED; reconnect before continuing.",

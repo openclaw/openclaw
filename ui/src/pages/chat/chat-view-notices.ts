@@ -1,14 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
-import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
+import { renderChatErrorNotice } from "./components/chat-error-notice.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
@@ -35,7 +34,7 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
   providerReviewNotice?: TemplateResult | typeof nothing;
-  runError?: { summary: string } | null;
+  runError?: { summary: string; runId?: string } | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
@@ -75,48 +74,6 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   `;
 }
 
-function renderErrorNotice(
-  error: string,
-  action: TemplateResult | typeof nothing = nothing,
-  displayError = formatWebUiIconErrorText(error),
-) {
-  const lines = displayError
-    .trim()
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Keep the bounded summary readable without opening the technical details.
-  return html`
-    <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
-      role="alert"
-    >
-      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
-        >${icons.alertTriangle}</span
-      >
-      ${
-        hasDetails
-          ? html`<details class="chat-error__content">
-              <summary class="chat-error__summary">
-                <strong>${summary}</strong>
-                <span>${t("chat.details")}</span>
-                <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
-                ${renderCopyButton(error, t("chat.copyError"))}
-              </summary>
-              <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
-${displayError}</pre>
-            </details>`
-          : html`<span class="chat-error__content"
-              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
-            >`
-      }
-      ${action}
-    </div>
-  `;
-}
-
 export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   const dismiss = props.onDismissError
     ? html`
@@ -135,7 +92,7 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   return html`
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
-      ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
+      ${props.error ? renderChatErrorNotice({ error: props.error, action: dismiss }) : nothing}
       ${
         props.focusMode && props.onToggleFocusMode
           ? html`
@@ -170,7 +127,15 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh) : nothing}
+    ${
+      props.runError
+        ? renderChatErrorNotice({
+            error: props.runError.summary,
+            action: refresh,
+            runId: props.runError.runId,
+          })
+        : nothing
+    }
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -246,5 +211,5 @@ function renderPlacementStartupError(
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, action, displayError);
+  return renderChatErrorNotice({ error, action, displayError });
 }

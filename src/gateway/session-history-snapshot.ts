@@ -8,7 +8,6 @@ import {
   projectChatDisplayMessagesWithState,
   type ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import {
@@ -46,7 +45,7 @@ export async function readSessionHistorySnapshotKernel(
     projected = projectChatDisplayMessagesWithState(rawMessages, {
       subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
-      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      maxChars: params.maxChars,
       resolveCronJobName: options.resolveCronJobName,
       ...(options.deferProfileDisplay
         ? {}
@@ -57,7 +56,7 @@ export async function readSessionHistorySnapshotKernel(
     const tail = await readIncrementalChatHistoryTail({
       entry: params.target.sessionEntry,
       readScope: params.target,
-      effectiveMaxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      effectiveMaxChars: params.maxChars,
       max: params.limit,
       maxBytes: getMaxChatHistoryMessagesBytes(),
       ...(cursorSeq === undefined ? {} : { beforeSeq: cursorSeq }),

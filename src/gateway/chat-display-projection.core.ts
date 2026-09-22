@@ -524,7 +524,7 @@ export function projectChatDisplayMessagesWithState(
   );
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
-    options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    options?.maxChars,
   ) as Array<Record<string, unknown>>;
   const result: ChatDisplayProjectionResult = {
     activity,

@@ -58,6 +58,32 @@ function appendAssistantText(state: SessionHistorySseState, text: string, messag
 }
 
 describe("SessionHistorySseState", () => {
+  test.each([undefined, 512])(
+    "preserves the failed-turn cap in SSE with maxChars=%s",
+    (maxChars) => {
+      const state = newState([], { maxChars });
+      const content = `This turn ended before a reply: Worker setup failed\n${"  at prepareWorkspace (worker.ts:42)\n".repeat(260)}Cause: network allocation failed`;
+      const appended = state.appendInlineMessage({
+        message: {
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content,
+          details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
+        },
+        messageId: "failed-turn",
+        messageSeq: 1,
+      });
+      if (maxChars === undefined) {
+        expect(appended?.message?.content).toBe(content);
+      } else {
+        expect(String(appended?.message?.content).length).toBeLessThan(600);
+        expect(appended?.message?.content).not.toContain("Cause:");
+      }
+      expect(appended?.message?.__openclaw).toMatchObject({ runId: "failed-run" });
+      expect(appended?.message).not.toHaveProperty("details");
+    },
+  );
+
   test("seeds inline sequence from the completed snapshot watermark", () => {
     const messages = [assistantTextMessage("fresh snapshot message", 2)];
     const state = newState(messages, { rawTranscriptSeq: 4 });

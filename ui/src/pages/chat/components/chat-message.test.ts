@@ -12,6 +12,7 @@ import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-f
 import * as chatAvatar from "../chat-avatar.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -552,6 +553,60 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("keeps repeated failures compact without merging distinct run IDs", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const diagnostic = `This turn ended before a reply: Worker startup failed.\n${"  at prepare (/workspace/example.ts:12)\n".repeat(240)}<img src=x onerror=alert(1)>\nTerminal cause`;
+    const container = document.createElement("div");
+    const groups = groupMessages(
+      ["failed-run", "failed-run", "other-run"].map((runId, index) => ({
+        kind: "message" as const,
+        key: `failure-notice-${index}`,
+        message: {
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: diagnostic,
+          timestamp: index + 1,
+          __openclaw: { id: `failure-notice-${index}`, seq: index + 1, runId },
+        },
+      })),
+    );
+    renderMessageGroups(
+      container,
+      groups.filter((group) => group.kind === "group"),
+    );
+    expect(container.querySelectorAll(".chat-error")).toHaveLength(2);
+    expect(
+      Array.from(container.querySelectorAll(".chat-error__run code"), (code) => code.textContent),
+    ).toEqual(["failed-run", "other-run"]);
+    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
+    const badge = container.querySelector(".chat-bubble")?.querySelector(".chat-duplicate-count");
+    expect(badge?.textContent?.trim()).toBe("×2");
+    expect(badge?.getAttribute("aria-label")).toBe("2 consecutive identical messages collapsed");
+    expect(badge?.closest("details")).toBeNull();
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    const summary = details?.querySelector("summary");
+    expect(summary?.querySelector("strong")?.textContent).toBe(
+      "This turn ended before a reply: Worker startup failed.",
+    );
+    expect(summary?.textContent).not.toContain("Terminal cause");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".chat-error")?.hasAttribute("role")).toBe(false);
+    summary?.click();
+    expect(details?.open).toBe(true);
+    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    details?.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+    expect(details?.open).toBe(true);
+    details?.querySelector<HTMLButtonElement>('[aria-label="Copy run ID"]')?.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenLastCalledWith("failed-run");
+  });
+
   it.each([
     { customType: "run-failed-before-reply", label: "Error" },
     { customType: "cloud-workspace-recovery-failed", label: "Error" },

@@ -119,10 +119,11 @@ suite.define(() => {
     const failedAlert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
     await failedAlert
-      .locator(".chat-error__content > strong")
+      .locator(".chat-error__summary strong")
       .getByText(renderedDiagnostic)
       .waitFor();
-    expect(await failedAlert.locator("details").count()).toBe(0);
+    expect(await failedAlert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+    expect(await failedAlert.locator(".chat-error__run code").textContent()).toBe(failedRunId);
     expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 

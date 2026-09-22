@@ -57,6 +57,24 @@ You can override the path in `~/.openclaw/openclaw.json`:
 
 ## How to read logs
 
+### Find a failed turn by run ID
+
+Expand **Details** on a failed turn to view up to 10,000 characters of redacted
+error text. Use **Copy run ID** to find its fuller diagnostic in the Control UI
+**Logs** tab or CLI output:
+
+```bash
+openclaw logs --json --max-bytes 1000000 | rg --fixed-strings 'RUN_ID'
+```
+
+Chat setup, dispatch, and terminal agent failures log the same `runId` with a
+redacted `diagnostic` containing available stacks and causes. Diagnostics are
+capped at 100,000 characters; `diagnosticTruncated: true` marks text clipping.
+
+The Logs tab and CLI read the active log. For older failures, search dated files
+and numbered archives on the Gateway host. Availability depends on logging
+settings and retention.
+
 ### CLI: live tail (recommended)
 
 Tail the gateway log file via RPC:

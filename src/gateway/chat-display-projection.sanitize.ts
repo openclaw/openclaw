@@ -7,6 +7,10 @@ import {
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
 import {
+  RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+  RUN_FAILURE_NOTICE_MAX_CHARS,
+} from "../shared/session-run-error.js";
+import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
   messageHasToolResultShape,
@@ -412,12 +416,18 @@ function projectWorkspaceConflictDetails(
 
 export function sanitizeChatHistoryMessage(
   message: unknown,
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  maxChars?: number,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
   const entry = { ...(message as Record<string, unknown>) };
+  // Failure receipts already have their own retention cap. Keep their diagnostic
+  // intact on reload, while explicit caller limits and other messages stay bounded.
+  maxChars ??=
+    entry.role === "custom" && entry.customType === RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE
+      ? RUN_FAILURE_NOTICE_MAX_CHARS
+      : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   let changed = false;
   let truncated = false;
   if ("providerReplay" in entry) {
@@ -667,7 +677,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  maxChars?: number,
   opts?: { includeCommentaryFallbacks?: boolean },
 ): unknown[] {
   if (messages.length === 0) {
@@ -678,7 +688,10 @@ export function sanitizeChatHistoryMessages(
   for (const original of messages) {
     let message = original;
     if (opts?.includeCommentaryFallbacks === true) {
-      const projection = projectAssistantCommentaryFallbacks(message, maxChars);
+      const projection = projectAssistantCommentaryFallbacks(
+        message,
+        maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      );
       message = projection.message;
       changed ||= message !== original;
       for (const commentary of projection.fallbacks) {

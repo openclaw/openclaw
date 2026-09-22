@@ -13,6 +13,14 @@ const message = {
   __openclaw: { transcriptPosition: { source: "untrusted", rawSeq: 0 } },
 };
 
+const failureMessage = {
+  role: "custom",
+  customType: "run-failed-before-reply",
+  content: `This turn ended before a reply: Worker setup failed\n${"  at prepareWorkspace (worker.ts:42)\n".repeat(260)}Cause: network allocation failed`,
+  display: true,
+  details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
+};
+
 describe("trusted transcript display metadata", () => {
   it("keeps nested activity run ownership distinct from entry deduplication in history and live events", () => {
     const activity = {
@@ -67,23 +75,16 @@ describe("trusted transcript display metadata", () => {
     { transcriptPosition: undefined, custom: true },
     { transcriptPosition: position, custom: true },
   ])("uses only reader-supplied placement (%j)", ({ transcriptPosition, custom }) => {
-    const customMessage = {
-      role: "custom",
-      customType: "run-failed-before-reply",
-      content: "This turn ended before a reply.",
-      display: true,
-      details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
-    };
     const timestamp = "2026-09-08T00:00:00.000Z";
     const history = projectTranscriptEntryMessage(
       custom
-        ? { ...customMessage, type: "custom_message", id: "entry", timestamp }
+        ? { ...failureMessage, type: "custom_message", id: "entry", timestamp }
         : { type: "message", id: "entry", message },
       2,
       transcriptPosition,
     );
     const live = projectSessionMessagePayload({
-      message: custom ? { ...customMessage, timestamp: Date.parse(timestamp) } : message,
+      message: custom ? { ...failureMessage, timestamp: Date.parse(timestamp) } : message,
       messageId: "entry",
       messageSeq: 2,
       transcriptPosition,
@@ -98,11 +99,12 @@ describe("trusted transcript display metadata", () => {
         expect(projected).toMatchObject({
           role: "custom",
           customType: "run-failed-before-reply",
-          content: customMessage.content,
+          content: failureMessage.content,
           display: true,
           timestamp: Date.parse(timestamp),
         });
         expect(projected).not.toHaveProperty("details");
+        expect(JSON.stringify(projected)).not.toContain("PRIVATE_DIAGNOSTIC");
       }
     }
     expect(message["__openclaw"].transcriptPosition.source).toBe("untrusted");
@@ -125,4 +127,16 @@ describe("trusted transcript display metadata", () => {
       });
     },
   );
+
+  it("keeps explicit and ordinary caps while bounding oversized failure notices", () => {
+    const content = failureMessage.content;
+    expect(content.length).toBeGreaterThan(8_000);
+    expect(projectChatDisplayMessage(failureMessage, { maxChars: 512 })?.content).not.toContain(
+      "Cause:",
+    );
+    expect(projectChatDisplayMessage({ role: "user", content })?.content).not.toContain("Cause:");
+    const oversized = projectChatDisplayMessage({ ...failureMessage, content: "x".repeat(20_000) });
+    expect(String(oversized?.content).length).toBeLessThan(10_100);
+    expect(oversized?.__openclaw).toMatchObject({ truncated: true });
+  });
 });

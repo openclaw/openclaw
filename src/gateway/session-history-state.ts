@@ -14,7 +14,6 @@ import {
   projectChatDisplayMessagesWithState,
   createCurrentUserProfileMessageProjector,
 } from "./chat-display-projection.core.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
   projectForwardedMessages,
@@ -81,7 +80,7 @@ export async function readSessionHistorySnapshotAsync(
 /** Tracks session-history SSE state and decides when inline appends are still valid. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
-  private readonly maxChars: number;
+  private readonly maxChars: number | undefined;
   private readonly limit: number | undefined;
   private readonly cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
@@ -98,7 +97,7 @@ export class SessionHistorySseState {
 
   private constructor(params: SessionHistoryReadParams & { snapshot: SessionHistorySnapshot }) {
     this.target = params.target;
-    this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+    this.maxChars = params.maxChars;
     this.limit = params.limit;
     this.cursor = params.cursor;
     const snapshot = params.snapshot;

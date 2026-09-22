@@ -18,6 +18,8 @@ import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logRunError } from "../../logging/run-error.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -44,6 +46,7 @@ import {
 } from "./reply-operation-abort.js";
 
 const MAX_LIVE_SWITCH_RETRIES = 2;
+const agentRunLog = createSubsystemLogger("auto-reply/agent-run");
 
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
@@ -91,6 +94,7 @@ export async function handleAgentExecutionError(params: {
     payload: ReplyPayload & { text: string },
     isGenericRunnerFailure = false,
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
+    logRunError(agentRunLog, "agent run failed", { runId: params.runId, error: err });
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);

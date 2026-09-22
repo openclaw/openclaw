@@ -37,6 +37,8 @@ describe("handleChatSendSetupError", () => {
     const broadcast = vi.fn();
     const respond = vi.fn();
     const dedupe = new Map();
+    const logError = vi.fn();
+    const failure = new SessionTranscriptProjectionUnavailableError("sess-main");
 
     await handleChatSendSetupError({
       admission: {
@@ -55,11 +57,11 @@ describe("handleChatSendSetupError", () => {
         broadcast,
         chatRunState: { clearRun },
         dedupe,
-        logGateway: { warn: vi.fn() },
+        logGateway: { isEnabled: () => true, warn: vi.fn(), error: logError },
         nodeSendToSession: vi.fn(),
         removeChatRun: vi.fn(),
       } as never,
-      error: new SessionTranscriptProjectionUnavailableError("sess-main"),
+      error: failure,
       respond,
       session: {
         agentId: "main",
@@ -74,6 +76,10 @@ describe("handleChatSendSetupError", () => {
       expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
       expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
       expect.anything(),
+    );
+    expect(logError).toHaveBeenCalledWith(
+      "chat.send setup failed",
+      expect.objectContaining({ runId: "setup-projection-retry", diagnosticTruncated: false }),
     );
     expect(dedupe.size).toBe(0);
     expect(broadcast).not.toHaveBeenCalled();
@@ -147,6 +153,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           await persistUserTurnTranscript();
         }
         const warn = vi.fn();
+        const logError = vi.fn();
         const chatRunState = createChatRunState();
         const broadcast = vi.fn();
         const agentRunSeq = new Map<string, number>();
@@ -187,7 +194,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             dedupe: new Map(),
             getRuntimeConfig: () => ({}),
             getSessionEventSubscriberConnIds: () => new Set<string>(),
-            logGateway: { warn },
+            logGateway: { isEnabled: () => true, warn, error: logError },
             nodeSendToSession: vi.fn(),
             removeChatRun: vi.fn(),
           } as never,
@@ -230,6 +237,10 @@ describe("createChatSendDispatchErrorLifecycle", () => {
                 })
               : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
+        expect(logError).toHaveBeenCalledWith(
+          "chat.send dispatch failed",
+          expect.objectContaining({ runId, diagnosticTruncated: false }),
+        );
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
         expect(broadcast).toHaveBeenLastCalledWith(
@@ -383,7 +394,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           chatRunState: createChatRunState(),
           dedupe,
           getRuntimeConfig: () => ({}),
-          logGateway: { warn },
+          logGateway: { isEnabled: () => true, warn, error: vi.fn() },
           nodeSendToSession: vi.fn(),
           removeChatRun,
         } as never,
@@ -492,7 +503,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             chatRunState,
             dedupe,
             getRuntimeConfig: () => ({}),
-            logGateway: { warn },
+            logGateway: { isEnabled: () => true, warn, error: vi.fn() },
             nodeSendToSession: vi.fn(),
             removeChatRun,
           } as never,
@@ -539,12 +550,15 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   );
 
-  it("keeps a signal-only dispatch rejection as an error without an explicit abort", async () => {
+  it("preserves signal-only rejection settlement when diagnostic logging fails", async () => {
     const controller = new AbortController();
     controller.abort(new Error("restart interrupted dispatch"));
     const chatRunState = createChatRunState();
     const dedupe = new Map();
     const broadcast = vi.fn();
+    const logError = vi.fn(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
     const lifecycle = createChatSendDispatchErrorLifecycle({
       admission: {
         sessionBinding: {
@@ -569,7 +583,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         chatRunState,
         dedupe,
         getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
+        logGateway: { isEnabled: () => true, warn: vi.fn(), error: logError },
         nodeSendToSession: vi.fn(),
         removeChatRun: vi.fn(),
       } as never,
@@ -592,6 +606,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     await lifecycle.handleError(new Error("dispatch rejected after restart"));
     await lifecycle.finalize();
 
+    expect(logError).toHaveBeenCalledOnce();
     expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
       ok: false,
       payload: { runId: "signal-only-dispatch-rejection", status: "error" },
@@ -646,7 +661,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         chatRunState,
         dedupe,
         getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
+        logGateway: { isEnabled: () => true, warn: vi.fn(), error: vi.fn() },
         nodeSendToSession: vi.fn(),
         removeChatRun: vi.fn(),
       } as never,
@@ -739,7 +754,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           dedupe,
           getRuntimeConfig: () => cfg,
           getSessionEventSubscriberConnIds: () => new Set<string>(),
-          logGateway: { warn: vi.fn() },
+          logGateway: { isEnabled: () => true, warn: vi.fn(), error: vi.fn() },
           nodeSendToSession: vi.fn(),
           removeChatRun: vi.fn(),
         } as never,

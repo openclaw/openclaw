@@ -469,7 +469,7 @@ function readTail(scope: TranscriptScope, offset?: number, max = 20) {
     canonicalKey: sessionKey,
     max,
     maxHistoryBytes: maxBytes,
-    effectiveMaxChars: 10_000,
+    effectiveMaxChars: undefined,
     offset,
     messageId: undefined,
     ignoreCliSessionImports: true,
@@ -478,6 +478,7 @@ function readTail(scope: TranscriptScope, offset?: number, max = 20) {
 
 describe("chat history custom reports", () => {
   it("delivers a committed failure notice once through the cursor and refreshed history", async () => {
+    const diagnostic = `This turn ended before a reply: Worker setup failed\n${"  at prepareWorkspace (worker.ts:42)\n".repeat(260)}Cause: network allocation failed`;
     const { scope } = await createTranscript();
     await appendTranscriptMessage(scope, {
       eventId: "question",
@@ -490,7 +491,7 @@ describe("chat history custom reports", () => {
     for (const report of [
       {
         customType: "run-failed-before-reply",
-        content: "This turn ended before a reply: The request timed out.",
+        content: diagnostic,
         display: true,
       },
       { customType: "private-report", content: "PRIVATE_REPORT", display: false },
@@ -500,7 +501,10 @@ describe("chat history custom reports", () => {
         appendSessionTranscriptReport(scope, {
           kind: "custom",
           customTypes: [report.customType],
-          selectReport: () => ({ ...report, details: { error: "PRIVATE_DIAGNOSTIC" } }),
+          selectReport: () => ({
+            ...report,
+            details: { error: "PRIVATE_DIAGNOSTIC", runId: "failed-run" },
+          }),
         }),
       ).resolves.toMatchObject({ ok: true });
     }
@@ -518,9 +522,9 @@ describe("chat history custom reports", () => {
           message: {
             role: "custom",
             customType: "run-failed-before-reply",
-            content: "This turn ended before a reply: The request timed out.",
+            content: diagnostic,
             timestamp: expect.any(Number),
-            __openclaw: { seq: 2, transcriptPosition: { rawSeq: 2 } },
+            __openclaw: { seq: 2, transcriptPosition: { rawSeq: 2 }, runId: "failed-run" },
           },
         },
         { messageId: "follow-up", messageSeq: 3 },

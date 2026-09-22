@@ -7,12 +7,16 @@ import {
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import {
+  RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+  RUN_FAILURE_ERROR_MAX_CHARS,
+  RUN_FAILURE_NOTICE_PREFIX,
+} from "../shared/session-run-error.js";
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
-const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
 
 function sanitizeSessionRunError(error: unknown): string {
-  const text = renderUserFacingText(error, { errorContext: true }).replace(/\s+/g, " ").trim();
+  const text = renderUserFacingText(error, { errorContext: true }).trim();
   return redactSensitiveText(text, { mode: "tools" });
 }
 
@@ -25,7 +29,12 @@ export async function recordGatewaySessionRunFailure(params: {
   settleSession?: () => undefined;
 }): Promise<void> {
   const { runId } = params;
-  const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
+  const marker = "\n\n[Error truncated; search Gateway logs by run ID for more detail.]";
+  const error =
+    sanitized.length > RUN_FAILURE_ERROR_MAX_CHARS
+      ? truncateUtf16Safe(sanitized, RUN_FAILURE_ERROR_MAX_CHARS - marker.length) + marker
+      : sanitized;
   const result = await appendSessionTranscriptReport(params.target, {
     kind: "custom",
     customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
@@ -39,7 +48,7 @@ export async function recordGatewaySessionRunFailure(params: {
       }
       return {
         customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-        content: `This turn ended before a reply: ${error}`,
+        content: `${RUN_FAILURE_NOTICE_PREFIX}${error}`,
         display: true,
         details: { runId, error },
       };
@@ -61,7 +70,7 @@ export function resolveSessionRunError(
   ) {
     return undefined;
   }
-  const error = sanitizeSessionRunError(outcome.error);
+  const error = sanitizeSessionRunError(outcome.error).replace(/\s+/g, " ").trim();
   if (error.length <= SESSION_RUN_ERROR_MAX_CHARS) {
     return error || undefined;
   }

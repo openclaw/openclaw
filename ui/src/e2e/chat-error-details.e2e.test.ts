@@ -167,8 +167,15 @@ suite.define(() => {
           const sessionKey = "agent:main:main";
           const skillPath =
             "/home/operator/.openclaw/projects/0123456789abcdef/example/.agents/skills/review";
-          const diagnostic = `Failed to prepare skill resources: skill="review" root="${skillPath}" error=Skill trees cannot contain links or special files: path="CLAUDE.md" kind=symlink. | INVALID_BUNDLE.\npassword=synthetic-password`;
-          const displayPrefix = source === "live" ? "Error: " : "This turn did not run: ";
+          const failure = `Failed to prepare skill resources: skill="review" root="${skillPath}" error=Skill trees cannot contain links or special files: path="CLAUDE.md" kind=symlink. | INVALID_BUNDLE.\npassword=synthetic-password\n`;
+          const tail = "<img src=x onerror=alert(1)>\nRetained cause beyond 8,000 characters";
+          const cutoff = "\n\n[Error truncated; search Gateway logs by run ID for more detail.]";
+          // Model the API's retained text; backend tests own the truncation boundary.
+          const diagnostic =
+            source === "history"
+              ? failure.padEnd(10_000 - tail.length - cutoff.length, "x") + tail + cutoff
+              : failure + "  at prepare (/workspace/example.ts:12)\n".repeat(230) + tail;
+          const displayPrefix = source === "live" ? "Error: " : "This turn ended before a reply: ";
           const safeDiagnostic =
             displayPrefix +
             diagnostic.replace("password=synthetic-password", "password=[redacted]");
@@ -195,6 +202,7 @@ suite.define(() => {
                 }
               : {}),
           });
+          let expectedRunId = "failed-run";
           await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           if (source === "live") {
             await currentPage
@@ -204,6 +212,7 @@ suite.define(() => {
             const send = await gateway.waitForRequest("chat.send");
             expect(send.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
             const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+            expectedRunId = runId;
             await gateway.emitGatewayEvent("chat", {
               sessionKey,
               runId,
@@ -213,9 +222,13 @@ suite.define(() => {
           } else {
             await gateway.waitForRequest("chat.startup");
           }
-          const alert = currentPage.locator(".chat-error");
+          const alert = currentPage.locator(".agent-chat__composer-notices .chat-error");
           await alert.waitFor();
           await captureDiagnosticProof(currentPage, `run-error-${source}-collapsed`);
+          expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+          expect(await alert.locator("summary strong").textContent()).not.toContain(
+            "Retained cause",
+          );
           const summary = alert.locator("summary");
           expect(await summary.count()).toBe(1);
           await summary.focus();
@@ -224,12 +237,41 @@ suite.define(() => {
           await expect.poll(() => details.isVisible()).toBe(true);
           await captureDiagnosticProof(currentPage, `run-error-${source}-expanded`);
           expect(await details.textContent()).toBe(safeDiagnostic);
+          await details.evaluate((node) => {
+            node.scrollTop = node.scrollHeight;
+          });
+          await captureDiagnosticProof(currentPage, `run-error-${source}-expanded-tail`);
+          expect(await alert.locator("img").count()).toBe(0);
+          expect(await alert.locator(".chat-error__run code").textContent()).toBe(expectedRunId);
+          await alert.getByRole("button", { name: "Copy run ID", exact: true }).click();
+          await expect
+            .poll(() => currentPage.evaluate(() => navigator.clipboard.readText()))
+            .toBe(expectedRunId);
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           await copy.click();
           await expect
             .poll(() => currentPage.evaluate(() => navigator.clipboard.readText()))
             .toBe(safeDiagnostic);
           expect(await details.isVisible()).toBe(true);
+          if (source === "history") {
+            const transcript = currentPage.locator(".chat-thread .chat-error");
+            const transcriptDetails = transcript.getByLabel("Error details", { exact: true });
+            expect(await transcriptDetails.isVisible()).toBe(false);
+            await transcript.locator("summary").click();
+            expect(await transcriptDetails.textContent()).toBe(safeDiagnostic);
+            await transcriptDetails.evaluate((node) => {
+              node.scrollTop = node.scrollHeight;
+            });
+            expect(await transcript.locator(".chat-error__run code").textContent()).toBe(
+              expectedRunId,
+            );
+            await transcript.getByRole("button", { name: "Copy error", exact: true }).click();
+            await expect
+              .poll(() => currentPage.evaluate(() => navigator.clipboard.readText()))
+              .toBe(safeDiagnostic);
+            await captureDiagnosticProof(currentPage, "run-error-history-transcript-expanded");
+            await transcript.locator("summary").click();
+          }
           await currentPage.setViewportSize({ width: 393, height: 852 });
           await expect
             .poll(() =>

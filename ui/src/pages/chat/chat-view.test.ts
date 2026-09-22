@@ -955,7 +955,9 @@ describe("chat run error", () => {
       const onDismissError = vi.fn();
       const onRetrySessionPlacementStartup = vi.fn();
       const container = renderChatView({
-        ...(source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic }),
+        ...(source === "run"
+          ? { runError: { summary: diagnostic, runId: "failed-run" } }
+          : { error: diagnostic }),
         onDismissError,
         onRetrySessionPlacementStartup,
       });
@@ -973,7 +975,10 @@ describe("chat run error", () => {
       const summary = requireElement(details, "summary", "error header");
       expect(summary.textContent).toContain("Details");
       expect(summary.textContent).not.toContain("Error details");
-      expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
+      expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(source === "run" ? 2 : 1);
+      expect(alert.querySelector(".chat-error__run code")?.textContent).toBe(
+        source === "run" ? "failed-run" : undefined,
+      );
       const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
       expect(copy).not.toBeNull();
       for (const open of [false, true]) {
@@ -983,6 +988,11 @@ describe("chat run error", () => {
         await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
         expect(writeText).toHaveBeenLastCalledWith(diagnostic);
         expect(details.hasAttribute("open")).toBe(open);
+      }
+      if (source === "run") {
+        alert.querySelector<HTMLButtonElement>('[aria-label="Copy run ID"]')?.click();
+        await Promise.resolve();
+        expect(writeText).toHaveBeenLastCalledWith("failed-run");
       }
       (summary as HTMLElement).click();
       expect(onDismissError).not.toHaveBeenCalled();

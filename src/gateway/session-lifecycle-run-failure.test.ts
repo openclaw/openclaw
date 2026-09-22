@@ -92,20 +92,24 @@ async function reports() {
 }
 
 describe("durable pre-reply run failure", () => {
-  it("records one displayed failure per run and retains it after the next run starts", async () => {
+  it("records one long diagnostic per run and retains it after the next run starts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();
-      await persistGatewaySessionLifecycleEvent({ ...target, event });
+      const diagnostic = `Worker setup failed\n${"  at prepareWorkspace (worker.ts:42)\n".repeat(260)}Cause: network allocation failed`;
+      expect(diagnostic.length).toBeGreaterThan(8_000);
+      expect(diagnostic.length).toBeLessThan(10_000);
+      const failureEvent = { ...event, data: { ...event.data, error: diagnostic } };
+      await persistGatewaySessionLifecycleEvent({ ...target, event: failureEvent });
       expect(await reports()).toMatchObject([
         {
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: `This turn ended before a reply: ${error}`,
+          content: `This turn ended before a reply: ${diagnostic}`,
           display: true,
-          details: { runId, error },
+          details: { runId, error: diagnostic },
         },
       ]);
-      await persistGatewaySessionLifecycleEvent({ ...target, event });
+      await persistGatewaySessionLifecycleEvent({ ...target, event: failureEvent });
       await persistGatewaySessionLifecycleEvent({
         ...target,
         event: {
@@ -212,7 +216,7 @@ describe("durable pre-reply run failure", () => {
           ...event,
           data: {
             ...event.data,
-            error: `Worker rejected token=${secret}\n${"detail ".repeat(150)}token=${secret}: upload failed`,
+            error: `Worker rejected token=${secret}\n${"detail 🦞 ".repeat(1_500)}token=${secret}: upload failed`,
           },
         },
       });
@@ -221,8 +225,13 @@ describe("durable pre-reply run failure", () => {
       expect(JSON.stringify(entries)).not.toContain(secret);
       expect(entries[0]).toMatchObject({ details: { runId, error: expect.any(String) } });
       const report = entries[0] as { details: { error: string } };
-      expect(report.details.error.length).toBeLessThanOrEqual(512);
-      expect(report.details.error).not.toContain("\n");
+      expect(report.details.error.length).toBeGreaterThan(9_900);
+      expect(report.details.error.length).toBeLessThanOrEqual(10_000);
+      expect(report.details.error).toContain("\ndetail 🦞 ");
+      expect(report.details.error).toMatch(
+        /\[Error truncated; search Gateway logs by run ID for more detail\.\]$/,
+      );
+      expect(report.details.error).not.toMatch(/[\uD800-\uDFFF]/u);
       const lastRunError = loadSessionEntry(target)?.lastRunError;
       expect(lastRunError).not.toContain(secret);
       expect(lastRunError).not.toContain("abcdefghijklmnopqrstuvwxyz");
