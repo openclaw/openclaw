@@ -182,7 +182,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-95 plugins
+96 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -217,6 +217,8 @@ Each entry lists the package, distribution route, and description.
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - npm or ClawHub: `clawhub:@openclaw/comfy-provider`. Adds ComfyUI model provider support to OpenClaw.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm or ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
+
+- **[databricks](/plugins/reference/databricks)** (`@openclaw/databricks-provider`) - npm or ClawHub: `clawhub:@openclaw/databricks-provider`. Adds Databricks model provider support to OpenClaw.
 
 - **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - npm or ClawHub: `clawhub:@openclaw/deepinfra-provider`. Adds DeepInfra model provider support to OpenClaw.
 

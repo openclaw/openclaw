@@ -535,6 +535,56 @@
       }
     },
     {
+      "name": "@openclaw/databricks-provider",
+      "description": "OpenClaw Databricks Unity Gateway provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "databricks",
+          "label": "Databricks"
+        },
+        "providers": [
+          {
+            "id": "databricks",
+            "name": "Databricks",
+            "docs": "/providers/databricks",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "DATABRICKS_TOKEN"
+            ],
+            "authChoices": [
+              {
+                "method": "api-token",
+                "choiceId": "databricks-token",
+                "choiceLabel": "Databricks token",
+                "choiceHint": "Unity Gateway / model services",
+                "groupId": "databricks",
+                "groupLabel": "Databricks",
+                "groupHint": "Workspace token + model services",
+                "optionKey": "databricksToken",
+                "cliFlag": "--databricks-token",
+                "cliOption": "--databricks-token <token>",
+                "cliDescription": "Databricks personal access token or OAuth token",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/databricks-provider",
+          "npmSpec": "@openclaw/databricks-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.5"
+        }
+      }
+    },
+    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",

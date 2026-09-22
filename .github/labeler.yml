@@ -547,6 +547,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: databricks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/databricks/**"
+          - "docs/providers/databricks.md"
+          - "docs/plugins/reference/databricks.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:

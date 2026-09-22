@@ -1,0 +1,38 @@
+{
+  "id": "databricks",
+  "categories": ["models"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["databricks"],
+  "setup": {
+    "providers": [
+      {
+        "id": "databricks",
+        "envVars": ["DATABRICKS_TOKEN"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "databricks",
+      "method": "api-token",
+      "choiceId": "databricks-token",
+      "choiceLabel": "Databricks token",
+      "choiceHint": "Unity Gateway / model services",
+      "groupId": "databricks",
+      "groupLabel": "Databricks",
+      "groupHint": "Workspace token + model services",
+      "optionKey": "databricksToken",
+      "cliFlag": "--databricks-token",
+      "cliOption": "--databricks-token <token>",
+      "cliDescription": "Databricks personal access token or OAuth token"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
