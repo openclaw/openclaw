@@ -4,7 +4,10 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -21,6 +24,7 @@ async function createState(label: string) {
 }
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   while (states.length > 0) {
     await states.pop()?.cleanup();
@@ -48,6 +52,7 @@ describe("resolveLocalNodeId", () => {
     await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
 
     // Once discovered, the same-install identity stays stable until process restart.
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(state.statePath("state"), { recursive: true });
     expect(loadDeviceIdentityIfPresent({ env: state.env })).toBeNull();

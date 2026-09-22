@@ -10,6 +10,7 @@ import {
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type PublicationCrashPoint = "after-publish" | "before-publish";
 type PublicationExit = ReliabilityReport["publicationInterruptionProof"]["beforePublish"]["exit"];
@@ -82,6 +83,7 @@ async function runCrashPoint(params: {
   const child = spawn(
     process.execPath,
     [
+      ...resolveForwardedNodeCompilerArgs(),
       "--import",
       "tsx",
       PUBLICATION_WORKER_PATH,

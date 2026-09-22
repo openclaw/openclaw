@@ -49,7 +49,10 @@ describe("Gateway CPU attribution", () => {
     expect(root.querySelectorAll(".sparkline-tile__stack")).toHaveLength(3);
     const detail = root.querySelector(".gateway-cpu-detail")!.textContent!;
     expect(detail).toContain("220%");
-    expect(detail).toContain("Loop utilization");
+    expect(detail).toContain("Event loop busy");
+    expect(
+      [...root.querySelectorAll(".gateway-cpu-detail__thread dd")].map((row) => row.textContent),
+    ).toEqual(["18%", "220%", "≈20%"]);
     const chart = root.querySelector<HTMLElement>(".sparkline-tile__chart")!;
     chart.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 0 }));
     await root.querySelector<LitElement>("openclaw-sparkline")!.updateComplete;

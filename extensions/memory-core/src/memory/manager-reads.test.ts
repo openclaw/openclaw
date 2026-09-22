@@ -4,6 +4,7 @@ import {
   sessionPathForFile,
   sessionPathForSessionIdentity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -127,8 +128,8 @@ describe("memory manager reads", () => {
     database
       .prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('previous', 'previous', 'previous', 'retained', '[1,2]', 2, 1)`)
-      .run();
+      VALUES ('previous', 'previous', 'previous', 'retained', ?, 2, 1)`)
+      .run(encodeMemoryEmbedding([1, 2]));
     const ordinary = manager.status();
     expect(ordinary.storage).toBeUndefined();
     expect(ordinary.cache?.entries).toBe(1);
@@ -137,7 +138,10 @@ describe("memory manager reads", () => {
     try {
       const inspected = diagnostic.status();
       expect(inspected.cache?.entries).toBe(1);
-      expect(inspected.storage).toMatchObject({ embeddingCacheEntries: 1, embeddingCacheBytes: 5 });
+      expect(inspected.storage).toMatchObject({
+        embeddingCacheEntries: 1,
+        embeddingCacheBytes: 16,
+      });
       expect(
         diagnosticReads.reads.filter(({ sql }) => /\bmemory_embedding_cache\b/i.test(sql)),
       ).toHaveLength(1);

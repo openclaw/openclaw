@@ -10,7 +10,7 @@ export type MirroredAgentMessage = Extract<
   AgentMessage,
   { role: "user" | "assistant" | "toolResult" }
 > &
-  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
+  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">> & { display?: boolean };
 
 export function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";

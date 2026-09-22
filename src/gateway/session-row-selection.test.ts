@@ -1,12 +1,15 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -16,11 +19,59 @@ import {
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
 
-it("reuses resident key predicates across list requests and refreshes entry classification", async () => {
+beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
+it("selects an exact row before pagination while retaining discovery filters", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const key = "agent:main:target";
+    for (let index = 0; index < 7; index++) {
+      const sessionKey = index === 0 ? key : `${key}-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: `transcript-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const projection = await createSessionRowProjection({ cfg });
+    try {
+      const page = await listProjectedSessions({
+        projection,
+        opts: { agentId: "main", search: key, limit: 5 },
+      });
+      expect(page.sessions.map((row) => row.key)).not.toContain(key);
+      const exact = await listProjectedSessions({
+        projection,
+        key,
+        opts: { agentId: "main", limit: 1 },
+      });
+      expect(exact.sessions).toMatchObject([{ key, sessionId: "transcript-0" }]);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: "transcript-0", updatedAt: 8, archivedAt: 8 },
+      );
+      const hidden = await listProjectedSessions({
+        projection,
+        key,
+        opts: { agentId: "main", limit: 1 },
+      });
+      expect(hidden.sessions).toEqual([]);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("reuses resident key predicates across list requests and refreshes legacy spawned classification", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const keys = [
-      "agent:main:dashboard:visible",
+      "agent:main:legacy-visible",
       "agent:main:cron:job:run:one",
       "agent:main:subagent:child",
       "agent:main:matrix:channel:!Room:example.org:thread:$Event",
@@ -225,3 +276,31 @@ it("rejects duplicate ordinary keys introduced after store admission before filt
     }
   });
 });
+
+it.each([undefined, "Research"])(
+  "keeps visible spawned work discoverable with group=%s",
+  async (category) => {
+    const result = await listSessionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      storePath: "/tmp/openclaw-visible-session-activity",
+      store: {
+        "agent:main:subagent:hidden": {
+          sessionId: "hidden",
+          updatedAt: 3,
+          category,
+          spawnedBy: "agent:main:discussion",
+        },
+        "agent:main:dashboard:visible": {
+          sessionId: "visible",
+          updatedAt: 2,
+          category,
+          spawnedBy: "agent:main:discussion",
+        },
+        "agent:main:discussion": { sessionId: "parent", updatedAt: 1 },
+      },
+      opts: { excludeSubagents: true, limit: 1 },
+    });
+    expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:visible"]);
+    expect(result).toMatchObject({ totalCount: 2, nextOffset: 1, hasMore: true });
+  },
+);

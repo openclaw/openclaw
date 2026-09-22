@@ -7,6 +7,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "./worker-cell-package.mjs";
@@ -407,9 +411,11 @@ async function seed(ctx, packageRoot) {
     throw new AggregateError(errors, "Published fixture owners did not settle");
   }
   const spawnedCwd = path.join(worktree.path, "packages/app");
+  // Keep Doctor's title repair separate from workspace preservation.
   const entries = {
     [KEY]: {
       sessionId: SESSION,
+      displayName: "Legacy project worktree",
       updatedAt: 10,
       lastActivityAt: 10,
       projectId: project.id,
@@ -417,7 +423,12 @@ async function seed(ctx, packageRoot) {
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
       sessionFile: `${SESSION}.jsonl`,
     },
-    [OTHER_KEY]: { sessionId: OTHER_SESSION, updatedAt: 20, sessionFile: `${OTHER_SESSION}.jsonl` },
+    [OTHER_KEY]: {
+      sessionId: OTHER_SESSION,
+      displayName: "Unrelated legacy session",
+      updatedAt: 20,
+      sessionFile: `${OTHER_SESSION}.jsonl`,
+    },
   };
   writeJson(legacyStore, entries);
   for (const id of [SESSION, OTHER_SESSION]) {
@@ -608,9 +619,14 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     ),
     transcript: rows(
       db.prepare(
-        "SELECT session_id,seq,event_json,created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq",
+        `SELECT session_id,seq,${sqliteTranscriptPayloadColumns(db)},created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq`,
       ),
-    ),
+    ).map((row) => ({
+      session_id: row.session_id,
+      seq: row.seq,
+      event_json: readSqliteTranscriptPayload(row),
+      created_at: row.created_at,
+    })),
   }));
   const expectedSchema = ["published-import", "before-schema"].includes(stage)
     ? BASELINE_AGENT_SCHEMA

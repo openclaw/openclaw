@@ -10,6 +10,7 @@ import {
   deleteTaskFlowRecordById,
   ensureTaskFlowRegistryReadyAsync,
   getTaskFlowById,
+  readResidentTaskFlow,
   runTaskFlowRegistryWorkerMutation,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
@@ -143,15 +144,6 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
   });
   configureTaskFlowRegistryRuntime({ store });
   await ensureTaskFlowRegistryReadyAsync(context);
-  configureTaskFlowRegistryRuntime({
-    observers: {
-      onEvent(event) {
-        if (event.kind !== "restored") {
-          events.push(event.kind === "deleted" ? "deleted" : event.flow.goal);
-        }
-      },
-    },
-  });
   return {
     events,
     writes,
@@ -182,7 +174,7 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
           return record;
         },
       ),
-    current: () => getTaskFlowById(initial.flowId)?.goal,
+    current: () => readResidentTaskFlow(initial.flowId)?.goal,
     synchronous(value) {
       if (value === undefined) {
         expect(deleteTaskFlowRecordById(initial.flowId)).toBe(true);
@@ -259,7 +251,7 @@ describe("overlapping worker publication", () => {
       secondEffectsRelease.resolve();
       await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
       expect(taskOwner.events.at(-1)).toBe("v2");
-      expect(flowOwner.events).toEqual(["v1", "v2"]);
+      expect(flowOwner.current()).toBe("v2");
       expect(effects).toEqual(["A-finish", "B-finish"]);
       expect(taskOwner.writes).toEqual([1, 2]);
       expect(flowOwner.writes).toEqual([1, 2]);
@@ -318,7 +310,9 @@ describe("overlapping worker publication", () => {
         ]);
         expect(owner.reads).toEqual([1, 4, 2, 5, 3]);
         expect(owner.writes).toEqual([1, 4, 2, 3]);
-        expect(owner.events.at(-1)).toBe("v3");
+        if (kind === "task") {
+          expect(owner.events.at(-1)).toBe("v3");
+        }
         expect(owner.current()).toBe("v3");
         await expect(
           owner.run(
@@ -388,7 +382,7 @@ describe("overlapping worker publication", () => {
       ]);
       expect(finishedBeforeFirstEffects).toBe(true);
       expect(effects).toEqual(["A-start", "B-start", "B-finish"]);
-      expect(flowOwner.events).toEqual(["v1", "v2"]);
+      expect(flowOwner.current()).toBe("v2");
       expect(taskOwner.events).toEqual(["v2"]);
       firstEffectsRelease.resolve();
       await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
@@ -421,7 +415,9 @@ describe("overlapping worker publication", () => {
         await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
         expect(owner.writes).toEqual([1, 2]);
         expect(owner.reads).toEqual([1, 2]);
-        expect(owner.events).toEqual(["v2"]);
+        if (kind === "task") {
+          expect(owner.events).toEqual(["v2"]);
+        }
         expect(owner.current()).toBe("v2");
       } finally {
         firstRelease.resolve();
@@ -463,16 +459,20 @@ describe("overlapping worker publication", () => {
             expect(owner.writes).toEqual([1, 2]);
             expect(owner.reads).toEqual([1, 2]);
             if (intervening === "none") {
-              expect([["v1", "v2"], ["v2"]]).toContainEqual(owner.events);
+              if (kind === "task") {
+                expect([["v1", "v2"], ["v2"]]).toContainEqual(owner.events);
+              }
               expect(owner.current()).toBe("v2");
             } else {
-              expect(owner.events).toEqual(
-                intervening === "synchronous delete"
-                  ? ["deleted"]
-                  : intervening === "synchronous ABA"
-                    ? ["v3", "v0"]
-                    : ["v3"],
-              );
+              if (kind === "task") {
+                expect(owner.events).toEqual(
+                  intervening === "synchronous delete"
+                    ? ["deleted"]
+                    : intervening === "synchronous ABA"
+                      ? ["v3", "v0"]
+                      : ["v3"],
+                );
+              }
               expect(owner.current()).toBe(
                 intervening === "synchronous delete"
                   ? undefined

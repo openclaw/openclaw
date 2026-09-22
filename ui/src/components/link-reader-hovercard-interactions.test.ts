@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
@@ -125,45 +125,40 @@ describe("generic preview portal lifecycle", () => {
   );
 
   it("keeps genuine request failures cached for 30 seconds before retrying on hover", async () => {
-    const mountedCards = observeHovercardMounts();
     const retry = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const request = vi
       .fn()
-      .mockRejectedValueOnce(new Error("GitHub preview unavailable"))
+      .mockRejectedValueOnce(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "GitHub preview unavailable" }),
+      )
       .mockReturnValue(retry.promise);
     const { anchor, provider } = createLink(ISSUE_HREF);
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
-    expect(hovercard()).toBeNull();
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+    expect(hovercard()?.textContent).toContain("GitHub preview unavailable");
+    expect(anchor.getAttribute("aria-expanded")).toBe("true");
     anchor.focus();
     await vi.advanceTimersByTimeAsync(0);
     expect(document.activeElement).toBe(anchor);
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
     anchor.blur();
     leave(anchor);
     await vi.advanceTimersByTimeAsync(29_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(hovercard()).toBeNull();
-
-    expect(mountedCards).toEqual([]);
+    expect(hovercard()?.textContent).toContain("GitHub preview unavailable");
     leave(anchor);
     await vi.advanceTimersByTimeAsync(1_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(mountedCards).toEqual([]);
     expect(hovercard()).toBeNull();
     retry.resolve(issuePreviewResponse());
     await vi.advanceTimersByTimeAsync(0);
     expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
   });
 
-  it("keeps a pending preview rejection invisible without moving keyboard focus", async () => {
-    const mountedCards = observeHovercardMounts();
+  it("shows a pending preview rejection without moving focus and keeps its original link reachable", async () => {
     const pending = createDeferred<unknown>();
     const { anchor, provider } = createLink(ISSUE_HREF);
     provider.client = {
@@ -172,18 +167,22 @@ describe("generic preview portal lifecycle", () => {
     anchor.focus();
     await vi.advanceTimersByTimeAsync(0);
     expect(hovercard()).toBeNull();
-    expect(mountedCards).toEqual([]);
     pending.reject(new Error("Gateway request timed out"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBeNull();
+    expect(hovercard()?.textContent).toContain("Try again or open the original.");
     expect(document.activeElement).toBe(anchor);
-    expect(anchor.hasAttribute("aria-controls")).toBe(false);
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    expect(anchor.getAttribute("aria-controls")).toBe(hovercard()?.id);
+    expect(anchor.getAttribute("aria-expanded")).toBe("true");
     const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
     anchor.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(false);
-    expect(mountedCards).toEqual([]);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(hovercard()?.querySelector("a"));
+    expect((document.activeElement as HTMLAnchorElement).href).toBe(ISSUE_HREF);
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+    );
+    expect(hovercard()).toBeNull();
+    expect(document.activeElement).toBe(anchor);
   });
 
   it.each(["pointer", "focus"])(
@@ -216,17 +215,22 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it.each([
-    "pointer leave",
-    "focus leave",
-    "Escape",
-    "click",
-    "route replacement",
-    "href change",
-    "agent change",
-    "client change",
-    "disconnect",
-  ])("does not mount a late success after %s", async (dismissal) => {
+  it.each(
+    [
+      "pointer leave",
+      "focus leave",
+      "Escape",
+      "click",
+      "route replacement",
+      "href change",
+      "agent change",
+      "client change",
+      "disconnect",
+    ].flatMap((dismissal) => [
+      { dismissal, settlement: "success" },
+      { dismissal, settlement: "failure" },
+    ]),
+  )("does not mount a late $settlement after $dismissal", async ({ dismissal, settlement }) => {
     const mountedCards = observeHovercardMounts();
     const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const { anchor, provider } = createLink(ISSUE_HREF);
@@ -265,7 +269,11 @@ describe("generic preview portal lifecycle", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(signal?.aborted).toBe(true);
-    pending.resolve(issuePreviewResponse());
+    if (settlement === "success") {
+      pending.resolve(issuePreviewResponse());
+    } else {
+      pending.reject(new Error("GitHub API rate limit reached"));
+    }
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mountedCards).toEqual([]);
     expect(hovercard()).toBeNull();
@@ -343,7 +351,7 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it("shares the first displayed success across providers while suppressing cached failures", async () => {
+  it("shares successful loading state across providers and shows cached failures", async () => {
     const first = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const failure = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const retry = createDeferred<ReturnType<typeof issuePreviewResponse>>();
@@ -375,15 +383,15 @@ describe("generic preview portal lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(hovercard()?.dataset.loading).toBe("true");
     expect(hovercard()?.getAttribute("aria-label")).toBe("Loading preview…");
-    failure.reject(new Error("Not Found"));
+    failure.reject(new GatewayRequestError({ code: "UNAVAILABLE", message: "Not Found" }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()).toBeNull();
-    const mountsAfterFailure = mounted.length;
+    expect(hovercard()?.textContent).toContain("Not Found");
     leave(two.anchor);
+    await vi.advanceTimersByTimeAsync(120);
     await hover(two.anchor);
-    expect(hovercard()).toBeNull();
-    expect(mounted).toHaveLength(mountsAfterFailure);
+    expect(hovercard()?.textContent).toContain("Not Found");
     expect(request).toHaveBeenCalledTimes(2);
+    leave(two.anchor);
     await vi.advanceTimersByTimeAsync(30_000);
     await hover(two.anchor);
     expect(request).toHaveBeenCalledTimes(3);
@@ -455,7 +463,9 @@ describe("generic preview portal lifecycle", () => {
         .fn()
         .mockResolvedValueOnce(issuePreviewResponse())
         .mockResolvedValueOnce(issuePreviewResponse({ number: 99816 }))
-        .mockRejectedValueOnce(new Error("Not Found"))
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Not Found" }),
+        )
         .mockReturnValueOnce(pending.promise)
         .mockReturnValueOnce(next.promise);
       const client = {
@@ -479,7 +489,7 @@ describe("generic preview portal lifecycle", () => {
       failed.href = "https://github.com/openclaw/openclaw/issues/99818";
       one.provider.append(failed);
       await hover(failed);
-      expect(hovercard()).toBeNull();
+      expect(hovercard()?.textContent).toContain("Not Found");
       one.anchor.href = "https://github.com/openclaw/openclaw/issues/99817";
       await hover(one.anchor);
       expect(hovercard()?.dataset.loading).toBe("true");
@@ -494,7 +504,7 @@ describe("generic preview portal lifecycle", () => {
       leave(one.anchor);
       await vi.advanceTimersByTimeAsync(120);
       await hover(failed);
-      expect(hovercard()).toBeNull();
+      expect(hovercard()?.textContent).toContain("Not Found");
       expect(request).toHaveBeenCalledTimes(4);
       one.anchor.href = "https://github.com/openclaw/openclaw/issues/99819";
       await hover(one.anchor);
@@ -651,8 +661,10 @@ describe("generic preview portal lifecycle", () => {
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
   });
 
-  it("ignores unsupported GitHub links and dismisses failed previews", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("Not Found"));
+  it("ignores unsupported GitHub links and reports failed supported previews", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message: "Not Found" }));
     const unsupportedLink = createLink("https://github.com/openclaw/openclaw", "repository");
     unsupportedLink.provider.client = { request } as unknown as GatewayBrowserClient;
 
@@ -663,7 +675,7 @@ describe("generic preview portal lifecycle", () => {
     const missingLink = createLink("https://github.com/openclaw/openclaw/issues/999999", "missing");
     missingLink.provider.client = { request } as unknown as GatewayBrowserClient;
     await hover(missingLink.anchor);
-    expect(hovercard()).toBeNull();
+    expect(hovercard()?.textContent).toContain("Not Found");
     expect(request).toHaveBeenCalledTimes(1);
   });
 

@@ -1,5 +1,6 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
@@ -217,11 +218,13 @@ export async function executeFollowupTurn(params: {
     isHeartbeat,
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
+    operatorAuthority: turn.queued.operatorAuthority,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
+    onPreparedBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
@@ -371,6 +374,9 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
+        ? sessionPersonalProfileId(turn.session.current())
+        : undefined;
       // Admission froze authority before preflight; execution keeps that same owner.
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =

@@ -1,7 +1,5 @@
 export * from "./subagent-registry.js";
 export {
-  buildLatestSubagentRunReadIndex,
-  buildSubagentRunReadIndex,
   buildSubagentSessionListReadIndex,
   countActiveDescendantRuns,
   countPendingDescendantRuns,
@@ -57,6 +55,7 @@ type RegistryDeps = {
   onAgentEvent: typeof import("../../../infra/agent-events.js").onAgentEvent;
   persistSubagentRunsToDisk: typeof import("./subagent-registry-state.js").persistSubagentRunsToDisk;
   persistSubagentRunsToDiskOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskOrThrow;
+  persistSubagentRunsToDiskAsyncOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskAsyncOrThrow;
   resolveAgentTimeoutMs: typeof import("../../timeout.js").resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow;

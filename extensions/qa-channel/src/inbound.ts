@@ -7,7 +7,6 @@ import {
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
@@ -378,7 +377,7 @@ export async function handleQaInbound(params: {
       })
     : undefined;
   const sessionKey = commandTargets?.sessionKey ?? threadKeys.sessionKey;
-  const access = await resolveStableChannelMessageIngress({
+  const access = await channelRuntime.inbound.ingress.resolveStable({
     cfg: params.config,
     channelId: params.channelId,
     accountId: params.account.accountId,
@@ -394,6 +393,7 @@ export async function handleQaInbound(params: {
     contextBinding: {
       agentId: route.agentId,
       sessionKey,
+      nativeChannelId: inbound.conversation.id,
       messageId: inbound.id,
       inboundEventKind: "user_request",
     },

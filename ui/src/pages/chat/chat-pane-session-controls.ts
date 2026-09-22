@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
@@ -12,7 +13,6 @@ import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
   switchChatContextWindow,
@@ -23,12 +23,15 @@ import {
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+
+registerModelControlsEnglish();
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -140,10 +143,12 @@ export function renderChatPaneComposerControls(params: {
     state.connectionEpoch === connectionEpoch &&
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
   const ownsSelection = () => {
-    const currentSessionId =
-      state.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey))
-        ?.sessionId ?? selectedSession?.sessionId;
-    return ownsRoute() && currentSessionId === expectedSessionId;
+    const currentSession = selectedChatSessionRow(state);
+    return (
+      ownsRoute() &&
+      Boolean(currentSession) === Boolean(selectedSession) &&
+      currentSession?.sessionId === expectedSessionId
+    );
   };
   let pendingChange = permissionChanges.get(permissionScopeKey);
   if (pendingChange && pendingChange.expectedSessionId !== expectedSessionId) {
@@ -325,10 +330,10 @@ export function renderChatPaneComposerControls(params: {
             affectedAgentId,
           );
           const outcome = await state.sessions.reconcileMutation(affectedAgentId);
-          if (!ownsRoute() || !ownsOutcome()) {
+          if (!ownsSelection() || !ownsOutcome()) {
             return;
           }
-          if (ownsSelection() && outcome.status !== "refreshed") {
+          if (outcome.status !== "refreshed") {
             change.pending = false;
             change.retainWhileCurrent = retainWhileCurrent;
           }

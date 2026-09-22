@@ -1,5 +1,9 @@
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeStringifiedOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -657,18 +661,17 @@ export async function processResponsesStream<TApi extends Api>(
           // unreliable by an unrouteable delta), and parses as complete JSON;
           // otherwise fall back to the done snapshot.
           const streamedArguments = streamingToolCall?.block.partialJson || "";
-          const preferredArguments =
+          const parsedStreamedArguments =
             streamingToolCall?.argumentStreamReliable &&
             streamingToolCall?.argumentsStreamed &&
             streamedArguments.length > 0 &&
             completedArguments !== undefined &&
-            streamedArguments !== completedArguments &&
-            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
-              ? streamedArguments
-              : completedArguments || streamedArguments;
+            streamedArguments !== completedArguments
+              ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
+              : null;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: preferredArguments,
+            arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
@@ -705,8 +708,14 @@ export async function processResponsesStream<TApi extends Api>(
         }
         break;
       } else if (event.type === "error") {
-        throw new Error(
-          event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
+        const details = isRecord(event) && isRecord(event.error) ? event.error : event;
+        const message = readStringValue(details.message);
+        const code = normalizeStringifiedOptionalString(details.code);
+        throw Object.assign(
+          new Error(
+            message ? (code ? `Error Code ${code}: ${message}` : message) : "Unknown error",
+          ),
+          { code: details.code, error: details },
         );
       } else if (event.type === "response.failed") {
         const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);

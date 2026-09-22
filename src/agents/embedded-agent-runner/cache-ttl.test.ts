@@ -1,8 +1,11 @@
 // Cache-TTL delegation, built-in fallback, and session-marker coverage.
 import { describe, expect, it, vi } from "vitest";
 
+const providerEligibility = vi.hoisted(() => vi.fn());
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderCacheTtlEligibility: (params: { context: { provider: string } }) => {
+    providerEligibility(params);
     if (params.context.provider === "moonshot" || params.context.provider === "zai") {
       return true;
     }
@@ -16,6 +19,27 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
+  it("forwards only the normalized identity and bounded resolved route", () => {
+    providerEligibility.mockClear();
+    const route = {
+      baseUrl: "https://proxy.example/v1",
+      supportsPromptCacheKey: false,
+      headers: { "x-test-private": "not-for-provider-hooks" },
+      apiKey: "synthetic-not-for-provider-hooks",
+    };
+    isCacheTtlEligibleProvider(" OPENAI ", " GPT-4O ", "openai-responses", route);
+    expect(providerEligibility).toHaveBeenCalledExactlyOnceWith({
+      provider: "openai",
+      context: {
+        provider: "openai",
+        modelId: "gpt-4o",
+        modelApi: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+        supportsPromptCacheKey: false,
+      },
+    });
+  });
+
   it("is case-insensitive for native providers", () => {
     expect(isCacheTtlEligibleProvider("Moonshot", "Kimi-K2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("ZAI", "GLM-5")).toBe(true);

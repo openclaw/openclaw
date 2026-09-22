@@ -1,6 +1,7 @@
 /** Tests node-host capability discovery and inventory publication. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -213,20 +214,32 @@ describe("runNodeHost", () => {
     await withRunningNodeHost(async () => {
       const options = mocks.capturedGatewayClientOptions[0];
       const client = mocks.capturedGatewayClients[0];
-
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-
-      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+      const inventory = {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
           capacity: { total: 5, available: 5 },
           bundlePrewarm: 1,
         },
+      };
+      const published = createDeferred();
+      client?.request.mockImplementation(async (method, params) => {
+        if (
+          method === NODE_RUNNER_INVENTORY_UPDATE_METHOD &&
+          expect.objectContaining(inventory).asymmetricMatch(params)
+        ) {
+          published.resolve();
+        }
+        return {};
       });
+
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+
+      await published.promise;
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory);
     });
   });
 

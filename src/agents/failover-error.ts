@@ -8,7 +8,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -31,6 +30,7 @@ import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
 import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
@@ -56,15 +56,10 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "ActiveTurnClaimError",
 ]);
 
-// Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
-// Keep the fact weakly keyed to the original error, never inferred from display text.
-const modelFallbackStops = resolveGlobalSingleton(
-  Symbol.for("openclaw.modelFallbackStops"),
-  () => new WeakSet<Error>(),
-);
+export { recordModelFallbackStop } from "./model-fallback-stop.js";
 
-export function recordModelFallbackStop(error: Error): void {
-  modelFallbackStops.add(error);
+export function hasRecordedModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(isRecordedModelFallbackStop);
 }
 
 export function hasModelFallbackStop(error: unknown): boolean {
@@ -73,7 +68,7 @@ export function hasModelFallbackStop(error: unknown): boolean {
     isAgentRunSupersededAbortReason(error) ||
     collectErrorGraphCandidates(error, resolveNestedErrors).some(
       (candidate) =>
-        (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
+        isRecordedModelFallbackStop(candidate) ||
         (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
     )
   );
@@ -167,8 +162,12 @@ export function findCliTimeoutError(
 }
 
 /** Map a failover reason to the closest HTTP-like status code. */
-export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
-  return FAILOVER_STATUS.get(reason);
+export function resolveFailoverStatus(reason: FailoverReason, code?: string): number | undefined {
+  return normalizeFailoverStatus(FAILOVER_STATUS.get(reason), code);
+}
+
+function normalizeFailoverStatus(status: number | undefined, code?: string): number | undefined {
+  return code === "selected_auth_profile_unavailable" ? undefined : status;
 }
 
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
@@ -247,9 +246,10 @@ function readDirectErrorDetails(err: unknown): string[] | undefined {
 
 function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   const message = readDirectErrorMessage(err);
+  const code = readDirectErrorCode(err);
   return {
-    status: readDirectStatusCode(err),
-    code: readDirectErrorCode(err),
+    status: normalizeFailoverStatus(readDirectStatusCode(err), code),
+    code,
     errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
@@ -332,9 +332,10 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
 
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
   const message = getErrorMessage(err);
+  const code = findErrorProperty(err, readDirectErrorCode);
   return {
-    status: findErrorProperty(err, readDirectStatusCode),
-    code: findErrorProperty(err, readDirectErrorCode),
+    status: normalizeFailoverStatus(findErrorProperty(err, readDirectStatusCode), code),
+    code,
     errorType: findErrorProperty(err, readDirectErrorType),
     message: message || undefined,
     provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
@@ -484,7 +485,7 @@ export function resolveFailoverReasonFromError(
 
 /** Build a copy-pasteable reauthentication hint for attributed auth failures. */
 export function buildFailoverRemediationHint(err: unknown): string | undefined {
-  if (!isFailoverError(err)) {
+  if (!isFailoverError(err) || err.code === "selected_auth_profile_unavailable") {
     return undefined;
   }
   if (err.reason !== "auth" && err.reason !== "auth_permanent") {
@@ -552,7 +553,7 @@ export function describeFailoverError(err: unknown): {
       message: err.message,
       rawError: err.rawError,
       reason: err.reason,
-      status: err.status,
+      status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
       provider: err.provider,
       model: err.model,
@@ -595,15 +596,20 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if ((context?.authMode && !err.authMode) || (context?.timeout && !err.timeout)) {
+    const status = normalizeFailoverStatus(err.status, err.code);
+    if (
+      !Object.is(status, err.status) ||
+      (context?.authMode && !err.authMode) ||
+      (context?.timeout && !err.timeout)
+    ) {
       const message = typeof err.message === "string" ? err.message : String(err);
       const enriched = new FailoverError(message, {
         reason: err.reason,
         provider: err.provider,
         model: err.model,
         profileId: err.profileId,
-        authMode: err.authMode ?? context.authMode,
-        status: err.status,
+        authMode: err.authMode ?? context?.authMode,
+        status,
         code: err.code,
         rawError: err.rawError,
         authProfileFailure: err.authProfileFailure,
@@ -612,7 +618,7 @@ export function coerceToFailoverError(
         cause: err.cause,
         suspend: err.suspend,
         cliTimeout: err.cliTimeout,
-        timeout: err.timeout ?? context.timeout,
+        timeout: err.timeout ?? context?.timeout,
         attempts: err.attempts,
         soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
@@ -628,8 +634,8 @@ export function coerceToFailoverError(
 
   const signal = normalizeErrorSignal(err);
   const message = signal.message ?? String(err);
-  const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
+  const status = signal.status ?? resolveFailoverStatus(reason, code);
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =

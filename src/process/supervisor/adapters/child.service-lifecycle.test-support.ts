@@ -7,7 +7,8 @@ import { createSpawnBrokerHost } from "../../spawn-broker/host.js";
 
 /** Run the existing process-owner contracts through each supported POSIX transport. */
 export function describeSpawnTransports(name: string, register: () => void): void {
-  describe.skipIf(process.platform === "win32").each(["native", "broker"] as const)(
+  const transports = process.versions.bun ? ["native"] : ["native", "broker"];
+  describe.skipIf(process.platform === "win32").each(transports)(
     `${name} (%s transport)`,
     (transport) => {
       if (transport === "broker") {

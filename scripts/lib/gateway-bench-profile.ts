@@ -25,9 +25,21 @@ export type GatewayCpuUsageSnapshot = {
   mainThread: NodeJS.CpuUsage;
 };
 
+export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
+  memory: NodeJS.MemoryUsage;
+  activeResources: Record<string, number>;
+  runtime: { node: string; platform: string; arch: string };
+};
+
 export type GatewayBenchCommand =
   | GatewayProfileCommand
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" };
+  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "resource-usage";
+      action: "sample";
+      initial?: boolean;
+    };
 
 type GatewayProfileReply = {
   channel: typeof GATEWAY_PROFILE_CHANNEL;
@@ -35,6 +47,7 @@ type GatewayProfileReply = {
   action: GatewayBenchCommand["action"];
   error?: string;
   cpuUsage?: GatewayCpuUsageSnapshot;
+  resources?: GatewayResourceSnapshot;
 };
 
 type CpuUsageMilliseconds = { userMs: number; systemMs: number; totalMs: number };
@@ -105,6 +118,23 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
     throw new Error("Gateway did not report CPU usage");
   }
   return reply.cpuUsage;
+}
+
+/** Samples the Gateway itself, not the controller or its descendants. */
+export async function readGatewayResources(
+  child: ChildProcess,
+  options: { initial?: boolean } = {},
+): Promise<GatewayResourceSnapshot> {
+  const reply = await sendGatewayBenchCommand(child, {
+    channel: GATEWAY_PROFILE_CHANNEL,
+    kind: "resource-usage",
+    action: "sample",
+    ...options,
+  });
+  if (!reply.resources || reply.resources.pid !== child.pid) {
+    throw new Error("Gateway did not report resources for the owned child PID");
+  }
+  return reply.resources;
 }
 
 export function measureGatewayCpuUsage(

@@ -562,9 +562,8 @@ describe("supplemental session reconciliation", () => {
           current.updatedAt,
         );
       });
-      const sessions = createTestSessionCapability(
-        createGatewayHarness(createTestGatewayClient(request)).gateway,
-      );
+      const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(gateway);
       const query = { ownerId: "ada", agentId: "main" };
       const unsubscribe = sessions.subscribeList(query, () => {});
       let refresh: Promise<void> | undefined;
@@ -586,14 +585,16 @@ describe("supplemental session reconciliation", () => {
           expect(reconcile(accepted)).toBe(true);
           expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(accepted);
           if (permission !== undefined) {
-            expect(
-              sessions.reconcileChanged({
+            emitEvent({
+              type: "event",
+              event: "sessions.changed",
+              payload: {
                 key,
                 sessionId: initial.sessionId,
                 updatedAt: 30,
                 permissionMode: permission,
-              }).applied,
-            ).toBe(true);
+              },
+            });
             expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(
               permission ?? undefined,
             );
@@ -630,11 +631,15 @@ describe("supplemental session reconciliation", () => {
             );
           }
         } else if (scenario === "deletion") {
-          sessions.reconcileChanged({
-            key,
-            sessionId: initial.sessionId,
-            agentId: "main",
-            reason: "delete",
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
+              key,
+              sessionId: initial.sessionId,
+              agentId: "main",
+              reason: "delete",
+            },
           });
           expect(reconcile(accepted)).toBe(false);
           expect(sessions.state.result?.sessions).toEqual([]);
@@ -698,7 +703,7 @@ describe("supplemental session reconciliation", () => {
       current = { ...current, updatedAt: 30, label: "Current child" };
       await readDescription();
       request.mockClear();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "sessions.list",
@@ -718,7 +723,7 @@ describe("supplemental session reconciliation", () => {
         model: "gpt-5.5",
         contextTokens: 128_000,
       });
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).not.toHaveBeenCalled();
       expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
     } finally {

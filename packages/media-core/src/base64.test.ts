@@ -1,5 +1,12 @@
+import { getHeapStatistics } from "node:v8";
 import { describe, expect, it } from "vitest";
 import { canonicalizeBase64, estimateBase64DecodedBytes, isValidBase64 } from "./base64.js";
+
+function usedMemoryBytes(): number {
+  // Bun's process.memoryUsage().heapUsed is sampled at the last collection.
+  const { used_heap_size, external_memory } = getHeapStatistics();
+  return used_heap_size + external_memory;
+}
 
 describe("base64 helpers", () => {
   it("canonicalizeBase64 validates large payloads without cons-string overflow", () => {
@@ -15,11 +22,10 @@ describe("base64 helpers", () => {
     // The threshold is deliberately generous; the bounded-buffer implementation
     // returns already-canonical input unchanged.
     const encoded = Buffer.alloc(16 * 1024 * 1024, 0xab).toString("base64");
-    const before = process.memoryUsage().heapUsed;
-
-    expect(canonicalizeBase64(encoded)).toBe(encoded);
-
-    const delta = process.memoryUsage().heapUsed - before;
+    const before = usedMemoryBytes();
+    const actual = canonicalizeBase64(encoded);
+    const delta = usedMemoryBytes() - before;
+    expect(actual).toBe(encoded);
     expect(delta).toBeLessThan(100 * 1024 * 1024);
   });
 
@@ -31,23 +37,15 @@ describe("base64 helpers", () => {
   });
 
   it("canonicalizeBase64 handles one whitespace per character without heap blow-up", () => {
-    // Worst case for any run-collecting cleanup strategy: every data character
-    // is its own whitespace-delimited run (2.7 M runs here). The whole cleanup
-    // must stay bounded by the input length — one output buffer — not by the
-    // number of runs.
+    // Keep the same coarse memory budget when every data character is its own
+    // whitespace-delimited run (2.7 M runs here).
     const encoded = Buffer.alloc(2 * 1024 * 1024, 0xab).toString("base64");
-    const shredded = encoded.split("").join("\n");
-    // heapUsed catches per-run JS objects (slices, rope nodes); arrayBuffers
-    // catches Buffer-backed strategies — bound both.
-    const usedBytes = () => {
-      const usage = process.memoryUsage();
-      return usage.heapUsed + usage.arrayBuffers;
-    };
-    const before = usedBytes();
-
-    expect(canonicalizeBase64(shredded)).toBe(encoded);
-
-    const delta = usedBytes() - before;
+    // Repeat the 0xab encoding without leaving a multi-million-entry split array for GC.
+    const shredded = "q\n6\nu\nr\n".repeat(Math.floor((2 * 1024 * 1024) / 3)) + "q\n6\ns\n=";
+    const before = usedMemoryBytes();
+    const actual = canonicalizeBase64(shredded);
+    const delta = usedMemoryBytes() - before;
+    expect(actual).toBe(encoded);
     expect(delta).toBeLessThan(64 * 1024 * 1024);
   });
 

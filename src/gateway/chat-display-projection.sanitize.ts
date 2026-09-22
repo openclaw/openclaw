@@ -191,21 +191,36 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
     truncated ||= projectedDetails.truncated;
   }
-  if (typeof entry.text === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.text, maxChars);
-      entry.text = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
+  if (preserveExactToolPayload && Array.isArray(entry.content)) {
+    // Some transcripts carry both nested output blocks and their joined text.
+    // Keep one representation, and apply the same media privacy rules recursively.
+    const text = entry.content
+      .flatMap((item) => {
+        const value = readRecord(item)?.text;
+        return typeof value === "string" ? [value] : [];
+      })
+      .join("\n");
+    if (entry.text === text) {
+      delete entry.text;
+      changed = true;
     }
+    const content = entry.content.map((item) =>
+      sanitizeChatHistoryContentBlock(item, { preserveExactToolPayload: true, maxChars }),
+    );
+    if (content.some((item) => item.changed)) {
+      entry.content = content.map((item) => item.block);
+      changed = true;
+    }
+    truncated ||= content.some((item) => item.truncated);
   }
-  if (typeof entry.content === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.content, maxChars);
-      entry.content = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
+  for (const field of ["text", "content"] as const) {
+    if (typeof entry[field] !== "string") {
+      continue;
     }
+    const res = truncateChatHistoryText(entry[field], maxChars, preserveExactToolPayload);
+    entry[field] = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   }
   if (typeof entry.partialJson === "string" && !preserveExactToolPayload) {
     const res = truncateChatHistoryText(entry.partialJson, maxChars);
@@ -498,14 +513,10 @@ export function sanitizeChatHistoryMessage(
         )
       : entry.content;
     changed ||= controlStripped !== entry.content;
-    if (preserveExactToolPayload) {
-      entry.content = controlStripped;
-    } else {
-      const res = truncateChatHistoryText(controlStripped, maxChars);
-      entry.content = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
-    }
+    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    entry.content = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   } else if (Array.isArray(entry.content)) {
     const content = entry.content;
     const commentary = readRecord(entry.openclawStreamFallback)?.source === "segment";
@@ -581,14 +592,10 @@ export function sanitizeChatHistoryMessage(
         )
       : entry.text;
     changed ||= controlStripped !== entry.text;
-    if (preserveExactToolPayload) {
-      entry.text = controlStripped;
-    } else {
-      const res = truncateChatHistoryText(controlStripped, maxChars);
-      entry.text = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
-    }
+    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    entry.text = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   }
 
   if (truncated) {

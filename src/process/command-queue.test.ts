@@ -530,7 +530,7 @@ describe("command queue", () => {
     expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     expect(task2Ran).toBe(false);
 
-    // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
+    // Simulate SIGUSR2: reset all lanes. Queued work (task2) should be
     // drained immediately — no fresh enqueue needed.
     resetAllLanes();
 

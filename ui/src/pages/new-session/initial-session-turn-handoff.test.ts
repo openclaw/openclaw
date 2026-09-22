@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "../chat/attachment-payload-store.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { completeInitialSessionTurn } from "./initial-session-turn-handoff.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
@@ -120,6 +125,45 @@ describe.each(["started", "rejected"] as const)("%s first-turn publication", (st
 });
 
 describe("retained launcher rejection", () => {
+  it("retains destination image bytes independently of the launcher", async () => {
+    const { context } = createDraftFixture();
+    const client = context.gateway.snapshot.client!;
+    const attachment = registerChatAttachmentPayload({
+      attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
+      dataUrl: "data:image/png;base64,aW1hZ2U=",
+      file: new File(["image"], "image.png", { type: "image/png" }),
+    });
+    const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
+    const clearDraft = vi.fn(async () => {});
+    const onRejectedPrompt = vi.fn();
+    onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
+    await completeInitialSessionTurn({
+      context,
+      client,
+      agentId: "main",
+      result: {
+        key: "agent:main:dashboard:rejected-image",
+        initialRun: { status: "rejected", error: "Rejected image" },
+      },
+      turn: { text: "", attachments: [attachment], createdAt: 1 },
+      instant: undefined,
+      navigation: new StartedSessionNavigation(),
+      isCurrent: () => true,
+      clearDraft,
+      completeInBackground: () => true,
+      finishNavigation: vi.fn(),
+      onRejectedPrompt,
+    });
+    const destination = retain.mock.calls[0]![0].attachments;
+    expect(destination).toHaveLength(1);
+    expect(destination[0]!.id).not.toBe(attachment.id);
+    expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
+    releaseChatAttachmentPayloads([attachment]);
+    expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(clearDraft).not.toHaveBeenCalled();
+    expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith("Rejected image");
+  });
+
   it.each([true, false])(
     "publishes rejected-prompt recovery only to its current owner (%s)",
     async (current) => {

@@ -51,10 +51,10 @@ import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-ad
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
@@ -73,7 +73,11 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import {
+  prepareInternalGetReplyOptions,
+  withExtractedFileImages,
+  type InternalGetReplyOptions,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -84,6 +88,7 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
+  classifyHeartbeatPendingFinalDelivery,
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery-state.js";
@@ -105,17 +110,6 @@ import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
-
-function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
-  const stripped = stripHeartbeatToken(text, {
-    mode: "heartbeat",
-    maxAckChars: ackMaxChars,
-  });
-  return {
-    shouldClear: stripped.shouldSkip,
-    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
-  };
-}
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
@@ -258,19 +252,6 @@ function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, stri
   );
 }
 
-function withExtractedFileImages(
-  opts: InternalGetReplyOptions | undefined,
-  extractedFileImages: ExtractedFileImage[] | undefined,
-): InternalGetReplyOptions | undefined {
-  if (!extractedFileImages || extractedFileImages.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
-  };
-}
-
 async function applyLinkUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -297,9 +278,10 @@ async function applyLinkUnderstandingIfNeeded(params: {
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const opts = prepareInternalGetReplyOptions(options);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined
@@ -654,6 +636,7 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
+            providerReviewAcknowledgment: internalOptsWithSkillFilter?.providerReviewAcknowledgment,
             ctx: finalized,
             cfg,
             commandAuthorized,

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { vi } from "vitest";
 
@@ -35,6 +36,7 @@ export function createFeishuRuntimeMockModule(): {
         }),
     },
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       debounce: {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({

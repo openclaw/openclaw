@@ -55,6 +55,7 @@ export function createCodexSteeringQueue(params: {
   prepareMessage: (
     text: string,
     options: CodexSteeringQueueOptions,
+    assertCurrent: () => void,
   ) => Promise<{
     input: CodexUserInput[];
     message: AgentMessage;
@@ -219,7 +220,10 @@ export function createCodexSteeringQueue(params: {
         try {
           prepared.push(
             Object.assign(item, {
-              prepared: await params.prepareMessage(item.text, item),
+              prepared: await params.prepareMessage(item.text, item, () => {
+                assertActive();
+                item.assertCurrent();
+              }),
             }),
           );
         } catch (error) {

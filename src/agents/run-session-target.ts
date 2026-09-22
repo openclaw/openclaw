@@ -18,19 +18,7 @@ import {
   resolveExistingSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
 } from "./command/session.js";
-
-/** Identifies a run transcript target without naming the current storage artifact. */
-export type AgentRunSessionTarget = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  threadId?: string | number;
-  /** Internal admission fence paired with sessionId for run-owned transcript writes. */
-  expectedLifecycleRevision?: string;
-  /** Internal durable writer claim installed after session-lane admission. */
-  expectedWriterRunId?: string;
-};
+import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
 /** Canonical SQLite target resolved from the storage-neutral run identity. */
 type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;

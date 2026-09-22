@@ -1,9 +1,14 @@
 // Shared reply dispatcher type contracts for visible and message-tool delivery.
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { ReplyPayload } from "../types.js";
 import type { NormalizeReplyOutcome } from "./normalize-reply-skip-reason.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
+
+export type ReplyDispatchOperation =
+  | { kind: "raw"; payload: ReplyPayload }
+  | { kind: "prepared"; plan: OutboundPayloadPlan };
 
 export type ReplyDispatchSettledCounts = {
   delivered: number;
@@ -69,6 +74,8 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
+  /** Preserve prepared text and fields through dispatch without raw directive parsing. */
+  sendPreparedReply?: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) => boolean;
   appendBeforeDeliver?: (
     hook: ReplyDispatchBeforeDeliver,
     options?: ReplyDispatchBeforeDeliverOptions,

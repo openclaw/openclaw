@@ -46,7 +46,6 @@ import {
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
   resolveActiveSidebarAgent,
-  resolveSidebarHomeAttention,
   resolveLatestSidebarAgentSession,
   resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
@@ -127,7 +126,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   sessionPeopleSortAvailable(): boolean {
-    return this.sessionPeopleSortCapability() === true;
+    return this.sessionPeopleSortCapability() !== false;
   }
 
   effectiveSessionSortMode(): SidebarSessionSortMode {
@@ -251,6 +250,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   protected override willUpdate(changedProperties: PropertyValues<this>) {
+    this.resolveSessionAttention = this.attention.createResolver();
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
       this.sidebarMenus.closeSessionSortMenu();
     }
@@ -343,7 +343,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
       outboxAttentionCountForSessionKey: this.outboxAttentionCountForSession,
       hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
-      resolveAttention: (row) => this.attention.resolveSessionAttention(row),
+      resolveAttention: this.resolveSessionAttention,
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,
     });
     if (this.groupedSessionSource) {
@@ -699,7 +699,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       agentIds: roster?.agentIds ?? [selected],
       result: roster?.result,
       compareSessions: createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
-      knownSessionAttention: this.attention.knownSessionAttention(),
+      resolveAttention: this.resolveSessionAttention,
     });
     return this.applySessionOwnerFilter(projected, this.selectedAgentSessionResult()?.owners);
   }
@@ -723,9 +723,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
-  resolveHomeSessionAttention(sessionKey: string, row: GatewaySessionRow | null) {
-    return resolveSidebarHomeAttention(this.attention, sessionKey, row);
-  }
+  resolveSessionAttention = this.attention.createResolver();
 
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession {
     return projectSidebarHomeSession({
@@ -734,7 +732,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       agentId,
       result: this.groupedSessionSource?.result,
       navigationState: this.getSessionNavigationState(),
-      knownSessionAttention: this.attention.knownSessionAttention(),
+      resolveAttention: this.resolveSessionAttention,
     });
   }
 

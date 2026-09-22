@@ -57,6 +57,7 @@ export type AuthorizationOperation = {
 
 export type GitHubIdentityHost = {
   requestUpdate: () => void;
+  authorizationSucceeded?: () => void;
   runExternalMutation?: RuntimeConfigCapability["runExternalMutation"];
 };
 

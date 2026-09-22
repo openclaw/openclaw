@@ -38,7 +38,9 @@ For `message(action=send)`, use `media` for one attachment or `attachments: [{me
 In automatic visible-reply mode, final assistant replies can still attach media
 with a plain standalone `MEDIA:` line. WebChat also supports the committed
 commentary compatibility path described below. The parser only recognizes lines
-whose trimmed text starts with `MEDIA:` outside Markdown wrappers and code fences.
+whose trimmed text starts with `MEDIA:` outside Markdown wrappers and fenced or
+indented code blocks. Up to three leading spaces are accepted; four-space or tab
+indentation follows CommonMark code-block rules.
 
 Valid automatic-mode assistant output:
 

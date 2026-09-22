@@ -53,7 +53,7 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
-  runReceipt?: import("../store/run-receipt-store.js").CronRunReceiptHandle;
+  runReceipt?: import("../store/run-receipt.types.js").CronRunReceiptHandle;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 };
 
@@ -306,7 +306,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         ...executionIdentity,
         onPostAdmission: (context) => {
           bindCronJobAdmittedRun(opts?.activeJobMarker, context, runAbortController.signal);
-          executionIdentity.onPostAdmission?.(context);
+          return executionIdentity.onPostAdmission?.(context);
         },
       },
     };

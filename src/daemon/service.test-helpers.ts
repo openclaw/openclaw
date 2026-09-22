@@ -3,6 +3,19 @@ import os from "node:os";
 import { vi } from "vitest";
 import type { GatewayService } from "./service.js";
 
+export function pathLikeToString(pathname: unknown): string {
+  if (typeof pathname === "string") {
+    return pathname;
+  }
+  if (pathname instanceof URL) {
+    return pathname.pathname;
+  }
+  if (pathname instanceof Uint8Array) {
+    return Buffer.from(pathname).toString("utf8");
+  }
+  return "";
+}
+
 // Keep OS-account fixtures out of the SDK-exposed spy barrel: node:os mock factories
 // import that barrel, so importing node:os there would deadlock test collection.
 /** Keep service policy real while giving isolated HOME scopes an OS account identity. */

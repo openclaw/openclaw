@@ -35,7 +35,10 @@ function bindChannelRuntime(
   context: Parameters<typeof startNostrGatewayAccount>[0],
 ): Parameters<typeof startNostrGatewayAccount>[0] {
   context.channelRuntime = {
-    inbound: { buildContext: buildChannelInboundEventContext },
+    inbound: {
+      ...createPluginRuntimeMock().channel.inbound,
+      buildContext: buildChannelInboundEventContext,
+    },
   } as never;
   return context;
 }

@@ -109,7 +109,7 @@ it.each([false, true])(
           activeRunIds: [],
           status: "done",
         });
-        const catchUpDelay = round === 0 ? 200 : 1_000;
+        const catchUpDelay = 5_000;
         await vi.advanceTimersByTimeAsync(catchUpDelay - 1);
         expect(request).toHaveBeenCalledTimes((refresh ? 2 : 1) + round);
         await vi.advanceTimersByTimeAsync(1);
@@ -141,7 +141,7 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
     expect(controller.result?.sessions).toEqual([]);
     expect(controller.incomplete).toBe(true);
     expect(controller.loading).toBe(true);
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(controller.error).toBe("Unavailable");
     expect(controller.loading).toBe(false);
     void controller.load(client, "current", "retry");
@@ -192,7 +192,7 @@ it.each([false, true])(
       }
       const terminalPublication = publications.length;
       stale.resolve(listing([active]));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(controller.result?.sessions).toEqual([]);
       expect(
         publications
@@ -267,7 +267,7 @@ it.each([false, true])(
           .slice(terminalPublication)
           .some((rows) => rows?.some((row) => row.activeRunIds?.includes("release-run"))),
       ).toBe(false);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
       controller.hostDisconnected();
@@ -314,7 +314,7 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
       stale.resolve(listing([active]));
       await vi.advanceTimersByTimeAsync(0);
       expect(controller.result?.sessions).toEqual([replacement]);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(controller.result?.sessions).toEqual([replacement]);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {

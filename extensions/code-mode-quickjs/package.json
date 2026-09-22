@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/code-mode-quickjs",
+  "version": "2026.9.5",
+  "private": true,
+  "description": "QuickJS executor for OpenClaw Code Mode",
+  "type": "module",
+  "dependencies": {
+    "quickjs-wasi": "3.6.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "build": {
+      "workerEntries": ["./src/code-mode.worker.ts"],
+      "staticAssets": [
+        {
+          "source": "./node_modules/quickjs-wasi/quickjs.wasm",
+          "output": "assets/quickjs.wasm"
+        },
+        {
+          "source": "./node_modules/quickjs-wasi/extensions/encoding/encoding.so",
+          "output": "assets/encoding.so"
+        }
+      ]
+    }
+  }
+}

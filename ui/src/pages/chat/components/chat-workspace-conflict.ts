@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { handleCopyButton, renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -11,13 +12,16 @@ import {
 } from "../workspace-conflict.ts";
 
 function renderConflictCopyAction(text: string, label: string) {
-  return html`<button
-    class="btn btn--sm chat-copy-btn"
-    type="button"
-    @click=${(event: Event) => void handleCopyButton(event, text, label)}
-  >
-    <span data-copy-label>${label}</span>
-  </button>`;
+  return keyed(
+    text,
+    html`<button
+      class="btn btn--sm chat-copy-btn"
+      type="button"
+      @click=${(event: Event) => void handleCopyButton(event, text, label)}
+    >
+      <span data-copy-label>${label}</span>
+    </button>`,
+  );
 }
 
 export function renderWorkspaceConflictNotice(props: {

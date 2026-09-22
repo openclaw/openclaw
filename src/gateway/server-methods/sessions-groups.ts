@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ensureSessionGroupCatalog } from "../session-group-catalog.js";
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
@@ -22,7 +23,6 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
-  resolveSessionGroupMutationTargetsByName,
   SessionGroupNotEmptyError,
   SessionGroupNotFoundError,
   updateSessionGroupDefaults,
@@ -43,6 +43,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    await ensureSessionGroupCatalog();
     respond(
       true,
       { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
@@ -60,10 +61,11 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const defaults = filterMutableSessionGroupRecords({
-      cfg: context.getRuntimeConfig(),
+    await ensureSessionGroupCatalog();
+    const defaults = await filterMutableSessionGroupRecords({
       client,
-      records: listSessionGroupDefaults(),
+      context,
+      records: () => listSessionGroupDefaults(),
     });
     respond(true, { defaults }, undefined);
   },
@@ -74,7 +76,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const groups = putSessionGroups({
+      const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
         names: params.names,
         sectionOrder: params.sectionOrder,
@@ -180,18 +182,26 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       }
       cwd = containment.path;
     }
-    sessionMutationAuthorization?.assertCurrent();
-    if (sessionMutationAuthorization) {
-      const currentTargets =
-        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).get(name) ?? [];
-      for (const target of currentTargets) {
-        sessionMutationAuthorization.assertTargetCurrent(target);
+    const assertCurrent = (
+      currentTargets?: readonly { sessionKey: string; agentId?: string }[],
+    ) => {
+      sessionMutationAuthorization?.assertCurrent();
+      if (sessionMutationAuthorization) {
+        for (const target of currentTargets ?? []) {
+          sessionMutationAuthorization.assertTargetCurrent(target);
+        }
       }
-    }
-    const defaults = updateSessionGroupDefaults(name, {
-      cwd,
-      worktree: params.worktree,
-    });
+    };
+    const defaults = await updateSessionGroupDefaults(
+      name,
+      {
+        cwd,
+        worktree: params.worktree,
+      },
+      process.env,
+      assertCurrent,
+      context.getRuntimeConfig(),
+    );
     if (!defaults) {
       respond(
         false,
@@ -204,10 +214,10 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        defaults: filterMutableSessionGroupRecords({
-          cfg: context.getRuntimeConfig(),
+        defaults: await filterMutableSessionGroupRecords({
           client,
-          records: defaults,
+          context,
+          records: () => listSessionGroupDefaults(),
         }),
       },
       undefined,

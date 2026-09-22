@@ -60,6 +60,13 @@ jobs:
           mkdir -p .opengrep-out
           scripts/run-opengrep.sh --sarif --error
 
+      - name: Setup supported Node runtime
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Prepare SARIF for GitHub Code Scanning
         id: github-sarif
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
@@ -68,7 +75,7 @@ jobs:
           > .opengrep-out/precise.github.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         # Never publish a partial conversion; the raw audit artifact stays intact.
         if: always() && steps.github-sarif.outcome == 'success'
         with:

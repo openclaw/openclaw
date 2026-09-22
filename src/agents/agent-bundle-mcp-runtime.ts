@@ -35,7 +35,7 @@ import type {
 import {
   connectMcpClient,
   disposeMcpClient,
-  isStatefulMcpHttpSessionExpired,
+  isMcpHttpSessionExpired,
   McpClientConnectTimeoutError,
 } from "./mcp-client-lifecycle.js";
 import {
@@ -644,7 +644,7 @@ function createServerMcpRuntime(
     } catch (error) {
       // A stateful server uses HTTP 404 to invalidate an expired MCP session.
       // Reinitialize a fresh client, but never replay a possibly mutating call.
-      const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
+      const sessionExpired = isMcpHttpSessionExpired(session, error);
       let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
@@ -936,7 +936,7 @@ function createServerMcpRuntime(
             message,
           },
         ];
-        if (!session.connected) {
+        if (!session.connected || isMcpHttpSessionExpired(session, error)) {
           // A close is terminal for every catalog generation sharing this
           // session. The identity guard preserves any newer replacement.
           await retireSessionIfCurrent(session);

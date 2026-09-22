@@ -27,6 +27,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveConfigApiKey",
   "resolveThinkingProfile",
   "resolveToolSearchMode",
+  "resolveNativeWebSearch",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",

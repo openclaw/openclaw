@@ -9,6 +9,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
@@ -133,6 +134,11 @@ export type SubagentManagerOptions = {
   resumedRuns: Set<string>;
   persist(...runIds: string[]): void;
   persistOrThrow(...runIds: string[]): void;
+  persistAsyncOrThrow(
+    context: OpenClawStateWorkerContext,
+    callbacks: { assertCurrent: () => void; onCommitted?: () => void },
+    ...runIds: string[]
+  ): Promise<void>;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   ensureListener(): void;

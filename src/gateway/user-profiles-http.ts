@@ -13,12 +13,11 @@ import {
   getUserProfileListItem,
   UserProfileNotFoundError,
 } from "../state/user-profiles.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -284,12 +283,8 @@ export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     fetchImpl?: typeof globalThis.fetch;
     nowMs?: () => number;
   },
@@ -299,7 +294,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return false;
   }
   const method = req.method;
-  const cfg = getRuntimeConfig();
+  const cfg = opts.cfg ?? getRuntimeConfig();
   const corsAllowed = setAvatarCorsHeaders(req, res, cfg);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
@@ -320,17 +315,18 @@ export async function handleUserProfileAvatarHttpRequest(
   // Personal avatars share the Control UI read boundary: paired device tokens
   // must retain their approved scopes rather than be treated as shared secrets.
   const authResult = await authorizeControlUiReadRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
+    cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     requiredOperatorMethod: "users.list",
   });
   if (!authResult) {
     return true;
   }
+  authResult.assertCurrent();
   // Avatars render as plain <img> against a stable, unversioned route, so a
   // heuristically-cached 404 miss would otherwise hide a later uploaded image.
   // Misses must never be cached; the 200 path overrides this with must-revalidate.
@@ -359,6 +355,7 @@ export async function handleUserProfileAvatarHttpRequest(
     (profileId === GATEWAY_OWNER_PROFILE_ID && profile?.id === profileId && !profile.mergedInto
       ? await resolveHostAccountAvatar()
       : null);
+  authResult.assertCurrent();
   if (avatar) {
     sendAvatar(
       req,
@@ -396,6 +393,7 @@ export async function handleUserProfileAvatarHttpRequest(
         waiterSignal,
       );
       waiterSignal.throwIfAborted();
+      authResult.assertCurrent();
       if (result.kind === "hit") {
         sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
         return true;
@@ -413,6 +411,7 @@ export async function handleUserProfileAvatarHttpRequest(
   if (clientAbort.signal.aborted) {
     return true;
   }
+  authResult.assertCurrent();
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },

@@ -36,7 +36,7 @@ import {
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
 
-it("awaits title application only with authoritative identity and an enabled reload owner", () => {
+it("awaits transcript additions and title edits only when the reload owner can apply them", () => {
   const previousConfig: OpenClawConfig = {
     transcripts: { autoStart: [{ providerId: "fixture", sessionId: "daily", title: "Before" }] },
   };
@@ -45,7 +45,7 @@ it("awaits title application only with authoritative identity and an enabled rel
   };
   const params = { previousConfig, nextConfig, changedPaths: ["transcripts.autoStart"] };
   expect(shouldAwaitGatewayConfigApplication(params)).toBe(true);
-  expect(shouldAwaitGatewayConfigApplication({ ...params, previousConfig: {} })).toBe(false);
+  expect(shouldAwaitGatewayConfigApplication({ ...params, previousConfig: {} })).toBe(true);
   expect(
     shouldAwaitGatewayConfigApplication({
       ...params,

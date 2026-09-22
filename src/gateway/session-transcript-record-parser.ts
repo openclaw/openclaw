@@ -74,6 +74,7 @@ function extractJsonStringFieldSuffix(source: string, field: string): string | u
 
 function recoverOversizedMultimodalTranscriptRecord(
   line: string,
+  byteLength: number,
 ): Record<string, unknown> | undefined {
   const markerPrefix = "__openclaw_omitted_image_";
   if (line.includes(markerPrefix)) {
@@ -140,7 +141,7 @@ function recoverOversizedMultimodalTranscriptRecord(
     ): Record<string, unknown> | undefined => {
       const bytes = selected.reduce(
         (remaining, payload) => remaining - (payload.end - payload.start - payload.marker.length),
-        Buffer.byteLength(line, "utf8"),
+        byteLength,
       );
       if (selected.length === 0 || bytes > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
         return undefined;
@@ -235,8 +236,11 @@ function recoverOversizedMultimodalTranscriptRecord(
 }
 
 export function parseTranscriptRecord(line: string): TranscriptRecord | null {
-  const oversized = isOversizedTranscriptLine(line);
-  const recoveredRecord = oversized ? recoverOversizedMultimodalTranscriptRecord(line) : undefined;
+  const byteLength = Buffer.byteLength(line, "utf8");
+  const oversized = byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+  const recoveredRecord = oversized
+    ? recoverOversizedMultimodalTranscriptRecord(line, byteLength)
+    : undefined;
   if (!oversized || recoveredRecord) {
     try {
       const record = recoveredRecord ?? (JSON.parse(line) as unknown);
@@ -245,7 +249,7 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
       }
       const id = readNonBlankStringPreservingWhitespace(record.id);
       return {
-        byteLength: Buffer.byteLength(line, "utf8"),
+        byteLength,
         ...(id ? { id } : {}),
         ...(recoveredRecord ? { recoveredImageData: true as const } : {}),
         record,
@@ -280,7 +284,7 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
     },
   };
   return {
-    byteLength: Buffer.byteLength(line, "utf8"),
+    byteLength,
     ...(id ? { id } : {}),
     record,
   };

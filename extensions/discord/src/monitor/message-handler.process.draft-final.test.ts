@@ -9,7 +9,6 @@ import {
   createNoQueuedDispatchResult,
   deliverDiscordReply,
   dispatchInboundMessageForTest as dispatchInboundMessage,
-  editMessageDiscord,
   getGlobalHookRunnerForTest as getGlobalHookRunner,
   getLastDispatchReplyOptions,
   getSessionEntry,
@@ -129,23 +128,7 @@ describe("processDiscordMessage provider preview hook safety", () => {
 describe("processDiscordMessage draft streaming final delivery", () => {
   it("sends a fresh final message when final fits one chunk", async () => {
     await runSingleChunkFinalScenario({ streaming: { mode: "partial" }, maxLinesPerMessage: 5 });
-    expect(editMessageDiscord).not.toHaveBeenCalled();
     expectFreshFinalText("Hello\nWorld");
-  });
-
-  it("retries stale preview cleanup at teardown after fresh final delivery", async () => {
-    const draftStream = createMockDraftStream();
-    draftStream.clear.mockImplementationOnce(async () => {});
-    createDiscordDraftStream.mockReturnValueOnce(draftStream);
-
-    await runSingleChunkFinalScenario({
-      streaming: { mode: "partial" },
-      maxLinesPerMessage: 5,
-    });
-
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(2);
-    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("preserves a delivered final when its first stale-preview cleanup fails", async () => {
@@ -170,57 +153,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expectFreshFinalText("Hello\nWorld");
   });
 
-  it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-      cfg: {
-        channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers a fresh message instead of a preview edit for a literal user mention in the final reply", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "On it <@1485891428809707651>" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("sends a fresh final message when an unaliased handle stays plain text", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
   it("sends a fresh final message for broadcast mentions like @everyone", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "heads up @everyone" });
@@ -234,7 +166,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
       onPlatformSendDispatch: expect.any(Function),
@@ -257,7 +188,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
     });
@@ -267,7 +197,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
     expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFreshFinalText("Hello\nWorld");
   });
@@ -300,8 +229,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     expect(draftStream.update).not.toHaveBeenCalled();
     expectFreshFinalText("done");
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.deleteCurrentMessage).not.toHaveBeenCalled();
   });
 
@@ -392,9 +319,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Working\n\n🛠️ Exec: running\n• exec done"]);
     expectFinalAnswerText("done");
-    // The working draft deletes once the receipt-bearing final landed.
-    expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.messageId()).toBeUndefined();
   });
 
@@ -657,7 +581,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expectFinalAnswerText("done");
   });
 
-  it("streams Discord tool progress for coding-profile message-tool-only guild replies", async () => {
+  it("retires coding-profile guild progress only after a confirmed message-tool reply", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -674,6 +598,11 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+      await params?.replyOptions?.onObservedReplyDelivery?.();
+      expect(draftStream.messageId()).toBeUndefined();
+      await params?.replyOptions?.onItemEvent?.({ progressText: "late progress" });
+      expect(draftStream.messageId()).toBeUndefined();
       return createNoQueuedDispatchResult();
     });
 
@@ -714,7 +643,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
   it("keeps Discord preview streaming off when explicitly disabled", async () => {
     await runSingleChunkFinalScenario({ streaming: { mode: "off" }, maxLinesPerMessage: 5 });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 });

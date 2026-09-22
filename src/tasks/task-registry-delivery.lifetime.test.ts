@@ -49,12 +49,42 @@ vi.mock("./task-registry-state.js", () => ({
 }));
 vi.mock("./task-registry-mutation.js", () => ({
   updateTask: storage.update,
-  upsertTaskDeliveryState: storage.upsertDelivery,
   getTaskDeliveryState: (taskId: string) => storage.delivery.get(taskId),
 }));
+vi.mock("./task-notification-mutation.async.js", async () => {
+  const { sameTaskRunScope } = await import("./task-registry-records.js");
+  return {
+    captureTaskNotificationMutationOwner: (assertCurrent: () => void) => ({
+      async prepare<T>(consume: () => T): Promise<T> {
+        assertCurrent();
+        return consume();
+      },
+      bindStateChange(task: TaskRecord, eventAt: number) {
+        assertCurrent();
+        const expected = { ...task };
+        return async (): Promise<TaskRecord | null> => {
+          assertCurrent();
+          const current = storage.tasks.get(expected.taskId);
+          if (!current || !sameTaskRunScope(current, expected)) {
+            return null;
+          }
+          const delivery = storage.delivery.get(expected.taskId);
+          storage.upsertDelivery({
+            taskId: expected.taskId,
+            requesterOrigin: delivery?.requesterOrigin,
+            lastNotifiedEventAt: Math.max(delivery?.lastNotifiedEventAt ?? 0, eventAt),
+          });
+          assertCurrent();
+          return storage.update(expected.taskId, { lastEventAt: Date.now() });
+        };
+      },
+    }),
+  };
+});
 vi.mock("./task-flow-runtime-internal.js", () => ({ getTaskFlowById: () => undefined }));
-vi.mock("./task-registry-runtime-loaders.js", () => ({
-  loadTaskRegistryDeliveryRuntime: async () => ({ sendMessage: storage.send }),
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: storage.send,
+  resolveTaskControlUiSessionUrl: () => undefined,
 }));
 vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent: storage.enqueue }));
 vi.mock("../infra/heartbeat-wake.js", () => ({ requestHeartbeat: storage.heartbeat }));
@@ -128,7 +158,7 @@ it.each(["absent", "released"] as const)(
     const caller = await closeCaller(parent);
     const outcomes = await caller.run(() =>
       Promise.allSettled([
-        maybeDeliverTaskStateChangeUpdate(task.taskId, event),
+        maybeDeliverTaskStateChangeUpdate(task, event),
         maybeDeliverTaskTerminalUpdate(task.taskId),
       ]),
     );
@@ -168,7 +198,7 @@ it.each([
     const result = caller.run(() =>
       (kind === "terminal"
         ? maybeDeliverTaskTerminalUpdate(task.taskId)
-        : maybeDeliverTaskStateChangeUpdate(task.taskId, event)
+        : maybeDeliverTaskStateChangeUpdate(task, event)
       ).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),

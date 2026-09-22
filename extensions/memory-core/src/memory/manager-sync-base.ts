@@ -13,6 +13,7 @@ import {
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
   type MemorySource,
+  type MemoryWorkspaceFiles,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -38,6 +39,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MEMORY_INDEX_META_KEY, readMemoryIndexMetadata } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
@@ -69,7 +71,6 @@ export type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
 };
 
-export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 const META_KEY = MEMORY_INDEX_META_KEY;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
@@ -77,6 +78,9 @@ const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext {
+  protected readonly memoryFiles?: MemoryWorkspaceFiles;
+  protected memoryWatchSubscription?: AbortController;
+  protected memoryWatchUnavailable = false;
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
@@ -157,12 +161,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }): Promise<MemorySourceSyncPlan>;
 
   protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
+    this.memoryFiles?.assertCurrent();
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
     this.activeManagerOperations += 1;
     try {
-      return await this.withPublishedDatabase(run);
+      const result = await this.withPublishedDatabase(run);
+      this.memoryFiles?.assertCurrent();
+      return result;
     } finally {
       this.activeManagerOperations -= 1;
       if (this.activeManagerOperations === 0) {
@@ -350,6 +357,17 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return row?.found === 1;
   }
 
+  protected resolveConfiguredIndexIdentity() {
+    if (this.settings.provider === "none") {
+      return undefined;
+    }
+    return resolveEmbeddingProviderIndexIdentity({
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+    });
+  }
+
   protected resolveCurrentIndexIdentityState(params?: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
@@ -360,11 +378,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     const hasProviderOverride = params && "provider" in params;
     const configuredIndexIdentity =
       !hasProviderOverride && !this.provider && this.settings.provider !== "none"
-        ? resolveEmbeddingProviderIndexIdentity({
-            config: this.cfg,
-            agentDir: resolveAgentDir(this.cfg, this.agentId),
-            ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-          })
+        ? this.resolveConfiguredIndexIdentity()
         : undefined;
     // Dynamic defaults stay unknown until provider initialization. Plain status
     // must not reinterpret an undiscovered semantic model as keyword-only.
@@ -494,8 +508,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       this.markConfiguredSourcesForFullReindex();
       return false;
     }
-    if (this.vector.available !== null) {
-      return this.vector.available;
+    // Child KNN proves capability, but this connection still needs its own extension setup.
+    if (this.vector.available === false) {
+      return false;
     }
     if (!this.vector.enabled) {
       this.vector.available = false;
@@ -546,7 +561,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     });
   }
 
-  private markConfiguredSourcesForFullReindex(): void {
+  protected markConfiguredSourcesForFullReindex(): void {
     // This flag selects the shadow-reindex path even for a sessions-only index;
     // the rebuild itself still filters work through the configured sources.
     this.memoryFullRetryDirty = true;
@@ -625,21 +640,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db
-      .prepare(`SELECT value FROM memory_index_meta WHERE key = ?`)
-      .get(META_KEY) as { value: string } | undefined;
-    if (!row?.value) {
-      this.database.lastMetaSerialized = null;
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
-      this.database.lastMetaSerialized = row.value;
-      return parsed;
-    } catch {
-      this.database.lastMetaSerialized = null;
-      return null;
-    }
+    const { meta, serialized } = readMemoryIndexMetadata(this.db);
+    this.database.lastMetaSerialized = serialized;
+    return meta;
   }
 
   protected writeMeta(meta: MemoryIndexMeta) {

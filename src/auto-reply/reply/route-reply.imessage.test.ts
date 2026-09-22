@@ -9,14 +9,19 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { applyReplyThreading } from "./reply-payloads-base.js";
 import { routeReply } from "./route-reply.js";
 
-const { sendDurableMessageBatchCore } = vi.hoisted(() => ({
+const { sendDurableMessageBatchCore, sendStructuredDurableMessageBatchCore } = vi.hoisted(() => ({
   sendDurableMessageBatchCore:
     vi.fn<typeof import("../../channels/message/runtime.js").sendDurableMessageBatchCore>(),
+  sendStructuredDurableMessageBatchCore:
+    vi.fn<
+      typeof import("../../channels/message/runtime.js").sendStructuredDurableMessageBatchCore
+    >(),
 }));
 
 // Exercise the real router and registered plugin without sending native messages.
 vi.mock("../../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore,
+  sendStructuredDurableMessageBatchCore,
   durableMessageBatchMayHaveReachedRecipient: () => false,
 }));
 

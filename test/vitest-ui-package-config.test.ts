@@ -3,6 +3,7 @@ import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCiTestRuntimeSelections } from "../scripts/lib/ci-test-runtime.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
@@ -27,6 +28,7 @@ type ExpectedTestConfig = ReturnType<typeof loadVitestPerformanceConfig> & {
   pool?: string;
   projects?: unknown[];
   runner?: string;
+  setupFiles?: string[];
   sequence?: { groupOrder?: number };
 };
 
@@ -74,6 +76,68 @@ describe("ui package vitest config", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("partitions runtimes after native UI sharding without changing ownership or dropping files", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("ui-runtime-partition-");
+    const output = path.join(root, "report.json");
+    const selectionsPath = path.join(root, "selections.json");
+    const selections = Object.fromEntries(
+      (["bun-compatible", "dual"] as const).map((policy) => [
+        policy,
+        resolveCiTestRuntimeSelections({ configs: ["ui/vitest.config.ts"] }, policy),
+      ]),
+    );
+    writeFileSync(selectionsPath, JSON.stringify(selections));
+    const result = await runVitestShutdownCommand({
+      args: [
+        fileURLToPath(new URL("./fixtures/vitest-ui-runtime-partition.mjs", import.meta.url)),
+        output,
+        selectionsPath,
+        path.join(root, "include.json"),
+      ],
+      signal,
+      timeoutMs: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      env: {
+        PATH: process.env.PATH,
+        CI: "1",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
+      },
+    });
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(readFileSync(output, "utf8")) as {
+      discovered: string[];
+      rows: Array<{
+        original: string[];
+        selected: Record<string, Array<{ runtime: string; files: string[] }>>;
+      }>;
+      empty: { modules: number; errors: number };
+      emptyDiscoveryAllowed: boolean;
+    };
+    const nodeFiles = new Set([
+      "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+      "ui/src/pages/usage/usage-page-details.test.ts",
+    ]);
+    expect(report.discovered.length).toBeGreaterThan(1000);
+    expect(report.rows).toHaveLength(4);
+    expect(report.empty).toEqual({ modules: 0, errors: 0 });
+    expect(report.emptyDiscoveryAllowed).toBe(false);
+    expect(
+      report.rows
+        .slice(1)
+        .flatMap((row) => row.original)
+        .toSorted(),
+    ).toEqual(report.discovered);
+    for (const row of report.rows) {
+      const compatible = row.selected["bun-compatible"]!;
+      expect(compatible.map((selection) => selection.runtime)).toEqual(["node", "bun"]);
+      expect(compatible[0]!.files).toEqual(row.original.filter((file) => nodeFiles.has(file)));
+      expect(compatible[1]!.files).toEqual(row.original.filter((file) => !nodeFiles.has(file)));
+      expect(compatible.flatMap((selection) => selection.files).toSorted()).toEqual(row.original);
+      expect(row.selected.dual).toEqual([{ runtime: "node", files: row.original }, compatible[1]]);
+    }
   });
 
   it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
@@ -289,7 +353,7 @@ describe("ui package vitest config", () => {
     expect(selected.toSorted()).toEqual(expected);
   });
 
-  it("keeps the standalone ui package on thread workers without broad isolation", () => {
+  it("keeps the standalone ui package on thread workers without broad isolation", async () => {
     const testConfig = requireTestConfig(uiConfig);
 
     expect(testConfig.pool).toBe("threads");
@@ -305,10 +369,19 @@ describe("ui package vitest config", () => {
       expect(projectTestConfig.pool).toBe("threads");
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
+      expect(projectTestConfig.setupFiles).toEqual(
+        projectTestConfig.browser?.enabled
+          ? ["./src/test-helpers/lit-warnings.setup.ts"]
+          : [
+              "./src/test-helpers/bun-css-tokenizer.setup.ts",
+              "./src/test-helpers/lit-warnings.setup.ts",
+            ],
+      );
       expect(projectTestConfig.isolate).toBe(
         projectTestConfig.name === "unit-mock-registry" || projectTestConfig.name === "unit-timing",
       );
     }
+    await import("../ui/src/test-helpers/bun-css-tokenizer.setup.ts");
   });
 
   // The invariant, not a snapshot: `unit` shares one module graph and jsdom

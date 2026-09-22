@@ -33,6 +33,7 @@ export type DraftRepositoryState =
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  providerDisplayId?: string;
   trust?: "persistent" | "disposable";
   executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
@@ -129,6 +130,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       const profile = raw as {
         id?: unknown;
         providerId?: unknown;
+        providerDisplayId?: unknown;
         trust?: unknown;
         executionModes?: unknown;
         machines?: unknown;
@@ -149,6 +151,11 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         {
           id,
           providerId,
+          ...(typeof profile.providerDisplayId === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
+          profile.providerDisplayId.trim() === profile.providerDisplayId
+            ? { providerDisplayId: profile.providerDisplayId }
+            : {}),
           trust,
           ...(Object.hasOwn(profile, "executionModes")
             ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }

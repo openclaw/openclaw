@@ -7,7 +7,7 @@
   "dependencies": {
     "imapflow": "2.0.2",
     "mailauth": "5.0.3",
-    "mailparser": "3.9.23"
+    "mailparser": "3.9.26"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

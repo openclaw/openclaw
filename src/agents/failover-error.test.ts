@@ -799,10 +799,9 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
-  it("preserves a selected-profile error code in the auth failover lane", () => {
+  it("keeps local profile absence in auth failover without inventing a provider response", () => {
     const err = coerceToFailoverError(
       Object.assign(new Error("selected profile missing"), {
-        status: 401,
         code: "selected_auth_profile_unavailable",
       }),
       { provider: "openai", model: "gpt-5.6-sol" },
@@ -810,9 +809,11 @@ describe("failover-error", () => {
 
     expect(err).toMatchObject({
       reason: "auth",
-      status: 401,
       code: "selected_auth_profile_unavailable",
+      message: "selected profile missing",
     });
+    expect(err?.status).toBeUndefined();
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
   });
 
   it("permission_error with organization denial stays auth_permanent", () => {
@@ -851,7 +852,7 @@ describe("failover-error", () => {
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
-      code: "selected_auth_profile_unavailable",
+      code: "rate_limit_exceeded",
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
@@ -864,7 +865,7 @@ describe("failover-error", () => {
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
     expect(description.status).toBe(429);
-    expect(description.code).toBe("selected_auth_profile_unavailable");
+    expect(description.code).toBe("rate_limit_exceeded");
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {

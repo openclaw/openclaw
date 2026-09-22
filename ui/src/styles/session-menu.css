@@ -151,3 +151,48 @@ wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-d
     corner-shape: superellipse(1.5);
   }
 }
+
+/* Search and page controls stay usable without mounting an entire directory. */
+.people-menu__search,
+.people-menu__pagination {
+  position: sticky;
+  z-index: 1;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+}
+
+.people-menu__search {
+  top: 0;
+}
+
+.people-menu__search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.people-menu__pagination {
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.people-menu__pagination span {
+  flex: 1;
+}
+
+wa-dropdown-item:has(> .people-menu__search)::part(submenu) {
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

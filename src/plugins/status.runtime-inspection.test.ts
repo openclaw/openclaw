@@ -316,7 +316,7 @@ module.exports = {
       output.push(value);
     });
     const projectionError = new Error("fixture report projection failed");
-    const projection = vi.spyOn(statusSnapshot, "collectPluginCapabilityConsentDiagnostics");
+    const projection = vi.spyOn(statusSnapshot, "projectPluginInstallHealth");
     try {
       await withEnvAsync(
         {
@@ -490,7 +490,7 @@ module.exports = {
       mode: "ready",
       slots: ["memory", "contextEngine"],
     },
-    { source: "npm", kind: undefined, mode: "ready", slots: ["memory"] },
+    { source: "npm", kind: undefined, mode: "ready", slots: ["contextEngine"] },
     { source: "npm", kind: "memory", mode: "disabled", slots: [] },
     { source: "npm", kind: "memory", mode: "requires-config", slots: [] },
   ] as const)("persists first-install slots for $source ($kind, $mode)", async (testCase) => {
@@ -540,7 +540,7 @@ module.exports = {
           );
           fs.writeFileSync(
             path.join(pluginDir, "index.cjs"),
-            `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "memory")}, register() {} };\n`,
+            `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
           );
 
           const next = await persistPluginInstall({
@@ -553,6 +553,7 @@ module.exports = {
             install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
             enable: testCase.mode !== "disabled",
           });
+          expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
 
           const expectedSlots = testCase.slots.length
             ? Object.fromEntries(testCase.slots.map((slot) => [slot, pluginId]))

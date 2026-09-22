@@ -88,7 +88,13 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();
         const dispatch = await gateway.waitForRequest("sessions.dispatch");
-        expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "aws" });
+        expect(dispatch.params).toEqual({
+          key: sessionKey,
+          agentId: "main",
+          profileId: "aws",
+          os: "linux",
+          machineClass: "standard",
+        });
       },
     );
   });

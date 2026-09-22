@@ -180,7 +180,6 @@ function visibleCatalogHosts(
 
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenuOpen: boolean;
   catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (element: Element | undefined) => void;
   subtitle?: string;

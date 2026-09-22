@@ -131,6 +131,7 @@ function createFixture() {
     appendMessage: vi.fn((message) => messages.push(message)),
     buildSessionContext: vi.fn(() => ({ messages: [] })),
     getSessionTarget: vi.fn(() => undefined),
+    getSessionId: () => "active-session",
   };
   const hookRunner = { hasHooks: vi.fn(() => false) };
   const cacheTrace = { recordStage: vi.fn() };

@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import {
@@ -30,15 +36,13 @@ import { failFlow, getTaskFlowById } from "../../../tasks/task-flow-registry.js"
 import { getTaskActivitySnapshot } from "../../../tasks/task-registry-activity.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import type { AgentWaitResult } from "../../run-wait.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDiskOrThrow,
-} from "./subagent-registry-state.js";
+import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 
@@ -47,7 +51,7 @@ const fixture = useSubagentControlFixture();
 it.each(["end", "error"] as const)(
   "keeps a timeout successor running when its exact predecessor owner publishes its first %s terminal",
   async (phase) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const oldWait = createDeferred<AgentWaitResult>();
     const nextWait = createDeferred<AgentWaitResult>();
     const previousSettled = createDeferred();
@@ -61,7 +65,7 @@ it.each(["end", "error"] as const)(
         successorSettled.resolve();
       }
     });
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       return (request.params as { runId: string }).runId === "timeout-predecessor"
         ? await oldWait.promise
@@ -269,7 +273,7 @@ it.each(["end", "error"] as const)(
 it.each(["successor", "task activation", "flow activation"] as const)(
   "restores a terminal predecessor when %s persistence rejects replacement",
   async (rejectedWrite) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const childSessionKey = "agent:main:subagent:rearm-rollback";
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -367,7 +371,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
 );
 
 it("rearms the canonical task and mirrored flow for an interrupted run's successor", async () => {
-  vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+  fixture.announce.mockResolvedValue("delivered");
   const childSessionKey = "agent:main:subagent:interrupted-task";
   const requesterSessionKey = "agent:main:main";
   const storePath = await writeSubagentSessionEntry({
@@ -397,6 +401,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
   ).toBe(1);
   expect(getTaskById(originalTask.taskId)).toMatchObject({ status: "failed", error });
   expect(getTaskFlowById(flowId)?.status).toBe("failed");
+  await settleSubagentRegistryPersistenceWork();
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
 
   const observerSnapshots: Array<{ run?: string; task?: string; flow?: string }> = [];

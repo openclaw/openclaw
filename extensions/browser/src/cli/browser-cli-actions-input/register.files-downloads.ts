@@ -2,7 +2,10 @@
  * Browser CLI file upload, dialog, and download commands.
  */
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveExistingUploadPaths } from "../../browser/paths.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -179,7 +182,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         path: "/hooks/dialog",
         body: {
           accept,
-          promptText: normalizeOptionalString(opts.prompt),
+          promptText: readStringValue(opts.prompt),
           dialogId: normalizeOptionalString(opts.dialogId),
           targetId,
           timeoutMs,

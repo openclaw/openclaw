@@ -18,6 +18,8 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     expectConnectedStatus,
     getSessionEntry,
+    getLastAudioPlayer,
+    lastRealtimeBridgeParams,
     startTranscripts,
     stopTranscripts,
     receiveRecordedSpeech,
@@ -125,6 +127,8 @@ defineDiscordVoiceTests(
       expect(await stopTranscripts()).toMatchObject({ ok: true });
       expectConnectedStatus(manager, "1001");
       expect(getSessionEntry(manager).realtimeLifecycle.status).toBe("active");
+      lastRealtimeBridgeParams().audioSink.sendAudio(Buffer.alloc(24_000));
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
     });
 

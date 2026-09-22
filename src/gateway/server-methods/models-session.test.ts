@@ -150,6 +150,39 @@ const isolated = {
 } as const;
 
 describe("direct session model catalogs", () => {
+  it.each(["missing", "foreign"] as const)(
+    "rejects a saved session with %s ownership before catalog I/O",
+    async (ownership) => {
+      await withOpenClawTestState(isolated, async (state) => {
+        const f = fixture();
+        await state.writeConfig(f.config);
+        const sessionKey = "agent:main:hidden-catalog";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "hidden-catalog-session",
+            updatedAt: 1,
+            ...(ownership === "foreign"
+              ? {
+                  createdActor: {
+                    type: "human" as const,
+                    source: "profile" as const,
+                    id: ensureProfileForEmail("hidden-catalog-owner@example.test").id,
+                  },
+                }
+              : {}),
+          },
+        );
+        await expect(f.request({ sessionKey, view: "configured" })).rejects.toThrow(
+          `Session "${sessionKey}" was not found.`,
+        );
+        expect(f.readPrepared).not.toHaveBeenCalled();
+        expect(f.loadDeferred).not.toHaveBeenCalled();
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      });
+    },
+  );
+
   it("keeps a scoped models.list result across only a committed read acknowledgment", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
@@ -159,6 +192,7 @@ describe("direct session model catalogs", () => {
         sessionId: "catalog-read-marker-session",
         lifecycleRevision: "catalog-read-marker-lifecycle",
         updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: f.person.id },
         lastReadAt: 1,
         label: "catalog-read-marker-label",
         authProfileOverride: f.authProfileId,
@@ -237,6 +271,7 @@ describe("direct session model catalogs", () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "original",
         updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: f.person.id },
         authProfileOverride: f.authProfileId,
         authProfileOverrideSource: "user",
       });
@@ -292,8 +327,16 @@ describe("direct session model catalogs", () => {
         await state.writeConfig(f.config);
         const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
         const other = { ...selected, sessionKey: "agent:main:metadata-other" };
-        await upsertSessionEntryCore(selected, { sessionId: "selected", updatedAt: 1 });
-        await upsertSessionEntryCore(other, { sessionId: "other", updatedAt: 1 });
+        await upsertSessionEntryCore(selected, {
+          sessionId: "selected",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: f.person.id },
+        });
+        await upsertSessionEntryCore(other, {
+          sessionId: "other",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: f.person.id },
+        });
         const entered = createDeferred();
         const release = createDeferred();
         f.context.readChatMetadata = async () => {
@@ -347,6 +390,7 @@ describe("direct session model catalogs", () => {
         {
           sessionId: "saved-catalog-session",
           updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: f.person.id },
           authProfileOverride: f.authProfileId,
           authProfileOverrideSource: "user",
         },
@@ -396,6 +440,7 @@ describe("direct session model catalogs", () => {
         {
           sessionId: "catalog-native-session",
           updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: f.person.id },
           agentHarnessId: "catalog-native",
           modelSelectionLocked: true,
         },

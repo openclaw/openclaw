@@ -1,6 +1,10 @@
 /** Typed private-peer reads through the platform sd-bus ABI, not a D-Bus codec. */
 import { createRequire } from "node:module";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  ServiceInspectionError,
+  ServiceOwnershipRefusalError,
+} from "./service-inspection-error.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
 
@@ -42,6 +46,13 @@ function loadApi() {
     errorHasName: bind("int sd_bus_error_has_name(void *error, const char *name)"),
     errorFree: bind("void sd_bus_error_free(void *error)"),
     newBus: bind("int sd_bus_new(_Out_ void **bus)"),
+    // This newer ABI is needed only for machine routes, not ordinary local peers.
+    userMachine: (machine: string, output: Pointer[]) =>
+      invoke(
+        bind("int sd_bus_open_user_machine(_Out_ void **bus, const char *machine)"),
+        output,
+        machine,
+      ),
     address: bind("int sd_bus_set_address(void *bus, const char *address)"),
     client: bind("int sd_bus_set_bus_client(void *bus, int client)"),
     start: bind("int sd_bus_start(void *bus)"),
@@ -90,6 +101,11 @@ export async function openSystemdBroker(address: string, deadline: number) {
   return await openSystemdConnection(address, deadline);
 }
 
+/** Preserve systemctl's explicit user@ machine route on one broker connection. */
+export async function openSystemdMachineBroker(machine: string, deadline: number) {
+  return await openSystemdConnection({ machine }, deadline);
+}
+
 /** Ordinary local reads authenticate the connected manager without a session broker. */
 export async function openSystemdUserManager(address: string, deadline: number) {
   const uid = process.geteuid?.();
@@ -100,7 +116,7 @@ export async function openSystemdUserManager(address: string, deadline: number) 
 }
 
 async function openSystemdConnection(
-  address: string,
+  address: string | { machine: string },
   deadline: number,
   expected?: SystemdPeerIdentity,
   managerUid?: number,
@@ -110,7 +126,11 @@ async function openSystemdConnection(
   let identity = expected;
   const native = (api ??= loadApi());
   const output: Pointer[] = [null];
-  checked(native.newBus(output));
+  if (typeof address === "string") {
+    checked(native.newBus(output));
+  } else {
+    await native.userMachine(address.machine, output);
+  }
   const bus = output[0];
   let closed = false;
   const queue = createSystemdPeerQueue();
@@ -118,8 +138,11 @@ async function openSystemdConnection(
   const remaining = (until: number) => {
     assertGatewayServiceUpdateCurrent();
     const value = until - performance.now();
-    if (closed || value <= 0) {
+    if (closed) {
       throw unavailable();
+    }
+    if (value <= 0) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
     return Math.max(1, Math.floor(value * 1000));
   };
@@ -131,12 +154,17 @@ async function openSystemdConnection(
   };
   const verify = () => {
     assertGatewayServiceUpdateCurrent();
-    if (
-      closed ||
-      (identity &&
-        (!isPidAlive(identity.pid) || getProcessStartTime(identity.pid) !== identity.startTime))
-    ) {
+    if (closed) {
       throw unavailable();
+    }
+    if (identity) {
+      const startTime = getProcessStartTime(identity.pid);
+      if (startTime !== null && startTime !== identity.startTime) {
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+      }
+      if (startTime === null || !isPidAlive(identity.pid)) {
+        throw unavailable();
+      }
     }
   };
   // Only call while owning the native queue (or before admission is published).
@@ -153,29 +181,40 @@ async function openSystemdConnection(
       const uid: [number] = [0];
       checked(native.pid(credentials[0], pid));
       checked(native.uid(credentials[0], uid));
+      if (pid[0] <= 0 || uid[0] >= 0xffffffff) {
+        throw unavailable();
+      }
       if (!identity) {
+        if (uid[0] !== managerUid) {
+          throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+        }
         const startTime = getProcessStartTime(pid[0]);
-        if (uid[0] !== managerUid || pid[0] <= 0 || !isPidAlive(pid[0]) || startTime === null) {
+        if (!isPidAlive(pid[0]) || startTime === null) {
           throw unavailable();
         }
         identity = { uid: uid[0], pid: pid[0], startTime };
       }
-      if (
-        pid[0] !== identity.pid ||
-        uid[0] !== identity.uid ||
-        getProcessStartTime(identity.pid) !== identity.startTime
-      ) {
+      if (pid[0] !== identity.pid || uid[0] !== identity.uid) {
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+      }
+      const startTime = getProcessStartTime(identity.pid);
+      if (startTime === null) {
         throw unavailable();
+      }
+      if (startTime !== identity.startTime) {
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
     } finally {
       native.unrefCredentials(credentials[0]);
     }
   };
   try {
-    checked(native.address(bus, address));
-    checked(native.client(bus, privatePeer ? 0 : 1));
-    remaining(deadline);
-    await invoke(native.start, bus);
+    if (typeof address === "string") {
+      checked(native.address(bus, address));
+      checked(native.client(bus, privatePeer ? 0 : 1));
+      remaining(deadline);
+      await invoke(native.start, bus);
+    }
     // Drive only authentication. No property read or service activation precedes credentials.
     while (!checked(native.ready(bus))) {
       remaining(deadline);
@@ -317,6 +356,9 @@ async function openSystemdConnection(
         checked(native.autoStart(message[0], 0));
         if (args[5] === "s" && args.length === 7) {
           checked(native.append(message[0], 115, args[6]));
+        } else if (args[5] === "ss" && args.length === 8) {
+          checked(native.append(message[0], 115, args[6]));
+          checked(native.append(message[0], 115, args[7]));
         } else if (args.length !== 5) {
           throw unavailable();
         }
@@ -338,11 +380,13 @@ async function openSystemdConnection(
           throw failure;
         }
         check();
-        if (signatures.length !== 1) {
+        if (signatures.length > 1) {
           throw unavailable();
         }
         // Method replies retain busctl's top-level tuple, unlike properties.
-        values.push([read(reply[0], signatures[0], budget)]);
+        if (signatures.length === 1) {
+          values.push([read(reply[0], signatures[0], budget)]);
+        }
         if (!checked(native.end(reply[0], 1))) {
           throw unavailable();
         }

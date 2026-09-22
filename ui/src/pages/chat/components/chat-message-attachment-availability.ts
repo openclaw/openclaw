@@ -190,7 +190,6 @@ export function resolveAssistantAttachmentAvailability(
           if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
             throw new Error("Attachment metadata has an invalid ticket expiry");
           }
-          resource.retryAttempted = false;
           return {
             status: "available",
             ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
@@ -215,18 +214,23 @@ export function resolveAssistantAttachmentAvailability(
           ),
       )
       .then((availability) => {
-        setAssistantAttachmentAvailability(resource, availability);
+        // Retry can replace a renewal on the same resource. Its aborted or late
+        // completion must not overwrite the new request or reset its retry budget.
+        if (resource.pending === pending && isChatMediaResourceCurrent(resource)) {
+          if (availability.status === "available") {
+            resource.retryAttempted = false;
+          }
+          setAssistantAttachmentAvailability(resource, availability);
+        }
         return availability;
       })
       .finally(() => {
         clearTimeout(timeout);
-        if (resource.abortController === controller) {
-          resource.abortController = undefined;
-        }
         if (resource.pending === pending) {
+          resource.abortController = undefined;
           resource.pending = undefined;
+          notifyChatMediaResourceSubscribers(resource);
         }
-        notifyChatMediaResourceSubscribers(resource);
       });
     resource.pending = pending;
   }

@@ -55,6 +55,8 @@ vi.mock("../infra/kysely-sync.js", () => ({
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
 }));
+// Keep config loading from publishing metadata readers that capture this fixture's native mocks.
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ loadSessionEntryReadOnly: vi.fn() }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: edge.warn }),

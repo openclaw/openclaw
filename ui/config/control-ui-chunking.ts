@@ -42,6 +42,17 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-feedback.ts":
+    case "ui/src/i18n/locales/en-login.ts":
+    case "ui/src/lib/gateway-secret-shape.ts":
+      return "login-runtime";
+    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/styles/sidebar-update-card.css":
+      return "sidebar-update-runtime";
+  }
+
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
@@ -51,13 +62,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
+  }
+
+  if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    // The cache directive belongs to the deferred text-attachment renderer, not
-    // the shared startup vendor chunk. Let its consumer determine when it loads.
-    return normalized.endsWith("/directives/cache.js") ? undefined : "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (

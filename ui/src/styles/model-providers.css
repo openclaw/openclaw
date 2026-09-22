@@ -587,3 +587,28 @@ openclaw-model-account-usage,
 .model-provider-login__secondary {
   margin-inline-end: auto;
 }
+
+.model-providers__installed-agent + .model-providers__installed-agent,
+.settings-row + .model-providers__installed-agent {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.model-providers__installed-agent .settings-row--toggle {
+  gap: var(--space-3);
+}
+
+.model-providers__agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.model-providers__agent-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.model-providers__installed-agent-message {
+  margin: 0 var(--space-4) var(--space-3);
+}

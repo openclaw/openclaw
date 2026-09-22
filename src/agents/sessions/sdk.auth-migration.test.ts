@@ -11,6 +11,7 @@ import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
 } from "../../state/openclaw-agent-db.js";
@@ -572,6 +573,7 @@ describe("SDK installation ownership", () => {
             "legacy SDK target",
           );
           existing.session.dispose();
+          await closeOpenClawAgentDatabasesAsync();
           closeOpenClawAgentDatabasesForTest();
           expect(inspectOpenClawAgentDatabaseOwner(original.storePath)).toEqual({
             status: "owned",
@@ -647,6 +649,7 @@ describe("SDK installation ownership", () => {
                 path.join(state.agentDir(configuredOwner), ".legacy-agent-dir-migration.json"),
               ),
             ).rejects.toMatchObject({ code: "ENOENT" });
+            await closeOpenClawAgentDatabasesAsync();
             closeOpenClawAgentDatabasesForTest();
           }
 
