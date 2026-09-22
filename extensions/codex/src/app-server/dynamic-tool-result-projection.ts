@@ -13,6 +13,7 @@ export function recordCodexDynamicToolResult(
     callId: call.callId,
     tool: call.tool,
     asyncStarted: response.asyncStarted === true,
+    terminate: response.terminate === true,
     terminalResolution: response.terminalResolution,
     success: protocolResponse.success,
     terminalType:

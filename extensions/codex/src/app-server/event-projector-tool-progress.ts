@@ -170,6 +170,7 @@ export class CodexToolProgressProjection {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    terminate?: boolean;
     terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
@@ -180,6 +181,7 @@ export class CodexToolProgressProjection {
     const existing = this.metas.get(params.callId);
     this.metas.set(params.callId, {
       toolName: existing?.toolName ?? params.tool,
+      ...(params.terminate === true ? { toolCallId: params.callId, terminate: true } : {}),
       ...(existing?.meta ? { meta: existing.meta } : {}),
       ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
       isError: !params.success,
@@ -387,7 +389,9 @@ export class CodexToolProgressProjection {
             : undefined;
     this.metas.set(item.id, {
       toolName,
+      ...(existing?.toolCallId ? { toolCallId: existing.toolCallId } : {}),
       ...(meta ? { meta } : {}),
+      ...(existing?.terminate === true ? { terminate: true } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
       ...(isError === undefined ? {} : { isError }),
     });

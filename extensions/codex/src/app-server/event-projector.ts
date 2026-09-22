@@ -324,6 +324,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    terminate?: boolean;
     terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";

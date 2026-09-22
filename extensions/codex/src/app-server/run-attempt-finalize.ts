@@ -502,6 +502,7 @@ export async function finalizeCodexAttempt(
     const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
       mirrorOutcome;
     const shouldCaptureSettledTurnFinalizationContext =
+      !turnRuntime.didCompleteViaReleasedTerminalDynamicTool(result.toolMetas) &&
       result.assistantTexts.every((text) => !text.trim()) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
       (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);

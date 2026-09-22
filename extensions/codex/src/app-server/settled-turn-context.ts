@@ -23,6 +23,28 @@ type CodexSettledTurnSelection = {
   authProfileId?: string;
 };
 
+/** Matches a locally released terminal call to its successful synchronous projection. */
+export function hasReleasedTerminalDynamicToolResult(params: {
+  releasedCallId?: string;
+  toolMetas: ReadonlyArray<{
+    toolCallId?: string;
+    terminate?: boolean;
+    isError?: boolean;
+    asyncStarted?: boolean;
+  }>;
+}): boolean {
+  if (!params.releasedCallId) {
+    return false;
+  }
+  return params.toolMetas.some(
+    (meta) =>
+      meta.toolCallId === params.releasedCallId &&
+      meta.terminate === true &&
+      meta.isError === false &&
+      meta.asyncStarted !== true,
+  );
+}
+
 /** Only the Codex owner interprets this bounded, detached replay projection. */
 export class CodexSettledTurnContext {
   readonly source = "harness";

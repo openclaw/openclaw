@@ -82,6 +82,50 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     },
   );
 
+  it("preserves exact terminal metadata from dynamic tool results", async () => {
+    const projector = await createProjector();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-message-final",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "send", message: "Done." },
+    };
+    const response = {
+      success: true,
+      terminate: true,
+      contentItems: [{ type: "inputText" as const, text: "Sent." }],
+    };
+
+    projector.recordDynamicToolCall(call);
+    recordCodexDynamicToolResult(projector, call, response, response);
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: call.callId,
+          namespace: null,
+          tool: call.tool,
+          arguments: call.arguments,
+          status: "completed",
+          contentItems: response.contentItems,
+          success: true,
+          durationMs: 1,
+        },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).toolMetas).toEqual([
+      {
+        toolCallId: "call-message-final",
+        toolName: "message",
+        terminate: true,
+        isError: false,
+      },
+    ]);
+  });
+
   it.each([
     ["gateway", { ok: true, result: { path: "gateway.port", config: 19_801 } }],
     ["dashboard", { ok: true, delivered: 0 }],

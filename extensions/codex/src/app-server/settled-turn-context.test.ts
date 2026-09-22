@@ -2,7 +2,10 @@ import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-h
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexHistoryRejection } from "./history-rejection.js";
-import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import {
+  captureCodexSettledTurnFinalizationContext,
+  hasReleasedTerminalDynamicToolResult,
+} from "./settled-turn-context.js";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -101,6 +104,56 @@ async function captureContext(params: {
     authProfileId: params.authProfileId,
   });
 }
+
+describe("hasReleasedTerminalDynamicToolResult", () => {
+  it.each([
+    {
+      name: "exact successful terminal result",
+      releasedCallId: "call-final",
+      meta: { toolCallId: "call-final", terminate: true, isError: false },
+      expected: true,
+    },
+    {
+      name: "missing release",
+      releasedCallId: undefined,
+      meta: { toolCallId: "call-final", terminate: true, isError: false },
+      expected: false,
+    },
+    {
+      name: "stale call id",
+      releasedCallId: "call-final",
+      meta: { toolCallId: "call-stale", terminate: true, isError: false },
+      expected: false,
+    },
+    {
+      name: "non-terminal result",
+      releasedCallId: "call-final",
+      meta: { toolCallId: "call-final", isError: false },
+      expected: false,
+    },
+    {
+      name: "failed result",
+      releasedCallId: "call-final",
+      meta: { toolCallId: "call-final", terminate: true, isError: true },
+      expected: false,
+    },
+    {
+      name: "async result",
+      releasedCallId: "call-final",
+      meta: {
+        toolCallId: "call-final",
+        terminate: true,
+        isError: false,
+        asyncStarted: true,
+      },
+      expected: false,
+    },
+  ])("returns $expected for $name", ({ releasedCallId, meta, expected }) => {
+    expect(hasReleasedTerminalDynamicToolResult({ releasedCallId, toolMetas: [meta] })).toBe(
+      expected,
+    );
+  });
+});
 
 describe("captureCodexSettledTurnFinalizationContext", () => {
   beforeEach(() => {

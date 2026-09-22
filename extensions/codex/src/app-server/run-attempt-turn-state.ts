@@ -19,6 +19,7 @@ import {
 import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
+import { hasReleasedTerminalDynamicToolResult } from "./settled-turn-context.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
@@ -56,6 +57,8 @@ class CodexAttemptState {
     response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   };
+  /** Exact dynamic call whose successful terminal result locally released this turn. */
+  releasedTerminalDynamicToolCallId?: string;
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
@@ -81,6 +84,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
   const steeringQueueRef: { current?: ReturnType<typeof createCodexSteeringQueue> } = {};
+  const didCompleteViaReleasedTerminalDynamicTool = (
+    toolMetas: Parameters<typeof hasReleasedTerminalDynamicToolResult>[0]["toolMetas"],
+  ) =>
+    hasReleasedTerminalDynamicToolResult({
+      releasedCallId: state.releasedTerminalDynamicToolCallId,
+      toolMetas,
+    });
   const completeTurn = () => {
     if (state.completed) {
       return;
@@ -225,6 +235,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnIdRef,
     userInputBridgeRef,
     steeringQueueRef,
+    didCompleteViaReleasedTerminalDynamicTool,
     completeTurn,
     interruptTurn,
     renewNativeHookRelayForTurnProgress,

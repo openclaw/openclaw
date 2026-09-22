@@ -53,6 +53,7 @@ export function createCodexAttemptLifecycleController(
       return;
     }
     state.pendingTerminalDynamicToolRelease = undefined;
+    state.releasedTerminalDynamicToolCallId = value.call.callId;
     trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
       threadId: value.call.threadId,
       turnId: value.call.turnId,

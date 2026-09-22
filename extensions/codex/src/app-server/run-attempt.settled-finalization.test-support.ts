@@ -1,11 +1,15 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
+  createCodexRuntimePlanFixture,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   tempDir,
   threadStartResult,
   userMessage,
@@ -38,6 +42,60 @@ export function registerSettledFinalizationTests({
   expectResumeRequest,
   writeExistingBinding,
 }: SettledFinalizationFixtures) {
+  it("returns exact terminal dynamic-tool evidence without fallback context capture", async () => {
+    const terminalTool = createRuntimeDynamicTool("message");
+    terminalTool.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Sent." }],
+      details: {},
+      terminate: true,
+    }));
+    const sessionFile = path.join(tempDir, "terminal-tool-session.jsonl");
+    const workspaceDir = path.join(tempDir, "terminal-tool-workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    setCodexTestToolFactory(params, () => [terminalTool]);
+    setCodexTestModelSupportsTools(params, true);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["message"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await expect(
+      harness.handleServerRequest({
+        id: "request-message-final",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-message-final",
+          namespace: null,
+          tool: "message",
+          arguments: {},
+        },
+      }),
+    ).resolves.toMatchObject({ success: true });
+
+    const result = await run;
+    expect(result.toolMetas).toContainEqual({
+      toolCallId: "call-message-final",
+      toolName: "message",
+      terminate: true,
+      isError: false,
+    });
+    expect(result.messagesSnapshot).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "call-message-final",
+          toolName: "message",
+          isError: false,
+        }),
+      ]),
+    );
+    expect(result.settledTurnFinalizationContext).toBeUndefined();
+  });
+
   it.each(
     [
       { label: "completed turn", failure: undefined, expectedContext: true },

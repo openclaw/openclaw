@@ -21,6 +21,7 @@ function createTerminalReleaseHarness() {
     activeAppServerTurnRequests: 0,
     currentTurnHadNonTerminalDynamicToolResult: false,
     pendingTerminalDynamicToolRelease: undefined,
+    releasedTerminalDynamicToolCallId: undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     resolveCompletion,
   };
@@ -227,6 +228,7 @@ describe("Codex terminal dynamic-tool release", () => {
       );
       expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
       expect(harness.state.completed).toBe(true);
+      expect(harness.state.releasedTerminalDynamicToolCallId).toBe("call-yield");
       expect(harness.resolveCompletion).toHaveBeenCalledOnce();
 
       harness.completeTurn();
@@ -255,6 +257,7 @@ describe("Codex terminal dynamic-tool release", () => {
     expect(harness.cancel).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.state.completed).toBe(false);
+    expect(harness.state.releasedTerminalDynamicToolCallId).toBeUndefined();
     expect(harness.resolveCompletion).not.toHaveBeenCalled();
   });
 });
