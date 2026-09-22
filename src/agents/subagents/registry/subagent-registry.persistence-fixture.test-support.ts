@@ -100,12 +100,17 @@ export function useSubagentPersistenceFixture() {
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
         if (tempStateDir) {
-          await fs.rm(tempStateDir, {
-            recursive: true,
-            force: true,
-            maxRetries: 5,
-            retryDelay: 50,
-          });
+          // Resource cleanup finished; removal failure must not retain a retired owner.
+          try {
+            await fs.rm(tempStateDir, {
+              recursive: true,
+              force: true,
+              maxRetries: 5,
+              retryDelay: 50,
+            });
+          } catch (error) {
+            failures.push(error);
+          }
         }
         configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
         clearRuntimeConfigSnapshot();
