@@ -1,5 +1,17 @@
 // MTS declarations preserve the source extension before runner preparation.
 export const scriptModuleEntrypoints = {
+  vitestBatchRunner: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "lib/vitest-batch-runner",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/lib/vitest-batch-runner.js",
+  },
+  additionalBoundaryChecks: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "run-additional-boundary-checks",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/run-additional-boundary-checks.js",
+  },
   runWithEnv: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "run-with-env",

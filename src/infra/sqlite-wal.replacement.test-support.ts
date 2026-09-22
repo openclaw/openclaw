@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
@@ -8,7 +9,10 @@ const [role, databasePath, staleCloseMarker] = process.argv.slice(2);
 assert.ok(role === "worker" || role === "stale" || role === "current");
 assert.ok(databasePath && staleCloseMarker);
 if (role === "worker") {
-  new Worker(new URL(import.meta.url), { argv: ["stale", databasePath, staleCloseMarker] });
+  const worker = new Worker(new URL(import.meta.url), {
+    argv: ["stale", databasePath, staleCloseMarker],
+  });
+  await once(worker, "online");
 } else if (role === "stale") {
   const stale = new DatabaseSync(databasePath);
   setTimeout(() => {

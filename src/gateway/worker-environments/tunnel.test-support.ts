@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -11,6 +11,7 @@ import {
 } from "../../process/exec.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -88,6 +89,15 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   return { receiverEntryPath, target };
 }
 
+export async function prepareLocalWorkspaceRsyncReceiver(receiverEntry: string): Promise<void> {
+  await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
+  const receiverUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.rsyncReceiver);
+  const source = receiverUrl.pathname.endsWith(".ts")
+    ? `import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};\nawait tsImport(${JSON.stringify(receiverUrl.href)}, import.meta.url);\n`
+    : `await import(${JSON.stringify(receiverUrl.href)});\n`;
+  await fs.writeFile(receiverEntry, source);
+}
+
 export async function prepareLocalWorkspaceRsyncBoundary(
   remoteHome: string,
   argv: readonly string[],
@@ -97,13 +107,7 @@ export async function prepareLocalWorkspaceRsyncBoundary(
     throw new Error("test rsync transfer is missing its bundled receiver invocation");
   }
   const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
-  await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-  const tsxApi = import.meta.resolve("tsx/esm/api");
-  const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
-  await fs.writeFile(
-    receiverEntry,
-    `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
-  );
+  await prepareLocalWorkspaceRsyncReceiver(receiverEntry);
   const fakeSsh = path.join(remoteHome, ".openclaw-test-ssh");
   await fs.writeFile(
     fakeSsh,

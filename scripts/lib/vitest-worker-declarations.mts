@@ -57,6 +57,10 @@ export const vitestWorkerDeclarationEntries = {
     "test/e2e/qa-lab/runtime/qa-otel-smoke-entrypoint.test-support.ts",
   "extensions/matrix/src/matrix/config-update-runtime.test-support":
     "extensions/matrix/src/matrix/config-update-runtime.test-support.ts",
+  "extensions/openai/realtime-audio-worker-entrypoints.test-support":
+    "extensions/openai/realtime-audio-worker-entrypoints.test-support.ts",
+  "extensions/code-mode-quickjs/src/worker-entrypoint.test-support":
+    "extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts",
   "process/spawn-broker/context-runtime.test-support":
     "src/process/spawn-broker/context-runtime.test-support.ts",
   "commands/sessions-cleanup-runtime.test-support":

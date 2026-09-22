@@ -1,5 +1,15 @@
 // Prepare standalone script graphs before native process guards begin.
 export const scriptProcessEntrypoints = {
+  packageDistInventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "write-package-dist-inventory",
+    distWorkerPath: "legacy-finalizer/scripts/write-package-dist-inventory.js",
+  },
+  agentPluginGatewayE2e: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "agent-plugin-gateway-e2e",
+    distWorkerPath: "legacy-finalizer/scripts/agent-plugin-gateway-e2e.js",
+  },
   npmUpdateSmoke: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "e2e/parallels/npm-update-smoke",

@@ -171,6 +171,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       // Runtime entries share bundled query builders; other root dependencies stay external.
       alwaysBundle: (id) =>
         shouldBundleWorkspaceDependency(id) || shouldBundleRuntimeSqliteDependency(id),
+      // Installed tooling resolves native bindings and assets from its own package directory.
+      neverBundle: [/^(?:vitest|vite|tsdown|rolldown|esbuild|typescript)(?:\/|$)/u],
     },
     logLevel: "warn",
     plugins: [
@@ -204,6 +206,23 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             }
             return null;
           },
+        },
+      },
+      {
+        name: "openclaw:quickjs-package-boundary",
+        resolveId(id, importer) {
+          if (
+            id !== "quickjs-wasi" ||
+            !importer ||
+            path.resolve(importer) !==
+              path.join(root, "extensions/code-mode-quickjs/src/code-mode.worker.ts")
+          ) {
+            return null;
+          }
+          // Native snapshot fixtures patch this same package instance before loading the worker.
+          const dependency = createRequire(importer).resolve(id);
+          recordInput(dependency);
+          return { id: pathToFileURL(dependency).href, external: "absolute" };
         },
       },
       {

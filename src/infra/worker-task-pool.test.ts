@@ -16,7 +16,7 @@ import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-suppo
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
-const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
+const workerUrl = resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker);
 const pools: WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>[] = [];
 const workers = vi.hoisted(() => [] as Worker[]);
 const directories = createTempDirTracker();

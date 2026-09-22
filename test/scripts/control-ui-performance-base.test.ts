@@ -4,12 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { build } from "tsdown";
 import { expect, it } from "vitest";
 
 const repoRoot = process.cwd();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 
-it("compares real UI builds with canonical compression and keeps artifacts after a growth failure", () => {
+it("compares real UI builds with canonical compression and keeps artifacts after a growth failure", async () => {
   const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ui-budget-proof-")));
   const root = path.join(temporaryRoot, "repo");
   const scratch = path.join(temporaryRoot, "scratch");
@@ -142,6 +143,42 @@ export default {
     write("package.json", '{"name":"ui-budget-proof","version":"1.0.1","type":"module"}');
     write("ui/vite.config.ts", config.replace("level: 0", "level: 9"));
     write("packages/workspace-value/index.js", 'export const message = "candidate workspace";');
+
+    const { bundles } = await build({
+      config: false,
+      cwd: root,
+      root,
+      entry: [
+        "scripts/check-control-ui-performance-base.mts",
+        "scripts/check-control-ui-performance.mts",
+        "scripts/check-control-ui-precompressed-assets.mts",
+      ],
+      outDir: root,
+      unbundle: true,
+      format: "esm",
+      platform: "node",
+      dts: false,
+      clean: false,
+      treeshake: false,
+      deps: { neverBundle: ["pako"] },
+      outExtensions: () => ({ js: ".js" }),
+      outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
+      logLevel: "silent",
+    });
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+    // Keep the real CLI's source-relative subprocess paths and direct-run guards.
+    for (const name of [
+      "check-control-ui-performance-base",
+      "check-control-ui-performance",
+      "check-control-ui-precompressed-assets",
+    ]) {
+      fs.copyFileSync(
+        path.join(root, "scripts", `${name}.js`),
+        path.join(root, "scripts", `${name}.mts`),
+      );
+    }
 
     const runComparison = () => {
       fs.rmSync(identityCapture, { force: true });

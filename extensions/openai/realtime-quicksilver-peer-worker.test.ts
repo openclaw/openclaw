@@ -2,11 +2,15 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  OpenAIQuicksilverAudioPeer,
-  type QuicksilverAudioWorkerEvent,
-} from "./realtime-quicksilver-peer.runtime.js";
+import { realtimeAudioTestEntrypoints } from "./realtime-audio-worker-entrypoints.test-support.js";
+import type { QuicksilverAudioWorkerEvent } from "./realtime-quicksilver-peer.runtime.js";
+
+const peerModule: typeof import("./realtime-quicksilver-peer.runtime.js") = await import(
+  resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href
+);
+const { OpenAIQuicksilverAudioPeer } = peerModule;
 
 // Observe encrypted RTP on another event loop: a same-thread receiver would
 // hide the gap by processing its queued callbacks after the deliberate stall.
@@ -49,8 +53,10 @@ const receiverSource = `const { parentPort, workerData } = require('node:worker_
 // in the same turn avoids racing the 80 ms reorder timer on a loaded test host.
 const interruptionSource = `const { parentPort, workerData } = require('node:worker_threads');
 (async () => {
-  const { register } = await import(workerData.tsxApiUrl);
-  register();
+  if (workerData.tsxApiUrl) {
+    const { register } = await import(workerData.tsxApiUrl);
+    register();
+  }
   const { OpenAIQuicksilverAudioPeer } = await import(workerData.mediaUrl);
   const { RtpHeader, RtpPacket } = await import(workerData.weriftUrl);
   const create = OpenAIQuicksilverAudioPeer.create;
@@ -82,17 +88,19 @@ const interruptionSource = `const { parentPort, workerData } = require('node:wor
 
 describe("GPT-Live audio thread", () => {
   it("does not restamp pre-clear reordered RTP as the next output generation", async () => {
-    const workerUrl = new URL("./realtime-quicksilver-audio.worker.ts", import.meta.url);
+    const workerUrl = resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.worker);
     const worker = new Worker(interruptionSource, {
       eval: true,
-      // Register inside the worker: tsx automatic preloads only install on main.
+      // Source fallback registers inside the worker; prepared children need no loader.
       execArgv: [],
       workerData: {
         iceServers: [],
         reportMediaErrors: false,
         workerUrl: workerUrl.href,
-        tsxApiUrl: import.meta.resolve("tsx/esm/api"),
-        mediaUrl: new URL("./realtime-quicksilver-media.runtime.ts", import.meta.url).href,
+        tsxApiUrl: workerUrl.pathname.endsWith(".ts")
+          ? import.meta.resolve("tsx/esm/api")
+          : undefined,
+        mediaUrl: resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.media).href,
         weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
       },
     });

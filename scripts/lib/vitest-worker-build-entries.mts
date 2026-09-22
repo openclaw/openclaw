@@ -1,8 +1,10 @@
+import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
+import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
 import { busServerShutdownEntrypoint } from "../../extensions/qa-lab/src/bus-server-runtime.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
@@ -104,10 +106,14 @@ export const preservedModuleBuildSources = [
   "scripts/release-verify-beta.ts",
   "scripts/release-verify-publish.ts",
   "scripts/write-cli-startup-metadata.ts",
+  "scripts/write-package-dist-inventory.ts",
+  "scripts/agent-plugin-gateway-e2e.ts",
+  "scripts/run-additional-boundary-checks.mts",
   "scripts/run-with-env.mts",
   "scripts/plugin-sdk-api-diff.mts",
   "scripts/test-projects.mts",
   "scripts/lib/vitest-build-prerequisites.mts",
+  "scripts/lib/vitest-batch-runner.mts",
   "scripts/check-memory-fd-repro.mts",
   "scripts/sparkle-build.ts",
   "scripts/crabbox-source-capsule.mts",
@@ -202,7 +208,10 @@ export const preservedModuleBuildSources = [
 ];
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
-export const preservedModuleBuildAssets = [".github/workflows/plugin-npm-release.yml"];
+export const preservedModuleBuildAssets = [
+  ".github/workflows/plugin-npm-release.yml",
+  "scripts/lib/vitest-worker-bootstrap.mts",
+];
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
@@ -233,6 +242,8 @@ export const vitestWorkerBuildEntries = {
     toolingProbeRuntimeEntrypoints.buildArtifactCache,
     toolingProbeRuntimeEntrypoints.buildIdentity,
     ...Object.values(discordAudioTestEntrypoints),
+    ...Object.values(realtimeAudioTestEntrypoints),
+    quickJsWorkerTestEntrypoint,
     codexCatalogPageWorkerEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
