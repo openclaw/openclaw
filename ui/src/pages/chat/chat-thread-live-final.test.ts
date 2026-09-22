@@ -86,6 +86,26 @@ describe("live terminal continuity with pending collaborators", () => {
     );
     expect(after.findIndex((item) => item.kind === "agent-run-frame")).toBeLessThan(peer);
   });
+  it.each([
+    { label: "visible history", messages: history },
+    {
+      label: "a hidden trailing assistant row",
+      messages: [...history, { role: "assistant", content: "", timestamp: 40 }],
+    },
+  ])("keeps older queued inputs at the live edge with $label", ({ messages }) => {
+    const stale = {
+      ...pending,
+      acceptedAt: 5,
+      message: { ...pending.message, timestamp: 5 },
+    };
+    const items = project(
+      props({ messages, pendingInputs: [stale], stream: null, runId: null, runWorking: false }),
+    );
+    const visibleMessages = items.flatMap((item) =>
+      item.kind === "group" ? item.messages.map((source) => source.message) : [],
+    );
+    expect(visibleMessages).toEqual([...history, stale.message]);
+  });
   it("already attributes a streaming reply to the same participant as its terminal", () => {
     const before = project(props());
     const frame = before.find((item) => item.kind === "agent-run-frame");

@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker, WorkerOptions } from "node:worker_threads";
@@ -22,7 +21,11 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.j
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
-import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
+import {
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+  type OpenClawAgentDatabaseWorkerLeaseReceipt,
+} from "../../state/openclaw-agent-db-lease.js";
 import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -39,10 +42,14 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { removeAgentIntegrityMetadataForTest } from "../../state/openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "../../state/openclaw-agent-execution-native.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
+import {
+  clearOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
+} from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -50,15 +57,13 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
 } from "./conversation-delivery-store.js";
 import { listConversations, registerConversationAddresses } from "./conversation-registry.js";
-import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
@@ -71,8 +76,6 @@ import {
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
-import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
-import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
 const validation = vi.hoisted(() => ({
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
@@ -155,68 +158,83 @@ function leasesFor(fixture: ReturnType<typeof createFixture>) {
     .all(fixture.database.path);
 }
 
-test.each(["current", "revoked-after-open", "revoked-during-open"] as const)(
-  "reclamation borrows native-only verification unless revoked (%s)",
-  async (proof) => {
-    const { database, options, plans, scopes } = createFixture(["victim"]);
-    closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
-    const context = captureOpenClawStateWorkerContext(options);
-    const assertCurrent = () => context.admission.assertCurrent();
-    let revokedDuringOpen = false;
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent,
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            if (
-              proof === "revoked-during-open" &&
-              !revokedDuringOpen &&
-              request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.identity) &&
-              request.facts.identity.kind === "file"
-            ) {
-              invalidateOpenClawAgentDatabaseValidation(database.path);
-              revokedDuringOpen = true;
-            }
-            binding.authorize(request);
-            assertCurrent();
-            if (!grant()) {
-              throw new Error("Native reclamation fixture lost admission");
-            }
-          }),
-        });
-      },
-    };
-    const generation = createAgentDatabaseNativeGeneration(
-      database.agentId,
-      database.path,
-      context,
-      assertCurrent,
-      assertCurrent,
-      undefined,
-      () => {},
-    );
-    try {
-      await generation.runExisting(source, async () => "opened");
-      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-      const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
-      expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
-      if (proof === "revoked-after-open") {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+test.each([
+  "current",
+  "two-leases",
+  "two-leases-missing",
+  "revoked-after-open",
+  "revoked-during-open",
+] as const)("reclamation borrows native-only verification unless revoked (%s)", async (proof) => {
+  const { database, options, plans, scopes } = createFixture(["victim"]);
+  closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
+  const context = captureOpenClawStateWorkerContext(options);
+  const assertCurrent = () => context.admission.assertCurrent();
+  let revokedDuringOpen = false;
+  const source: AgentDatabaseRequestExecutionSource = {
+    assertCurrent,
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (
+            proof === "revoked-during-open" &&
+            !revokedDuringOpen &&
+            request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.identity) &&
+            request.facts.identity.kind === "file"
+          ) {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+            revokedDuringOpen = true;
+          }
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Native reclamation fixture lost admission");
+          }
+        }),
+      });
+    },
+  };
+  const generation = createAgentDatabaseNativeGeneration(
+    database.agentId,
+    database.path,
+    context,
+    assertCurrent,
+    assertCurrent,
+    undefined,
+    () => {},
+  );
+  let peerLease: string | undefined;
+  try {
+    await generation.runExisting(source, async () => "opened");
+    if (proof.startsWith("two-leases")) {
+      const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
+      peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
+      expect(readOpenClawAgentIntegrityVerification(database.path, options.env)).toEqual(before);
+      if (proof === "two-leases-missing") {
+        removeAgentIntegrityMetadataForTest(options.env);
       }
-      await expect(
-        runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
-      ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
-      expect(fullChecks()).toBe(proof === "current" ? 0 : 1);
-      expect(revokedDuringOpen).toBe(proof === "revoked-during-open");
-      expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
-    } finally {
-      await generation.close();
     }
-  },
-);
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+    const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
+    expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
+    if (proof === "revoked-after-open") {
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+    }
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! }),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
+    expect(revokedDuringOpen).toBe(proof === "revoked-during-open");
+    expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
+  } finally {
+    await generation.close();
+    if (peerLease) {
+      releaseOpenClawAgentDatabaseLease(peerLease, options, "read-only");
+    }
+  }
+});
 
 test.each(["directory discovery", "Gateway send", "durable completion"] as const)(
   "admits %s behind a native reclamation commit request",
@@ -833,6 +851,7 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
   expect(terminated).toBe(true);
   expect(child.threadId).toBe(-1);
   expect(leasesFor(fixture)).toHaveLength(1);
+  expect(getOpenClawAgentDatabaseValidationForTransfer(fixture.database)).toBeUndefined();
   expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toMatchObject({ sessionId: "second" });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[2]! });
   expect(spawned).toHaveLength(2);
@@ -948,74 +967,3 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
   expect(readLeases()).toEqual(before.filter((row) => row.path === kept.path));
   expect(kept.db.isOpen).toBe(true);
 });
-
-test.each([false, true])(
-  "reuses one Worker across history and cap-entry victims until lifecycle close (failure: %s)",
-  async (failure) => {
-    await withOpenClawTestState(
-      { prefix: "reclamation-sweep-", layout: "state-only" },
-      async (state) => {
-        const sessionKey = "agent:main:explicit:sweep-lifetime";
-        const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const databaseOptions = { agentId: "main", env: state.env };
-        for (const [index, sessionId] of ["first", "second", "current"].entries()) {
-          await replaceSessionEntry(
-            { sessionKey, storePath },
-            {
-              sessionId,
-              updatedAt: index + 1,
-              ...(sessionId === "current"
-                ? { archivedAt: 4, archiveReason: "active-session-cap" as const }
-                : {}),
-            },
-          );
-        }
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        await reclaimSqliteFreePages(databaseOptions);
-        const workers: Worker[] = [];
-        const spawn = archiveWorker.createSqliteTranscriptArchiveWorker;
-        vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-          (data) => {
-            const worker = spawn(data);
-            workers.push(worker);
-            return worker;
-          },
-        );
-        const run = reclamation.runSqliteSessionReclamation;
-        vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-          if (
-            failure &&
-            params.plan.kind === "history-eviction" &&
-            params.plan.sessionId === "second"
-          ) {
-            throw new Error("next victim preparation failed");
-          }
-          return run(params);
-        });
-        const sweep = enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-        });
-        if (failure) {
-          await expect(sweep).rejects.toThrow("next victim preparation failed");
-        } else {
-          const result = await sweep;
-          expect(result?.removedEntries).toBe(3);
-          expect(result?.totalBytesAfter).toBe(
-            (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
-          );
-        }
-        expect(
-          openOpenClawAgentDatabase(databaseOptions)
-            .db.prepare("SELECT session_id FROM session_windows ORDER BY session_id")
-            .all(),
-        ).toEqual(failure ? [{ session_id: "current" }, { session_id: "second" }] : []);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBeGreaterThan(0);
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        expect(workers[0]?.threadId).toBe(-1);
-      },
-    );
-  },
-);

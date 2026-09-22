@@ -51,8 +51,12 @@ and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
 verified rollback outcome. The report excludes secrets, tokens, chat content,
 raw logs, private absolute paths, and recovery commands. Nothing is submitted
-until an administrator confirms that preview. OpenClaw then uses the existing
-GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
+until an identified administrator confirms that preview. Named administrators
+receive a prefilled issue to review and submit using their own GitHub account in
+their browser. This path never invokes the host's GitHub CLI, including for
+authentication or reconciliation. Connecting My GitHub does not grant host-account
+publication authority. Only the Gateway owner or an internal system administrator
+can authorize the existing host GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
 locally; a confirmed issue keeps only its durable issue URL. OpenClaw first makes
 a silent, read-only request with the active `github.com` account. A missing CLI
 or a failed, unavailable, or timed-out authentication check returns a prefilled
@@ -99,20 +103,19 @@ still owns the selected state directory. A starting Gateway and a healthy servin
 Gateway retain that ownership for their entire process lifetime; waiting for
 readiness does not release the lock.
 
-Finalizers with this recovery wait for startup through the existing readiness
-observer. If the same holder is verified serving the installed version and build,
-the update finishes with a warning and leaves the Gateway running. Update history
-names the holder and records the skipped Doctor pass. Config and plugin maintenance
-remain pending. At the next maintenance window, stop that Gateway through its
-service or deployment owner, run `openclaw update repair`, then start it through
-the same owner. Check `openclaw update status --json` and
-`openclaw gateway status --deep` for the recorded warning and current health.
+Maintenance admission refusals finish the update with a recorded warning when
+no data is at risk, including contention from an unknown or non-serving holder.
+Repair restores a managed service it stopped before reporting that warning.
+Doctor and plugin maintenance remain pending. Resolve the reported ownership or
+availability problem, then run `openclaw update repair`. Check
+`openclaw update status --json` and `openclaw gateway status --deep` for pending
+migrations, the recorded warning, and current health.
 
 Do not delete lock files to force entry. A dead process releases the physical lock,
-and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
-database, incompatible schemas, active database writers, or unconfirmed subprocess
-cleanup still require their named recovery action; a maintenance warning does not
-authorize concurrent repair or discard recovery backups.
+and lease owners reclaim provably dead identities. A maintenance warning never
+authorizes concurrent repair or discards recovery backups. Active migration
+writes, unreadable state, incomplete migrations, and unconfirmed subprocess
+cleanup retain their failure and recovery guidance.
 
 ## Node and global install permissions
 
@@ -247,7 +250,7 @@ failure report keeps it in a separate **Warnings** section.
 A throwing plugin config-repair hook leaves that plugin's input unchanged and
 names the plugin in its warning. Repair the plugin, then run
 `openclaw doctor --fix` or `openclaw update repair`.
-Explicit state-migration or config-write refusals remain blocking. So does a
+A live or unverified Gateway and explicit state-migration or config-write refusals remain blocking. So does a
 Doctor child whose shutdown could not be confirmed: it may still write state.
 Preserve the backup and resolve that specific refusal before retrying.
 

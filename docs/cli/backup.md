@@ -460,6 +460,8 @@ scratch even when it is old. Cleanup failures preserve the published archive
 and appear as warnings with the scratch path in both text and JSON output.
 The owned prefix also lets cleanup coordinate with a new creator before its
 token exists, without mistaking that allocation for legacy scratch.
+If cleanup wins before the creator claims its directory, creation retries with
+a fresh directory. A changed directory identity is still rejected.
 Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
 
