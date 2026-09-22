@@ -307,6 +307,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+    - If a reply cannot be saved, stopping still succeeds and the chat shows a save warning. Copy any visible text you want to keep before leaving the chat; it may not be available when you reopen the conversation.
 
   </Accordion>
 </AccordionGroup>

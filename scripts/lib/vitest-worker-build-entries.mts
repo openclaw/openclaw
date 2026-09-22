@@ -6,6 +6,7 @@ import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/g
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
 import { workboardSqliteBackendEntrypoint } from "../../extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts";
 import { authProfileScopeCwdEntrypoint } from "../../src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts";
+import { processPollLivenessEntrypoint } from "../../src/agents/bash-tools.process-liveness-runtime.test-support.ts";
 import {
   codeModeDescriptionRetentionEntrypoint,
   codeModeRetentionEntrypoint,
@@ -113,6 +114,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
     authProfileScopeCwdEntrypoint,
+    processPollLivenessEntrypoint,
     codeModeRetentionEntrypoint,
     codeModeDescriptionRetentionEntrypoint,
     ...cliCompactionBackendEntrypoints,
