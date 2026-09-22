@@ -111,16 +111,16 @@ export function createRemoteEmbeddingProvider(params: {
 function sumEmbeddingUsage(usages: Array<EmbeddingUsage | undefined>): EmbeddingUsage | undefined {
   let promptTokens = 0;
   let totalTokens = 0;
-  let sawUsage = false;
   for (const usage of usages) {
     if (!usage) {
-      continue;
+      // A batch total from partial per-request counts would silently undercount;
+      // report the batch usage as unavailable instead.
+      return undefined;
     }
-    sawUsage = true;
     promptTokens += usage.promptTokens;
     totalTokens += usage.totalTokens;
   }
-  return sawUsage ? { promptTokens, totalTokens } : undefined;
+  return usages.length > 0 ? { promptTokens, totalTokens } : undefined;
 }
 
 /** Resolve a normalized remote embedding client from provider config and model options. */

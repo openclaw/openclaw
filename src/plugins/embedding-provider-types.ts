@@ -57,7 +57,9 @@ export type EmbeddingProvider = {
   /**
    * Optional extension of `embedBatch` that also surfaces provider-reported token usage.
    * Implementations must return the same vectors as `embedBatch` for the same inputs and
-   * may omit `usage` when the provider does not report it.
+   * may omit `usage` when the provider does not report it. When usage is reported for
+   * only part of the batch (for example one aggregated query response omits it), the
+   * implementation must omit `usage` rather than report an undercounted total.
    */
   embedBatchDetailed?: (
     inputs: EmbeddingInput[],

@@ -96,6 +96,23 @@ describe("remote embedding provider usage reporting", () => {
     });
   });
 
+  it("omits batch usage when any per-input query response lacks usage", async () => {
+    mocks.fetchRemoteEmbeddingVectorsDetailed
+      .mockResolvedValueOnce({
+        vectors: [[0.1]],
+        usage: { promptTokens: 3, totalTokens: 4 },
+      })
+      .mockResolvedValueOnce({
+        vectors: [[0.2]],
+      });
+
+    await expect(
+      createProvider().embedBatchDetailed?.(["first", "second"], { inputType: "query" }),
+    ).resolves.toEqual({
+      embeddings: [[0.1], [0.2]],
+    });
+  });
+
   it("omits usage when the provider response has none", async () => {
     await expect(
       createProvider().embedBatchDetailed?.(["first"], { inputType: "document" }),
