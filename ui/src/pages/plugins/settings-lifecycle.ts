@@ -54,7 +54,7 @@ export function renderPluginLifecycle(
       </button>`,
     );
   return html`
-    ${action(enableAction, t(enableAction === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable"), "oc-action-secondary", props.mutationBlockedReason ?? (plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null), props.canMutate && plugin.state !== "needs-setup", () => props.onSetEnabled(plugin.id, !plugin.enabled, key))}
+    ${action(enableAction, t(enableAction === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable"), plugin.enabled ? "oc-action-secondary" : "primary oc-action-primary", props.mutationBlockedReason ?? (plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null), props.canMutate && plugin.state !== "needs-setup", () => props.onSetEnabled(plugin.id, !plugin.enabled, key))}
     ${plugin.removable ? action("uninstall", t("pluginsPage.uninstall"), "oc-action-secondary", props.mutationBlockedReason, props.canMutate, () => props.onUninstall(plugin.id, key)) : nothing}
     <a
       class="btn btn--icon oc-action oc-action-icon oc-action-secondary"
