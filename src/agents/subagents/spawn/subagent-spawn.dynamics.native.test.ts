@@ -132,7 +132,9 @@ describe("native dynamics spawn boundary", () => {
       expect(result).toMatchObject({ status: "accepted" });
       const launch = requests.find((request) => request.method === "agent");
       expect(launch).toBeDefined();
-      expect(launch?.params.message).toEqual(expect.stringContaining('"boundary":"artifact-only"'));
+      expect(launch?.params.message).toEqual(
+        expect.stringContaining('"boundary":"artifact-only"'),
+      );
       expect(launch?.params.message).toEqual(expect.stringContaining('"sandbox":"require"'));
       expect(launch?.params.message).toEqual(expect.stringContaining("sha256:candidate"));
     },
