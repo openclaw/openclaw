@@ -2405,6 +2405,11 @@ class NodeForegroundServiceTest {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
       foregroundServiceTypes(VoiceCaptureMode.TalkMode, backgroundLocationActive = true),
     )
+    // Wake-word listening needs the microphone type even with no manual or Talk capture active.
+    assertEquals(
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+      foregroundServiceTypes(VoiceCaptureMode.Off, backgroundLocationActive = false, voiceWakeActive = true),
+    )
   }
 
   @Test

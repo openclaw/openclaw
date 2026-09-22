@@ -1271,6 +1271,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Running Since" to R.string.native_6e8a74ada297ff53,
     "Runs" to R.string.native_848f54e89660cea4,
     "Runs on-device while OpenClaw is visible." to R.string.native_83e2faed20a3cda4,
+    "Runs on-device while the OpenClaw node service is running." to R.string.native_807b625d89e5af68,
     "Runtime" to R.string.native_1093115897879aa3,
     "SHA-256 fingerprint" to R.string.native_684889f0079cc145,
     "SMS" to R.string.native_40b601a10ca536c1,

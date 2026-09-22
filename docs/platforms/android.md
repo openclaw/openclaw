@@ -457,10 +457,15 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Enable **Settings → Voice → Listen for wake words** for foreground on-device
-  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
-  recognition and microphone permission are available, and wake words are
-  synchronized with the current Gateway.
+- Enable **Settings → Voice → Listen for wake words** for on-device Voice Wake.
+  While enabled, the node foreground service adds the `microphone` service type
+  so listening continues after the app leaves the screen; Android grants that
+  type only while an Activity is visible, so the service retries it on the next
+  foreground visit if the grant was refused. The final reply to a wake-word
+  command is spoken through the Talk voice when the speaker is on. Android
+  advertises `voiceWake` only when enabled, on-device recognition and
+  microphone permission are available, and wake words are synchronized with
+  the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings → Phone Capabilities → Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).

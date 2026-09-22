@@ -64,7 +64,7 @@ Both broadcast to every WebSocket client with read scope (macOS app, WebChat, an
 
 - **macOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to stay in sync with other clients.
 - **iOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to keep local wake-word detection responsive.
-- **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device and foreground-only; it pauses while Talk, manual dictation, voice-note capture, or message speech owns audio.
+- **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device. On Android 13+ the app streams its own microphone capture to the on-device recognizer, so one session stays open with no start/stop tones and no silence timeout. It runs while the app is visible and keeps running in the background while the node foreground service holds the `microphone` service type; it pauses while Talk, manual dictation, voice-note capture, or message speech owns audio. The final reply to a wake-word command is spoken through the configured Talk voice when the speaker is on.
 
 ## Related
 

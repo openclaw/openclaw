@@ -4,15 +4,24 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -21,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,6 +43,8 @@ internal sealed interface VoiceWakeRecognitionEvent {
   data class Transcript(
     val text: String,
     val isFinal: Boolean,
+    /** True when the recognizer keeps listening after this final transcript (segmented session). */
+    val sessionContinues: Boolean = false,
   ) : VoiceWakeRecognitionEvent
 
   data class Error(
@@ -79,6 +91,24 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
   private var recognizer: SpeechRecognizer? = null
   private var recognitionSession: VoiceWakeRecognitionSession? = null
 
+  private enum class SessionMode {
+    /** The app records the microphone itself and streams PCM to the service: no per-session tones, no silence timeout. */
+    RawAudio,
+
+    /** One service-owned session that stays open across silences. */
+    SilenceSegmented,
+
+    /** Plain session; the service ends it after a few seconds of silence. */
+    Single,
+  }
+
+  // Start with the richest mode Android offers and demote for good when the service closes a
+  // session before it delivered anything (a sign the mode is unsupported here).
+  private var sessionMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) SessionMode.RawAudio else SessionMode.Single
+  private var sessionStartedAtMs = 0L
+  private var sessionDeliveredResults = false
+  private var audioSource: WakeAudioSource? = null
+
   override fun start(
     operationId: Long,
     onEvent: (VoiceWakeRecognitionEvent) -> Unit,
@@ -103,10 +133,11 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       }
       val session = VoiceWakeRecognitionSession(onEvent)
       try {
-        val active = createRecognizer(session)
+        val mode = sessionMode
+        val active = createRecognizer(session, mode)
         recognitionSession = session
         recognizer = active
-        active.startListening(recognizerIntent())
+        startListening(active, session, operationId, mode)
       } catch (_: Throwable) {
         session.retire()
         retireRecognizer()
@@ -141,7 +172,10 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
     }
   }
 
-  private fun createRecognizer(session: VoiceWakeRecognitionSession): SpeechRecognizer =
+  private fun createRecognizer(
+    session: VoiceWakeRecognitionSession,
+    mode: SessionMode,
+  ): SpeechRecognizer =
     SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { active ->
       active.setRecognitionListener(
         object : RecognitionListener {
@@ -150,6 +184,8 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
           }
 
           override fun onResults(results: Bundle?) {
+            sessionDeliveredResults = true
+            Log.d(TAG, "results: ${bestTranscript(results)}")
             bestTranscript(results)?.let { session.emit(VoiceWakeRecognitionEvent.Transcript(it, isFinal = true)) }
               ?: session.emit(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_NO_MATCH))
           }
@@ -160,7 +196,25 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
             }
           }
 
+          override fun onSegmentResults(segmentResults: Bundle) {
+            sessionDeliveredResults = true
+            Log.d(TAG, "segment: ${bestTranscript(segmentResults)}")
+            // The service keeps listening; a non-matching segment must not restart the session.
+            bestTranscript(segmentResults)?.let {
+              session.emit(VoiceWakeRecognitionEvent.Transcript(it, isFinal = true, sessionContinues = true))
+            }
+          }
+
+          override fun onEndOfSegmentedSession() {
+            Log.d(TAG, "end of segmented session")
+            noteSessionClosed(mode)
+            // The manager restarts on this error code after its normal delay.
+            session.emit(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_SPEECH_TIMEOUT))
+          }
+
           override fun onError(error: Int) {
+            Log.d(TAG, "error code=$error")
+            noteSessionClosed(mode, error)
             session.emit(VoiceWakeRecognitionEvent.Error(error))
           }
 
@@ -190,6 +244,8 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
     recognizer = null
     runCatching { active?.cancel() }
     runCatching { active?.destroy() }
+    audioSource?.close()
+    audioSource = null
   }
 
   private fun runOnMain(action: () -> Unit) {
@@ -218,14 +274,78 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
     failure.get()?.let { throw it }
   }
 
-  private fun recognizerIntent(): Intent =
+  private fun startListening(
+    active: SpeechRecognizer,
+    session: VoiceWakeRecognitionSession,
+    operationId: Long,
+    mode: SessionMode,
+  ) {
+    if (operationId != latestOperationId.get() || recognizer !== active) return
+    sessionStartedAtMs = SystemClock.elapsedRealtime()
+    sessionDeliveredResults = false
+    val intent = recognizerIntent(mode)
+    Log.d(TAG, "start mode=$mode")
+    active.startListening(intent)
+    // With app-supplied audio the service does not report readiness for speech; we own the mic.
+    if (mode == SessionMode.RawAudio) session.emit(VoiceWakeRecognitionEvent.Ready)
+  }
+
+  private fun noteSessionClosed(
+    mode: SessionMode,
+    errorCode: Int? = null,
+  ) {
+    // A missing language or permission says nothing about session-mode support.
+    if (errorCode == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
+      errorCode == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+      errorCode == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+    ) {
+      return
+    }
+    if (mode == SessionMode.Single || sessionDeliveredResults || sessionMode != mode) return
+    if (SystemClock.elapsedRealtime() - sessionStartedAtMs < SESSION_MIN_LIFETIME_MS) {
+      sessionMode = if (mode == SessionMode.RawAudio) SessionMode.SilenceSegmented else SessionMode.Single
+      Log.d(TAG, "session mode $mode unsupported here; using $sessionMode")
+    }
+  }
+
+  private fun recognizerIntent(mode: SessionMode): Intent =
     Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
       putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
       putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
       putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
       putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
       putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        when (mode) {
+          SessionMode.RawAudio -> applyRawAudioSessionExtras(this)
+          SessionMode.SilenceSegmented -> applySegmentedSessionExtras(this)
+          SessionMode.Single -> Unit
+        }
+      }
     }
+
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  private fun applySegmentedSessionExtras(intent: Intent) {
+    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
+    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
+    intent.putExtra(
+      RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+      RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+    )
+  }
+
+  @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+  @SuppressLint("MissingPermission")
+  private fun applyRawAudioSessionExtras(intent: Intent) {
+    audioSource?.close()
+    val source = WakeAudioSource.open(WAKE_AUDIO_SAMPLE_RATE_HZ)
+    audioSource = source
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source.readDescriptor)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, WAKE_AUDIO_SAMPLE_RATE_HZ)
+    intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+  }
 
   private fun bestTranscript(bundle: Bundle?): String? =
     bundle
@@ -233,6 +353,92 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       ?.firstOrNull()
       ?.trim()
       ?.takeIf(String::isNotEmpty)
+
+  private companion object {
+    const val TAG = "VoiceWake"
+    const val SESSION_MIN_LIFETIME_MS = 1_500L
+    const val WAKE_AUDIO_SAMPLE_RATE_HZ = 16_000
+  }
+}
+
+/** Microphone capture streamed to the recognition service over a pipe for one wake session. */
+private class WakeAudioSource private constructor(
+  val readDescriptor: ParcelFileDescriptor,
+  private val writeStream: ParcelFileDescriptor.AutoCloseOutputStream,
+  private val recorder: AudioRecord,
+  bufferSize: Int,
+) {
+  @Volatile private var closed = false
+  private val pump =
+    Thread({
+      val buffer = ByteArray(bufferSize)
+      try {
+        while (!closed) {
+          val read = recorder.read(buffer, 0, buffer.size)
+          if (read <= 0) break
+          writeStream.write(buffer, 0, read)
+        }
+      } catch (_: IOException) {
+        // The service closed its end; the session is over.
+      } finally {
+        release()
+      }
+    }, "voice-wake-audio")
+
+  private fun start() {
+    pump.isDaemon = true
+    pump.start()
+  }
+
+  @Synchronized
+  fun close() {
+    closed = true
+    runCatching { recorder.stop() }
+    release()
+  }
+
+  @Synchronized
+  private fun release() {
+    runCatching { recorder.stop() }
+    runCatching { recorder.release() }
+    runCatching { writeStream.close() }
+    runCatching { readDescriptor.close() }
+  }
+
+  companion object {
+    @SuppressLint("MissingPermission")
+    fun open(sampleRateHz: Int): WakeAudioSource {
+      val minBufferSize = AudioRecord.getMinBufferSize(sampleRateHz, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+      check(minBufferSize > 0) { "AudioRecord buffer unavailable" }
+      val pipe = ParcelFileDescriptor.createPipe()
+      var recorder: AudioRecord? = null
+      try {
+        recorder =
+          AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            sampleRateHz,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            minBufferSize * 2,
+          )
+        check(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord initialization failed" }
+        recorder.startRecording()
+        check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
+        return WakeAudioSource(
+          readDescriptor = pipe[0],
+          writeStream = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]),
+          recorder = recorder,
+          bufferSize = minBufferSize.coerceAtLeast(4_096),
+        ).also { it.start() }
+      } catch (err: Throwable) {
+        runCatching { recorder?.stop() }
+        runCatching { recorder?.release() }
+        runCatching { pipe[1].close() }
+        runCatching { pipe[0].close() }
+        throw err
+      }
+    }
+  }
 }
 
 internal enum class VoiceWakeSuppressionReason {
@@ -276,6 +482,7 @@ internal class VoiceWakeManager(
   private val lock = Any()
   private var enabled = false
   private var foreground = false
+  private var backgroundListeningAllowed = false
   private var sessionGeneration = 0L
   private var sessionActive = false
   private var commandInFlight = false
@@ -311,6 +518,19 @@ internal class VoiceWakeManager(
     val action =
       synchronized(lock) {
         foreground = value
+        reconcileLocked()
+      }
+    performRecognizerAction(action)
+  }
+
+  /**
+   * Allows recognition while no Activity is visible. Only the node foreground service may grant
+   * this, after the OS accepted its microphone service type; without it Android denies the mic.
+   */
+  fun setBackgroundListeningAllowed(value: Boolean) {
+    val action =
+      synchronized(lock) {
+        backgroundListeningAllowed = value
         reconcileLocked()
       }
     performRecognizerAction(action)
@@ -360,7 +580,7 @@ internal class VoiceWakeManager(
   private fun reconcileLocked(): RecognizerAction? {
     val blockedStatus = blockedStatusLocked()
     if (blockedStatus != null) {
-      val action = stopSessionLocked(destroy = !enabled || !foreground)
+      val action = stopSessionLocked(destroy = !enabled || !canListenLocked())
       _statusText.value = blockedStatus
       return action
     }
@@ -375,9 +595,11 @@ internal class VoiceWakeManager(
       !enabled -> nativeText("Off")
       !recognizer.isAvailable -> nativeText("On-device speech recognition unavailable")
       !hasRecordAudioPermission() -> nativeText("Microphone permission required")
-      !foreground || suppressionReasons.isNotEmpty() -> nativeText("Paused")
+      !canListenLocked() || suppressionReasons.isNotEmpty() -> nativeText("Paused")
       else -> null
     }
+
+  private fun canListenLocked(): Boolean = foreground || backgroundListeningAllowed
 
   private fun startSessionLocked(): RecognizerAction {
     sessionGeneration += 1
@@ -407,7 +629,7 @@ internal class VoiceWakeManager(
             // has the recognizer's end-of-utterance boundary and is safe to dispatch.
             if (!event.isFinal) return
             val transcriptAction = handleTranscriptLocked(event.text)
-            if (transcriptAction == null) {
+            if (transcriptAction == null && !event.sessionContinues) {
               sessionActive = false
               _isListening.value = false
               scheduleRestartLocked()

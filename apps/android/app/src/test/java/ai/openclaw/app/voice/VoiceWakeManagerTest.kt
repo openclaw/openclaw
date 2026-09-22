@@ -223,6 +223,62 @@ class VoiceWakeManagerTest {
       assertEquals(2, recognizer.startCount)
     }
 
+  @Test
+  fun backgroundListeningAllowanceKeepsRecognizerRunningWithoutForeground() =
+    runTest {
+      val recognizer = FakeVoiceWakeRecognizer()
+      val manager = manager(recognizer = recognizer)
+
+      manager.setEnabled(true)
+      manager.setForeground(false)
+      assertEquals("Paused", manager.statusText.value)
+      assertEquals(0, recognizer.startCount)
+
+      // The node foreground service holds the microphone type: listen while no Activity is visible.
+      manager.setBackgroundListeningAllowed(true)
+      recognizer.emit(VoiceWakeRecognitionEvent.Ready)
+      assertEquals(1, recognizer.startCount)
+      assertTrue(manager.isListening.value)
+
+      // Losing the service (or its microphone type) pauses the recognizer again.
+      manager.setBackgroundListeningAllowed(false)
+      assertEquals("Paused", manager.statusText.value)
+      assertFalse(manager.isListening.value)
+      assertEquals(1, recognizer.startCount)
+
+      // A visible Activity still listens on its own, as before.
+      manager.setForeground(true)
+      assertEquals(2, recognizer.startCount)
+    }
+
+  @Test
+  fun segmentedSessionKeepsListeningAcrossNonMatchingSegments() =
+    runTest {
+      val recognizer = FakeVoiceWakeRecognizer()
+      val commands = mutableListOf<VoiceWakeMatch>()
+      val manager =
+        manager(recognizer = recognizer) { match ->
+          commands += match
+          true
+        }
+
+      manager.setForeground(true)
+      manager.setEnabled(true)
+      recognizer.emit(VoiceWakeRecognitionEvent.Ready)
+
+      // A segment without a wake word must not restart the session (that restart plays the tone).
+      recognizer.emit(VoiceWakeRecognitionEvent.Transcript("just talking", isFinal = true, sessionContinues = true))
+      advanceUntilIdle()
+      assertTrue(manager.isListening.value)
+      assertEquals(1, recognizer.startCount)
+      assertEquals(0, recognizer.stopCount)
+
+      recognizer.emit(VoiceWakeRecognitionEvent.Transcript("openclaw show status", isFinal = true, sessionContinues = true))
+      runCurrent()
+      assertEquals(listOf(VoiceWakeMatch("openclaw", "show status")), commands)
+      assertEquals(1, recognizer.stopCount)
+    }
+
   private fun kotlinx.coroutines.test.TestScope.manager(
     recognizer: FakeVoiceWakeRecognizer,
     hasPermission: () -> Boolean = { true },

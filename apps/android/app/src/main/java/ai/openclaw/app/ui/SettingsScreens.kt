@@ -743,7 +743,7 @@ private fun VoiceSettingsScreen(
               title = nativeString("Listen for wake words"),
               subtitle =
                 if (voiceWakeAvailable) {
-                  nativeString("Runs on-device while OpenClaw is visible.")
+                  nativeString("Runs on-device while the OpenClaw node service is running.")
                 } else {
                   nativeString("On-device speech recognition is unavailable.")
                 },

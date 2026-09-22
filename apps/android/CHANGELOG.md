@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Keeps wake-word listening running in the background through the node foreground service and speaks wake-word replies aloud.
+
 ## 2026.8.2 - 2026-08-31
 
 View your connected machine's desktop from your phone, and follow live subagent progress in chat.

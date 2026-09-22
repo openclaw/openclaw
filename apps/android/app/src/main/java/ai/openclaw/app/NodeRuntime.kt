@@ -123,6 +123,7 @@ import ai.openclaw.app.voice.VoiceConversationRole
 import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
+import ai.openclaw.app.voice.VoiceWakeReplyTracker
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
 import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
@@ -1178,6 +1179,11 @@ class NodeRuntime private constructor(
   val voiceWakeWordsSaving: StateFlow<Boolean> = _voiceWakeWordsSaving.asStateFlow()
   private val _voiceWakeWordsNoticeText = MutableStateFlow<NativeText?>(null)
   val voiceWakeWordsNoticeText: StateFlow<String?> = _voiceWakeWordsNoticeText.resolveOptionalNativeText()
+  private val _voiceWakeBackgroundCaptureRequested = MutableStateFlow(false)
+
+  /** True while the node foreground service should hold the microphone type for wake-word listening. */
+  val voiceWakeBackgroundCaptureRequested: StateFlow<Boolean> = _voiceWakeBackgroundCaptureRequested.asStateFlow()
+  private val voiceWakeReplyTracker = VoiceWakeReplyTracker()
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
@@ -3438,6 +3444,7 @@ class NodeRuntime private constructor(
     reconcileVoiceWakeCaptureSuppression()
     voiceWakeManager.setForeground(initialForeground)
     voiceWakeManager.setEnabled(prefs.voiceWakeEnabled.value)
+    refreshVoiceWakeBackgroundCaptureRequest()
     scope.launch {
       combine(micCapture.micCooldown, talkMode.audioRetirement.completion, micCapture.audioRetirement.completion) { _, talk, mic ->
         talk to mic
@@ -4360,6 +4367,7 @@ class NodeRuntime private constructor(
     if (prefs.voiceWakeEnabled.value == value) return
     prefs.setVoiceWakeEnabled(value)
     voiceWakeManager.setEnabled(value)
+    refreshVoiceWakeBackgroundCaptureRequest()
     refreshVoiceWakeCapabilitySurfaceIfChanged()
   }
 
@@ -4427,7 +4435,21 @@ class NodeRuntime private constructor(
 
   fun refreshVoiceWakePermission() {
     voiceWakeManager.refreshPermission()
+    refreshVoiceWakeBackgroundCaptureRequest()
     refreshVoiceWakeCapabilitySurfaceIfChanged()
+  }
+
+  private fun refreshVoiceWakeBackgroundCaptureRequest() {
+    _voiceWakeBackgroundCaptureRequested.value =
+      mode == NodeRuntimeMode.Live &&
+      prefs.voiceWakeEnabled.value &&
+      voiceWakeManager.isAvailable &&
+      hasRecordAudioPermission()
+  }
+
+  /** The node foreground service reports whether the OS accepted its microphone service type. */
+  fun setVoiceWakeBackgroundCaptureGranted(granted: Boolean) {
+    voiceWakeManager.setBackgroundListeningAllowed(granted)
   }
 
   private fun isVoiceWakeCapabilityEnabled(): Boolean =
@@ -5642,6 +5664,7 @@ class NodeRuntime private constructor(
     }
     if (retireRunState) updateGatewayDefaultAgentId(null)
     invalidateVoiceWakeWordsForGateway()
+    voiceWakeReplyTracker.clear()
     chat.onGatewayScopeChanging(retireRunState)
     stopMessageSpeech()
     micCapture.onGatewayScopeChanging()
@@ -6072,6 +6095,9 @@ class NodeRuntime private constructor(
     if (event == GatewayEvent.VoicewakeChanged.rawValue) {
       applyVoiceWakeWords(payloadJson)
     }
+    if (event == "chat") {
+      handleVoiceWakeReplyChatEvent(payloadJson)
+    }
     if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
       refreshModelCatalog()
       refreshProviderModels()
@@ -6236,17 +6262,40 @@ class NodeRuntime private constructor(
     val gatewayId = connectedEndpoint?.stableId ?: return false
     if (!isVoiceWakeWordsReadyFor(gatewayId)) return false
     if (!_nodeConnected.value) return false
+    val sessionKey = resolveMainSessionKey()
     val payload =
       buildJsonObject {
         put("eventId", JsonPrimitive(UUID.randomUUID().toString()))
         put("text", JsonPrimitive(match.command))
-        put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
+        put("sessionKey", JsonPrimitive(sessionKey))
       }
-    return nodeSession.sendNodeEventForEndpoint(
-      expectedEndpointStableId = gatewayId,
-      event = "voice.transcript",
-      payloadJson = payload.toString(),
-    )
+    // Arm before sending so the first chat event of the answering run cannot slip past.
+    voiceWakeReplyTracker.arm(sessionKey = sessionKey, nowMs = SystemClock.elapsedRealtime())
+    val delivered =
+      nodeSession.sendNodeEventForEndpoint(
+        expectedEndpointStableId = gatewayId,
+        event = "voice.transcript",
+        payloadJson = payload.toString(),
+      )
+    if (!delivered) voiceWakeReplyTracker.clear()
+    return delivered
+  }
+
+  private fun handleVoiceWakeReplyChatEvent(payloadJson: String?) {
+    if (payloadJson.isNullOrBlank()) return
+    val payload = runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }.getOrNull() ?: return
+    val text = voiceWakeReplyTracker.onChatEvent(payload, nowMs = SystemClock.elapsedRealtime()) ?: return
+    // Talk mode already speaks every final reply on its own.
+    if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) return
+    scope.launch {
+      try {
+        voiceReplySpeaker.speakAssistantReply(text)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        Log.w("OpenClawRuntime", "voice wake reply speech failed: ${err.message ?: err::class.java.simpleName}")
+      }
+    }
   }
 
   private fun handleExecApprovalGatewayEvent(
