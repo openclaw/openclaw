@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { setTimeout as wait } from "node:timers/promises";
 import {
+  GitHubDiffDataError,
   GitHubRateLimitError,
   createGitHubApi,
   parseApprovalCommands,
@@ -55,17 +55,16 @@ function snapshot(pr) {
   };
 }
 
-export async function assertGuardUnchanged(guard, { allowFileCountChange = false } = {}) {
-  const current = await guard.api.request(guard.pullPath);
+function assertPullRequestUnchanged(pullRequest, current, { allowFileCountChange = false } = {}) {
   if (
-    current.number === guard.pullRequest.number &&
-    isSupersededHead(guard.pullRequest.head?.sha, current.head?.sha)
+    current.number === pullRequest.number &&
+    isSupersededHead(pullRequest.head?.sha, current.head?.sha)
   ) {
     throw new SupersededReviewError();
   }
   const expected = allowFileCountChange
-    ? { ...guard.pullRequest, changed_files: current.changed_files }
-    : guard.pullRequest;
+    ? { ...pullRequest, changed_files: current.changed_files }
+    : pullRequest;
   const currentSnapshot = snapshot(current);
   const changedFields = Object.entries(snapshot(expected))
     // Keep the original array serialization's null/undefined equivalence.
@@ -73,6 +72,9 @@ export async function assertGuardUnchanged(guard, { allowFileCountChange = false
       ([field, value]) => JSON.stringify([value]) !== JSON.stringify([currentSnapshot[field]]),
     )
     .map(([field]) => field);
+  if (changedFields.length === 1 && changedFields[0] === "changed_files") {
+    throw new GitHubDiffDataError("The changed-file count changed during security review.");
+  }
   if (changedFields.length > 0) {
     throw new Error(
       `The pull request changed during security review (changed fields: ${changedFields.join(", ")}); the next automatic event will evaluate it.`,
@@ -81,33 +83,24 @@ export async function assertGuardUnchanged(guard, { allowFileCountChange = false
   return current;
 }
 
-async function readGuardFileSnapshot(review) {
-  const retryDelays = [1_000, 2_000, 4_000];
-  let pullRequest = review.pullRequest;
-  for (let attempt = 0; ; attempt += 1) {
-    const files = await review.api.paginate(`${review.pullPath}/files`);
-    const current = await assertGuardUnchanged(review, { allowFileCountChange: true });
-    if (
-      files.length === pullRequest.changed_files &&
-      current.changed_files === pullRequest.changed_files
-    ) {
-      return { pullRequest: current, files };
-    }
-    const detail = `GitHub did not return a consistent, complete changed-file list (expected ${pullRequest.changed_files}, received ${files.length}, current count ${current.changed_files})`;
-    if (attempt >= retryDelays.length) {
-      throw new Error(
-        `${detail}. Automatic file-list recovery exhausted; security review remains incomplete.`,
-      );
-    }
-    console.warn(`${detail}; retrying in ${retryDelays[attempt] / 1_000}s.`);
-    await wait(retryDelays[attempt]);
-    // Only the count may settle. A changed head, target, or author invalidates
-    // this evaluation; never reuse partial files against a corrected count.
-    pullRequest = await assertGuardUnchanged(review, { allowFileCountChange: true });
-  }
+export async function assertGuardUnchanged(guard, options) {
+  const current = await guard.api.request(guard.pullPath);
+  return assertPullRequestUnchanged(guard.pullRequest, current, options);
 }
 
-export async function readGuardReview() {
+async function readGuardFileSnapshot(review) {
+  const files = await review.api.paginate(`${review.pullPath}/files`);
+  const current = await assertGuardUnchanged(review, { allowFileCountChange: true });
+  const expected = review.pullRequest.changed_files;
+  if (files.length !== expected || current.changed_files !== expected) {
+    throw new GitHubDiffDataError(
+      `GitHub did not return a consistent, complete changed-file list (expected ${expected}, received ${files.length}, current count ${current.changed_files}).`,
+    );
+  }
+  return { pullRequest: current, files };
+}
+
+export async function readGuardReview(previousReview) {
   const { GITHUB_TOKEN, GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env;
   if (!GITHUB_TOKEN || !GITHUB_EVENT_PATH || !GITHUB_REPOSITORY) {
     throw new Error("GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.");
@@ -128,6 +121,13 @@ export async function readGuardReview() {
   const api = createGitHubApi(GITHUB_TOKEN, { userAgent: "openclaw-security-review" });
   const pullPath = `/repos/${owner}/${repo}/pulls/${number}`;
   const pullRequest = await api.request(pullPath);
+  if (previousReview) {
+    // Only diff counts may settle across recovery. Other PR changes still
+    // invalidate the original evaluation before any new writes or approvals.
+    assertPullRequestUnchanged(previousReview.pullRequest, pullRequest, {
+      allowFileCountChange: true,
+    });
+  }
   const expectedHead = process.env.OPENCLAW_SECURITY_REVIEW_HEAD_SHA;
   if (expectedHead !== undefined && expectedHead !== pullRequest.head?.sha) {
     if (pullRequest.number === number && isSupersededHead(expectedHead, pullRequest.head?.sha)) {
@@ -187,7 +187,7 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
   if (review.fileSnapshot) {
     await assertGuardUnchanged(review);
   } else {
-    // Share success or failure so the sibling guard cannot restart the budget.
+    // Both guards must evaluate the same complete file list for this attempt.
     review.fileSnapshot = readGuardFileSnapshot(review);
   }
   const { pullRequest, files } = await review.fileSnapshot;
