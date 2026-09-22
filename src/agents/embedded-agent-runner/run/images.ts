@@ -581,9 +581,9 @@ async function projectOrderedPromptMedia(params: {
     }
   });
   for (const [factIndex, fact] of params.media.entries()) {
-    if (isImageMediaFact(fact)) {
-      projected.push(...(imagesByFact.get(factIndex) ?? []));
-    } else if (isVideoMediaFact(fact)) {
+    // Extracted document pages carry their document fact index too.
+    projected.push(...(imagesByFact.get(factIndex) ?? []));
+    if (isVideoMediaFact(fact)) {
       projected.push(
         params.options.provider
           ? await materializeVideoFact(fact, params.budget, params.options)

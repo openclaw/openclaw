@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveProviderContext,
   type ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
+import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildForkedChildTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-parent-fork.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -24,6 +25,9 @@ import { installHistoryImagePruneContextTransform } from "./history-image-prune.
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 
+const extractPdf = vi.hoisted(() => vi.fn());
+vi.mock("../../../media/pdf-extract.js", () => ({ extractPdfContent: extractPdf }));
+afterEach(() => extractPdf.mockReset());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -155,6 +159,94 @@ describe("native document replay", () => {
         expect(text.match(/remember the blue lighthouse/g)).toHaveLength(1);
         expect(JSON.stringify(history)).toBe(serialized);
         expect(JSON.stringify(agent.state.messages.slice(0, history.length))).toBe(serialized);
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { pdfFirst: false, video: false, inline: false, photoSuppressed: false },
+    { pdfFirst: true, video: false, inline: false, photoSuppressed: false },
+    { pdfFirst: false, video: true, inline: false, photoSuppressed: false },
+    { pdfFirst: true, video: true, inline: false, photoSuppressed: false },
+    { pdfFirst: false, video: false, inline: true, photoSuppressed: false },
+    { pdfFirst: true, video: false, inline: true, photoSuppressed: false },
+    { pdfFirst: false, video: false, inline: false, photoSuppressed: true },
+  ])(
+    "preserves photo/PDF identity: PDF first=$pdfFirst, video=$video, inline=$inline, described=$photoSuppressed",
+    async ({ pdfFirst, video, inline, photoSuppressed }) => {
+      const workspaceDir = tempDirs.make("openclaw-document-pages-");
+      const photo = path.join(workspaceDir, "photo.png");
+      const pdf = path.join(workspaceDir, "scan.pdf");
+      const page = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }).toString("base64");
+      await fs.writeFile(photo, Buffer.from(PNG, "base64"));
+      await fs.writeFile(pdf, "%PDF-1.4\n");
+      extractPdf.mockResolvedValue({
+        text: "",
+        images: [{ type: "image", data: page, mimeType: "image/png" }],
+      });
+      const media: MediaFact[] = [
+        { path: photo, contentType: "image/png", hydrationSuppressed: photoSuppressed },
+        { path: pdf, contentType: "application/pdf", hydrationSuppressed: true },
+      ];
+      if (pdfFirst) {
+        media.reverse();
+      }
+      if (video) {
+        const clip = path.join(workspaceDir, "clip.mp4");
+        await fs.writeFile(
+          clip,
+          Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex"),
+        );
+        media.splice(1, 0, { path: clip, contentType: "video/mp4" });
+      }
+      const slots = media.flatMap((fact, factIndex) =>
+        fact.contentType === "video/mp4"
+          ? []
+          : [
+              {
+                kind: "inline",
+                ...(fact.contentType === "image/png" ? { factIndex } : {}),
+              },
+            ],
+      );
+      const original = castAgentMessage({
+        role: "user",
+        content: inline
+          ? [
+              { type: "text", text: "Compare the attachments" },
+              { type: "image", data: PNG, mimeType: "image/png" },
+            ]
+          : "Compare the attachments",
+        timestamp: 1,
+        __openclaw: {
+          media,
+          mediaImageLayout: {
+            slots,
+            ...(photoSuppressed ? { suppressedFactIndexes: [0] } : {}),
+          },
+        },
+      });
+      const serialized = JSON.stringify(original);
+      const { agent, requests, cleanup } = fixture(workspaceDir);
+      try {
+        agent.state.messages = [original, makeAgentAssistantMessage({ content: [] })];
+        await agent.prompt("Which one is the photograph?");
+        const message = requests[0]?.messages[0];
+        if (message?.role !== "user" || !Array.isArray(message.content)) {
+          throw new Error("Expected provider user content");
+        }
+        const bytes = message.content.flatMap((block) =>
+          block.type === "image" ? [block.data] : [],
+        );
+        expect(bytes).toEqual(photoSuppressed ? [page] : pdfFirst ? [page, PNG] : [PNG, page]);
+        if (video) {
+          expect(
+            message.content.filter((block) => block.type !== "text").map((block) => block.type),
+          ).toEqual(["image", "video", "image"]);
+        }
+        expect(JSON.stringify(original)).toBe(serialized);
       } finally {
         cleanup();
       }

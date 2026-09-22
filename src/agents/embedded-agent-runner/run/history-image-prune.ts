@@ -26,6 +26,7 @@ import {
   type UserTranscriptContext,
 } from "./attempt-history.js";
 import { buildPromptImageFailureNotice, hydratePromptMediaMessages } from "./images.js";
+import { appendExtractedPromptImages } from "./prompt-image-metadata.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
@@ -384,14 +385,25 @@ export function installHistoryImagePruneContextTransform(
         if (files.text) {
           content.push({ type: "text", text: files.text });
         }
+        let projected: Extract<AgentMessage, { role: "user" }> = { ...message, content };
+        let extractedPageMedia: MediaFact[] | undefined;
         if (files.images.length) {
           if (mediaOptions.model.input?.includes("image")) {
-            const images = await sanitizeImageBlocks(files.images, "history:files", mediaOptions);
-            assertCurrent();
-            content.push(...images.images);
-            if (images.dropped) {
-              content.push({ type: "text", text: buildPromptImageFailureNotice(images.dropped) });
+            const pages = [];
+            let dropped = 0;
+            for (const page of files.images) {
+              const sanitized = await sanitizeImageBlocks([page], "history:files", mediaOptions);
+              assertCurrent();
+              dropped += sanitized.dropped;
+              pages.push(
+                ...sanitized.images.map((image) => ({ image, factIndex: page.attachmentIndex })),
+              );
             }
+            if (dropped) {
+              content.push({ type: "text", text: buildPromptImageFailureNotice(dropped) });
+            }
+            projected = appendExtractedPromptImages(projected, media, pages);
+            extractedPageMedia = readPersistedMediaFacts(projected);
           } else {
             content.push({
               type: "text",
@@ -399,12 +411,11 @@ export function installHistoryImagePruneContextTransform(
             });
           }
         }
-        const projected = { ...message, content };
         const runtimeMedia = readRuntimePromptMediaFacts(message);
         if (runtimeMedia) {
           attachRuntimePromptMediaFacts(
             projected,
-            runtimeMedia,
+            extractedPageMedia ?? runtimeMedia,
             readRuntimePromptImageOrder(message),
           );
         }
