@@ -292,7 +292,11 @@ export async function maintainBackupScratch(params: {
               }
               throw error;
             });
-          await inspectScratchPayload(directory);
+          // Live snapshots can remove journals while inspection awaits lstat.
+          // Token-backed repair inspects only after exclusive admission below.
+          if (!params.repair || !token) {
+            await inspectScratchPayload(directory);
+          }
           if (!token && !entry.name.startsWith(retiredPrefix)) {
             report.warnings.push(
               `Legacy backup scratch at ${directory} has no lifetime token. Confirm older backup processes have stopped before removing it.`,
