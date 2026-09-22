@@ -5549,6 +5549,17 @@ describe("agent event handler", () => {
         updatedAt: 1_000,
         status: "running",
         startedAt: 1_000,
+        goal: {
+          schemaVersion: 1,
+          id: "terminal-goal",
+          objective: "Finish the requested work",
+          status: "active",
+          createdAt: 1_000,
+          updatedAt: 1_000,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
       });
       vi.mocked(loadSessionEntry).mockImplementation(() => ({
         cfg: {},
@@ -5583,16 +5594,31 @@ describe("agent event handler", () => {
             "tool",
             { phase: "result", name: "read", isError: true, result: "An earlier tool failed." },
           ],
+        ]);
+        expect(read()?.goal?.status).toBe("active");
+        expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+        emitAgentEvents(handler, "run-terminal-final-failure", [
           ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
         ]);
         await Promise.all(
           persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
         );
 
-        expect(read()).toMatchObject({ status, lastRunError: terminal.error, endedAt: 2_000 });
+        const stoppedGoal = {
+          id: "terminal-goal",
+          status: "paused",
+          pausedAt: 2_000,
+          lastStatusNote: expect.stringContaining(terminal.error),
+        };
+        expect(read()).toMatchObject({
+          status,
+          lastRunError: terminal.error,
+          endedAt: 2_000,
+          goal: stoppedGoal,
+        });
         expect(
           broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
-        ).toMatchObject({ status, lastRunError: terminal.error });
+        ).toMatchObject({ status, lastRunError: terminal.error, session: { goal: stoppedGoal } });
 
         vi.setSystemTime(3_000);
         emitAgentEvents(handler, "run-recovered", [
@@ -5605,6 +5631,7 @@ describe("agent event handler", () => {
         await vi.advanceTimersByTimeAsync(15_000);
         expect(read()).toMatchObject({ status: "done", startedAt: 3_000, endedAt: 4_000 });
         expect(read()?.lastRunError).toBeUndefined();
+        expect(read()?.goal).toMatchObject(stoppedGoal);
         expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
           "error",
           "final",
