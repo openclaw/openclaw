@@ -69,9 +69,7 @@ function readRequirements(value: unknown): DynamicsSpawnRequirements {
   }
   const raw = readRecord(value, "dynamics.requirements");
   if (
-    Object.keys(raw).some(
-      (key) => !["sandbox", "candidateDigest", "artifactRefs"].includes(key),
-    )
+    Object.keys(raw).some((key) => !["sandbox", "candidateDigest", "artifactRefs"].includes(key))
   ) {
     throw new Error("unsupported dynamics requirement");
   }

@@ -14,21 +14,21 @@ import {
 } from "../sessions/session-lifecycle-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
 import { codeModeSwarmHandlers } from "./code-mode-swarm.runtime.js";
-import { createToolSearchCatalogRef } from "./tool-search-catalog.js";
-import type { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchToolContext } from "./tool-search-types.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
-import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
-import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
-import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
+import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
+import { createToolSearchCatalogRef } from "./tool-search-catalog.js";
+import type { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
