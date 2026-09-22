@@ -51,6 +51,7 @@ import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/libra
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { workerBackgroundExecEntrypoints } from "../../src/worker/worker-runtime-background-exec-entrypoints.test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
+import { benchSessionHistoryEntrypoint } from "../bench-session-history-runtime.test-support.ts";
 import { runtimeProcessBuildEntrypoints } from "./runtime-process-build-entries.mts";
 import { createRuntimeProcessBuildEntries } from "./runtime-process-core-build-entries.mts";
 import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.mts";
@@ -103,6 +104,7 @@ export const vitestWorkerBuildEntries = {
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
     ...runtimeProcessBuildEntrypoints,
+    benchSessionHistoryEntrypoint,
     ...Object.values(discordAudioTestEntrypoints),
     codexCatalogPageWorkerEntrypoint,
     agentWorkerStoreFixtureEntrypoint,

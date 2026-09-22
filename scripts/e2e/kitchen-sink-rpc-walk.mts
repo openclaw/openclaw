@@ -28,6 +28,11 @@ import {
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
 import {
+  calibrateKitchenSinkResources,
+  KITCHEN_RESOURCE_CONTROLS,
+  type KitchenSinkCalibration,
+} from "./lib/kitchen-sink-calibration.mts";
+import {
   compareResourcePhases,
   measureResourceOperations,
   summarizeResourcePhase,
@@ -1086,6 +1091,8 @@ async function rpcCall(method: string, params: unknown, options: RpcCallOptions)
   const module = await loadCallGatewayModule(options.runner);
   const payload = module
     ? await module.callGateway({
+        // Match gateway call: plugin RPCs are unknown to the backend scope map.
+        mode: "cli",
         config: readJson(options.env.OPENCLAW_CONFIG_PATH),
         configPath: options.env.OPENCLAW_CONFIG_PATH,
         url: `ws://127.0.0.1:${options.port}`,
@@ -2790,9 +2797,23 @@ type KitchenSinkResourceCase = {
   status: "blocked" | "exercised" | "failed";
   phases: KitchenSinkResourcePhase[];
   activePlugins?: string[];
+  calibration?: KitchenSinkCalibration;
   shutdown?: { exited: boolean; signals: string[]; exitCode: number | null; signal: string | null };
   error?: string;
 };
+
+export function assertKitchenSinkResourceShutdown(
+  shutdown: NonNullable<KitchenSinkResourceCase["shutdown"]>,
+) {
+  if (
+    !shutdown.exited ||
+    shutdown.exitCode !== 0 ||
+    shutdown.signal !== null ||
+    shutdown.signals.includes("SIGKILL")
+  ) {
+    throw new Error("Owned Gateway did not exit cleanly; temporary state retained");
+  }
+}
 
 async function profileKitchenSinkResources(reportPath: string) {
   if (
@@ -2849,6 +2870,7 @@ async function profileKitchenSinkResources(reportPath: string) {
         [
           "./kitchen-sink-rpc-walk.mts",
           "./lib/kitchen-sink-resources.mts",
+          "./lib/kitchen-sink-calibration.mts",
           "../lib/gateway-bench-profile.ts",
           "../lib/gateway-bench-profile-preload.ts",
         ].map((file) => [file, sha256(new URL(file, import.meta.url))]),
@@ -2875,6 +2897,12 @@ async function profileKitchenSinkResources(reportPath: string) {
       isolation:
         "minimal child environment; network and resource limits must be enforced by the external runner",
       instrumentation: "same private IPC preload in both cases; includes measurement overhead",
+      activeResources:
+        "resource types keeping the event loop alive; not ownership IDs or every live object",
+      calibration: {
+        ...KITCHEN_RESOURCE_CONTROLS,
+        operations: "asserted control steps, including any timer progress probes",
+      },
       runs: 1,
       neutralWarmupOperations: 1,
       pluginToolWarmupOperations: 0,
@@ -2885,8 +2913,8 @@ async function profileKitchenSinkResources(reportPath: string) {
     },
     postDisposalResidual: {
       status: "unsupported",
-      reason: "Gateway shutdown exits the measured process; no in-process disposal observation",
-    },
+      reason: "In-process plugin retirement has not completed",
+    } as KitchenSinkCalibration["postDisposalResidual"],
     cases,
     comparison: [] as ReturnType<typeof compareResourcePhases>,
   };
@@ -3005,6 +3033,18 @@ async function profileKitchenSinkResources(reportPath: string) {
             );
           });
           await idle("post-tool");
+          result.calibration = await calibrateKitchenSinkResources({
+            pluginId: PLUGIN_ID,
+            rpc: (method, params) => rpcCall(method, params, rpcOptions),
+            sample,
+            assertDisabled: (payload) => {
+              assertKitchenSinkResourcePlugins(payload, false);
+            },
+          });
+          report.postDisposalResidual = result.calibration.postDisposalResidual;
+          if (result.calibration.status !== "exercised") {
+            throw new Error(`Resource calibration: ${result.calibration.error}`);
+          }
         }
         assertNoErrorLogs(logPath);
         result.status = "exercised";
@@ -3030,16 +3070,7 @@ async function profileKitchenSinkResources(reportPath: string) {
               exitCode: child.exitCode,
               signal: child.signalCode,
             };
-            if (!exited) {
-              result.status = "failed";
-              result.error = [
-                result.error,
-                "Owned Gateway process group did not exit; temporary state retained",
-              ]
-                .filter(Boolean)
-                .join("; ")
-                .slice(0, 2_048);
-            }
+            assertKitchenSinkResourceShutdown(result.shutdown);
           } catch (error) {
             result.status = "failed";
             result.error = [result.error, `Shutdown failed: ${String(error)}`]

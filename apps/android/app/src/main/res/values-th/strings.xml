@@ -1419,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชทมีปัญหาที่ต้องตรวจสอบ"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw รวบรวมและส่งชื่อ รหัสแพ็กเกจ และสถานะของแอปที่มองเห็นได้บนโทรศัพท์เครื่องนี้เมื่อ OpenClaw Gateway ที่จับคู่ไว้ร้องขอข้อมูลดังกล่าว ข้อมูลนี้ช่วยให้ผู้ช่วยของคุณตอบคำถามและดำเนินการต่าง ๆ โดยใช้แอปที่ติดตั้งไว้ได้"</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ยังไม่ได้เชื่อมต่อ"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่มีผลลัพธ์"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"นโยบาย"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แทนที่ %1$s — อัปเดตล่าสุด %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"หมดเวลารอการยืนยันข้อความที่ส่งแล้ว โปรดรีเฟรชเพื่อตรวจสอบสถานะการส่ง"</string>

@@ -29,6 +29,10 @@ const jobPageSchema = z.object({
   ),
 });
 
+type TimingJob = z.infer<typeof jobPageSchema>["jobs"][number] & {
+  kind: CiTimingRun["logs"][number]["kind"];
+};
+
 async function readGh(args: string[]): Promise<string> {
   const retryDelays = [1000, 3000, 6000];
   for (let attempt = 0; ; attempt += 1) {
@@ -107,11 +111,14 @@ async function main() {
   async function readRun(run: z.infer<typeof runSchema>, source: TimingSource) {
     const logs: CiTimingRun["logs"] = [];
     const completeInventory = run.conclusion === "success";
+    const jobsByAttempt: TimingJob[][] = [];
+    let afterCutoff = false;
     let pages = 0;
     // A partial retry omits successful original jobs. Read every captured attempt,
     // then give the refit one run so retries cannot become independent samples.
     for (let attempt = 1; attempt <= run.run_attempt; attempt += 1) {
-      const attemptLogs: CiTimingRun["logs"] = [];
+      const timingJobs: TimingJob[] = [];
+      jobsByAttempt.push(timingJobs);
       const jobIds = new Set<number>();
       let total: number | undefined;
       for (let page = 1; page <= 25; page += 1) {
@@ -126,6 +133,7 @@ async function main() {
             ]),
           ),
         );
+        const observedAt = Date.now();
         if (total !== undefined && total !== payload.total_count) {
           throw new Error(`Job pagination changed for run ${run.id} attempt ${attempt}`);
         }
@@ -153,14 +161,15 @@ async function main() {
           if (
             job.status !== "completed" ||
             !job.completed_at ||
-            !inWindow(job.started_at) ||
-            !inWindow(job.completed_at) ||
-            Date.parse(job.completed_at) < Date.parse(job.started_at)
+            Date.parse(job.started_at) < Date.parse(lower) ||
+            Date.parse(job.completed_at) < Date.parse(job.started_at) ||
+            Date.parse(job.completed_at) > observedAt
           ) {
             throw new Error(
               `Successful job ${job.id} is not completed inside the frozen UTC window`,
             );
           }
+          afterCutoff ||= Date.parse(job.completed_at) > Date.parse(upper);
           const kind =
             source === "release"
               ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
@@ -176,12 +185,7 @@ async function main() {
                     ? "compact"
                     : undefined;
           if (kind) {
-            console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
-            attemptLogs.push({
-              kind,
-              labels: job.labels,
-              text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
-            });
+            timingJobs.push({ ...job, kind });
           }
         }
         if (jobIds.size === total) {
@@ -190,6 +194,24 @@ async function main() {
         if (jobIds.size > total || payload.jobs.length === 0 || page === 25) {
           throw new Error(`Job pagination incomplete for run ${run.id} attempt ${attempt}`);
         }
+      }
+    }
+    // A run can finish after the frozen cutoff while earlier cohorts download.
+    // Validate every captured attempt first; dropping only its late jobs would
+    // misrepresent a partial inventory as complete evidence for pruning.
+    if (afterCutoff) {
+      return null;
+    }
+    for (const [index, timingJobs] of jobsByAttempt.entries()) {
+      const attempt = index + 1;
+      const attemptLogs: CiTimingRun["logs"] = [];
+      for (const job of timingJobs) {
+        console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+        attemptLogs.push({
+          kind: job.kind,
+          labels: job.labels,
+          text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+        });
       }
       const { contributingRunIds } = refitTestTimings([
         { id: run.id, createdAt: run.created_at, logs: attemptLogs, completeInventory },
@@ -268,6 +290,12 @@ async function main() {
           continue;
         }
         const timingRun = await readRun(run, source);
+        if (timingRun === null) {
+          console.error(
+            `Skipped ${source} run ${run.id}: jobs completed after frozen UTC cutoff ${upper}.`,
+          );
+          continue;
+        }
         const { contributingRunIds } = refitTestTimings([timingRun]);
         const compact = contributingRunIds.blacksmith.length + contributingRunIds.github.length > 0;
         const contributes =
@@ -310,7 +338,13 @@ async function main() {
       if (run.id !== id) {
         throw new Error(`Requested tooling run ${id} returned run ${run.id}`);
       }
-      runs.push(await readRun(run, "tooling"));
+      const timingRun = await readRun(run, "tooling");
+      if (timingRun === null) {
+        throw new Error(
+          `Requested tooling run ${id} has jobs completed after frozen UTC cutoff ${upper}.`,
+        );
+      }
+      runs.push(timingRun);
     }
     const { contributingRunIds } = refitTestTimings(runs, undefined, { seedTooling: true });
     if (
