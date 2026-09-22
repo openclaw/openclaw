@@ -28,6 +28,7 @@ import {
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import type { PrefixRecoveryResult } from "./io.recovery.js";
 import type {
   BestEffortConfigSnapshot,
   ConfigSnapshotReadOptions,
@@ -384,7 +385,7 @@ export async function recoverConfigFromLastKnownGood(params: {
 
 export async function recoverConfigFromJsonRootSuffix(
   snapshot: ConfigFileSnapshot,
-): Promise<boolean> {
+): Promise<PrefixRecoveryResult> {
   return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot);
 }
 

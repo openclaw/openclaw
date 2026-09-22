@@ -9,6 +9,7 @@ import {
   recoverConfigFromLastKnownGood,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
+import { PREFIX_RECOVERY_PRESERVATION_REFUSED } from "../config/io.recovery.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
@@ -95,11 +96,13 @@ export async function prepareDoctorConfigRecovery(params: {
         ? params.planRepair(snapshot)
         : null;
     let configRepaired = false;
-    if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
+    const prefixRecovery = await recoverConfigFromJsonRootSuffix(snapshot);
+    if (!activeConfigRepair && prefixRecovery === true) {
       note("Removed non-JSON prefix from openclaw.json.", "Config");
       configRepaired = true;
     } else if (
       !activeConfigRepair &&
+      prefixRecovery !== PREFIX_RECOVERY_PRESERVATION_REFUSED &&
       // Config preparation imports these records; backup recovery would erase its source.
       !pendingPluginInstallConfig &&
       (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
