@@ -27,9 +27,9 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-afterEach(() => {
+afterEach(async () => {
   resetGlobalHookRunner();
-  resetCodeModeTestState();
+  await resetCodeModeTestState();
 });
 
 function createFixture(

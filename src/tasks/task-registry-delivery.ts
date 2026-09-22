@@ -367,7 +367,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
             } = fresh;
             const requesterAgentId = owner.agentId;
             const inspectUrl = latest.childSessionKey
-              ? resolveTaskControlUiSessionUrl?.({
+              ? resolveTaskControlUiSessionUrl({
                   sessionKey: latest.childSessionKey,
                   fallbackAgentId:
                     parseAgentSessionKey(latest.childSessionKey)?.agentId ?? requesterAgentId,

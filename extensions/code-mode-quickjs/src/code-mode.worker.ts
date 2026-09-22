@@ -1,7 +1,29 @@
-/**
- * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
- */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+/** QuickJS worker for Code Mode guest execution and suspended VM snapshots. */
+import {
+  CODE_MODE_CONTROLLER_SOURCE,
+  boundCodeModeError,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  EMPTY_CODE_MODE_OUTPUT,
+  buildUserSource,
+  SOURCE_LOCATION_KEY,
+  USER_SOURCE_FILE,
+  normalizeSourceStack,
+  prepareSource,
+  ToolInputError,
+  type CodeModeApiVirtualFile,
+  type CodeModeConfig,
+  type CodeModeNamespaceDescriptor,
+  type CodeModeWorkerPayload as SharedWorkerPayload,
+  type CodeModeWorkerContinuation,
+  type CodeModeVmResult,
+  type CodeModeWorkerThreadResult as SharedWorkerThreadResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
+  type SourceLocation,
+} from "openclaw/plugin-sdk/code-mode-executor-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { serveWorkerTasks, type WorkerTaskChannel } from "openclaw/plugin-sdk/worker-task-server";
 import {
   EvalFlags,
   JSException,
@@ -10,35 +32,15 @@ import {
   type JSValueHandle,
   type Snapshot,
 } from "quickjs-wasi";
-import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
-import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import {
-  boundCodeModeError,
-  captureCodeModeOutput,
-  captureCodeModeValue,
-  EMPTY_CODE_MODE_OUTPUT,
-} from "./code-mode-json.js";
-import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
-import {
-  buildUserSource,
-  SOURCE_LOCATION_KEY,
-  USER_SOURCE_FILE,
-  readSourceLocation,
-  normalizeSourceStack,
-  type SourceLocation,
-} from "./code-mode-source-location.js";
-import { prepareSource } from "./code-mode-source.js";
-import type {
-  CodeModeConfig,
-  CodeModeNamespaceDescriptor,
-  CodeModeWorkerPayload,
-  CodeModeWorkerContinuation,
-  CodeModeVmResult as CodeModeWorkerResult,
-  CodeModeWorkerThreadResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
-} from "./code-mode-worker-types.js";
-import { ToolInputError } from "./tool-input-error.js";
+import { readSourceLocation } from "./source-location.js";
+
+type CodeModeWorkerPayload = SharedWorkerPayload<Snapshot> & {
+  wasmModule: WebAssembly.Module;
+  wasmExtensions: Array<{ name: string; wasm: WebAssembly.Module }>;
+};
+type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
+type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
+
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
 
@@ -215,12 +217,12 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
   };
   const vm =
     input.kind === "resume"
-      ? await QuickJS.restore(input.snapshot, options)
+      ? await QuickJS.restore(input.continuation, options)
       : await QuickJS.create(options);
   try {
     if (input.kind === "resume") {
       // Restore owns an independent WASM heap; all incoming aliases share this snapshot.
-      input.snapshot.memory = new Uint8Array();
+      input.continuation.memory = new Uint8Array();
     }
     const callbacks = [
       ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
@@ -396,7 +398,7 @@ function waitingResult(params: {
   }
   return {
     status: "waiting",
-    snapshot,
+    continuation: snapshot,
     pendingRequests: params.bridge.pendingRequests,
     canceledRequestIds: params.bridge.canceledRequestIds,
     settlementMode: params.settlementMode,
@@ -637,6 +639,7 @@ async function main(
       output: EMPTY_CODE_MODE_OUTPUT,
     };
   }
+  // SAFETY: The private executor sends core-normalized limits through structured clone.
   const config = input.config as CodeModeConfig;
   try {
     if (config.timeoutMs <= 0) {
@@ -656,10 +659,10 @@ async function main(
             config,
             catalog: Array.isArray(input.catalog) ? input.catalog : [],
             apiFiles: Array.isArray(input.apiFiles)
-              ? (input.apiFiles as CodeModeApiVirtualFile[])
+              ? (input.apiFiles as CodeModeApiVirtualFile[]) // SAFETY: Only host-prepared declaration files enter this channel.
               : [],
             namespaces: Array.isArray(input.namespaces)
-              ? (input.namespaces as CodeModeNamespaceDescriptor[])
+              ? (input.namespaces as CodeModeNamespaceDescriptor[]) // SAFETY: The host serializes these descriptors before dispatch.
               : [],
             swarmEnabled: input.swarmEnabled === true,
           },
@@ -670,7 +673,7 @@ async function main(
       );
     }
     // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
-    const snapshot = input.snapshot as Snapshot | undefined;
+    const snapshot = input.continuation as Snapshot | undefined;
     if (input.kind === "resume" && snapshot?.memory instanceof Uint8Array) {
       return captureWorkerResult(
         await run(
@@ -678,13 +681,13 @@ async function main(
             kind: "resume",
             wasmModule: input.wasmModule,
             wasmExtensions: input.wasmExtensions,
-            snapshot,
+            continuation: snapshot,
             config,
             settledRequests: Array.isArray(input.settledRequests)
-              ? (input.settledRequests as SettledBridgeRequest[])
+              ? (input.settledRequests as SettledBridgeRequest[]) // SAFETY: The core broker constructs envelopes around guest JSON.
               : [],
             pendingRequests: Array.isArray(input.pendingRequests)
-              ? (input.pendingRequests as PendingBridgeRequest[])
+              ? (input.pendingRequests as PendingBridgeRequest[]) // SAFETY: The broker returns this worker's pending descriptors.
               : [],
           },
           channel,
@@ -716,5 +719,5 @@ async function main(
 serveWorkerTasks(main, {
   transferList: (result) =>
     // SAFETY: QuickJS.snapshot allocates a dedicated, transferable ArrayBuffer.
-    result.status === "waiting" ? [result.snapshot.memory.buffer as ArrayBuffer] : [],
+    result.status === "waiting" ? [result.continuation.memory.buffer as ArrayBuffer] : [],
 });

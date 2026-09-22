@@ -1,6 +1,7 @@
 ---
 summary: "Code Mode configuration fields, automatic per-model activation, and the activation order"
 title: "Code Mode configuration"
+doc-schema-version: 1
 read_when:
   - You are setting Code Mode limits or the runtime
   - You need the preferred-model list and the compat catalog flag
@@ -13,23 +14,30 @@ read_when:
 `false`, including when the Code Mode object configures other fields. Set
 `true` or `"auto"` explicitly, or use an [agent or model override](/tools/code-mode/quickstart#override-one-model).
 
-| Field                 | Default          | Clamp                                           |
-| --------------------- | ---------------- | ----------------------------------------------- |
-| `enabled`             | `false`          | `false`, `true`, or `"auto"` (per-model)        |
-| `runtime`             | `"quickjs-wasi"` | only supported value                            |
-| `mode`                | `"only"`         | exposes control/direct tools, catalogs the rest |
-| `timeoutMs`           | `10000`          | `100`-`60000`                                   |
-| `memoryLimitBytes`    | `67108864`       | `1048576`-`1073741824`                          |
-| `maxOutputBytes`      | `65536`          | `1024`-`10485760`                               |
-| `maxSnapshotBytes`    | `10485760`       | `1024`-`268435456`                              |
-| `maxPendingToolCalls` | `16`             | `1`-`128`                                       |
-| `snapshotTtlSeconds`  | `900`            | `1`-`86400`                                     |
-| `searchDefaultLimit`  | `8`              | clamped to `maxSearchLimit`                     |
-| `maxSearchLimit`      | `50`             | `1`-`50`                                        |
+| Field                 | Default    | Clamp                                           |
+| --------------------- | ---------- | ----------------------------------------------- |
+| `enabled`             | `false`    | `false`, `true`, or `"auto"` (per-model)        |
+| `executor`            | `"node"`   | `"node"` or `"quickjs"`                         |
+| `mode`                | `"only"`   | exposes control/direct tools, catalogs the rest |
+| `timeoutMs`           | `10000`    | `100`-`60000`                                   |
+| `memoryLimitBytes`    | `67108864` | `1048576`-`1073741824`                          |
+| `maxOutputBytes`      | `65536`    | `1024`-`10485760`                               |
+| `maxSnapshotBytes`    | `10485760` | `1024`-`268435456`                              |
+| `maxPendingToolCalls` | `16`       | `1`-`128`                                       |
+| `snapshotTtlSeconds`  | `900`      | `1`-`86400`                                     |
+| `searchDefaultLimit`  | `8`        | clamped to `maxSearchLimit`                     |
+| `maxSearchLimit`      | `50`       | `1`-`50`                                        |
 
 Code Mode executes JavaScript only. Doctor and eligible Gateway startup
 migrations remove the retired `languages` setting from global and per-agent
 Code Mode config, preserving activation and limits.
+
+The default Node executor uses `node:vm` for trusted execution, not security
+isolation. Select `executor: "quickjs"` for the bundled hardened guest runtime.
+Agent-level executor settings override the global selection. See
+[Code Mode executors](/tools/code-mode/executors) for security, memory, wait,
+and upgrade behavior. `maxSnapshotBytes` caps QuickJS VM snapshots and the
+shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
@@ -42,10 +50,11 @@ headless wall-clock deadline. A checkpoint does not reset that wall deadline.
 When the shell `exec` tool is available, use it for heavier computation
 and keep guest JavaScript focused on coordinating tools and processing results.
 
-If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
+If code mode is enabled but the selected executor cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
-an engaged run never silently falls back to broad direct tool exposure.
+an engaged run never silently falls back to another executor or broad direct
+tool exposure.
 
 ## Automatic per-model activation
 

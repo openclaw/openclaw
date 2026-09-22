@@ -405,7 +405,7 @@ Store environment values never enter the Codex app-server process, native
 shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
-[OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
+[OpenClaw Code Mode](/tools/code-mode), an opt-in JavaScript runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model

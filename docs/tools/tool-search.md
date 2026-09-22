@@ -16,7 +16,7 @@ search or dynamic-tools surface. Codex-native code mode, tool search, deferred
 dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
-For the generic OpenClaw runtime that exposes a QuickJS-WASI `exec`/`wait`
+For the generic OpenClaw runtime that exposes a JavaScript `exec`/`wait`
 surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
 
 OpenClaw embedded and Copilot runs use structured Tool Search automatically when
@@ -338,7 +338,7 @@ does not return a resumable `waiting` result: expiry kills the child and cancels
 outstanding calls. Before retrying a timed-out mutation, inspect its outcome;
 cancellation cannot undo side effects that already occurred.
 
-This is different from the QuickJS-WASI [Code Mode](/tools/code-mode/configuration)
+This is different from the [Code Mode](/tools/code-mode/configuration)
 `exec`/`wait` surface, which pauses its budget for approvals and can checkpoint
 unfinished tool waits for a later `wait`. Use structured `tools` mode when the
 Node bridge deadline is unsuitable; target tools still enforce their own

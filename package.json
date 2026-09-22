@@ -447,6 +447,10 @@
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
     },
+    "./plugin-sdk/code-mode-executor-runtime": {
+      "types": "./dist/plugin-sdk/code-mode-executor-runtime.d.ts",
+      "default": "./dist/plugin-sdk/code-mode-executor-runtime.js"
+    },
     "./plugin-sdk/control-ui-link-reader": {
       "types": "./dist/plugin-sdk/control-ui-link-reader.d.ts",
       "default": "./dist/plugin-sdk/control-ui-link-reader.js"
@@ -2230,9 +2234,9 @@
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/sdk": "0.124.0",
-    "@clack/core": "1.5.0",
-    "@clack/prompts": "1.8.0",
+    "@anthropic-ai/sdk": "0.125.0",
+    "@clack/core": "1.5.1",
+    "@clack/prompts": "1.8.1",
     "@earendil-works/pi-tui": "0.85.1",
     "@google/genai": "2.22.0",
     "@grammyjs/runner": "2.0.3",
@@ -2259,7 +2263,7 @@
     "entities": "8.1.0",
     "execa": "10.0.1",
     "express": "5.2.1",
-    "file-type": "22.0.2",
+    "file-type": "22.1.0",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",
     "hosted-git-info": "10.1.1",
@@ -2282,7 +2286,6 @@
     "playwright-core": "1.63.0",
     "pretty-ms": "9.3.1",
     "qrcode": "1.5.4",
-    "quickjs-wasi": "3.6.0",
     "rastermill": "0.3.3",
     "semver": "7.8.5",
     "tar": "7.5.22",
@@ -2294,12 +2297,12 @@
     "web-tree-sitter": "0.27.0",
     "ws": "8.21.3",
     "yaml": "2.9.0",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@a2ui/lit": "0.10.3",
     "@a2ui/web_core": "0.10.7",
-    "@copilotkit/aimock": "1.41.0",
+    "@copilotkit/aimock": "1.42.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",

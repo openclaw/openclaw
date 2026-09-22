@@ -693,6 +693,26 @@ The practical effect is that OpenClaw knows, up front, which plugin owns which s
 
 When in doubt, raise the abstraction level: define the capability first, then let plugins plug into it.
 
+## Skill previews
+
+The Control UI previews a declared plugin skill without installing or executing it.
+Opening a preview reads its file inventory and only the entry `SKILL.md` body.
+Selecting another file reads that body on demand; navigation never prefetches
+sibling contents. The file tree remains available while a selected file loads,
+and failed reads can be retried in place.
+
+Catalog reads stay pinned to the selected package version and validate the
+inventory’s paths, sizes, and SHA-256 hashes. Installed reads stay inside the
+resolved plugin root, reject unsafe links, and reject a changed plugin version.
+Both paths retain the file-count, tree-depth, per-file, and aggregate bundle
+limits. The aggregate limit applies to the inventory, not selection order.
+
+Loaded bodies and pending reads belong to one open preview and Gateway connection.
+Closing, reopening, navigating away, or reconnecting retires that cache. A late
+file response can populate its own cache entry but cannot change the selected
+file. New selected-file requests revalidate the inventory; only already loaded
+bodies are reused. Installed files edited in place become visible on reopening.
+
 ## Execution model
 
 Native OpenClaw plugins run **in-process** with the Gateway. They are not sandboxed. A loaded native plugin has the same process-level trust boundary as core code.

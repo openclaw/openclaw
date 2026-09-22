@@ -1,19 +1,22 @@
+/// <reference lib="es2024.promise" />
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkerTaskPool, type WorkerTaskResponse } from "../infra/worker-task-pool.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { CodeModeOutputState } from "./code-mode-json.js";
-import { resolveCodeModeConfig, type CodeModeWorkerResult } from "./code-mode-runtime.js";
 import type {
+  CodeModeWorkerResult,
   CodeModeWorkerBoundary,
   CodeModeWorkerContinuation,
-} from "./code-mode-worker-types.js";
-import { runCodeModeWorker } from "./code-mode-worker.js";
+  CodeModeOutputSource,
+} from "openclaw/plugin-sdk/code-mode-executor-runtime";
+import { WorkerTaskPool, type WorkerTaskResponse } from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createQuickJsTestConfig,
+  runQuickJsExecutor as runCodeModeWorker,
+} from "./executor.test-support.js";
 
-const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+const config = createQuickJsTestConfig();
 const sleep = "await new Promise(resolve => setTimeout(resolve, 0));";
 const workerUrl = new URL("./code-mode.worker.ts", import.meta.url);
 const pools: WorkerTaskPool<unknown, CodeModeWorkerResult>[] = [];
@@ -26,8 +29,17 @@ const modules = Promise.all([
   wasmExtensions: [{ name: "encoding", wasm: encoding }],
 }));
 
+function completeOutput(output: CodeModeOutputSource): unknown[] {
+  expect(output.source.kind).toBe("complete");
+  const entries: unknown = JSON.parse(output.source.json);
+  if (!Array.isArray(entries)) {
+    throw new Error("expected complete output entries");
+  }
+  return entries;
+}
+
 function input(source: string) {
-  return { kind: "exec", source, config, catalog: [], namespaces: [] };
+  return { kind: "exec" as const, source, config, catalog: [], namespaces: [] };
 }
 function resume(state: CodeModeWorkerBoundary, deadline: number): CodeModeWorkerContinuation {
   return {
@@ -85,9 +97,9 @@ describe("Code Mode live VM", () => {
   it.each([0, 30])(
     "retains the snapshot limit at genuine parking after %i ms of host wait",
     async (hostDelay) => {
-      const output = new CodeModeOutputState(config.maxOutputBytes);
+      const output: unknown[] = [];
       const onBoundary = vi.fn(async (value: CodeModeWorkerBoundary) => {
-        output.append(value.output);
+        output.push(...completeOutput(value.output));
         expect(value.memoryUsedBytes).toBeGreaterThan(12 * 1024 * 1024);
         await delay(hostDelay);
         return { kind: "checkpoint" as const };
@@ -101,10 +113,10 @@ describe("Code Mode live VM", () => {
         undefined,
         { onBoundary },
       );
-      output.append(result.output);
+      output.push(...completeOutput(result.output));
       expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
       expect(onBoundary).toHaveBeenCalledTimes(1);
-      expect(output.take().output).toEqual([{ type: "text", text: "before parking" }]);
+      expect(output).toEqual([{ type: "text", text: "before parking" }]);
     },
   );
 
@@ -124,7 +136,7 @@ describe("Code Mode live VM", () => {
     const result = await runCodeModeWorker(
       {
         kind: "resume",
-        snapshot: parked.snapshot,
+        continuation: parked.continuation,
         config,
         settledRequests: parked.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
         pendingRequests: [],
@@ -136,11 +148,18 @@ describe("Code Mode live VM", () => {
     );
     expect(result).toMatchObject({ status: "completed", value: { json: "42" } });
     expect(consumed).toHaveBeenCalledTimes(1);
+    await parked.continuation.dispose();
+    expect(
+      await parked.continuation.resume(
+        { kind: "resume", config, settledRequests: [] },
+        { timeoutMs: 15_000 },
+      ),
+    ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
   });
 
   it("keeps outputs and closures through many inline boundaries without leaking into the next cell", async () => {
     const deadline = performance.now() + config.timeoutMs;
-    const output = new CodeModeOutputState(config.maxOutputBytes);
+    const output: unknown[] = [];
     const receipts = vi.fn();
     let boundaries = 0;
     const result = await runCodeModeWorker(
@@ -153,16 +172,16 @@ describe("Code Mode live VM", () => {
       {
         onBoundary: async (value) => {
           boundaries++;
-          output.append(value.output);
+          output.push(...completeOutput(value.output));
           return { ...resume(value, deadline), onConsumed: receipts };
         },
       },
     );
-    output.append(result.output);
+    output.push(...completeOutput(result.output));
     expect(result).toMatchObject({ status: "completed", value: { json: "7" } });
     expect(boundaries).toBe(8);
     expect(receipts).toHaveBeenCalledTimes(8);
-    expect(output.take().output).toEqual(
+    expect(output).toEqual(
       Array.from({ length: 8 }, (_, i) => ({ type: "text", text: String(i) })),
     );
     const next = await runCodeModeWorker(input("return typeof privateCell;"), 15_000);
@@ -173,8 +192,8 @@ describe("Code Mode live VM", () => {
     "fences late host replies after %s and releases their ownership once",
     async (ending) => {
       const workers = pool();
-      const entered = createDeferredCore();
-      const late = createDeferredCore<WorkerTaskResponse>();
+      const entered = Promise.withResolvers<void>();
+      const late = Promise.withResolvers<WorkerTaskResponse>();
       const controller = new AbortController();
       const consumed = vi.fn();
       let calls = 0;
@@ -219,7 +238,7 @@ describe("Code Mode live VM", () => {
   it("releases response input only after consumption, and terminates a resumed CPU loop on abort", async () => {
     const workers = pool();
     const controller = new AbortController();
-    const receipt = createDeferredCore();
+    const receipt = Promise.withResolvers<void>();
     const consumed = vi.fn(() => receipt.resolve());
     const running = workers.run(await payload(`${sleep} while (true) {}`), {
       timeoutMs: 15_000,
@@ -242,7 +261,7 @@ describe("Code Mode live VM", () => {
 
   it("checkpoints a slow host waiter under contention so queued cells can run within the same capacity", async () => {
     const workers = pool();
-    const entered = createDeferredCore();
+    const entered = Promise.withResolvers<void>();
     const yielded = vi.fn();
     const start = performance.now();
     const waiting = workers.run(await payload(`${sleep} return 1;`), {
@@ -268,8 +287,8 @@ describe("Code Mode live VM", () => {
 
   it("bounds concurrent live heaps to admitted worker capacity and keeps each cell isolated", async () => {
     const workers = pool(2);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     let active = 0;
     let highWater = 0;
     let ownedBytes = 0;
@@ -376,10 +395,10 @@ describe("Code Mode live VM", () => {
   });
   it("pressures a newly waiting worker when an earlier pressured waiter has not yielded", async () => {
     const workers = pool(2);
-    const firstEntered = createDeferredCore();
-    const firstPressured = createDeferredCore();
-    const releaseFirst = createDeferredCore();
-    const prepareSecond = createDeferredCore<unknown>();
+    const firstEntered = Promise.withResolvers<void>();
+    const firstPressured = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const prepareSecond = Promise.withResolvers<unknown>();
     const first = workers.run(await payload(`${sleep} return 1;`), {
       timeoutMs: 15_000,
       onRequest: async (_value, { yieldSignal }) => {

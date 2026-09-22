@@ -14,6 +14,18 @@ Manifest fields that declare what a plugin owns and when the activation planner 
 
 Use `contracts` only for static capability ownership metadata that OpenClaw can read without importing the plugin runtime.
 
+`contracts.codeModeExecutors` declares the supported executor supplied by a plugin's
+`code-mode-executor-api` public artifact. Plugins currently implement `quickjs`;
+the other selectable executor, `node`, is owned by core. The plugin's installation
+ID is separate from this executor ID. Selecting QuickJS loads only its
+admitted owner. Selected bundled executors remain available when plugins are
+globally disabled or an allowlist names other plugins, preserving their former
+core runtime availability. An explicit owner deny or disabled entry still blocks
+selection; external executors follow the full plugin policy.
+The artifact exports `codeModeExecutor` using the
+`openclaw/plugin-sdk/code-mode-executor-runtime` contract. It does not register
+model tools or replace host tool authorization. See [Code Mode executors](/tools/code-mode/executors).
+
 ```json
 {
   "contracts": {

@@ -2559,7 +2559,12 @@ export const en: TranslationMap & {
     codeMode: {
       title: "Code Mode",
       description:
-        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
     },
 
     swarm: {

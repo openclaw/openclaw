@@ -37,6 +37,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property() layout: "files" | "document" = "files";
   @property({ attribute: false }) directories: string[] = [];
   @property({ type: Boolean }) loading = false;
+  @property({ type: Boolean }) fileLoading = false;
   @property() error = "";
   @property() notice = "";
   @query(".search") private searchInput?: HTMLInputElement;
@@ -67,6 +68,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     this.derivedInputsReady = true;
     this.filteredFiles = this.filterFiles();
     const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
+    // A late sibling read replaces the inventory, not the document being read.
+    // Reset only when the displayed document or explicit view context changes.
+    this.resetScrollAfterUpdate ||=
+      changed.has("layout") ||
+      changed.has("query") ||
+      this.activeFile?.path !== nextActiveFile?.path ||
+      this.activeFile?.contents !== nextActiveFile?.contents ||
+      this.activeFile?.message !== nextActiveFile?.message;
     this.activeFile = nextActiveFile;
 
     const nextCodeSource = nextActiveFile?.contents;
@@ -74,8 +83,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       this.codeSource = nextCodeSource;
       this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
     }
-
-    this.resetScrollAfterUpdate = true;
   }
 
   override render() {
@@ -122,7 +129,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
             }
           </header>
           ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : ""}
-          <div class="body ${this.layout === "document" ? "tree" : ""}" aria-busy=${this.loading}>
+          <div
+            class="body ${this.layout === "document" ? "tree" : ""}"
+            aria-busy=${this.loading || this.fileLoading}
+          >
             <aside class="list">
               ${this.layout === "files" ? html`<div class="list-section">${listLabel} · ${filteredFiles.length}</div>` : ""}
               ${this.loading && !this.error ? renderPanelLoadingSkeleton("file-list", t("common.loading"), true) : filteredFiles.length === 0 ? (this.error ? "" : html`<div class="empty-list">${t("filePreview.noMatches")}</div>`) : this.layout === "document" ? this.renderFolder("") : filteredFiles.map((file) => this.renderItem(file))}
@@ -138,7 +148,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                       ${t("common.retry")}
                     </button>
                   </section>`
-                : this.loading
+                : this.loading || this.fileLoading
                   ? html`<section class="detail">
                       <div class="detail-body">
                         ${renderPanelLoadingSkeleton("document", t("common.loading"), true)}

@@ -153,6 +153,10 @@ export function executeSharedStateCommand(
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
+  // Dispatch preparation has loaded this module; do not open or observe token state.
+  if (command.type === "deviceAuth.prepare") {
+    return undefined;
+  }
   if (command.type === "mcpOAuth.read") {
     return readMcpOAuthStoreInDatabase(open().db, command.input);
   }

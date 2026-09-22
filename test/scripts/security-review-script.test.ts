@@ -884,10 +884,13 @@ describe("combined security review entry point", () => {
     expect(result.combined).not.toContain("success");
   });
 
-  it("keeps an unchanged PR approved when main advances during evaluation", () => {
+  it("ignores main advancement and absent-to-null metadata during evaluation", () => {
     const result = evaluate({
       [`GET ${pullPath}`]: {
-        responses: [pr, { ...pr, base: { ...pr.base, sha: "e".repeat(40) } }],
+        responses: [
+          pr,
+          { ...pr, base: { ...pr.base, sha: "e".repeat(40) }, maintainer_can_modify: null },
+        ],
       },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -896,27 +899,58 @@ describe("combined security review entry point", () => {
   });
 
   it.each([
-    { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }, status: 0 },
-    { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } }, status: 1 },
-    { name: "missing head", changedPr: { ...pr, head: { ...pr.head, sha: undefined } }, status: 1 },
-  ])("does not publish combined success after a changed $name", ({ changedPr, status }) => {
+    {
+      name: "head",
+      changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+      changedFields: [],
+    },
+    {
+      name: "target branch",
+      changedPr: { ...pr, base: { ...pr.base, ref: "stable" } },
+      changedFields: ["base.ref"],
+    },
+    {
+      name: "missing head",
+      changedPr: { ...pr, head: { ...pr.head, sha: undefined } },
+      changedFields: ["head.sha"],
+    },
+    {
+      name: "author and edit permission",
+      changedPr: {
+        ...pr,
+        user: { id: 2, login: "changed-author", type: "Bot" },
+        maintainer_can_modify: false,
+      },
+      changedFields: ["user.id", "user.login", "user.type", "maintainer_can_modify"],
+    },
+    {
+      name: "file count after file-list recovery",
+      changedPr: { ...pr, changed_files: 3 },
+      changedFields: ["changed_files"],
+    },
+  ])("does not publish combined success after a changed $name", ({ changedPr, changedFields }) => {
     const result = evaluate({
       [`GET ${pullPath}`]: {
         responses: [pr, pr, pr, pr, pr, changedPr],
       },
     });
-    expect(result.status).toBe(status);
-    expect(result.stdout + result.stderr).toContain(
-      status === 0 ? "Superseded" : "pull request changed",
-    );
+    const superseded = changedFields.length === 0;
+    expect(result.status).toBe(superseded ? 0 : 1);
     expect(result.combined).not.toContain("success");
-    if (status === 0) {
+    if (superseded) {
+      expect(result.stdout).toContain("Superseded");
+      expect(result.stderr).toBe("");
       expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
       expect(
         result.requests
           .filter((entry) => entry.method === "POST" && entry.path.includes("/statuses/"))
           .every((entry) => entry.path.endsWith(head)),
       ).toBe(true);
+    } else {
+      // Only fixed field names belong in the diagnostic, never the PR's values.
+      expect(result.stderr.trim()).toBe(
+        `The pull request changed during security review (changed fields: ${changedFields.join(", ")}); the next automatic event will evaluate it.`,
+      );
     }
   });
 

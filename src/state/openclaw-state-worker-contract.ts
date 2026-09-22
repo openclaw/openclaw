@@ -129,6 +129,7 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
       };
       output: OpenClawStateLeaseAcquisition;
     };
+    "deviceAuth.prepare": { input: undefined; output: void };
     "deviceAuth.list": { input: { deviceId: string }; output: DeviceAuthEntry[] };
     "deviceAuth.read": {
       input: Parameters<typeof deviceAuth.readDeviceAuthTokenObservationFromDatabase>[1] & {

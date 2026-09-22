@@ -23,7 +23,6 @@ import {
   configureTaskFlowRegistryRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -124,7 +123,6 @@ async function resetTaskCommandRuntime() {
   taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
   resetConfigRuntimeState();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();

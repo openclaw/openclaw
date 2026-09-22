@@ -16,6 +16,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
+import type { sendMessage as SendMessage } from "./task-registry-delivery-runtime.js";
 import { maybeDeliverTaskStateChangeUpdate } from "./task-registry-delivery.js";
 import {
   captureTaskDeliveryWork,
@@ -31,14 +32,15 @@ import {
   loadTaskRegistryMutationStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
-import {
-  createTaskFixture,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
-} from "./task-registry.test-support.js";
+import { createTaskFixture, resetTaskRegistryForTests } from "./task-registry.test-support.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
+
+const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage,
+  resolveTaskControlUiSessionUrl: () => undefined,
+}));
 
 const ownerKey = "agent:main:state-notification";
 const runId = "state-notification-run";
@@ -51,8 +53,7 @@ const sent: MessageSendResult = {
   deliveryStatus: "sent",
   result: { messageId: "synthetic-notification" },
 };
-type MessageSendParams = Parameters<deliveryRuntime.TaskRegistryDeliveryRuntime["sendMessage"]>[0];
-const sendMessage = vi.fn<deliveryRuntime.TaskRegistryDeliveryRuntime["sendMessage"]>();
+type MessageSendParams = Parameters<typeof SendMessage>[0];
 let state: OpenClawTestState;
 let notifications: Array<{ complete: () => void; result: Promise<TaskRecord | null> }>;
 let nativeDeliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
@@ -132,7 +133,6 @@ beforeEach(async () => {
   nativeDeliveries = undefined;
   systemEvents.resetSystemEventsForTest();
   sendMessage.mockReset();
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
 });
 
 afterEach(async () => {
@@ -144,7 +144,6 @@ afterEach(async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetGatewayWorkAdmission();

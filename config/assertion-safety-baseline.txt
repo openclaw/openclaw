@@ -1612,9 +1612,7 @@ src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
-src/agents/code-mode-worker.ts	2
 src/agents/code-mode.ts	2
-src/agents/code-mode.worker.ts	5
 src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	7
 src/agents/command/attempt-execution.ts	1
@@ -3417,7 +3415,6 @@ src/tasks/generated-media-task-activity.ts	1
 src/tasks/task-flow-registry.store.ts	1
 src/tasks/task-flow-registry.ts	1
 src/tasks/task-flow-registry.types.ts	2
-src/tasks/task-registry-query.ts	4
 src/tasks/task-registry.process-state.ts	1
 src/tasks/task-registry.sqlite.shared.ts	1
 src/tasks/task-registry.ts	1

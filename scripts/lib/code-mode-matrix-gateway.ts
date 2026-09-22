@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
+import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
@@ -65,6 +66,7 @@ export type GatewayMatrixWorkload = {
   promptSha256: string;
   fixtureSha256: string;
   settings: {
+    executor: CodeModeExecutorId;
     thinking: string;
     timeoutSeconds: number;
     execTimeoutMs: number;
@@ -109,6 +111,7 @@ export function createGatewayMatrixWorkload(
   repetition: number,
   thinking: string,
   timeoutSeconds: number,
+  executor: CodeModeExecutorId = "node",
 ): GatewayMatrixWorkload {
   const fixture = createGatewayMatrixFixture(task, repetition);
   return {
@@ -125,6 +128,7 @@ export function createGatewayMatrixWorkload(
       .update(JSON.stringify(fixture.workspaceFiles ?? {}))
       .digest("hex"),
     settings: {
+      executor,
       thinking,
       timeoutSeconds,
       execTimeoutMs: EXEC_TIMEOUT_MS,
@@ -1057,6 +1061,7 @@ function transcriptRows(stateDir: string): { seq: number; event: unknown }[] {
 export async function runGatewayMatrixCell(
   params: RunCellParams & { cell: RunCellParams["cell"] & { task: GatewayMatrixTask } },
 ): Promise<CodeModeMatrixCellResult> {
+  const executor = params.executor ?? "node";
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) {
     throw new Error("OPENAI_API_KEY is required for Gateway interview tasks");
@@ -1134,11 +1139,16 @@ export async function runGatewayMatrixCell(
       entries: { qa: {} },
     },
     plugins: {
-      allow: ["openai", ...(fixture.requiredTools.length > 0 ? ["code-mode-matrix-fixture"] : [])],
+      allow: [
+        "openai",
+        ...(executor === "quickjs" ? ["code-mode-quickjs"] : []),
+        ...(fixture.requiredTools.length > 0 ? ["code-mode-matrix-fixture"] : []),
+      ],
       slots: { memory: "none" },
       ...(fixture.requiredTools.length > 0 ? { load: { paths: [pluginDir] } } : {}),
       entries: {
         openai: { enabled: true },
+        ...(executor === "quickjs" ? { "code-mode-quickjs": { enabled: true } } : {}),
         ...(fixture.requiredTools.length > 0
           ? { "code-mode-matrix-fixture": { enabled: true, config: { receiptsPath } } }
           : {}),
@@ -1152,7 +1162,12 @@ export async function runGatewayMatrixCell(
       allow: gatewayAllowedTools(params.cell.task, fixture.requiredTools),
       fs: { workspaceOnly: true },
       exec: { security: "full", ask: "off" },
-      codeMode: { enabled: true, timeoutMs: EXEC_TIMEOUT_MS, maxOutputBytes: MAX_OUTPUT_BYTES },
+      codeMode: {
+        enabled: true,
+        executor,
+        timeoutMs: EXEC_TIMEOUT_MS,
+        maxOutputBytes: MAX_OUTPUT_BYTES,
+      },
     },
     gateway: {
       mode: "local",
@@ -1395,6 +1410,7 @@ export async function runGatewayMatrixCell(
       params.cell.repetition,
       params.thinking,
       params.timeoutSeconds,
+      executor,
     ),
     behavior,
     ...(taskElapsedMs !== undefined ? { taskElapsedMs } : {}),
@@ -1443,6 +1459,7 @@ export async function runGatewayMatrixCell(
   const slash = params.cell.model.indexOf("/");
   return {
     id: params.cell.id,
+    executor,
     task: params.cell.task,
     model: params.cell.model,
     mode: params.cell.mode,

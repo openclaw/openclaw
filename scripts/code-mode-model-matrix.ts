@@ -19,6 +19,7 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
 } from "../extensions/qa-lab/test-api.js";
+import type { CodeModeExecutorId } from "../src/agents/code-mode-executor-types.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
@@ -56,6 +57,7 @@ export type CodeModeMatrixTask = (typeof MATRIX_TASKS)[number];
 export type CodeModeMatrixOptions = {
   allowFailures: boolean;
   dryRun: boolean;
+  gatewayExecutor?: CodeModeExecutorId;
   keepState: boolean;
   models: string[];
   modes: CodeModeMatrixMode[];
@@ -111,6 +113,7 @@ export type CodeModeMatrixCellResult = {
   diagnostics?: string;
   elapsedMs: number;
   evidenceOccurrenceId?: string;
+  executor?: CodeModeExecutorId;
   error?: AgentExecEnvelope["error"];
   expected: string;
   failureCategory: CellFailureCategory | null;
@@ -145,6 +148,7 @@ export type RunCellParams = {
   abortSignal?: AbortSignal;
   buildSha256: string;
   cell: MatrixCell;
+  executor?: CodeModeExecutorId;
   gitSha: string;
   keepState: boolean;
   outputDir: string;
@@ -172,13 +176,14 @@ type SourceIdentity = {
 };
 
 function usage() {
-  return `Usage: pnpm qa:code-mode-models -- --model <provider/model> [options]
+  return `Usage: pnpm qa:code-mode-models --model <provider/model> [options]
 
 Runs repeated Code Mode acceptance cells through the normal embedded agent path.
 
 Options:
   --model <provider/model>  Model reference; repeat for multiple models
   --mode <mode>             direct | auto | code; repeat to select modes
+  --executor <executor>     node | quickjs for Gateway tasks only (default: node)
   --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
                             (default: read, dependent-read-write)
   --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
@@ -243,6 +248,7 @@ export function parseCodeModeMatrixOptions(
   const tasks: CodeModeMatrixTask[] = [];
   let allowFailures = false;
   let dryRun = false;
+  let gatewayExecutor: CodeModeExecutorId = "node";
   let keepState = false;
   let outputDir: string | undefined;
   let runtimeDir: string | undefined;
@@ -273,6 +279,16 @@ export function parseCodeModeMatrixOptions(
     }
     if (arg === "--mode") {
       collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--executor") {
+      recordOnce(arg);
+      const value = requireOptionArgument(argv, index, arg);
+      if (value !== "node" && value !== "quickjs") {
+        throw new Error(`--executor must be node or quickjs; got ${JSON.stringify(value)}`);
+      }
+      gatewayExecutor = value;
       index += 1;
       continue;
     }
@@ -344,6 +360,12 @@ export function parseCodeModeMatrixOptions(
   if (models.length === 0) {
     throw new Error("At least one --model <provider/model> is required");
   }
+  if (
+    seen.has("--executor") &&
+    (tasks.length === 0 || tasks.some((task) => !isGatewayTask(task)))
+  ) {
+    throw new Error("--executor requires only Gateway-backed tasks.");
+  }
   if (tasks.some(isGatewayTask)) {
     if (modes.length !== 1 || modes[0] !== "code") {
       throw new Error("Gateway interview tasks require --mode code.");
@@ -360,6 +382,7 @@ export function parseCodeModeMatrixOptions(
   return {
     allowFailures,
     dryRun,
+    gatewayExecutor,
     keepState,
     models,
     modes: modes.length > 0 ? modes : ["direct", "auto", "code"],
@@ -1489,6 +1512,9 @@ export async function runCodeModeModelMatrix(
     buildSha256,
     models: options.models,
     modes: options.modes,
+    ...(options.tasks.some(isGatewayTask)
+      ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+      : {}),
     tasks: options.tasks,
     repetitions: options.repetitions,
     timeoutSeconds: options.timeoutSeconds,
@@ -1529,6 +1555,7 @@ export async function runCodeModeModelMatrix(
             cell.repetition,
             options.thinking,
             options.timeoutSeconds,
+            options.gatewayExecutor ?? "node",
           )
         : undefined;
       // Repetitions are independent scheduled cells, not retries whose eventual
@@ -1541,6 +1568,7 @@ export async function runCodeModeModelMatrix(
           abortSignal: abortController.signal,
           buildSha256: buildSha256 ?? "dry-run",
           cell,
+          ...(workload ? { executor: workload.settings.executor } : {}),
           gitSha: sourceIdentity.gitSha,
           keepState: options.keepState,
           outputDir,
@@ -1564,6 +1592,7 @@ export async function runCodeModeModelMatrix(
       }
       if (workload) {
         result.workload = workload;
+        result.executor = workload.settings.executor;
       }
       result.evidenceOccurrenceId = occurrenceId;
       const artifactPath = path.posix.join("observations", `${occurrenceId}.json`);
@@ -1636,6 +1665,9 @@ export async function runCodeModeModelMatrix(
     const summary = {
       schemaVersion: MATRIX_SCHEMA_VERSION,
       finishedAt: new Date().toISOString(),
+      ...(options.tasks.some(isGatewayTask)
+        ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
+        : {}),
       ...sourceIdentity,
       buildSha256,
       counts: {

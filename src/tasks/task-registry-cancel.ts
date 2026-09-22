@@ -204,7 +204,7 @@ export async function cancelTaskById(params: {
       const processSessionId = task.sourceId?.trim();
       const { cancelBackgroundExecSession } = await loadTaskRegistryControlRuntime();
       control?.assertCurrent();
-      if (!processSessionId || !cancelBackgroundExecSession?.(processSessionId)) {
+      if (!processSessionId || !cancelBackgroundExecSession(processSessionId)) {
         return notCancelled("Background command has no active cancellation handle.");
       }
     } else if (task.runtime === "cli") {

@@ -30,8 +30,6 @@ import {
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -81,8 +79,6 @@ async function resetTaskOperationsRuntime(): Promise<void> {
   await stopTaskRegistryMaintenance();
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetSystemEventsForTest();

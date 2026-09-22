@@ -33,25 +33,26 @@ function pullRequestNumber(event) {
   return null;
 }
 
+/** @returns {Record<string, unknown>} */
 function snapshot(pr) {
   // Approval binds to the PR head and target branch. Unrelated pushes to the
   // target move base.sha without a PR event, so they must not strand this check.
-  return JSON.stringify([
-    pr.number,
-    pr.state,
-    pr.created_at,
-    pr.draft,
-    pr.user?.id,
-    pr.user?.login,
-    pr.user?.type,
-    pr.base?.repo?.id,
-    pr.base?.ref,
-    pr.head?.repo?.id,
-    pr.head?.ref,
-    pr.head?.sha,
-    pr.maintainer_can_modify,
-    pr.changed_files,
-  ]);
+  return {
+    number: pr.number,
+    state: pr.state,
+    created_at: pr.created_at,
+    draft: pr.draft,
+    "user.id": pr.user?.id,
+    "user.login": pr.user?.login,
+    "user.type": pr.user?.type,
+    "base.repo.id": pr.base?.repo?.id,
+    "base.ref": pr.base?.ref,
+    "head.repo.id": pr.head?.repo?.id,
+    "head.ref": pr.head?.ref,
+    "head.sha": pr.head?.sha,
+    maintainer_can_modify: pr.maintainer_can_modify,
+    changed_files: pr.changed_files,
+  };
 }
 
 export async function assertGuardUnchanged(guard, { allowFileCountChange = false } = {}) {
@@ -65,9 +66,16 @@ export async function assertGuardUnchanged(guard, { allowFileCountChange = false
   const expected = allowFileCountChange
     ? { ...guard.pullRequest, changed_files: current.changed_files }
     : guard.pullRequest;
-  if (snapshot(current) !== snapshot(expected)) {
+  const currentSnapshot = snapshot(current);
+  const changedFields = Object.entries(snapshot(expected))
+    // Keep the original array serialization's null/undefined equivalence.
+    .filter(
+      ([field, value]) => JSON.stringify([value]) !== JSON.stringify([currentSnapshot[field]]),
+    )
+    .map(([field]) => field);
+  if (changedFields.length > 0) {
     throw new Error(
-      "The pull request changed during security review; the next automatic event will evaluate it.",
+      `The pull request changed during security review (changed fields: ${changedFields.join(", ")}); the next automatic event will evaluate it.`,
     );
   }
   return current;

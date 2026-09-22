@@ -125,7 +125,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const captured: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"] = {
       ...withOwnedSessionTranscriptWriterFence(target),
       storePath: database.path,
-      env: options.env,
     };
     if (database.db.isTransaction) {
       throw new Error("Asynchronous session metadata writes must own their transaction");

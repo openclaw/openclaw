@@ -138,12 +138,13 @@ graph with TypeScript syntax and `.js`-to-`.ts` resolution. Bun uses its native
 TypeScript loader. This keeps source-host tests from relying on Jiti to evaluate
 another copy of the host SDK.
 
-Parallel project runs on macOS and Linux reuse filesystem transforms within
-exclusive worker slots, with separate directories for each Vitest configuration.
-A slot stays owned through preflight, retries, and verified child/group completion;
-uncertain cleanup retires it. Explicit isolated cache paths, serial and watch runs,
-and Windows retain their existing cache ownership. Concurrent invocations still
-need separate cache roots.
+Scheduler-owned project runs on macOS and Linux reuse filesystem transforms within
+exclusive slots, including serial runs that mix configurations. Each Vitest
+configuration keeps separate directories. A slot stays owned through preflight,
+retries, and verified child/group completion; uncertain cleanup retires it.
+Same-config serial runs without scheduler assignment, explicit isolated cache paths,
+watch runs, and Windows retain their existing cache ownership. Concurrent invocations
+still need separate cache roots.
 
 Control UI builds report size budgets without enforcing them. Run
 `pnpm ui:check-performance` after a build to enforce absolute budgets, or

@@ -145,6 +145,13 @@ const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
+const fileParallelAgentGroupNames = new Set([
+  "agentic-agents-embedded-base-1",
+  "agentic-agents-embedded-base-2",
+  "agentic-agents-embedded-base-3",
+  "agentic-agents-embedded-run",
+  "agentic-agents-tools",
+]);
 const plannerHosts = [
   { label: "hosted-2cpu", logicalCpuCount: 2, totalMemoryBytes: 16 * 1024 ** 3 },
   { label: "large-32cpu", logicalCpuCount: 32, totalMemoryBytes: 512 * 1024 ** 3 },
@@ -159,7 +166,9 @@ function usesParallelPacking(job: CompactNodeTestShard | undefined) {
       job.groups.length > 1 &&
       job.groups.some(
         (group) =>
-          (group.fallbackMaxWorkers === 2 && group.configs.some(isExclusiveCiTestConfig)) ||
+          (group.fallbackMaxWorkers === 2 &&
+            (group.configs.some(isExclusiveCiTestConfig) ||
+              fileParallelAgentGroupNames.has(group.shard_name.replace(/-hosted-\d+$/u, "")))) ||
           group.configs.includes("test/vitest/vitest.commands.config.ts"),
       ))
   );
@@ -333,7 +342,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["core-runtime-media-ui-13", 110],
       ["core-unit-src-security-13", 50],
     ] as const;
-    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(Object.fromEntries(entries));
+    // These synthetic costs already describe parallel embedded invocations.
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(
+        entries.map(([name, seconds]) => [
+          name.startsWith("agentic-agents-embedded-base-") ? `${name}#file-parallel` : name,
+          seconds,
+        ]),
+      ),
+    );
     vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
     vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
     const original = fullSuiteVitestShards.slice();
@@ -518,6 +535,81 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ],
     });
   });
+
+  it.each([
+    { runnerBackend: "blacksmith", serialEstimate: 60, parallelEstimate: 24 },
+    { runnerBackend: "blacksmith", serialEstimate: 53, parallelEstimate: 24, indivisible: true },
+    { runnerBackend: "hybrid", serialEstimate: 52, parallelEstimate: 21 },
+    { runnerBackend: "github", serialEstimate: 80, parallelEstimate: 24 },
+  ])(
+    "prices parallel agent files once across $runnerBackend timing refits ($serialEstimate s fallback)",
+    ({ runnerBackend, serialEstimate, parallelEstimate, indivisible = false }) => {
+      const originalShards = fullSuiteVitestShards.slice();
+      fullSuiteVitestShards.splice(
+        0,
+        fullSuiteVitestShards.length,
+        ...originalShards
+          .map((shard) => ({
+            ...shard,
+            projects: shard.projects.filter((config) =>
+              indivisible
+                ? embeddedAgentVitestProjectOwners.some((owner) => owner.config === config)
+                : config === agentVitestProjectOwners.tools.config,
+            ),
+          }))
+          .filter((shard) => shard.projects.length > 0),
+      );
+      try {
+        const owner = "agentic-agents-tools";
+        const timings: Record<"blacksmith" | "github", Record<string, number>> = {
+          blacksmith: indivisible
+            ? {
+                "agentic-agents-embedded-base-1": 66,
+                "agentic-agents-embedded-base-2": 66,
+                "agentic-agents-embedded-base-3": 66,
+                // Keep non-base owners out of the indivisible file's admission row.
+                "agentic-agents-embedded-incomplete-turn": 1_000,
+                "agentic-agents-embedded-overflow-compaction": 1_000,
+                "agentic-agents-embedded-run": 2_000,
+              }
+            : { [owner]: 120 },
+          github: { [owner]: 160 },
+        };
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+          (profile) => timings[profile],
+        );
+        vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+        const options = { compactMode: "push" as const, runnerBackend };
+        const selectOwnerJob = (plan: CompactNodeTestShard[]) =>
+          expectDefined(
+            plan.find((job) =>
+              job.groups.some((group) =>
+                indivisible
+                  ? group.includePatterns?.includes(
+                      "src/agents/embedded-agent-runner/run.compaction-runtime.test.ts",
+                    )
+                  : group.shard_name === owner,
+              ),
+            ),
+            "priced agent owner",
+          );
+        const initial = selectOwnerJob(createNodeTestShardBundles(options));
+        expect(initial.predictedSeconds).toBe(serialEstimate);
+        expect(initial.groups).toHaveLength(1);
+        const group = initial.groups[0]!;
+        const key = expectDefined(group.timing_key, "parallel timing identity");
+        expect(key).toBe(`${group.shard_name}#file-parallel`);
+        timings.blacksmith[key] = 24;
+        timings.github[key] = 24;
+        const refitted = selectOwnerJob(createNodeTestShardBundles(options));
+        // New wall samples override serial/file floors and must not be divided again.
+        expect(refitted.predictedSeconds).toBe(parallelEstimate);
+        expect(refitted.groups).toEqual(initial.groups);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+      }
+    },
+  );
 
   it("binds split timing identity to exact complete-file membership", () => {
     const common = {
@@ -2449,6 +2541,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             expect(gatewayGroups.map((group) => group.timing_key)).toEqual(generation.timingKeys);
           }
         }
+        const parallelAgentGroups = groups.filter((group) =>
+          fileParallelAgentGroupNames.has(group.shard_name),
+        );
+        expect(new Set(parallelAgentGroups.map((group) => group.shard_name))).toEqual(
+          fileParallelAgentGroupNames,
+        );
+        for (const group of parallelAgentGroups) {
+          expect(group.timing_key).toBe(`${group.shard_name}#file-parallel`);
+          expect(group.fallbackMaxWorkers).toBe(profile.name === "GitHub-hosted" ? undefined : 2);
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
+        }
         for (const owner of profile.largeOwners) {
           const selected = groups.filter(
             (group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner,
@@ -2750,7 +2853,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
     };
     // The embedded composite expands into per-config groups and stripes its
-    // serial base config; whole-config runtime consumers may also be striped.
+    // base config; whole-config runtime consumers may also be striped.
     const embeddedBaseOwnerFiles = ownerScopedTestFiles(agentVitestProjectOwners.embedded);
     const supportOwnerFiles = ownerScopedTestFiles(agentVitestProjectOwners.support);
     const cliProcessOwnerFiles = listMatchedTestFiles(createCliProcessVitestConfig({}));
@@ -3099,8 +3202,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
       ),
     ).toBe(true);
-    // The base config runs serially with a shared module graph, so its stripes
-    // must partition the owner's files: a repeat re-runs a suite, a miss drops it.
+    // Base stripes must partition the owner's files: a repeat re-runs a suite,
+    // and a missing file silently loses coverage.
     const embeddedBaseGroups = embeddedAgentGroups.filter((group) =>
       /^agentic-agents-embedded-base-\d+$/u.test(group.shard_name),
     );
@@ -5548,7 +5651,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           if (parallelAutoReply || /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
             expect(group.timing_key).toBeDefined();
           }
-          if (group.timing_key === undefined) {
+          if (
+            group.timing_key === undefined ||
+            (fileParallelAgentGroupNames.has(group.shard_name) &&
+              group.timing_key === `${group.shard_name}#file-parallel`)
+          ) {
             continue;
           }
           if (parallelAutoReply) {
@@ -5865,7 +5972,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             (job) =>
               job.planConcurrency === 2 &&
               job.groups.some(
-                (group) => group.timing_key && group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined,
+                (group) =>
+                  group.timing_key &&
+                  parseCompactSplitTimingKey(group.timing_key) &&
+                  group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined,
               ) &&
               job.groups.every(
                 (group) =>
@@ -5903,7 +6013,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }
         const hosted = expectDefined(
           recipient.groups.find(
-            (group) => group.timing_key && beforeInherited.has(group.shard_name),
+            (group) =>
+              group.timing_key &&
+              parseCompactSplitTimingKey(group.timing_key) &&
+              beforeInherited.has(group.shard_name),
           ),
           "hosted recipient group",
         );

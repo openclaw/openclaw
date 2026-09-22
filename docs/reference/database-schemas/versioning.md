@@ -85,6 +85,29 @@ Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
+Cron standing-grant definition generations use three bare nullable projections on
+`cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
+`grant_definition_updated_at`. The canonical job remains `job_json`. Current
+writers update the projections atomically with it, advance the generation for a
+substantive definition change (including edit-and-restore), and preserve the
+generation across disable and re-enable.
+
+The released `operator_approval_standing_grants` table keeps its exact shape. A
+first-use companion table, `operator_approval_standing_grant_generations`, binds
+each newly minted grant to its job generation and cascades with the grant. Older
+same-version readers ignore the companion and the bare nullable job columns, so
+they can reopen the database. After re-upgrade, a grant without a companion row
+is treated as legacy and requires approval again; it is never assigned a
+generation retroactively. A job recreation advances past retained companion
+generations, including when an older writer deleted the job row.
+
+An older writer does not maintain these projections. Its edits make the
+projection stale, so a current reader fails closed after re-upgrade. While the
+older build is running it cannot enforce generation binding, and changes that
+preserve every observable job value and timestamp cannot be reconstructed later.
+No backfill or schema-version bump is required. The accepted design and rollback
+contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
+
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
 import ensures it on first use and records exact source-component provenance;

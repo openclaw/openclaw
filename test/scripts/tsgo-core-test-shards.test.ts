@@ -85,6 +85,7 @@ describe("tsgo core test shards", () => {
       ["src/plugins/loader.native-module-loader.test.ts", "plugins-platform"],
       ["src/acp/session-new-ordering.test.ts", "plugins-platform"],
       ["src/system-agent/operations.test.ts", "services"],
+      ["src/system-agent/operations.gateway-lifecycle.test.ts", "services"],
     ] as const) {
       expect(
         shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),

@@ -214,9 +214,11 @@ local scheduling is unchanged.
 | 16                         | 4 / 15.42 GiB       |                                3 |                         2 |
 | 32                         | 8 / 30.95 GiB       |                                8 |                         2 |
 
-Group pins can lower these ceilings. The `agentic-gateway-core-2` family, commands groups, and
-whole `agentic-cli` group use measured workers on Blacksmith and hybrid profiles,
-with `fallbackMaxWorkers: 2`. Full CLI bins request
+Group pins can lower these ceilings. The `agentic-gateway-core-2`,
+`agentic-agents-embedded-base-*`, `agentic-agents-embedded-run`, and
+`agentic-agents-tools` families, commands groups, and the whole `agentic-cli`
+group use measured workers on Blacksmith and hybrid profiles, with
+`fallbackMaxWorkers: 2`. Full CLI bins request
 `blacksmith-32vcpu-ubuntu-2404` after packing and retain serial execution. The
 observed eight-CPU/30.95-GiB allocation can admit eight workers; actual CPU,
 memory, and load still determine the ceiling. The shard runner applies the
@@ -260,6 +262,14 @@ by file count and bounded below by the longest file. Runtime preparation is not
 divided. Separate timing identities preserve direct two/eight-worker samples;
 new parallel observations are not divided as though they were serial. Live
 CPU load and memory pressure can lower the scheduler's allocation.
+
+Embedded base, attempt-runner, and tool files follow the shared scheduler's file
+parallelism. The base keeps three balanced stripes for its large harness files;
+the separate overflow-compaction and incomplete-turn configs remain serial.
+Parallel agent wall times use distinct timing keys. Until those measurements
+arrive, the planner divides legacy serial costs by two effective workers while
+retaining the largest indivisible file's cost. Fresh parallel measurements
+replace that fallback without another discount.
 
 Agents-core files share the configured worker pool, including local scheduling
 and its one-worker throttle. Compact agents-core groups retain a two-worker cap.

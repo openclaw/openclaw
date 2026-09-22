@@ -91,7 +91,9 @@ export const validateWorkerLiveEventParams = compile(
   checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = compile(S.GatewaySuspendPrepareParamsSchema);
+export const validateGatewaySuspendPrepareResult = compile(S.GatewaySuspendPrepareResultSchema);
 export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatusParamsSchema);
+export const validateGatewaySuspendStatusResult = compile(S.GatewaySuspendStatusResultSchema);
 export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
 export const validateGatewaySuspendHandoffParams = compile(S.GatewaySuspendHandoffParamsSchema);
 export const validateRequestFrame = compile(S.RequestFrameSchema);

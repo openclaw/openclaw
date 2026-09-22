@@ -180,7 +180,7 @@ function runGatewayPendingWorkContinuation<T>(params: {
   }
   if (
     params.admission === "continuation" ||
-    getGatewaySuspendAdmissionPhase() !== "draining" ||
+    (getGatewaySuspendAdmissionPhase() !== "draining" && !isGatewayRestartDraining()) ||
     params.client?.connect.role !== "operator" ||
     typeof request.id !== "string"
   ) {

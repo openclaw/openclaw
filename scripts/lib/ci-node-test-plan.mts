@@ -385,11 +385,8 @@ const AGENTIC_GATEWAY_CORE_STRIPES = 3;
 const CORE_RUNTIME_MEDIA_UI_STRIPES = 3;
 const CORE_UNIT_SRC_SECURITY_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
-// The embedded base config owns 107 serial files and measured 258.1s/256.4s/
-// 253.7s/269.4s on main runs 33319465485, 33318725438, 33319958268, and
-// 33319413324 - the tallest compact job on every one of them. Three stripes
-// keep every stripe under COMPACT_GITHUB_MAX_PREDICTED_SECONDS on both runner
-// classes, so the hosted splitter never has to divide them again.
+// Preserve three balanced base stripes: the largest individual harness files
+// remain indivisible even after files within each stripe run in parallel.
 const EMBEDDED_BASE_NODE_TEST_STRIPES = 3;
 // Cold-start fallback when committed CI measurements are missing. Refresh
 // config/ci-test-timings.json with pnpm ci:timings:refit, not these literals.
@@ -802,6 +799,22 @@ const PINNED_WORKER_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-config$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli(?:-process)?$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 const MEASURED_GATEWAY_ISOLATED_GROUP_RE = /^agentic-gateway-server-isolated(?:-hosted-\d+)?$/u;
+const FILE_PARALLEL_AGENT_GROUP_RE = /^agentic-agents-(?:embedded-base-\d+|embedded-run|tools)$/u;
+const FILE_PARALLEL_AGENT_MIN_WORKERS = 2;
+
+// Existing samples describe serial file execution. Keep new parallel wall
+// samples under a separate identity so refitting never discounts them twice.
+function fileParallelAgentFallbackSeconds(
+  group: NodeTestShardGroup,
+  seconds: number | undefined,
+): number | undefined {
+  return seconds !== undefined && FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name)
+    ? Math.max(
+        seconds / FILE_PARALLEL_AGENT_MIN_WORKERS,
+        ...(group.includePatterns ?? []).map(stripeFileWeight),
+      )
+    : seconds;
+}
 
 function isAutoReplyReplyGroup(group: NodeTestShardGroup): boolean {
   return (
@@ -897,7 +910,8 @@ function usesMeasuredCompactWorkers(group: NodeTestShardGroup, runnerBackend: st
     (group.shard_name === "agentic-cli" ||
       isParallelCommandsGroup(group) ||
       /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name) ||
-      MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name))
+      MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name) ||
+      FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name.replace(/-hosted-\d+$/u, "")))
   );
 }
 
@@ -997,22 +1011,26 @@ function applyCompactGroupWorkerPins(
       timing_key: `${group.shard_name}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
     };
   }
-  if (usesMeasuredCompactWorkers(group, runnerBackend)) {
+  const timedGroup =
+    FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name) && group.timing_key === undefined
+      ? { ...group, timing_key: `${group.shard_name}#file-parallel` }
+      : group;
+  if (usesMeasuredCompactWorkers(timedGroup, runnerBackend)) {
     return {
-      ...group,
-      ...(MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name)
+      ...timedGroup,
+      ...(MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(timedGroup.shard_name)
         ? {
-            env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+            env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
             minTotalMemoryBytes: 28 * 1024 ** 3,
           }
         : {}),
       fallbackMaxWorkers: 2,
     };
   }
-  if (!PINNED_WORKER_COMPACT_GROUP_RE.test(group.shard_name)) {
-    return group;
+  if (!PINNED_WORKER_COMPACT_GROUP_RE.test(timedGroup.shard_name)) {
+    return timedGroup;
   }
-  return { ...group, env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV } };
+  return { ...timedGroup, env: { ...timedGroup.env, ...PINNED_COMPACT_GROUP_ENV } };
 }
 
 function readCompactGroupSeconds(
@@ -1023,6 +1041,9 @@ function readCompactGroupSeconds(
   const measured = timings[compactGroupTimingKey(group)];
   if (measured !== undefined) {
     return measured;
+  }
+  if (FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name)) {
+    return fileParallelAgentFallbackSeconds(group, timings[group.shard_name]);
   }
   const cronOwner = /^core-runtime-cron-parallel-(core|isolated-agent|service)$/u.exec(
     compactGroupTimingKey(group),
@@ -1084,7 +1105,7 @@ function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
       (isParallelAgentsCoreGroup(group)
         ? COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name)
         : undefined) ??
-      COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name));
+      fileParallelAgentFallbackSeconds(group, COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name)));
   if (hint !== undefined) {
     return parallelCompactFallbackSeconds(group, hint) / effectiveAgentsCoreWorkers(group);
   }
@@ -1121,7 +1142,7 @@ function readUnmeasuredCompactHint(
   ) {
     return undefined;
   }
-  const hint = hints.get(group.shard_name);
+  const hint = fileParallelAgentFallbackSeconds(group, hints.get(group.shard_name));
   return hint === undefined ? undefined : parallelCompactFallbackSeconds(group, hint);
 }
 
@@ -1195,7 +1216,10 @@ function estimateCompactGroupSeconds(
         ? readCompactGroupTimings("github")[group.shard_name]
         : undefined) ??
       readSerialAgentsCoreSeconds(group, "github") ??
-      COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name));
+      fileParallelAgentFallbackSeconds(
+        group,
+        COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name),
+      ));
   return Math.max(
     serialFloor,
     hint === undefined
@@ -1260,7 +1284,10 @@ function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   );
 }
 
-function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
+function expandCompactGroup(
+  group: NodeTestShardGroup,
+  runnerBackend: string | undefined,
+): NodeTestShardGroup[] {
   if (group.shard_name !== "agentic-agents-embedded") {
     return [group];
   }
@@ -1297,7 +1324,9 @@ function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
       });
     }
   }
-  return expandedGroups;
+  return expandedGroups.map((expandedGroup) =>
+    applyCompactGroupWorkerPins(expandedGroup, runnerBackend),
+  );
 }
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
@@ -3879,7 +3908,7 @@ function createCompactNodeTestShardBundles(
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
     const sortedGroups = groups
-      .flatMap(expandCompactGroup)
+      .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
       .toSorted(
         (a, b) =>
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||

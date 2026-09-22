@@ -231,6 +231,7 @@ src/agents/worktrees/snapshot-inventory.ts
 src/agents/worktrees/template-registry.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
+src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts

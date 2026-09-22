@@ -5732,7 +5732,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       "Android SDK package install step",
     );
 
-    expect(javaStep.uses).toBe("actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c");
+    expect(javaStep.uses).toBe("actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6");
     expect(javaStep.with).toMatchObject({
       distribution: "temurin",
       "java-version": 17,

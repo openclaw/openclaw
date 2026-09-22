@@ -5,7 +5,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { validateAnthropicTurns } from "./embedded-agent-helpers/turns.js";
+import {
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
+  validateAnthropicTurns,
+} from "./embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
@@ -200,15 +204,9 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 });
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
-let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
-let shouldMergeConsecutiveUserTurns: typeof import("./transcript-policy.js").shouldMergeConsecutiveUserTurns;
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
-    ({
-      resolveTranscriptPolicy,
-      shouldAllowProviderOwnedThinkingReplay,
-      shouldMergeConsecutiveUserTurns,
-    } = await import("./transcript-policy.js"));
+    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
   });
 
   beforeEach(() => {
