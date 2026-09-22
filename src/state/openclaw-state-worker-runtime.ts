@@ -235,16 +235,6 @@ export function executeSharedStateCommand(
     };
     return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
   }
-  if (command.type === "secrets.purge") {
-    return purgeExpiredSecretStoreEntriesInDatabase({
-      cutoffs: command.input,
-      database: {
-        database: open(),
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      },
-    });
-  }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
     return executePromotionCommand(
       command,
@@ -512,6 +502,12 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "secrets.purge") {
+    return purgeExpiredSecretStoreEntriesInDatabase({
+      cutoffs: command.input,
+      database: writeOptions,
+    });
+  }
   if (
     command.type === "conversationBindings.resolve" ||
     command.type === "conversationBindings.touch"
