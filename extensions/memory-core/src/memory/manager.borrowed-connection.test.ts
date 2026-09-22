@@ -20,6 +20,7 @@ import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
@@ -460,14 +461,29 @@ describe("memory manager shared agent connection", () => {
       const readSource = shared.db.prepare(
         "SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'memory'",
       );
-      expect(readSource.get(sourcePath) !== undefined).toBe(previouslyIndexed);
+      const indexedSource = readSource.get(sourcePath);
+      expect(indexedSource !== undefined).toBe(previouslyIndexed);
       const writer = new DatabaseSync(shared.path);
-      let releaseWriter: NodeJS.Timeout | undefined;
+      let publicationStarted = false;
+      let deletionCount = 0;
+      // oxlint-disable-next-line typescript/unbound-method -- Called with the actual database owner.
+      const deleteSource = MemoryIndexDatabase.prototype.deleteSource;
+      const publicationSpy = vi
+        .spyOn(MemoryIndexDatabase.prototype, "deleteSource")
+        .mockImplementation(function (this: MemoryIndexDatabase, input, assertCurrent) {
+          if (input.path === sourcePath && input.source === "memory") {
+            deletionCount += 1;
+            expect(input.expectedHash).toBe(indexedSource?.hash);
+            expect(writer.isTransaction).toBe(true);
+            writer.exec("COMMIT");
+          }
+          return deleteSource.call(this, input, assertCurrent);
+        });
       try {
         await manager.sync({
           reason: "watch",
           progress: ({ label }) => {
-            if (label?.startsWith("Indexing memory files") && !releaseWriter) {
+            if (label?.startsWith("Indexing memory files") && !publicationStarted) {
               unlinkSync(imagePath);
               writer.exec("BEGIN IMMEDIATE");
               writer
@@ -475,19 +491,23 @@ describe("memory manager shared agent connection", () => {
                   "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES (?, 'memory', 'newer-media-publication', 1, 1) ON CONFLICT(path, source) DO UPDATE SET hash = excluded.hash",
                 )
                 .run(sourcePath);
-              releaseWriter = setTimeout(() => writer.exec("COMMIT"), 100);
+              publicationStarted = true;
             }
           },
         });
-        expect(releaseWriter).toBeDefined();
+        expect(publicationStarted).toBe(true);
+        expect(deletionCount).toBe(1);
         expect(readSource.get(sourcePath)).toEqual({ hash: "newer-media-publication" });
       } finally {
-        clearTimeout(releaseWriter);
-        if (writer.isTransaction) {
-          writer.exec("ROLLBACK");
+        try {
+          if (writer.isTransaction) {
+            writer.exec("ROLLBACK");
+          }
+          writer.close();
+          await manager.close();
+        } finally {
+          publicationSpy.mockRestore();
         }
-        writer.close();
-        await manager.close();
       }
     },
   );

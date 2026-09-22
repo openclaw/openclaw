@@ -43,7 +43,10 @@ export function applySessionEntryPatchInDatabase(
     sessionKey: string;
     writeBase: SessionEntry;
     next: SessionEntry | undefined;
-    options: Pick<SessionEntryPatchOptions, "consumePendingReset" | "assertCommitAllowed">;
+    options: Pick<
+      SessionEntryPatchOptions,
+      "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
+    >;
   },
 ): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
   // Canonical validation belongs to the current connection, not the captured rows.
@@ -66,6 +69,7 @@ export function applySessionEntryPatchInDatabase(
   const selectedPreviousEntry = fresh[0]?.entry ?? params.writeBase;
   const persisted = writeSessionEntry(database, params.sessionKey, params.next, {
     ...(params.options.consumePendingReset ? { consumePendingReset: true } : {}),
+    ...(params.options.providerReviewMutation ? { providerReviewMutation: true } : {}),
     previousEntry: selectedPreviousEntry,
     // The validated snapshot already owns this canonical row's decode.
     ...(fresh[0]?.sessionKey === params.sessionKey

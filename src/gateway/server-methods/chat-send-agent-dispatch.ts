@@ -319,6 +319,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   : {}),
                 runId: clientRunId,
                 operatorAuthority: admission.operatorAuthority,
+                providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,
                 skillWorkshopProposalRevision,
                 skillLibraryAuthoring,

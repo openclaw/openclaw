@@ -94,9 +94,6 @@ suite.define(() => {
         const card = page.locator(".session-progress-card--composer");
         await card.waitFor();
         await waitForChatScrollIdle(page);
-        if (collapsed) {
-          await card.locator("summary").click();
-        }
         await expect
           .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
           .toBe(!collapsed);

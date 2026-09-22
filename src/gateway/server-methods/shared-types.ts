@@ -473,9 +473,19 @@ export type GatewayRequestOptions = {
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
   talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
+  /** Original materialized target; Stop must match producer facts, not a later row lookup. */
+  admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
+  recordCreatedSession?: (target: {
+    agentId: string;
+    sessionKey: string;
+    storePath: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  }) => void;
   assertTargetCurrent: (target: {
     sessionKey: string;
     agentId?: string;

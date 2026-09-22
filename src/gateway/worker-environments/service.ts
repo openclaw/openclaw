@@ -14,7 +14,7 @@ import {
   createWorkerEnvironmentTransportLifecycle,
   type WorkerEnvironmentNodeTunnel,
 } from "./environment-access.js";
-import { registerWorkerInferenceSessionDrain } from "./inference-control-internal.js";
+import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
@@ -739,7 +739,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionDrain(service, inference.beginSessionDrain);
+  registerWorkerInferenceSessionControl(service, {
+    beginDrain: inference.beginSessionDrain,
+    captureCancel: inference.captureSessionCancellation,
+  });
   return service;
 }
 

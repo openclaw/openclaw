@@ -369,6 +369,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
       );
       return;
+    } else if (recordedRuntime.status === "supported" && opts.runtime === undefined) {
+      runtimePath = recordedNode;
     }
   }
   if (loaded && !opts.force) {

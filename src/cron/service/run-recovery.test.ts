@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -27,6 +26,7 @@ import {
   claimCronRecoveryReceipt as claimReceipt,
   makeCronRecoveryState as makeState,
   observeCronRecoveryForTest,
+  observeCronTimerAdmissions,
   recoverCronRunForTest,
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -115,11 +115,14 @@ describe("atomic cron run recovery", () => {
           }
           return result;
         });
-      const rootWorkBefore = getActiveGatewayRootWorkCount();
+      const admissions = observeCronTimerAdmissions(state);
       const retired = source === "startup" ? start(state) : onTimer(state);
       let restarted: Promise<void> | undefined;
       try {
         await barriers[0]!.entered.promise;
+        if (source === "timer") {
+          await admissions.expectActive();
+        }
         stop(state);
         restarted = start(state);
         expect(state.stopped).toBe(false);
@@ -134,7 +137,7 @@ describe("atomic cron run recovery", () => {
         expect(reaperDiscovery).not.toHaveBeenCalled();
         expect(state.activeTimerTicks).toBe(0);
         expect(state.queuedRunReservationsByJobId.size).toBe(0);
-        expect(getActiveGatewayRootWorkCount()).toBe(rootWorkBefore);
+        await admissions.expectReleased(source === "timer" ? 1 : 0);
 
         await barriers[1]!.entered.promise;
         barriers[1]!.release.resolve();

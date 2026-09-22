@@ -54,7 +54,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
@@ -88,6 +88,7 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
+  classifyHeartbeatPendingFinalDelivery,
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery-state.js";
@@ -109,17 +110,6 @@ import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
-
-function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
-  const stripped = stripHeartbeatToken(text, {
-    mode: "heartbeat",
-    maxAckChars: ackMaxChars,
-  });
-  return {
-    shouldClear: stripped.shouldSkip,
-    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
-  };
-}
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
@@ -646,6 +636,7 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
+            providerReviewAcknowledgment: internalOptsWithSkillFilter?.providerReviewAcknowledgment,
             ctx: finalized,
             cfg,
             commandAuthorized,

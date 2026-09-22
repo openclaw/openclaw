@@ -3,7 +3,6 @@ import { MessagePort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -21,7 +20,7 @@ import {
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { stop } from "./ops-lifecycle.js";
 import { ensureLoadedForRead } from "./ops-shared.js";
-import { makeCronRecoveryState } from "./run-recovery.test-support.js";
+import { makeCronRecoveryState, observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import { tryCreateCronTaskRunHandle } from "./task-runs.js";
@@ -152,7 +151,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
     onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
   const notificationKeys = () =>
     enqueueSystemEvent.mock.calls.map(([, options]) => options.contextKey);
-  const rootWorkBefore = getActiveGatewayRootWorkCount();
+  const admissions = observeCronTimerAdmissions(state);
   const reply = loseFirstCronMutationReply();
   const pending: Promise<unknown>[] = [];
   onTestFinished(async () => {
@@ -165,6 +164,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   const firstTick = onTimer(state);
   pending.push(firstTick);
   await expect(firstTick).rejects.toBeInstanceOf(Error);
+  await admissions.expectReleased(1);
   await reply.waitForExit();
   expect(reply.wasDropped()).toBe(true);
   expect(reply.attempts).toEqual(["first"]);
@@ -193,7 +193,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   }
   expect(runner).not.toHaveBeenCalled();
   expect(state.activeTimerTicks).toBe(0);
-  expect(getActiveGatewayRootWorkCount()).toBe(rootWorkBefore);
+  await admissions.expectReleased(2);
 });
 
 it("publishes committed schedule maintenance once after its successful reply is lost", async () => {

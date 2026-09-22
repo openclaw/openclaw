@@ -71,6 +71,8 @@ export const vitestWorkerDeclarationEntries = {
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
+  "worker/worker-runtime-background-exec-entrypoints.test-support":
+    "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":

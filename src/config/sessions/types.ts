@@ -301,6 +301,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
+    /** Current provider precaution; only its acknowledged continuation may start work. */
+    providerReview?: import("./provider-review.types.js").SessionProviderReview;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
     // threads.archived_at: the boolean is always derived from the timestamp and
     // stamped server-side). Codex serializes camelCase but in epoch SECONDS;

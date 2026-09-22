@@ -3192,3 +3192,27 @@ openclaw-chat-ci-details {
   margin-right: auto;
   padding: 4px;
 }
+
+.chat-provider-review-dialog__content {
+  overflow-y: auto;
+  max-height: 60dvh;
+}
+
+.chat-provider-review-dialog__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-provider-review-dialog h3 {
+  font-size: 13px;
+}
+
+.chat-provider-review-dialog blockquote {
+  margin-inline: 0;
+  padding-inline-start: 16px;
+  border-inline-start: 3px solid var(--border);
+}
+
+.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
+}

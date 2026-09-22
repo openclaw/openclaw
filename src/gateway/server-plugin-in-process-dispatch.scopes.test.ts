@@ -21,6 +21,66 @@ import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.p
 
 describe("synthetic operator scope attenuation", () => {
   it.each([
+    { method: "sessions.create", params: { incognito: true }, scope: "dynamic", missing: "admin" },
+    {
+      method: "sessions.create",
+      params: { execNode: "remote" },
+      scope: "dynamic",
+      missing: "admin",
+    },
+    {
+      method: "sessions.patch",
+      params: { permissionMode: "full" },
+      scope: "dynamic",
+      missing: "admin",
+    },
+    {
+      method: "sessions.patchMany",
+      params: { patch: { sandboxMode: "off" } },
+      scope: "dynamic",
+      missing: "admin",
+    },
+    {
+      method: "sessions.delete",
+      params: { key: "agent:main:own" },
+      scope: "dynamic",
+      missing: "admin",
+    },
+    { method: "sessions.create", params: {}, scope: "operator.admin", missing: "admin" },
+    { method: "sessions.create", params: {}, scope: "operator.approvals", missing: "approvals" },
+  ] as const)(
+    "keeps $method $params behind its $scope requirement",
+    async ({ method, params, scope, missing }) => {
+      const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, {}));
+      const context = createContext();
+      context.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          { name: method, scope, owner: { kind: "core", area: "scope-proof" }, handler },
+        ]);
+      await expect(
+        withOperatorToolGatewayAuthority(
+          {
+            authenticatedUserProfile: {
+              profileId: "scope-owner",
+              displayName: null,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            scopes: ["operator.sessions.write"],
+          },
+          () =>
+            dispatchGatewayMethodInProcess(method, params, {
+              forceSyntheticClient: true,
+              syntheticScopes: ["operator.write"],
+              resolveGatewayContext: () => context,
+            }),
+        ),
+      ).rejects.toThrow(`missing scope: operator.${missing}`);
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     {
       method: "sessions.list",
       requiredScope: "operator.read",

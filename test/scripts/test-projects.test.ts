@@ -1035,7 +1035,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
       [
         "scripts/docs-i18n/go.mod",
-        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-planning.test.ts"],
       ],
     ] as const;
     for (const [modulePath, targets] of cases) {
@@ -1135,6 +1135,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/ci-workflow-evidence.test.ts",
       ]),
     });
   });
@@ -1176,6 +1177,8 @@ describe("scripts/test-projects changed-target routing", () => {
     [
       ".github/workflows/ci.yml",
       [
+        "test/scripts/ci-workflow-planning.test.ts",
+        "test/scripts/ci-workflow-evidence.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/plugin-contract-test-plan.test.ts",
@@ -1499,7 +1502,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
-        ...(workflow === "docs-sync-publish" ? ["test/scripts/docs-mirror-freshness.test.ts"] : []),
+        ...(workflow === "docs-sync-publish"
+          ? ["test/scripts/docs-mirror-freshness.test.ts"]
+          : ["test/scripts/ci-workflow-planning.test.ts"]),
       ],
     );
   });

@@ -521,7 +521,10 @@ class ChatOutboxGatewayOwner {
         return false;
       }
     }
-    return !item.pendingRunId && (item.sendState === "failed" || item.sendState === "unconfirmed");
+    return (
+      !item.pendingRunId &&
+      (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
+    );
   }
   beginSubmission(
     host: Host,
@@ -642,13 +645,16 @@ export function listChatOutboxAttention(host: Composer) {
       .filter((item) =>
         owner
           ? owner.needsReview(outbox, item)
-          : !item.pendingRunId && (item.sendState === "failed" || item.sendState === "unconfirmed"),
+          : !item.pendingRunId &&
+            (item.sendState === "failed" ||
+              item.sendState === "unconfirmed" ||
+              item.sendState === "held"),
       )
       .map((item) => ({
         id: item.id,
         sessionKey: outbox.sessionKey,
         agentId: outbox.agentId,
-        unconfirmed: item.sendState === "unconfirmed",
+        unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
         command: Boolean(item.localCommandName),
       })),
   );

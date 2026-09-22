@@ -92,6 +92,8 @@ Read:
 - `.github/workflows/codeql-critical-quality.yml`
 - `docs/ci.md`
 - `test/scripts/ci-workflow-guards.test.ts`
+- `test/scripts/ci-workflow-planning.test.ts`
+- `test/scripts/ci-workflow-evidence.test.ts`
 - touched planner files under `scripts/lib/*ci*`, `scripts/lib/*test-plan*`, or
   `scripts/ci-changed-scope.mjs`
 
@@ -189,7 +191,8 @@ Do not:
 
 ## Current OpenClaw Knobs
 
-These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
+These are intentionally guarded by the `ci-workflow-guards`,
+`ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
@@ -548,10 +551,10 @@ the current circuit breaker.
 For workflow-only or docs/skill-only changes in a Codex worktree:
 
 ```bash
-node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts
+node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts
 node --import tsx scripts/check-workflows.mts
 node scripts/docs-list.js
-./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
+./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/ci-workflow.test-support.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
 git diff --check
 ```
 

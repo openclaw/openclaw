@@ -187,6 +187,7 @@ export type AgentRunTranscriptContext = {
 };
 
 export type AgentRunLifecycle = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */

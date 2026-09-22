@@ -4,8 +4,10 @@ import type {
   HostedOutboundMediaMetaRecord,
 } from "./outbound-media.js";
 import { createHostedOutboundMediaStore } from "./outbound-media.js";
+import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "./plugin-state-test-runtime.js";
 import * as webMedia from "./web-media.js";
@@ -23,6 +25,22 @@ function prepare(store: ReturnType<typeof createHostedOutboundMediaStore>) {
     publicBaseUrl: "https://gateway.example.com",
     maxBytes: 1024,
   });
+}
+
+function createClockedStateStore<T>(
+  options: Parameters<typeof createPluginStateSyncKeyedStoreForTests>[1],
+): PluginStateKeyedStore<T> {
+  // Native workers have a real clock; retention fixtures need SQLite and media on one fake clock.
+  const store = createPluginStateSyncKeyedStoreForTests<T>("fixture-plugin", options);
+  return {
+    register: async (...args) => store.register(...args),
+    registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
+    lookup: async (...args) => store.lookup(...args),
+    consume: async (...args) => store.consume(...args),
+    delete: async (...args) => store.delete(...args),
+    entries: async () => store.entries(),
+    clear: async () => store.clear(),
+  };
 }
 
 describe("hosted outbound media post-expiry retention", () => {
@@ -43,14 +61,14 @@ describe("hosted outbound media post-expiry retention", () => {
   });
 
   it("denies new reads at logical expiry and deletes rows after serving grace", async () => {
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-      "fixture-plugin",
-      { namespace: "retained-ttl-media", maxEntries: 10 },
-    );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-      "fixture-plugin",
-      { namespace: "retained-ttl-media-chunks", maxEntries: 100 },
-    );
+    const metadataStore = createClockedStateStore<HostedOutboundMediaMetaRecord>({
+      namespace: "retained-ttl-media",
+      maxEntries: 10,
+    });
+    const chunkStore = createClockedStateStore<HostedOutboundMediaChunkRecord>({
+      namespace: "retained-ttl-media-chunks",
+      maxEntries: 100,
+    });
     const store = createHostedOutboundMediaStore({
       metadataStore,
       chunkStore,
@@ -85,12 +103,12 @@ describe("hosted outbound media post-expiry retention", () => {
     ];
     let idIndex = 0;
     const store = createHostedOutboundMediaStore({
-      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+      metadataStore: createClockedStateStore({
         namespace: "grace-capacity-media",
         maxEntries: 1,
         overflowPolicy: "reject-new",
       }),
-      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+      chunkStore: createClockedStateStore({
         namespace: "grace-capacity-media-chunks",
         maxEntries: 10,
         overflowPolicy: "reject-new",

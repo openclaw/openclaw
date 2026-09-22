@@ -955,7 +955,7 @@ describe("CI changed Node test plan", () => {
         ).toEqual([
           "test/scripts/check-max-lines-ratchet.test.ts",
           "test/scripts/ci-changed-node-test-plan.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/ci-workflow-planning.test.ts",
         ]);
         expect(targets).toEqual(expect.arrayContaining(companions));
       }
@@ -987,6 +987,8 @@ describe("CI changed Node test plan", () => {
       tests: [
         "test/scripts/check-workflows.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/ci-workflow-planning.test.ts",
+        "test/scripts/ci-workflow-evidence.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
       ],
     },

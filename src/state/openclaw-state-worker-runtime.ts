@@ -68,6 +68,7 @@ import {
   persistTelemetrySuccessInDatabase,
   readTelemetryStateInWorker,
 } from "../infra/telemetry-store.kernel.js";
+import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { isNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker-contract.js";
@@ -327,6 +328,13 @@ export function executeSharedStateCommand(
     return runOpenClawStateWriteTransaction(
       ({ db }) => upsertPluginBindingApprovalInDatabase(db, command.input),
       { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+    );
+  }
+  if (command.type === "updateRuns.reconcileInterrupted") {
+    return persistInterruptedUpdateObservation(
+      command.input,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
   }
   if (command.type === "plugins.deferredMigrations.read") {

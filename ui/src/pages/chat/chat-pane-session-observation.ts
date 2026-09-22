@@ -4,6 +4,8 @@ import { projectSessionResultRows, reconcileSessionHistory } from "../../lib/ses
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -64,6 +66,16 @@ function applyObservedChatSessionRow(
           false,
           { project: (next, previous) => state.sessions.inheritRow(next, row, previous) },
         );
+  if (row.providerReview) {
+    holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
+    if (
+      state.realtimeTalkSession ||
+      state.realtimeTalkActive ||
+      state.realtimeTalkUseSystemDefault
+    ) {
+      stopChatRealtimeTalk(state, { preserveConversation: true });
+    }
+  }
   if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
     return false;
   }

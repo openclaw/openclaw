@@ -503,7 +503,7 @@ it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
   },
 );
 
-it.each(["canonical-wrapper", "wrapper", "metadata"])(
+it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "metadata"])(
   "audits launchd %s before the installer can replace it",
   async (kind) => {
     const home = dirs.make("rewrite-launchd-preservation-");
@@ -519,6 +519,16 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
       sourcePath,
       buildLaunchAgentPlist({
         ...command,
+        ...(kind === "malformed-args"
+          ? {
+              programArguments: [
+                "/bin/sh",
+                resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway"),
+                command.programArguments[0]!,
+                ...command.programArguments,
+              ],
+            }
+          : {}),
         label: "ai.openclaw.gateway",
         comment: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
         stdoutPath,
@@ -530,9 +540,11 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
       await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
       await fs.writeFile(
         wrapperPath,
-        kind === "canonical-wrapper"
+        kind === "canonical-wrapper" || kind === "malformed-args"
           ? buildLaunchAgentEnvironmentWrapper()
-          : '#!/bin/sh\necho operator-private\nexec "$@"\n',
+          : kind === "legacy-wrapper"
+            ? '#!/bin/sh\nset -eu\nenv_file="$1"\nshift\nif [ -f "$env_file" ]; then\n  . "$env_file"\nfi\nexec "$@"\n'
+            : '#!/bin/sh\necho operator-private\nexec "$@"\n',
       );
     }
     const result = await auditGatewayServiceConfig({
@@ -543,6 +555,24 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
     });
     if (kind === "canonical-wrapper") {
       expect(result.definitionDrift ?? []).toEqual([]);
+      return;
+    }
+    if (kind === "malformed-args") {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: "launchd-env-file-argument",
+          message: expect.stringContaining("openclaw gateway install --force"),
+        }),
+      );
+      return;
+    }
+    if (kind === "legacy-wrapper") {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "launchd-env-wrapper-outdated" }),
+      );
+      expect(result.definitionDrift).toEqual([
+        expect.objectContaining({ kind: "outdated", key: "EnvironmentWrapper" }),
+      ]);
       return;
     }
     expect(result.definitionDrift).toContainEqual(

@@ -40,6 +40,10 @@ import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
+import type {
+  InterruptedUpdateSettlement,
+  InterruptedUpdateSettlementResult,
+} from "../infra/update-run-interruption-contract.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-worker-contract.js";
@@ -108,6 +112,10 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
   TaskRegistryWorkerOperations & {
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
+    "updateRuns.reconcileInterrupted": {
+      input: InterruptedUpdateSettlement;
+      output: InterruptedUpdateSettlementResult;
+    };
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;
       output: RepositoryGitHubPublicationStatusRow | undefined;

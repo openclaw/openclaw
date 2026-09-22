@@ -357,12 +357,16 @@ async function callInProcessGatewayToolBound<T>(
         }
       : undefined;
   assertCallerCurrent?.();
-  const sessionMutationCommitGuard = assertCallerCurrent
-    ? () => {
-        assertCallerCurrent();
-        options.sessionMutationCommitGuard?.();
-      }
-    : options.sessionMutationCommitGuard;
+  // The hosted creation dispatcher retains this receipt until child input commits,
+  // then keeps its issued source authority. Opaque caller guards remain enforced.
+  const transfersCreatedInput = method === "sessions.create" && agentToolCaller !== undefined;
+  const sessionMutationCommitGuard =
+    assertCallerCurrent && !transfersCreatedInput
+      ? () => {
+          assertCallerCurrent();
+          options.sessionMutationCommitGuard?.();
+        }
+      : options.sessionMutationCommitGuard;
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
   const boundGateway = resolveGatewayContext

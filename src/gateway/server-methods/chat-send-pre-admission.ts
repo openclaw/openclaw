@@ -572,6 +572,8 @@ export async function runChatSendPreAdmission(
             }
             const workStartError = resolveSessionWorkStartError(sessionKey, current.entry, {
               allowPendingWorkspace: true,
+              providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+              runId: session.clientRunId,
               expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
             });
             if (workStartError) {
@@ -670,6 +672,8 @@ export async function runChatSendPreAdmission(
   }
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
     allowPendingWorkspace: true,
+    providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+    runId: clientRunId,
   });
   if (archivedSessionError) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));

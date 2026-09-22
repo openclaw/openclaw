@@ -343,6 +343,9 @@ export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
 export const validateSessionsGoalUpdateParams = compile(S.SessionsGoalUpdateParamsSchema);
 export const validateSessionsGoalClearParams = compile(S.SessionsGoalClearParamsSchema);
+export const validateSessionsProviderReviewContinueParams = compile(
+  S.SessionsProviderReviewContinueParamsSchema,
+);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);

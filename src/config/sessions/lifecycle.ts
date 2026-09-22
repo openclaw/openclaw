@@ -1,6 +1,10 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  assertProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
@@ -30,13 +34,19 @@ type SessionWorkStartEntry = Pick<
   | "sessionId"
   | "pendingProjectGitUrl"
   | "pendingWorktree"
+  | "providerReview"
+  | "lifecycleRevision"
 >;
 
 type SessionWorkStartOptions = {
+  /** Already-accepted transcript/delivery results settle without dispatching new model work. */
+  purpose?: "accepted-result-settlement";
   allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
   /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
   allowPendingWorkspace?: true;
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
+  runId?: string;
 };
 
 export function isRestartRecoveryTombstone(
@@ -113,9 +123,24 @@ export function resolveSessionWorkStartError(
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
   }
+  if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
+    try {
+      if (!options?.providerReviewAcknowledgment) {
+        return `Session "${sessionKey}" is paused as a precaution. Review the provider findings in chat before continuing.`;
+      }
+      assertProviderReviewAcknowledgment(options.providerReviewAcknowledgment, {
+        sessionKey,
+        entry,
+        runId: options.runId,
+      });
+    } catch {
+      return `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`;
+    }
+  }
   const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
   if (restartRecoveryTombstone) {
-    if (options?.allowRestartTombstoneReplacement === true) {
+    // Acknowledgment owns continuation of the reviewed conversation, never its replacement.
+    if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
     return entry?.modelSelectionLocked === true

@@ -2623,6 +2623,8 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
         includePatterns: [
           "src/commands/status.scan-result.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/ci-workflow-planning.test.ts",
+          "test/scripts/ci-workflow-evidence.test.ts",
           "test/scripts/ci-run-node-test-shard.test.ts",
         ],
         shard_name: "cache-warm:hosted-tooling",

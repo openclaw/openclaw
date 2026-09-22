@@ -3308,6 +3308,7 @@ export const en: TranslationMap & {
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
+    providerReview: {},
     providerPolicy: {
       bufferingTitle: "Cyber safety review",
       bufferingBody: "OpenAI is reviewing this response for cyber safety.",

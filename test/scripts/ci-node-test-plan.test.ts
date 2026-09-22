@@ -1666,7 +1666,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     expect(groups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
     const files = groups.flatMap((group) => group.includePatterns ?? []);
-    expect(files).toHaveLength(12);
+    expect(files).toHaveLength(14);
     expect(files.every((file) => existsSync(file))).toBe(true);
     expect(buildPrerequisites.resolveVitestPretestBuildMode(groups)).toBeUndefined();
     const tooling = expectDefined(

@@ -1395,7 +1395,7 @@ packages/ai/src/providers/clean-for-gemini.ts	12
 packages/ai/src/providers/google-shared.ts	3
 packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	26
+packages/ai/src/providers/openai-chatgpt-responses.ts	20
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	6
 packages/ai/src/providers/openai-reasoning-effort.ts	6
@@ -2738,7 +2738,6 @@ src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	2
 src/gateway/session-sharing-target-input.ts	2
-src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-title-reader.ts	1
