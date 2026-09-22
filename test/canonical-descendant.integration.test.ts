@@ -114,6 +114,37 @@ function expectPolicyHandoff(
   });
 }
 
+async function withRetainedNativeForkAttempt<T>(
+  fixture: CanonicalForkFixture,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await fixture.withClient(async (client) => {
+    const requests = vi.spyOn(client, "request");
+    try {
+      const result = await run();
+      const assertCurrent = expectDefined(
+        requests.mock.calls.findLast(([method]) => method === "thread/fork")?.[2]?.assertCurrent,
+        "production native-write authority",
+      );
+      const before = fixture.native.calls.filter((call) => call.method === "thread/fork").length;
+      expect(before).toBeGreaterThan(0);
+      await expect(
+        client.request(
+          "thread/fork",
+          { threadId: "original", excludeTurns: true },
+          { timeoutMs: 5_000, assertCurrent },
+        ),
+      ).rejects.toThrow("Session initialization source is closed");
+      expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
+        before,
+      );
+      return result;
+    } finally {
+      requests.mockRestore();
+    }
+  });
+}
+
 async function withFixture(
   run: (
     fixture: CanonicalForkFixture,
@@ -1152,7 +1183,9 @@ describe("canonical descendant lifecycle through real owners", () => {
       const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
       current.thread.model = "gpt-5.5";
       const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-      const result = await fork(source.sessionKey, selected.entryId);
+      const result = await withRetainedNativeForkAttempt(fixture, () =>
+        fork(source.sessionKey, selected.entryId),
+      );
       expect(result, result.message).toMatchObject({ ok: true });
       const childKey = expectDefined(result.key, "child key");
       expect(fixture.bindingStore.read(fixture.identity(childKey))).toMatchObject({
@@ -1892,7 +1925,12 @@ describe("canonical descendant lifecycle through real owners", () => {
           if (failure === "unsubscribe failure") {
             fixture.native.setFailUnsubscribe(true);
           }
-          const result = await fork(source.sessionKey, messages.at(-1)!.entryId);
+          const result =
+            failure === "sandbox policy changed during initialization"
+              ? await withRetainedNativeForkAttempt(fixture, () =>
+                  fork(source.sessionKey, messages.at(-1)!.entryId),
+                )
+              : await fork(source.sessionKey, messages.at(-1)!.entryId);
           expect(result.ok, result.message).toBe(false);
           expect(result.message).toMatch(expectedError);
           if (failure === "missing model" || failure === "null model") {
