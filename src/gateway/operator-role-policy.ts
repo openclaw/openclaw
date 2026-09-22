@@ -210,6 +210,7 @@ export function hasOperatorBoundary(client: GatewayClient | null, cfg: OpenClawC
 /** Enforces the owning agent ceiling for session creation and run-start targets. */
 export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
+  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
   const actor =
     params.actor ??
@@ -218,7 +219,9 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.profileId ?? params.profileId;
-  const role = resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const role = prepared
+    ? prepared.policy
+    : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

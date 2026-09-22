@@ -64,6 +64,7 @@ import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-captu
 import {
   createChangedPostCoreUpdateOptions,
   createConfigValidationFailure,
+  createUpdateCliBaseSnapshot,
   createUpdateCliConfigFixtures,
   pluginSyncResult,
   npmPluginUpdateResult,
@@ -776,7 +777,8 @@ const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
-const { clearRestartSentinel, readRestartSentinel } = await import("../infra/restart-sentinel.js");
+const { clearRestartSentinelIfRevision, readRestartSentinel } =
+  await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -824,21 +826,8 @@ describe("update-cli", () => {
     closeOpenClawStateDatabaseForTest();
   };
 
-  const baseConfig = {} as OpenClawConfig;
-  const baseSnapshot: ConfigFileSnapshot = {
-    path: "/tmp/openclaw-config.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: baseConfig,
-    sourceConfig: baseConfig,
-    valid: true,
-    config: baseConfig,
-    runtimeConfig: baseConfig,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  const baseConfig: OpenClawConfig = {};
+  const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
 
   const clawHubRiskWarning =
     "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
@@ -13072,7 +13061,11 @@ describe("update-cli", () => {
           if (consumed) {
             const respond = expectDefined(callGateway.getMockImplementation(), "health response");
             callGateway.mockImplementation(async (opts) => {
-              sentinelConsumed = (await clearRestartSentinel()) || sentinelConsumed;
+              const current = await readRestartSentinel();
+              if (current) {
+                sentinelConsumed =
+                  (await clearRestartSentinelIfRevision(current.revision)) || sentinelConsumed;
+              }
               return respond(opts);
             });
           }

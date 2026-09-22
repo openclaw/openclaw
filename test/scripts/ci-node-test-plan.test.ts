@@ -2483,7 +2483,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const isolated = owner === "agentic-gateway-server-isolated";
           const gatewayGroups = groups
             .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner)
-            .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
+            // Timing generations follow shard numbers, including double-digit children.
+            .toSorted((left, right) =>
+              left.shard_name.localeCompare(right.shard_name, undefined, { numeric: true }),
+            );
           const measured =
             (owner === "agentic-gateway-core-2" || isolated) && profile.name !== "GitHub-hosted";
           expect(gatewayGroups.length, `${profile.name}: ${owner}`).toBeGreaterThan(0);
@@ -4841,6 +4844,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
       "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
       "src/agents/tools/swarm-tools.integration.test.ts",
+      "src/config/sessions/disk-budget.physical-usage.test.ts",
     ]) {
       expect(admitted.has(file), file).toBe(true);
     }
@@ -4860,6 +4864,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         createToolingVitestConfig({}),
         createWizardVitestConfig({}),
         createCommandsVitestConfig({}),
+        createRuntimeConfigVitestConfig({}),
       ].flatMap(listMatchedTestFiles),
     );
     for (const file of databaseWorkerCoreTestFiles) {

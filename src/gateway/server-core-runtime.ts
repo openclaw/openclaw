@@ -234,6 +234,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
@@ -528,6 +529,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

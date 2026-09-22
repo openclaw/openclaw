@@ -9,6 +9,7 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
@@ -22,6 +23,8 @@ import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { formatRedactedOAuthRefreshError } from "./oauth-refresh-error-format.js";
 import {
   OAuthRefreshFailureError,
+  appendOAuthRefreshCleanupErrors,
+  readOAuthRefreshInitiatingError,
   readProviderOAuthRefreshFailure,
 } from "./oauth-refresh-failure.js";
 import {
@@ -91,37 +94,7 @@ type ResolvedOAuthAccess = {
   credential: OAuthCredential;
 };
 
-const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
-
-function appendOAuthRefreshCleanupErrors(error: unknown, cleanupErrors: readonly unknown[]): Error {
-  const primaryError = toErrorObject(error, "OAuth refresh failed");
-  if (cleanupErrors.length === 0) {
-    return primaryError;
-  }
-  const normalizedCleanupErrors = cleanupErrors.map((cleanupError) =>
-    toErrorObject(cleanupError, "OAuth refresh cleanup failed"),
-  );
-  const errors =
-    primaryError instanceof AggregateError && oauthRefreshCleanupAggregates.has(primaryError)
-      ? [...primaryError.errors, ...normalizedCleanupErrors]
-      : [primaryError, ...normalizedCleanupErrors];
-  const aggregate = new AggregateError(
-    errors,
-    "OAuth refresh failed and cleanup could not be completed.",
-    { cause: errors[0] },
-  );
-  oauthRefreshCleanupAggregates.add(aggregate);
-  return aggregate;
-}
-
-function readOAuthRefreshInitiatingError(error: unknown): unknown {
-  return error instanceof AggregateError &&
-    oauthRefreshCleanupAggregates.has(error) &&
-    error.errors.length > 0
-    ? error.errors[0]
-    : error;
-}
 
 function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
@@ -1114,7 +1087,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       throw appendOAuthRefreshCleanupErrors(cleanupErrors[0], cleanupErrors.slice(1));
     };
 
-    const settlement = (async (): Promise<ResolvedOAuthAccess | null> => {
+    const settlement = trackAsyncWork(async (): Promise<ResolvedOAuthAccess | null> => {
       let refreshed: OAuthCredentials | null;
       try {
         refreshed = await adapter.refreshCredential(claim.credential, {
@@ -1248,7 +1221,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
         return await settleFailure({ error });
       }
-    })();
+    });
     // The caller deadline observes the owner; it never cancels durable settlement.
     void settlement.then(claim.observation.finish, claim.observation.finish);
     return await observeOAuthRefreshSettlement(
@@ -1328,20 +1301,22 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     }
 
     try {
-      const queued = refreshQueue.enqueue(`${credential.provider}\u0000${params.profileId}`, () =>
-        refreshOAuthTokenWithLock({
-          profileId: params.profileId,
-          provider: credential.provider,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-          signal: params.signal,
-          forceRefresh: params.forceRefresh,
-          attemptedCredential: effectiveCredential,
-          attemptedCredentials,
-          bootstrapCredential,
-          bootstrapBaseCredential: adoptedCredential,
-          validateCredential: params.validateCredential,
-        }),
+      const queued = trackAsyncWork(() =>
+        refreshQueue.enqueue(`${credential.provider}\u0000${params.profileId}`, () =>
+          refreshOAuthTokenWithLock({
+            profileId: params.profileId,
+            provider: credential.provider,
+            agentDir: params.agentDir,
+            cfg: params.cfg,
+            signal: params.signal,
+            forceRefresh: params.forceRefresh,
+            attemptedCredential: effectiveCredential,
+            attemptedCredentials,
+            bootstrapCredential,
+            bootstrapBaseCredential: adoptedCredential,
+            validateCredential: params.validateCredential,
+          }),
+        ),
       );
       // The queue retains admission and claim cleanup after this caller stops observing.
       // Claimed refreshes transfer to durable settlement before their queue task exits.

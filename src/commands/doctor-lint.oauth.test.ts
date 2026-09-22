@@ -3,8 +3,8 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpToolRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
+import { withMcpOAuthProviderForTest } from "../agents/mcp-oauth.test-support.js";
 import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -156,14 +156,15 @@ describe("Doctor OAuth snapshot isolation", () => {
         await state.writeConfig(cfg);
         const network = rotatingOAuthServer(rejected);
         mocks.fetch.mockImplementation(network.fetch);
-        const provider = await createMcpOAuthClientProvider({ identity: IDENTITY });
-        await provider.saveClientInformation?.({ client_id: "fixture-client" });
-        await provider.saveDiscoveryState?.({ authorizationServerUrl: ISSUER });
-        await provider.saveTokens({
-          access_token: "fixture-access-0",
-          refresh_token: "fixture-refresh-0",
-          token_type: "Bearer",
-          expires_in: rejected ? 3600 : -1,
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveClientInformation?.({ client_id: "fixture-client" });
+          await provider.saveDiscoveryState?.({ authorizationServerUrl: ISSUER });
+          await provider.saveTokens({
+            access_token: "fixture-access-0",
+            refresh_token: "fixture-refresh-0",
+            token_type: "Bearer",
+            expires_in: rejected ? 3600 : -1,
+          });
         });
         const databasePath = resolveOpenClawStateSqlitePath(process.env);
         await closeOpenClawStateDatabaseByPathAsync(databasePath);

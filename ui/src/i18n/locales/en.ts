@@ -3045,6 +3045,10 @@ export const en: TranslationMap & {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
+    interruptedRetrying:
+      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
+    interrupted:
+      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",

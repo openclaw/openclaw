@@ -37,6 +37,7 @@ import {
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -98,9 +99,11 @@ it.each([
     bindGatewayContextResolver(facets.subagent, () => undefined);
     return facets;
   };
-  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("borrowed facets must not load the broad runtime");
-  });
+  const resolveRuntimeModule = vi
+    .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+    .mockImplementation(() => {
+      throw new Error("borrowed facets must not load the broad runtime");
+    });
   const createDonor = (owner: string) => {
     const facets = createFacets(owner);
     const reads = {
@@ -109,7 +112,6 @@ it.each([
     };
     const registry = createEmptyPluginRegistry();
     const runtime = createLazyPluginRuntime({
-      loadPluginModule,
       runtimeOptions: {
         get nodes() {
           return reads.nodes();
@@ -156,7 +158,7 @@ it.each([
     expect(loadAndActivateRootPluginRegistry(options)).toBe(registry);
     expect(resolveCompatibleRuntimePluginRegistry(options)).toBe(registry);
     expect(await read(registry)).toMatchObject(expected);
-    expect(loadPluginModule).not.toHaveBeenCalled();
+    expect(resolveRuntimeModule).not.toHaveBeenCalled();
     return;
   }
   let previous: ReturnType<typeof loadPluginRegistryHandle> | undefined;
@@ -185,7 +187,7 @@ it.each([
     }
     previous = registry;
   }
-  expect(loadPluginModule).not.toHaveBeenCalled();
+  expect(resolveRuntimeModule).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -317,8 +319,8 @@ it.each([
           gateway: { roles: { ...config.gateway.roles, default: "staff" } },
         };
         for (const unboundConfig of [staffDefault, { ...config, gateway: {} }]) {
-          expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeUndefined();
-          expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeUndefined();
+          expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeNull();
+          expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeNull();
         }
       } else {
         expect(() => resolveGatewayOperatorAccessAuthority(visitor.id, config)).toThrow(
@@ -326,14 +328,12 @@ it.each([
         );
         expect(optionalChecks).not.toHaveBeenCalled();
       }
-      expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeUndefined();
-      expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeUndefined();
+      expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeNull();
+      expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeNull();
       expect(optionalChecks).toHaveBeenCalledWith(staff.id, false);
       expect(optionalChecks).toHaveBeenCalledWith(unbound.id, false);
       optionalChecks.mockClear();
-      expect(
-        resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config),
-      ).toBeUndefined();
+      expect(resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
       expect(optionalChecks).not.toHaveBeenCalled();
     } finally {
       process.off(optionalCheckEvent, optionalChecks);

@@ -1,15 +1,18 @@
 import type { Message } from "grammy/types";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramInboundBuffers } from "./bot-handlers.inbound-buffer.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { TelegramContext } from "./bot/types.js";
 import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
+import { setTelegramRuntime } from "./runtime.js";
 
 describe("Telegram inbound provenance buffering", () => {
+  beforeEach(() => setTelegramRuntime(createPluginRuntimeMock()));
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each([false, true])(

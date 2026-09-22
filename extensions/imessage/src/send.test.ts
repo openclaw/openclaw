@@ -46,7 +46,7 @@ let sendMessageIMessage: SendModule["sendMessageIMessage"];
 
 async function loadFreshSendModule(): Promise<void> {
   ({ findLatestIMessageEntryForChat, rememberIMessageReplyCache } =
-    await loadFreshIMessageReplyCacheForTest());
+    await loadFreshIMessageReplyCacheForTest({ reuseDatabase: true }));
   ({ IMessageRpcRequestError } = await import("./client.js"));
   ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({

@@ -510,6 +510,20 @@ databases, and listener. A foreground Gateway launches a fresh process only afte
 the updater settles; it does not reopen its old module graph after replacement.
 Managed services restart through their existing service manager.
 
+Chat updates retain the requester's original person-access grant while staging
+and validation run. Revoking that grant stops the pending update and leaves the
+Gateway serving; issuing a new grant does not revive the original request. Before
+parking, the Gateway must confirm that the original grant and current admin
+authority still permit the update. A missing, failed, or timed-out confirmation
+does not authorize stopping the Gateway.
+
+After parking is authorized, the native updater owns completion or recovery of
+that same update, including Doctor and restart verification. Closing the original
+Gateway's access-policy service during shutdown does not cancel this accepted
+operation. The original profile link, role, configured authority, installation
+ownership, and config-write checks still apply. A new update or triage request
+requires fresh authorization.
+
 With `OPENCLAW_NO_RESPAWN` enabled, a foreground Gateway refuses `update.run`
 before starting the updater. Stop the Gateway, run `openclaw update`, and start
 it again, or relaunch it without `OPENCLAW_NO_RESPAWN` to allow control-plane updates.

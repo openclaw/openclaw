@@ -25,6 +25,7 @@ import {
   isPublicUpdateFailureCode,
   projectPublicUpdateFailureIdentifiers,
 } from "./update-failure-public-identifiers.js";
+import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -300,24 +301,27 @@ async function renderBoundedDiagnostics(
           ? diagnostic
           : `${exit} (${diagnostic})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
+    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env).map(async (fact) =>
-          formatUpdateFailureFact({
-            ...(await projectPublicUpdateFailureIdentifiers(fact)),
-            ...(fact.location ? { location: fact.location } : {}),
-            ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
-            ...(fact.message
-              ? {
-                  message:
-                    updatePreflightDetailMessage(fact.code) ??
-                    (fact.errorName
-                      ? redactSupportDiagnosticLine(fact.message, context)
-                      : redactPublicSupportDiagnosticLine(fact.message, context)),
-                }
-              : {}),
-          }),
-        ),
+        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
+          .filter((fact) => fact.check !== "npm")
+          .map(async (fact) =>
+            formatUpdateFailureFact({
+              ...(await projectPublicUpdateFailureIdentifiers(fact)),
+              ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.message
+                ? {
+                    message:
+                      updatePreflightDetailMessage(fact.code) ??
+                      (fact.errorName
+                        ? redactSupportDiagnosticLine(fact.message, context)
+                        : redactPublicSupportDiagnosticLine(fact.message, context)),
+                  }
+                : {}),
+            }),
+          ),
       )),
     );
   }

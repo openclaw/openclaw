@@ -167,7 +167,10 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. The updater preserves recorded choices and retains the previous plugin
+update. Candidate rehearsal also reports a plugin source parse failure as a warning
+with the plugin ID, source path, and parser error, then continues checking other
+plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
@@ -320,8 +323,7 @@ Operator-created scheduled automations can also call `gateway` → `update.run`
 without a chat owner identity. The Gateway uses the active scheduled run's
 authority; a notification destination does not become its requester. Jobs created
 by external chat users and webhook turns do not gain this authority. External
-chat update requests still require `commands.ownerAllowFrom`; the refusal tells
-the operator which sender to add.
+chat update requests still require current command-owner authority.
 
 `/update` is the model-independent fallback: it works without a functioning model
 or access to the `gateway` tool. The tool, slash command, and Control UI all use
@@ -337,8 +339,11 @@ Gateway observes the recorded milestones:
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
 
-External update and restart notices go only to destinations listed in
-`commands.ownerAllowFrom`. Selecting a non-owner chat in the Control UI does not
+External update and restart notices go to destinations listed in
+`commands.ownerAllowFrom` or a linked administrator's direct conversation. The
+channel resolves a direct recipient to its stable sender identity before checking
+the administrator link; group and channel targets do not inherit a person's
+administrator authority. Selecting a non-owner chat in the Control UI does not
 authorize notices to that contact. If no owner destination resolves, OpenClaw
 logs the skipped notice and keeps the update outcome in the run record and
 Control UI; it does not redirect the notice to another chat or wake the rejected
@@ -379,11 +384,19 @@ restart; `--json` exposes the `activeRun` and `lastRun` records. See
 [Run history and reports](/cli/update#run-history-and-reports) for Gateway history
 queries.
 
-The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
+The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration)
+or have a [verified channel link to a current Gateway administrator](/concepts/user-model#channel-identity-links).
 Being allowed to chat does not grant owner permissions. If your account is not
 an owner, the reply explains how the Gateway operator can connect it. Channel
 setup and [pairing](/channels/pairing) distinguish owner access from chat access;
 existing allowed users are not automatically promoted.
+Chat updates retain the original authorization source across managed handoffs,
+repair workers, and Doctor runs. Each worker checks the original installation's
+current policy and profile state before acting. Reassigning a channel account to
+another administrator does not transfer an update already in progress; a current
+owner must start a new update. Older updater handoffs without a captured profile
+source retain their configured-owner checks and cannot acquire linked-profile
+authority during recovery.
 External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's

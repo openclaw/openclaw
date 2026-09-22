@@ -970,6 +970,9 @@ enum class GatewayMethod(
   WebSearchStatus("webSearch.status"),
   WebSearchTest("webSearch.test"),
   SessionsProviderReviewContinue("sessions.providerReview.continue"),
+  UsersLinkChannelIdentity("users.linkChannelIdentity"),
+  UsersUnlinkChannelIdentity("users.unlinkChannelIdentity"),
+  UsersListChannelIdentities("users.listChannelIdentities"),
 }
 
 enum class GatewayEvent(

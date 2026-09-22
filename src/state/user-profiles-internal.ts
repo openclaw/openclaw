@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type SelectQueryBuilder } from "kysely";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
@@ -7,18 +8,28 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
+import { generateSecureUuid } from "../infra/secure-random.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
+import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
-import type { UserProfileAvatarMime, UserProfilesDatabase } from "./user-profiles.types.js";
+import type {
+  ProfileDisplayRow,
+  UserProfileDisplay,
+  UserProfileAvatarMime,
+  UserProfileEmailBinding,
+  UserProfileEmailBindingIndex,
+  UserProfilesDatabase,
+} from "./user-profiles.types.js";
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
@@ -28,6 +39,27 @@ const metadataReaders = new WeakMap<
   DatabaseSync,
   (profileId: string) => UserProfileMetadataRow | undefined
 >();
+
+export function insertUserProfile(
+  db: DatabaseSync,
+  displayName: string | null,
+  now: number,
+  mutation?: UserProfileMutationContext,
+): UserProfileRow {
+  const row: UserProfileRow = {
+    id: generateSecureUuid(),
+    display_name: displayName,
+    avatar: null,
+    avatar_mime: null,
+    avatar_sha256: null,
+    merged_into: null,
+    created_at: now,
+    updated_at: now,
+  };
+  mutation?.before(db, row.id);
+  executeSqliteQuerySync(db, userProfilesDb(db).insertInto("user_profiles").values(row));
+  return row;
+}
 
 export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">): UserProfile {
   return {
@@ -56,6 +88,62 @@ type UserProfileAvatar = {
 
 export function userProfilesDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
+}
+
+/** Keep each exact binding and its profile's email projection in the same committed update. */
+export function applyUserProfileEmailBinding(
+  bindings: UserProfileEmailBindingIndex,
+  email: string,
+  binding: UserProfileEmailBinding | null,
+): string | undefined {
+  const previous = bindings.byEmail.get(email);
+  if (previous) {
+    if (previous.bindingId) {
+      bindings.byId.delete(previous.bindingId);
+    }
+    const emails = bindings.emailsByProfile.get(previous.profileId);
+    emails?.delete(email);
+    if (emails?.size === 0) {
+      bindings.emailsByProfile.delete(previous.profileId);
+    }
+  }
+  if (binding) {
+    bindings.byEmail.set(email, binding);
+    if (binding.bindingId) {
+      bindings.byId.set(binding.bindingId, binding.profileId);
+    }
+    const emails = bindings.emailsByProfile.get(binding.profileId) ?? new Set<string>();
+    emails.add(email);
+    bindings.emailsByProfile.set(binding.profileId, emails);
+  } else {
+    bindings.byEmail.delete(email);
+  }
+  return previous?.profileId;
+}
+
+/** A binding survives same-owner refreshes; an actual transfer starts a new lifetime. */
+export function setUserProfileEmailBinding(
+  db: DatabaseSync,
+  email: string,
+  profileId: string,
+  now: number,
+): void {
+  const bindingId = generateSecureUuid();
+  const result = executeSqliteQuerySync(
+    db,
+    userProfilesDb(db)
+      .insertInto("user_profile_emails")
+      .values({ email, profile_id: profileId, binding_id: bindingId, created_at: now })
+      .onConflict((conflict) =>
+        conflict
+          .column("email")
+          .doUpdateSet({ profile_id: profileId, binding_id: bindingId })
+          .where("user_profile_emails.profile_id", "!=", profileId),
+      ),
+  );
+  if (result.numAffectedRows === 1n) {
+    stageUserProfileEmailBindingChange(db, email, { email, profileId, bindingId });
+  }
 }
 
 export const userProfileDisplaySelection = [
@@ -199,4 +287,62 @@ export function getProfileAvatar(
   return profile?.avatar && mime && profile.avatar_sha256
     ? { bytes: profile.avatar, mime, sha256: profile.avatar_sha256, updatedAt: profile.updated_at }
     : undefined;
+}
+
+export function projectUserProfileDisplay(
+  profile: Omit<ProfileDisplayRow, "role">,
+): UserProfileDisplay {
+  const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
+  return {
+    id: profile.id,
+    displayName: profile.display_name,
+    avatarRevision:
+      profile.avatar_sha256 && avatarMime
+        ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
+        : String(profile.updated_at),
+    hasAvatar: profile.has_avatar === 1,
+  };
+}
+
+/** Prefix references navigate display rows; they never select an authentication identity. */
+export function matchUserProfileReference(
+  reference: string,
+  exact: string | undefined,
+  readMatches: (prefix: string) => string[],
+): Result<string | undefined, "ambiguous"> {
+  if (exact !== undefined || !/^[0-9a-f]{8,32}$/.test(reference)) {
+    return ok<string | undefined, "ambiguous">(exact);
+  }
+  const prefix = [0, 8, 12, 16, 20]
+    .map((start, index, offsets) => reference.slice(start, offsets[index + 1]))
+    .filter(Boolean)
+    .join("-");
+  const matches = new Set(readMatches(prefix));
+  return matches.size > 1
+    ? err<string | undefined, "ambiguous">("ambiguous")
+    : ok<string | undefined, "ambiguous">(matches.values().next().value);
+}
+
+export function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string) {
+  const raw = rows.get(id);
+  return rows.get(raw?.merged_into ?? id) ?? raw;
+}
+
+/** Project exact identity facts from the catalogue owner's current rows. */
+export function projectCatalogUserProfileIdentity(
+  resident: Map<string, ProfileDisplayRow>,
+  profileId: string,
+) {
+  const profile = resolveCatalogProfile(resident, profileId);
+  return (
+    profile && {
+      profileId: profile.id,
+      role: profile.role ?? null,
+      aliases: new Set(
+        [...resident.values()]
+          .filter((row) => row.id === profile.id || row.merged_into === profile.id)
+          .map((row) => row.id),
+      ),
+    }
+  );
 }

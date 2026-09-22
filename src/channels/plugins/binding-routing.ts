@@ -273,6 +273,7 @@ export function resolveRuntimeConversationBindingRoute(
  * Ensures a configured binding target is ready without blocking route resolution indefinitely.
  */
 export async function ensureConfiguredBindingRouteReady(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {

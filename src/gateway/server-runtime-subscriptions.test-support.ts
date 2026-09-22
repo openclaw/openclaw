@@ -1,15 +1,22 @@
 import { expect, it, vi } from "vitest";
-import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
+import {
+  bindTestChannelParticipantAdmissionEvidence,
+  createChannelParticipantAdmissionEvidence,
+} from "../../test/helpers/channel-admission-evidence.js";
 import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import { emitTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
-import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
+  recordChannelAdmissionDecision,
+} from "../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../infra/agent-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -55,6 +62,24 @@ export function createSubscriptionTestFixture() {
       };
     },
   };
+}
+
+export function registerSubscriptionChatRun(
+  params: Parameters<typeof startGatewayEventSubscriptions>[0],
+  input: Omit<
+    Parameters<typeof registerChatAbortController>[0],
+    "chatAbortControllers" | "timeoutMs"
+  >,
+) {
+  const registration = registerChatAbortController({
+    ...input,
+    chatAbortControllers: params.chatAbortControllers,
+    timeoutMs: 60_000,
+  });
+  if (!registration.entry) {
+    throw new Error("expected registered chat abort controller");
+  }
+  return { ...registration, entry: registration.entry };
 }
 
 export function readLifecycleState(entry: ChatAbortControllerEntry) {
@@ -129,32 +154,105 @@ export function registerAuditSubscriptionTests(params: {
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
 
-  it("owns channel evidence collection for the configured gateway lifecycle", async () => {
+  it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
-    expect(createChannelParticipantAdmissionEvidence(participant)).toBeUndefined();
+    const context = {};
+    expect(
+      bindTestChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        context,
+        ...participant,
+      }),
+    ).toBeUndefined();
+    const resolveGateway = readChannelContextGatewayContextResolver(context);
+    expect(resolveGateway).toBeTypeOf("function");
+    const gateway = resolveGateway?.();
+    expect(gateway?.channelAdmissionAudit).toBe(unsubs.channelAdmissionAudit);
 
     runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
-    const evidence = createChannelParticipantAdmissionEvidence(participant);
+    const evidence = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
     expect(evidence).toBeDefined();
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
+    const decision = {
+      contextId: "audit-toggle-context",
+      executionId: "audit-toggle-execution",
+      runId: "audit-toggle-run",
+      occurredAt: 1_000,
+      coverageState: "attribution-only" as const,
+      identifierAuthentication: "not-evaluated" as const,
+    };
+    expect(recordChannelAdmissionDecision(evidence, decision)).toBe(true);
+    expect(auditTestState.decisionRecorded).toBe(1);
 
-    const retired = createChannelParticipantAdmissionEvidence(participant);
+    const retired = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
+    expect(retired).toBeDefined();
     runtimeConfigState.value = { logging: { audit: { enabled: false, executionIdentity: true } } };
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
-    expect(createChannelParticipantAdmissionEvidence(participant)).toBeUndefined();
+    const disabledContext = {};
+    expect(
+      bindTestChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        context: disabledContext,
+        ...participant,
+      }),
+    ).toBeUndefined();
+    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
+    expect(resolveGateway?.()).toBe(gateway);
+    expect(
+      readChannelContextGatewayContextResolver(disabledContext)?.()?.channelAdmissionAudit,
+    ).toBe(unsubs.channelAdmissionAudit);
+
     runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(retired)).toMatchObject({ ingressState: "unknown" });
+    expect(recordChannelAdmissionDecision(evidence, decision)).toBe(false);
+    expect(auditTestState.decisionRecorded).toBe(1);
+    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
+    expect(resolveGateway?.()).toBe(gateway);
 
-    const beforeShutdown = createChannelParticipantAdmissionEvidence(participant);
+    const beforeShutdown = createChannelParticipantAdmissionEvidence({
+      audit: unsubs.channelAdmissionAudit,
+      ...participant,
+    });
+    expect(beforeShutdown).toBeDefined();
     await unsubs.agentUnsub();
+    unsubs.reconcileAuditPolicy({ logging: { audit: { enabled: false } } });
+    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
     });
-    expect(createChannelParticipantAdmissionEvidence(participant)).toBeUndefined();
+    expect(
+      createChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        ...participant,
+      }),
+    ).toBeUndefined();
+
+    unsubs.heartbeatUnsub();
+    unsubs.transcriptUnsub();
+    unsubs.lifecycleUnsub();
+    await unsubs.taskUnsub();
+    const restarted = start();
+    expect(
+      consumeChannelAdmissionEvidence(
+        createChannelParticipantAdmissionEvidence({
+          audit: restarted.channelAdmissionAudit,
+          ...participant,
+        }),
+      ),
+    ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
+    expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
+      ingressState: "unknown",
+    });
   });
 
   it("applies audit policy changes through the existing event subscriptions", async () => {

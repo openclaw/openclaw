@@ -403,7 +403,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
   });
 });
 
-it("checks selected profile identity from current resident facts without following the requested ID through a merge", async () => {
+it("preserves selected account across role changes but rejects a changed merge identity without SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
@@ -411,7 +411,15 @@ it("checks selected profile identity from current resident facts without followi
     prepareGatewayRecipientProfile(client);
     const release = retainUserProfileCatalog();
     try {
-      const binding = createExpectedProfileBinding(source.id, client)!;
+      const binding = (await createExpectedProfileBinding(source.id, client))!;
+      const targetBinding = (await createExpectedProfileBinding(
+        target.id,
+        sharingPolicyClient({ user: target.id }),
+      ))!;
+      binding.markInvoked();
+      setUserProfileRole(source.id, "admin");
+      setUserProfileRole(source.id, "member");
+      linkEmail("extra@expected-profile.test", source.id);
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       binding.assertCurrent();
       const response = vi.fn();
@@ -419,10 +427,13 @@ it("checks selected profile identity from current resident facts without followi
       expect(response).toHaveBeenCalledWith(true, { session: null });
       expect(prepares).not.toHaveBeenCalled();
       prepares.mockRestore();
+      // Moving the last alias triggers the source profile's canonical merge.
+      linkEmail("extra@expected-profile.test", target.id);
       linkEmail("source@expected-profile.test", target.id);
       prepareGatewayRecipientProfile(client);
       const afterMerge = vi.spyOn(DatabaseSync.prototype, "prepare");
       expect(() => binding.assertCurrent()).toThrow(ExpectedProfileMismatchError);
+      expect(() => targetBinding.assertCurrent()).not.toThrow();
       expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(afterMerge).not.toHaveBeenCalled();
     } finally {

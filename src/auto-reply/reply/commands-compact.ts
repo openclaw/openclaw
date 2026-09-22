@@ -185,7 +185,11 @@ function resolveManualCompactContextModelId(params: {
   return model;
 }
 
-export const handleCompactCommand: CommandHandler = async (params) => {
+export async function handleCompactCommand(
+  params: Parameters<CommandHandler>[0],
+  _allowTextCommands: boolean,
+  assertOwnerCurrent?: () => void,
+): ReturnType<CommandHandler> {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
     params.command.commandBodyNormalized.startsWith("/compact ");
@@ -243,6 +247,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       resolveSessionStorePathCore(params.cfg.session?.store, { agentId: sessionAgentId }),
   });
   let expectedSession: InternalSessionEntry = targetSessionEntry;
+  let compactionAccepted = false;
+  const assertOwnerBeforeAcceptance = () => {
+    if (!compactionAccepted) {
+      assertOwnerCurrent?.();
+    }
+  };
   const resolveCurrentEntry = () =>
     runtime.resolveCurrentSessionEntry({
       agentId: sessionAgentId,
@@ -265,6 +275,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (failure) {
     return failure;
   }
+  assertOwnerBeforeAcceptance();
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
     const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
@@ -272,6 +283,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     if (failure) {
       return failure;
     }
+    assertOwnerBeforeAcceptance();
     if (!drained) {
       return compactionUnavailable(
         "the previous run is still stopping",
@@ -284,6 +296,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (failure) {
     return failure;
   }
+  assertOwnerBeforeAcceptance();
   // Draining a run does not clear its durable writer fence. Capture the current
   // row after the drain instead of accounting against the command's older snapshot.
   const refreshedEntry = resolveCurrentEntry();
@@ -367,6 +380,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     },
     {
       assertActive: () => {
+        assertOwnerBeforeAcceptance();
         params.opts?.abortSignal?.throwIfAborted();
         params.commandInvocationSignal?.throwIfAborted();
         const current = resolveCurrentEntry();
@@ -375,11 +389,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         }
       },
       onCommitted: (accepted) => {
+        compactionAccepted = true;
         // Update the expectation before identity observers run, not from public result metadata.
         expectedSession = accepted.entry;
         if (params.sessionStore) {
           params.sessionStore[params.sessionKey] = accepted.entry;
         }
+      },
+      onHostCompactionCommitted: () => {
+        compactionAccepted = true;
       },
     },
   );
@@ -453,4 +471,4 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       isStatusNotice: true,
     },
   };
-};
+}

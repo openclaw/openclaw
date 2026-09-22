@@ -28,9 +28,6 @@ import {
   getExistingOpenClawStateSchemaPath,
   isExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
-import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
-import { withOpenClawStateLeaseWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerOperations,
@@ -702,18 +699,4 @@ async function inspectAdmittedOpenClawStateDatabase(
     }
     throw error;
   }
-}
-
-/** Retain the actual lease until every admitted worker transaction has settled. */
-export function runWithOpenClawStateLeaseWorker<T>(
-  lease: OpenClawStateLeaseContext,
-  context: OpenClawStateWorkerContext,
-  operation: (scope: DomainScope, identity: OpenClawStateLeaseIdentity) => Promise<T>,
-): Promise<T> {
-  return withOpenClawStateLeaseWorkerAdmission(lease, context.admission.databasePath, (admission) =>
-    runOpenClawStateWorkerOperation(context, (scope) => operation(scope, admission.identity), {
-      assertCurrent: admission.assertCurrent,
-      createAdmission: admission.createAdmission,
-    }),
-  );
 }

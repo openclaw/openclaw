@@ -13,6 +13,7 @@ import {
 import {
   GitHubPublicationBranchChangedError,
   GitHubPublicationKnownFailure,
+  GitHubPublicationRequesterUnavailableError,
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
@@ -33,6 +34,7 @@ import {
 } from "./github-repository-publication-snapshot.js";
 import type { RepositoryGitHubPublicationExecution } from "./github-repository-publication-store.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 function apiArgs(endpoint: string, method = "GET"): string[] {
@@ -474,6 +476,12 @@ export async function executeRepositoryGitHubPublication(params: {
       }),
     );
   } catch (error) {
+    if (
+      error instanceof GitHubPublicationRequesterUnavailableError ||
+      error instanceof GatewayOperatorAccessUnavailableError
+    ) {
+      throw error;
+    }
     if (dispatched && !(error instanceof GitHubPublicationKnownFailure)) {
       const interrupted = execution.interrupt();
       if (error instanceof SessionMutationAuthorizationChangedError) {

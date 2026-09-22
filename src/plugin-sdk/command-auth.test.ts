@@ -107,13 +107,14 @@ describe("plugin-sdk/command-auth", () => {
     ).toEqual({ provider: "example", model: "raw" });
   });
 
-  it("keeps the published authorization object and resolver return types unchanged", () => {
+  it("keeps SDK and native authorization result contracts aligned", () => {
     type PublishedAuthorization = {
       providerId?: ChannelId;
       ownerList: string[];
       senderId?: string;
       senderIsOwner: boolean;
       isAuthorizedSender: boolean;
+      assertOwnerCurrent?: () => void;
       from?: string;
       to?: string;
     };

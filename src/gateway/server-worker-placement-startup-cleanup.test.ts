@@ -21,6 +21,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   };
 });
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { createPlacementFailureActions } from "./worker-environments/placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./worker-environments/placement-dispatch-recovery.js";
@@ -202,6 +203,7 @@ describe("worker placement startup cleanup ownership", () => {
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements,
         environments,
@@ -305,6 +307,7 @@ describe("worker placement startup cleanup ownership", () => {
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements,
       environments,

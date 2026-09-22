@@ -26,6 +26,12 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
+Owner-authorized commands pass their captured `ctx.assertOwnerCurrent` as
+`writeOptions.assertCurrent`. The config writer rechecks it after asynchronous
+preparation and before publication, then completes settlement of an accepted
+write. Do not replace it with an earlier `senderIsOwner` boolean or check it only
+after the mutation returns.
+
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 

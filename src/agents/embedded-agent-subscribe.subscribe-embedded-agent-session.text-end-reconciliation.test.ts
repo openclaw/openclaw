@@ -285,6 +285,11 @@ describe("text_end snapshot reconciliation", () => {
       checkpoint: "Hello world. Next sentence. Fixed tail",
       expectedTail: ["Fixed tail"],
     },
+    {
+      name: "corrected-identical-tail",
+      checkpoint: "Hello world. Hello world.",
+      expectedTail: ["Hello world."],
+    },
   ])(
     "preserves delivered sentence chunks at a $name unphased checkpoint",
     async ({ checkpoint, expectedTail }) => {
@@ -346,6 +351,7 @@ describe("text_end snapshot reconciliation", () => {
           ...expectedTail,
         ]);
         expect(subscription.assistantTexts).toEqual([...delivered, ...expectedTail]);
+        expect(onBlockReply).toHaveBeenCalledTimes(delivered.length + expectedTail.length);
       } finally {
         subscription.unsubscribe();
       }

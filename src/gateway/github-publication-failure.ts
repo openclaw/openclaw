@@ -80,6 +80,16 @@ export class GitHubPublicationSessionChangedError extends GitHubPublicationKnown
   }
 }
 
+export class GitHubPublicationRequesterUnavailableError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("The original GitHub publication requester is no longer authorized.", {
+      code: "identity_changed",
+      nextAction:
+        "Review any recorded or unconfirmed GitHub effects, then request publication again from an authorized session. Saved work and existing pull requests are retained.",
+    });
+  }
+}
+
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
   if (error instanceof GitHubPublicationKnownFailure) {
     return error.failure;

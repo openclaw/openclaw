@@ -633,6 +633,22 @@ existing file weights prices an indivisible child at 239 seconds, beyond its
 200-second contract. That family needs a separate file-cost refit; its assertions
 and budget remain unchanged.
 
+The September 21 isolated Gateway refresh replaces its original one-file
+30-second weight with 1,043 seconds. The unchanged refit reducer measured the
+complete child spans in the newest five successful main-push contributors within
+the frozen September 14–21 window ending at 14:07:53 UTC: `35591186572`,
+`35592313474`, `35593033375`, `35601102699`, and `35607421993`. The median is
+1,043.136 seconds across both `gateway-server-isolated` and
+`gateway-database-workers`; one child's wall is not the complete family cost.
+Two repeated inventory-specific children retain their measured 396- and
+690-second weights. Other families and profiles keep their existing measurements.
+The matching fallback covers future inventory changes without suppressing refits.
+The existing 150-second split threshold produces 12 children, including the
+separate runtime-prerequisite child. This is distinct from exclusive-bin packing:
+Gateway configs retain exclusive plan admission and their current worker policy.
+With the tooling release tier and measured tooling workers applied, broad fallback
+fits the unchanged caps: 111 hybrid, 120 GitHub, and 117 Blacksmith PR Node rows.
+
 At the inspected inventory, hybrid compact descriptors change from 29 to 51 on
 push and 53 to 75 on broad PRs; the maximum prediction remains 518 seconds for the
 standalone CLI. At that revision, ordinary two-child bins remained within 360 seconds. Excluding dist,

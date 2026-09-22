@@ -153,6 +153,44 @@ function deferred() {
 }
 
 describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", () => {
+  it("captures final receipts after process stop and before removing runtime state", async () => {
+    const { params, pids } = await fixture();
+    const owner = own(params);
+    const gateway = await owner.start();
+    const receiptPath = path.join(gateway.tempRoot, "owned-receipt.txt");
+    await fs.writeFile(receiptPath, "final native receipt");
+    let captured: string | undefined;
+    const beforeTempCleanup = vi.fn(async () => {
+      expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+      captured = await fs.readFile(receiptPath, "utf8");
+    });
+    await expect(owner.stop({ beforeTempCleanup })).resolves.toEqual({
+      process: "confirmed-stopped",
+      errors: [],
+    });
+    expect(captured).toBe("final native receipt");
+    await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await owner.stop({ beforeTempCleanup });
+    expect(beforeTempCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("retains stopped runtime evidence when final receipt capture fails", async () => {
+    const { params, pids } = await fixture();
+    const owner = own(params);
+    const gateway = await owner.start();
+    const receiptPath = path.join(gateway.tempRoot, "owned-receipt.txt");
+    await fs.writeFile(receiptPath, "recoverable native receipt");
+    const result = await owner.stop({
+      beforeTempCleanup: async () => {
+        throw new Error("capture unavailable");
+      },
+    });
+    expect(result.process).toBe("confirmed-stopped");
+    expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+    expect(result.errors.map(String).join("; ")).toContain("receipt capture failed");
+    expect(await fs.readFile(receiptPath, "utf8")).toBe("recoverable native receipt");
+  });
+
   it("reports never spawned when preparation fails", async () => {
     const root = await dirs.makeTempDir("qa-lifetime-missing-");
     const owner = own({

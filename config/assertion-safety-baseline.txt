@@ -533,7 +533,6 @@ extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
-extensions/imessage/src/monitor/inbound-processing.ts	2
 extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
@@ -1963,7 +1962,6 @@ src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
-src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
@@ -2073,8 +2071,7 @@ src/channels/feedback-reflection.ts	1
 src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	6
 src/channels/location.ts	1
-src/channels/message-access/admission-evidence.ts	3
-src/channels/message-access/runtime.ts	2
+src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1
 src/channels/message/capabilities.ts	2
 src/channels/message/ingress-claim-owner.ts	1
@@ -3182,7 +3179,7 @@ src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	14
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
-src/plugins/loader-module-runtime.ts	7
+src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
@@ -3295,7 +3292,7 @@ src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.shared.ts	2
 src/secrets/runtime-web-tools.ts	4
 src/secrets/runtime.ts	4
-src/secrets/store/secret-store.ts	3
+src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.async.ts	2
@@ -3389,7 +3386,6 @@ src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	4
 src/system-agent/assistant-prompts.ts	1
-src/system-agent/assistant-timeout.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
 src/system-agent/operations-execute.ts	1

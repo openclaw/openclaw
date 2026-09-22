@@ -8,6 +8,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -30,7 +31,6 @@ import {
   repositoryGitHubPublicationDigest,
   claimRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
-  type RepositoryGitHubPublicationRow,
 } from "./github-repository-publication-store.js";
 import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
@@ -192,6 +192,7 @@ it.each([
         request_id: "prior-cloud-publication",
         idempotency_key: "prior",
         request_digest: "",
+        requester_authority_json: null,
         session_id: sessionId,
         session_lifecycle_revision: lifecycleRevision,
         session_key: scope.sessionKey,
@@ -237,7 +238,10 @@ it.each([
       };
       row.request_digest = repositoryGitHubPublicationDigest(row);
       insertRepositoryGitHubPublication(row, () => {});
-      const prior = claimRepositoryGitHubPublication(row, "cloud-instance", () => {});
+      const prior = claimRepositoryGitHubPublication(row, "cloud-instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       prior.recordEffect("push");
       if (scenario !== "unsettled") {
         prior.recordEffect("push", { headCommit: publishedHead });
@@ -388,6 +392,13 @@ it.each([
           requestDigest: createHash("sha256").update("local").digest("hex"),
           sessionId,
           lifecycleRevision,
+          requester: {
+            version: 1,
+            actor: { kind: "system" },
+            scopes: ["operator.admin"],
+            grant: null,
+          },
+          assertCurrent: () => {},
           now: Date.now(),
           worktree,
           identity,

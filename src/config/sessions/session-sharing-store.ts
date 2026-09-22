@@ -2,7 +2,6 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -10,6 +9,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
@@ -99,7 +99,12 @@ export function addSessionMember(
     );
     const changed = (result.numAffectedRows ?? 0n) > 0n;
     if (changed) {
-      sessionChanges.emit({ agentId, storePath: database.path, sessionKey }, database.db);
+      publishSessionSharingMemberChange(
+        database,
+        sessionKey,
+        { identityId, present: true },
+        agentId,
+      );
     }
     return changed;
   }, options);
@@ -142,7 +147,12 @@ export function removeSessionMember(
         .where("session_key", "=", sessionKey)
         .where("identity_id", "=", normalizedIdentityId),
     );
-    sessionChanges.emit({ agentId, storePath: database.path, sessionKey }, database.db);
+    publishSessionSharingMemberChange(
+      database,
+      sessionKey,
+      { identityId: normalizedIdentityId, present: false },
+      agentId,
+    );
     return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
   }, options);
 }

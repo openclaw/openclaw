@@ -463,8 +463,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-gateway-core-1", 99],
   ["agentic-gateway-core-2", 99],
   ["agentic-gateway-core-3", 99],
-  // One small file that pays a full cold module graph because it runs isolated.
-  ["agentic-gateway-server-isolated", 30],
+  // Five successful main runs through 35607421993 measured a 1,043s median
+  // across both configs and complete child spans; direct refits remain authoritative.
+  ["agentic-gateway-server-isolated", 1043],
   ["agentic-gateway-methods", 157],
   ["agentic-plugin-sdk", 45],
   ["auto-reply-core-top-level", 27],
@@ -2996,7 +2997,10 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
       ...gatewayPluginTestFiles.filter((file) => !gatewayDatabaseWorkerTestFiles.includes(file)),
     ],
   ],
-  ["core-runtime-config", () => listTestFiles("src/config")],
+  [
+    "core-runtime-config",
+    () => listTestFiles("src/config").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+  ],
   // isolate:true gives every file a fresh module graph, so file stripes
   // cannot change behavior.
   ["core-unit-fast-isolated", getUnitFastIsolatedTestFiles],

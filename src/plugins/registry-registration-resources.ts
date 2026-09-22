@@ -18,6 +18,7 @@ export class PluginRegistrationResourceSource {
   readonly #registrations = new Map<string, RegistrationResources>();
   readonly #pending = new Set<Promise<void>>();
   readonly #dependencies: Array<() => Promise<void>> = [];
+  readonly #cleanupWork = new AsyncWorkScope();
   #claims = 0;
   #closed = false;
 
@@ -34,54 +35,64 @@ export class PluginRegistrationResourceSource {
         if (!release) {
           const last = --this.#claims === 0;
           this.#closed = last;
-          release = Promise.resolve().then(async () => {
-            const entries = [...this.#registrations]
-              // Construction owns rollback failures; the last claim owns successful entries.
-              .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
-            // Queue the whole batch before any signal's awaited cleanup can reach disposal.
-            const disposals = entries.map(([pluginId, entry]) => this.#dispose(pluginId, entry));
-            await this.#waitForRegistrations();
-            const outcomes = await Promise.allSettled(disposals);
-            // Callback faults resolve as rows; rejection leaves a cleanup prerequisite unfinished.
-            const failures = outcomes.flatMap((outcome) =>
-              outcome.status === "fulfilled"
-                ? outcome.value
-                : [new PluginRuntimeCloseRetainedError(outcome.reason)],
-            );
-            if (last) {
-              // Rollback errors belong to construction; join its work before
-              // the final physical claim retires the shared instances and cache.
-              await Promise.allSettled(
-                [...this.#registrations].map(([pluginId, entry]) => this.#dispose(pluginId, entry)),
+          // Physical custody can outlive the releasing caller's captured work scope.
+          release = this.#cleanupWork
+            .track(async () => {
+              await Promise.resolve();
+              const entries = [...this.#registrations]
+                // Construction owns rollback failures; the last claim owns successful entries.
+                .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
+              // Queue the whole batch before any signal's awaited cleanup can reach disposal.
+              const disposals = entries.map(([pluginId, entry]) => this.#dispose(pluginId, entry));
+              await this.#waitForRegistrations();
+              const outcomes = await Promise.allSettled(disposals);
+              // Callback faults resolve as rows; rejection leaves a cleanup prerequisite unfinished.
+              const failures = outcomes.flatMap((outcome) =>
+                outcome.status === "fulfilled"
+                  ? outcome.value
+                  : [new PluginRuntimeCloseRetainedError(outcome.reason)],
               );
-              try {
-                await this.retire();
-              } catch (error) {
-                failures.push(
-                  error instanceof Error
-                    ? error
-                    : new Error("Plugin inspection cleanup failed", { cause: error }),
+              if (last) {
+                // Rollback errors belong to construction; join its work before
+                // the final physical claim retires the shared instances and cache.
+                await Promise.allSettled(
+                  [...this.#registrations].map(([pluginId, entry]) =>
+                    this.#dispose(pluginId, entry),
+                  ),
                 );
-              } finally {
-                await Promise.all(
-                  [...this.#registrations.values()].map(({ work }) => work.drain()),
-                );
-              }
-              // Final instance cleanup can still use copied callbacks from these donors.
-              for (const releaseDependency of this.#dependencies.splice(0)) {
                 try {
-                  await releaseDependency();
-                } catch (cause) {
+                  await this.retire();
+                } catch (error) {
                   failures.push(
-                    new Error("Borrowed plugin registration resources could not be disposed", {
-                      cause,
-                    }),
+                    error instanceof Error
+                      ? error
+                      : new Error("Plugin inspection cleanup failed", { cause: error }),
+                  );
+                } finally {
+                  await Promise.all(
+                    [...this.#registrations.values()].map(({ work }) => work.drain()),
                   );
                 }
+                // Final instance cleanup can still use copied callbacks from these donors.
+                for (const releaseDependency of this.#dependencies.splice(0)) {
+                  try {
+                    await releaseDependency();
+                  } catch (cause) {
+                    failures.push(
+                      new Error("Borrowed plugin registration resources could not be disposed", {
+                        cause,
+                      }),
+                    );
+                  }
+                }
               }
-            }
-            return failures;
-          });
+              return failures;
+            })
+            .finally(async () => {
+              if (last) {
+                await this.#cleanupWork.run(() => this.#cleanupWork.drain());
+              }
+            });
         }
         return release;
       },

@@ -1,7 +1,12 @@
-import { vi } from "vitest";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, expect, vi, type MockInstance } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import * as tempRoot from "../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
@@ -13,6 +18,22 @@ import {
   type StartupSmokeFailure,
   type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
+
+const handoffDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    handoffResolver?.mockRestore();
+    cleanup();
+  }),
+);
+let handoffResolver: MockInstance<typeof tempRoot.resolvePreferredOpenClawTmpDir> | undefined;
+beforeEach(() => {
+  const root = path.join(handoffDirs.make("openclaw-preflight-handoff-"), "private");
+  mkdirSync(root, { mode: 0o700 });
+  handoffResolver = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  expect(resolveManagedUpdateLeaseDatabasePath()).toBe(
+    path.join(root, "managed-update-handoffs.sqlite"),
+  );
+});
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult([], false)),
@@ -233,6 +254,25 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
   acquireStartupMigrationLeaseWithWait,
+  inspectStartupMigrationCheckpointWithLease: async (params: {
+    env: NodeJS.ProcessEnv;
+    stateMigrations: boolean;
+    startupMigrations: boolean;
+    forceLease: boolean;
+  }) => {
+    const status =
+      params.stateMigrations || params.startupMigrations
+        ? readMigrationCheckpointStatus()
+        : "stale";
+    const required =
+      params.forceLease ||
+      (params.stateMigrations && status === "stale") ||
+      (params.startupMigrations && status !== "startup-current");
+    return {
+      status,
+      lease: required ? await acquireStartupMigrationLeaseWithWait(params) : undefined,
+    };
+  },
   readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,

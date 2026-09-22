@@ -24,7 +24,11 @@ export type QaGatewayStopResult = {
   process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
   errors: unknown[];
 };
-export type QaGatewayStopOptions = { keepTemp?: boolean; preserveToDir?: string };
+export type QaGatewayStopOptions = {
+  keepTemp?: boolean;
+  preserveToDir?: string;
+  beforeTempCleanup?: () => Promise<void>;
+};
 
 type OwnedProcess = {
   kind: "gateway" | "cli";
@@ -55,6 +59,7 @@ export class QaGatewayChildLifecycle {
   private operation: Promise<unknown> | null = null;
   private stopping: Promise<QaGatewayStopResult> | null = null;
   private artifactsFinalized = false;
+  private stoppedArtifactsCaptured = false;
   private tempRootsCleaned = false;
   private readonly keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
 
@@ -298,6 +303,23 @@ export class QaGatewayChildLifecycle {
     const tempRoot = this.tempRoot;
     const keepTemp = opts?.keepTemp ?? this.keepTemp;
     let artifactsPreserved = true;
+    if (
+      stopped.process !== "unconfirmed" &&
+      opts?.beforeTempCleanup &&
+      !this.stoppedArtifactsCaptured
+    ) {
+      try {
+        await opts.beforeTempCleanup();
+        this.stoppedArtifactsCaptured = true;
+      } catch (error) {
+        artifactsPreserved = false;
+        errors.push(
+          new Error("QA stopped-Gateway receipt capture failed; runtime evidence retained.", {
+            cause: error,
+          }),
+        );
+      }
+    }
     if (tempRoot && opts?.preserveToDir && !keepTemp && !this.artifactsFinalized) {
       try {
         await preserveQaGatewayDebugArtifacts({

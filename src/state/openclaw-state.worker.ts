@@ -15,7 +15,10 @@ import {
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { acquireOpenClawStateLeaseInWorker } from "./openclaw-state-lease-worker.js";
+import {
+  acquireOpenClawStateLeaseInWorker,
+  executeOpenClawStateLeaseCommand,
+} from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerOpenPreparation,
@@ -85,7 +88,10 @@ function createSharedStateWorkerBackend(
         commandType === "database.inspectIdle" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
-        commandType === "deviceIdentity.load"
+        commandType === "deviceIdentity.load" ||
+        commandType === "stateLease.verify" ||
+        commandType === "stateLease.renew" ||
+        commandType === "stateLease.release"
       ) {
         return undefined;
       }
@@ -128,6 +134,13 @@ function createSharedStateWorkerBackend(
       }
       if (command.type === "stateLease.acquire") {
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
+      }
+      if (
+        command.type === "stateLease.verify" ||
+        command.type === "stateLease.renew" ||
+        command.type === "stateLease.release"
+      ) {
+        return executeOpenClawStateLeaseCommand(command, open());
       }
       if (command.type === "plugins.metadata.read") {
         return readPluginMetadataStateRowSync(

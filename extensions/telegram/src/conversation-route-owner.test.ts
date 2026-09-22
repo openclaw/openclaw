@@ -12,6 +12,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
+import {
+  inspectTelegramConversationRoute,
+  touchTelegramConversationRoute,
+} from "./conversation-route.js";
 
 describe("inspectTelegramConversationRouteOwner", () => {
   let adapter: SessionBindingAdapter;
@@ -85,6 +89,51 @@ describe("inspectTelegramConversationRouteOwner", () => {
     ).toEqual({ kind: "agent", agentId: "runtime" });
     expect(touch).not.toHaveBeenCalled();
   });
+
+  it.each(["unchanged", "reassigned", "replaced"])(
+    "touches only the captured native binding after authorization: %s",
+    (change) => {
+      const touch = vi.fn();
+      let targetSessionKey = "agent:original:bound";
+      let boundAt = 1;
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: (conversation) => ({
+          bindingId: "binding-topic",
+          targetSessionKey,
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt,
+        }),
+        touch,
+      });
+      const inspected = inspectTelegramConversationRoute({
+        cfg: { channels: { telegram: { accounts: { default: {} } } } },
+        accountId: "default",
+        chatId: -100123,
+        isGroup: true,
+        threadSpec: { scope: "forum", id: 42 },
+      });
+      expect(touch).not.toHaveBeenCalled();
+      if (change === "reassigned") {
+        targetSessionKey = "agent:replacement:bound";
+      }
+      if (change === "replaced") {
+        boundAt = 2;
+      }
+      if (change === "unchanged") {
+        touchTelegramConversationRoute(inspected);
+        expect(touch).toHaveBeenCalledWith("binding-topic", undefined);
+      } else {
+        expect(() => touchTelegramConversationRoute(inspected)).toThrow("command route changed");
+        expect(touch).not.toHaveBeenCalled();
+      }
+      expect(inspected.route.sessionKey).toBe("agent:original:bound");
+    },
+  );
 
   it("reports a temporary adapter gap only while thread bindings are enabled", () => {
     unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });

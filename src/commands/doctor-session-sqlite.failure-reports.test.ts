@@ -10,6 +10,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
+import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
@@ -25,6 +26,66 @@ import {
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["clean", "pending", "unselected"] as const)(
+    "distinguishes recorded failures from current recovery findings (%s)",
+    (outcome) => {
+      const store = createLegacyStore();
+      writeFailedManifest(store, "old-settlement.json", "2030-01-01T00:00:00.000Z", {
+        agentId: "main",
+        storePath: store.storePath,
+      });
+      const manifestPath = path.join(
+        store.stateDir,
+        "session-sqlite-migration-runs",
+        "old-settlement.json",
+      );
+      const manifest = readMigrationManifest(manifestPath);
+      const target = manifest.targets[0]!;
+      target.issues = [
+        {
+          code: "retained_plugin_source_settlement_failed",
+          message: "Previous migration reported another agent's transcript",
+        },
+      ];
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      const recovery = createDoctorSessionSqliteTargetReport({
+        ...target,
+        agentId: outcome === "unselected" ? "other" : target.agentId,
+        issues:
+          outcome === "pending"
+            ? [
+                {
+                  code: "plugin_migration_source_retained",
+                  message: "Original inputs remain pending for an unavailable plugin",
+                },
+              ]
+            : [],
+      });
+      const paths = writeSessionSqliteMigrationFailureReports(manifestPath, {
+        reason: "Recovery inspected selected targets",
+        recoveryTargets: [recovery],
+      });
+      const markdown = fs.readFileSync(paths.markdownPath, "utf8");
+      const current = markdown.split("- Recorded migration and recovery evidence:")[0]!;
+      expect(current).toContain(
+        outcome === "unselected"
+          ? "- Current recovery: not assessed"
+          : `- Current recovery issues: ${recovery.issues.length}`,
+      );
+      expect(current).not.toContain("[retained_plugin_source_settlement_failed]");
+      if (outcome === "pending") {
+        expect(current).toContain("[plugin_migration_source_retained]");
+      }
+      expect(markdown).toContain("[retained_plugin_source_settlement_failed]");
+      const payload = JSON.parse(fs.readFileSync(paths.jsonPath, "utf8"));
+      expect(payload.targets[0].issues).toContainEqual(target.issues[0]);
+      expect(payload.targets[0].recoveryIssues).toEqual(
+        outcome === "unselected" ? undefined : recovery.issues,
+      );
+      expect(createSessionSqliteMigrationFailureIssue(manifestPath)?.body).toContain(markdown);
+    },
+  );
+
   it("recovers the latest failed migration run and prepares a sanitized GitHub issue", async () => {
     const store = createLegacyStore({ agentDirName: "token=supersecret" });
     const importReport = await importLegacyStore(store);

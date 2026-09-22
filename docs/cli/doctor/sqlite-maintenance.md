@@ -291,7 +291,12 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+recovery findings from recorded migration and recovery evidence. A successful
+recovery can have zero current issues while preserving earlier failures for
+diagnosis; a target not inspected by this recovery is labeled accordingly.
+The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
+for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an
 issue or browser handoff may have published a report, doctor preserves that
 private report artifact and its marker receipt. When no failed migration

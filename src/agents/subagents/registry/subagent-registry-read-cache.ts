@@ -221,6 +221,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   cache: SubagentRunsCache<T>,
   scope?: {
     load?: () => Iterable<T>;
+    selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
     fresh?: boolean;
     borrowPersisted?: boolean;
     matches: (entry: SubagentRunReadRecord) => boolean;
@@ -238,8 +239,15 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     try {
       // Scoped reads use indexed SQL until a complete owner snapshot is available.
       const cached = scope?.load && !scope.fresh ? getPersistedSubagentRunsSnapshot(cache) : null;
+      const cachedRows =
+        cached && scope?.selectCached
+          ? indexedSnapshotRows(
+              cached,
+              scope.selectCached(expectDefined(getSessionListLookup(cache), "subagent lookup")),
+            )
+          : cached?.values();
       const persisted = scope?.load
-        ? (cached?.values() ?? scope.load())
+        ? (cachedRows ?? scope.load())
         : loadPersistedSubagentRunsForRead(cache).values();
       for (const entry of persisted) {
         if (!scope || scope.matches(entry)) {

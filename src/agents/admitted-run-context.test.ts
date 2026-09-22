@@ -10,6 +10,11 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../plugins/runtime/gateway-context-binding.js";
+import {
   closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
@@ -95,6 +100,32 @@ describe("prepared run admission", () => {
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.operationalRunInstance)).toBe(true);
   });
+
+  it.each([false, true])(
+    "binds Gateway routing after freezing admission (audit=%s)",
+    async (audit) => {
+      const { runtime, ...admissionFacts } = facts;
+      const resolver = () => undefined;
+      const prepared = prepareAgentRunAdmission({
+        cfg: audit ? enabledConfig : {},
+        facts: admissionFacts,
+        operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+        onAdmitted: (context) => {
+          expect(Object.isFrozen(context)).toBe(true);
+          bindGatewayContextResolver(context, resolver);
+        },
+      });
+      try {
+        const admitted = await prepared.admit(runtime.kind);
+        expect(getGatewayContextResolver(admitted)).toBe(resolver);
+        expect(getGatewayContextResolver({ ...admitted })).toBeUndefined();
+        expect(clearGatewayContextResolver(admitted)).toBe(true);
+        expect(getGatewayContextResolver(admitted)).toBeUndefined();
+      } finally {
+        prepared.close();
+      }
+    },
+  );
 
   it("consumes disabled recovery evidence so a reused run id cannot inherit it", async () => {
     const token = createExecutionIdentityAdmissionToken(facts.runId);

@@ -16,7 +16,8 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
 export type OperationalRunInstanceRef = Readonly<{
@@ -35,6 +36,8 @@ export type AdmittedRunContext = Readonly<{
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   scopes: readonly string[];
+  /** Original access dependency; null is proven independent, undefined is unclassified. */
+  gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: () => void;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
@@ -43,10 +46,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
 }>;
 
-const operatorAuthorityIssuers = resolveGlobalSingleton(
-  Symbol.for("openclaw.admittedRunOperatorAuthorities"),
-  () => new WeakSet<object>(),
-);
+const operatorAuthorityIssuers = new WeakSet<object>();
 
 /** Host-only construction; public reply options cannot manufacture a source capability. */
 export function createAdmittedRunOperatorAuthority(
@@ -58,6 +58,9 @@ export function createAdmittedRunOperatorAuthority(
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
+    gatewayAccessGrant: source.gatewayAccessGrant
+      ? Object.freeze({ ...source.gatewayAccessGrant })
+      : source.gatewayAccessGrant,
     source: source.source ?? Object.freeze({}),
     signal,
     retain: source.retain,
@@ -507,7 +510,7 @@ function admitPreparedAgentRun(params: {
     runId: params.facts.runId,
   });
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
-    return Object.freeze(admitted);
+    return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
   const executionIdentityToken =
     recovery.token ??
@@ -515,7 +518,7 @@ function admitPreparedAgentRun(params: {
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {
-    return Object.freeze(admitted);
+    return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
@@ -524,5 +527,5 @@ function admitPreparedAgentRun(params: {
     runtimeInstanceId: params.runtimeInstanceId,
     retryOnly: params.recovery?.retryOnly === true,
   });
-  return Object.freeze({ ...admitted, executionIdentityToken });
+  return Object.freeze(prepareGatewayContextBindingOwner({ ...admitted, executionIdentityToken }));
 }

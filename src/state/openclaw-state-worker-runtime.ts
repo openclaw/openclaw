@@ -9,7 +9,10 @@ import {
   listNativeHookRelayBridgeSnapshotsInDatabase,
 } from "../agents/harness/native-hook-relay-store.kernel.js";
 import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
-import { readMcpOAuthStoreInDatabase } from "../agents/mcp-oauth-store.kernel.js";
+import {
+  isMcpOAuthWorkerCommand,
+  executeMcpOAuthWorkerCommand,
+} from "../agents/mcp-oauth-store.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import * as worktreeRegistry from "../agents/worktrees/registry-read.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
@@ -60,7 +63,6 @@ import {
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -95,6 +97,7 @@ import {
   resolveProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
+import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import {
   pruneSessionStateEventsInDatabase,
   recordSessionStateEventInDatabase,
@@ -128,12 +131,13 @@ import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
+  OpenClawStateWorkerRuntimeCommand,
   OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
-import { executeUserProfileCommand } from "./user-profiles.worker.js";
+import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
 
 type Operations = OpenClawStateWorkerOperations &
   OpenClawStateWorkerInspectionOperations &
@@ -146,10 +150,7 @@ export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | un
 }
 
 export function executeSharedStateCommand(
-  command: Exclude<
-    SqliteWorkerCommand<Operations>,
-    { type: "plugins.metadata.read" | "database.inspectIdle" | "stateLease.acquire" }
-  >,
+  command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
@@ -158,8 +159,8 @@ export function executeSharedStateCommand(
   if (command.type === "deviceAuth.prepare") {
     return undefined;
   }
-  if (command.type === "mcpOAuth.read") {
-    return readMcpOAuthStoreInDatabase(open().db, command.input);
+  if (isMcpOAuthWorkerCommand(command)) {
+    return executeMcpOAuthWorkerCommand(open(), command);
   }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
     const databaseOptions = {
@@ -377,13 +378,7 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (
-    command.type === "userProfiles.list" ||
-    command.type === "userProfiles.directory" ||
-    command.type === "userProfiles.email.ensure" ||
-    command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.adopt"
-  ) {
+  if (isUserProfileCommand(command)) {
     return executeUserProfileCommand(command, {
       database: open(),
       path: context.databasePath,
@@ -507,6 +502,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "secrets.purge") {
+    return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
+  }
   if (
     command.type === "conversationBindings.resolve" ||
     command.type === "conversationBindings.touch"

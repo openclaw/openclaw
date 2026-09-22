@@ -551,6 +551,16 @@ back to the end or select **Latest** to resume following explicitly. Assistant
 text stays visible as it streams and becomes saved history, without a reply
 entry fade or slide.
 
+Hover an external web link, or focus it with the keyboard, to see its page title,
+description, and social image when available. GitHub repository and public
+landing-page links use the same card; issue and pull-request links keep their
+dedicated previews. The card uses
+OpenClaw's theme and includes **Open in your browser**. Press Escape to dismiss it.
+Pages without metadata keep the link label and destination. Touch taps open links
+normally. GitHub sign-in, account, and profile links do not trigger page previews.
+These anonymous previews respect **Automatically Fetch Link Favicons**; see
+[the request and privacy details](/web/control-ui/security-model#content-security-policy).
+
 Completed replies can show a compact **Sources** strip when their web links match
 recorded `web_search` or `web_fetch` results from the same run. Select a title and
 domain card to preview its **Search snippet** or **Page excerpt**, then use

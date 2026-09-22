@@ -110,7 +110,17 @@ it.each(["guidance", "staging"])(
         installTarget: target,
       };
       const permissionFacts = [
-        expect.objectContaining({ code: "global-install-permission-denied" }),
+        {
+          check: "package-install",
+          code: "global-install-permission-denied",
+          message: "Package update cannot write [redacted-path]",
+        },
+        ...[
+          "npm error code EACCES",
+          "npm error syscall rename",
+          "npm error path [redacted-path]",
+          "npm error EACCES: permission denied, rename [redacted-path]",
+        ].map((message) => ({ check: "npm", code: "EACCES", message })),
       ];
       if (consumer === "staging") {
         await expect(stagePackageInstallUpdate(params)).rejects.toMatchObject({

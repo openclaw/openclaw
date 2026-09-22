@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -128,13 +129,31 @@ describe("owned plugin inspections", () => {
     }
   });
 
-  it.each([
-    { capturedDisposal: "async-context", disposalFailure: false, capturedInstanceDisposal: false },
-    { capturedDisposal: "work-tracker", disposalFailure: true, capturedInstanceDisposal: false },
-    { capturedDisposal: "work-tracker", disposalFailure: false, capturedInstanceDisposal: true },
-  ] as const)(
-    "keeps registration cleanup captured by $capturedDisposal after its caller closes (instance: $capturedInstanceDisposal)",
-    async ({ capturedDisposal, disposalFailure, capturedInstanceDisposal }) => {
+  it.each(
+    (
+      [
+        {
+          capturedDisposal: "async-context",
+          disposalFailure: false,
+          capturedInstanceDisposal: false,
+        },
+        {
+          capturedDisposal: "work-tracker",
+          disposalFailure: true,
+          capturedInstanceDisposal: false,
+        },
+        {
+          capturedDisposal: "work-tracker",
+          disposalFailure: false,
+          capturedInstanceDisposal: true,
+        },
+      ] as const
+    ).flatMap((fixture) =>
+      [false, true].map((closedReleaseScope) => ({ ...fixture, closedReleaseScope })),
+    ),
+  )(
+    "keeps registration cleanup captured by $capturedDisposal after its caller closes (instance: $capturedInstanceDisposal, closed release scope: $closedReleaseScope)",
+    async ({ capturedDisposal, disposalFailure, capturedInstanceDisposal, closedReleaseScope }) => {
       const fixture = createInspectionFixture({
         capturedDisposal,
         disposalFailure,
@@ -143,6 +162,7 @@ describe("owned plugin inspections", () => {
       });
       const caller = new AsyncWorkScope();
       const closer = new AsyncWorkScope();
+      const releaseInScope = closer.run(() => AsyncLocalStorage.snapshot());
       let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
       let borrowed: { release: () => Promise<void> } | undefined;
       try {
@@ -161,12 +181,17 @@ describe("owned plugin inspections", () => {
           value: 42,
         });
         const registrationSignalAborted = fixture.state.captured.registrationSignal?.aborted;
-        const released = closer
-          .track(() => borrowed!.release())
-          .then(
-            () => ({ phase: "released", error: undefined }),
-            (error: unknown) => ({ phase: "released", error }),
-          );
+        if (closedReleaseScope) {
+          await closer.drain();
+        }
+        const released = (
+          closedReleaseScope
+            ? releaseInScope(() => borrowed!.release())
+            : closer.track(() => borrowed!.release())
+        ).then(
+          () => ({ phase: "released", error: undefined }),
+          (error: unknown) => ({ phase: "released", error }),
+        );
         expect(
           await Promise.race([
             fixture.state.disposalStarted.promise.then(() => ({

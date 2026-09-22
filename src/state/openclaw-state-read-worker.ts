@@ -86,6 +86,9 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "userProfiles.channelIdentity.resolve") {
+    return { type: command.type, identity: { ...command.identity } };
+  }
   if (command.type === "subagents.runs") {
     return {
       ...command,
@@ -126,6 +129,12 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   }
   if (command.type === "operatorApprovals.history") {
     return { ...command, input: { ...command.input } };
+  }
+  if (
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls"
+  ) {
+    return structuredClone(command);
   }
   if (command.type === "pluginBlob.lookup") {
     const { pluginId, namespace, key } = command.input;
@@ -254,6 +263,22 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (
+    command.type === "githubPublication.request" ||
+    command.type === "githubRepository.request" ||
+    command.type === "githubPublication.lifecycle"
+  ) {
+    return bytes + Buffer.byteLength(command.requestId, "utf8") + 8;
+  }
+  if (
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls"
+  ) {
+    return Object.values(command.input).reduce<number>(
+      (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 8),
+      bytes,
+    );
+  }
   if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
     return (
       bytes +
@@ -300,8 +325,24 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
-  if (command.type === "userProfiles.reconcile") {
+  if (
+    command.type === "userProfiles.reconcile" ||
+    command.type === "userProfiles.channelIdentity.list" ||
+    command.type === "userProfiles.authority.resolve"
+  ) {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
+  }
+  if (command.type === "userProfiles.githubIdentity.cached") {
+    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+  }
+  if (command.type === "userProfiles.channelIdentity.resolve") {
+    return (
+      bytes +
+      Object.values(command.identity).reduce(
+        (total, value) => total + Buffer.byteLength(value, "utf8"),
+        0,
+      )
+    );
   }
   if (command.type === "userProfiles.email.resolve") {
     return bytes + Buffer.byteLength(command.email, "utf8");

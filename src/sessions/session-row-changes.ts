@@ -4,7 +4,12 @@ import { resolveGlobalSet } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowChange =
-  | { sessionKey: string; agentId?: string; storePath?: string; scope?: "automation" }
+  | {
+      sessionKey: string;
+      agentId?: string;
+      storePath?: string;
+      scope?: "automation";
+    }
   | { all: true; scope: string | { agentId?: string; storePath?: string } };
 
 const listeners = resolveGlobalSet<(change: SessionRowChange) => void>(

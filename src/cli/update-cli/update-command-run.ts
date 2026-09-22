@@ -316,9 +316,16 @@ export async function admitUpdateCommandRun(params: {
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
   const requester = resolveManagedUpdateRequester(record.origin.requester);
-  const requesterAuthority = requester
-    ? await createManagedUpdateRequesterAuthority(requester, env)
-    : undefined;
+  const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+    ? Object.freeze({
+        requester: Object.freeze({ ...requester }),
+        isCurrent: () => {
+          throw new Error("Profile update continuation has not acquired its native owner.");
+        },
+      })
+    : requester
+      ? await createManagedUpdateRequesterAuthority(requester, env)
+      : undefined;
   const run = {
     runId: record.runId,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,

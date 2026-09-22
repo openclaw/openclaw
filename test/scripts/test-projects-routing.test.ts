@@ -252,6 +252,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
+      title: "routes disk-budget worker lifecycle fixtures to the isolated infra owner",
+      target: "src/config/sessions/disk-budget.physical-usage.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes the real memory CLI JSON tests to the infra config",
       target: "src/entry.memory-json.test.ts",
       config: "test/vitest/vitest.infra.config.ts",

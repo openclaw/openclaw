@@ -1012,7 +1012,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("allows providers without cleanup resources to embed concurrently", async () => {
     const { promise: firstEmbedGate, resolve: releaseFirstEmbed } = createDeferred();
+    const firstEmbedStarted = createDeferred();
     const firstEmbed = vi.fn(async () => {
+      firstEmbedStarted.resolve();
       await firstEmbedGate;
       return [[1, 2]];
     });
@@ -1038,13 +1040,28 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       });
 
     const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
-    await vi.waitFor(() => expect(firstEmbed).toHaveBeenCalledTimes(1));
-    const second = await postEmbeddings({ model: "openclaw/default", input: "second" });
-    expect(second.status).toBe(200);
-    expect(secondEmbed).toHaveBeenCalledTimes(1);
+    const requests = [firstPromise];
+    try {
+      await Promise.race([
+        firstEmbedStarted.promise,
+        firstPromise.then((response) => {
+          throw new Error(`Embedding request completed before provider entry (${response.status})`);
+        }),
+      ]);
+      expect(firstEmbed).toHaveBeenCalledTimes(1);
+      const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
+      requests.push(secondPromise);
+      const second = await secondPromise;
+      expect(second.status).toBe(200);
+      expect(secondEmbed).toHaveBeenCalledTimes(1);
 
-    releaseFirstEmbed();
-    expect((await firstPromise).status).toBe(200);
+      releaseFirstEmbed();
+      expect((await firstPromise).status).toBe(200);
+    } finally {
+      releaseFirstEmbed();
+      await Promise.allSettled(requests);
+      createEmbeddingProviderMock.mockReset();
+    }
   });
 
   it("drains retained provider cleanup during gateway shutdown", async () => {

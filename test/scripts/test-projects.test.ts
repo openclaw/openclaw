@@ -2454,19 +2454,21 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it.each(["src/plugin-state", "src/plugin-sdk", "src/agents", "src/commands", "test/plugins"])(
-    "retains database worker ownership for directory and glob target %s",
-    (directory) => {
-      const expected = databaseWorkerCoreTestFiles.filter((file) =>
-        file.startsWith(`${directory}/`),
-      );
-      for (const target of [directory, `${directory}/**/*.test.ts`]) {
-        const plans = buildVitestRunPlans([target]);
-        const infra = plans.find((plan) => plan.config === "test/vitest/vitest.infra.config.ts");
-        expect(infra?.includePatterns).toEqual(expected);
-      }
-    },
-  );
+  it.each([
+    "src/plugin-state",
+    "src/plugin-sdk",
+    "src/agents",
+    "src/commands",
+    "src/config",
+    "test/plugins",
+  ])("retains database worker ownership for directory and glob target %s", (directory) => {
+    const expected = databaseWorkerCoreTestFiles.filter((file) => file.startsWith(`${directory}/`));
+    for (const target of [directory, `${directory}/**/*.test.ts`]) {
+      const plans = buildVitestRunPlans([target]);
+      const infra = plans.find((plan) => plan.config === "test/vitest/vitest.infra.config.ts");
+      expect(infra?.includePatterns).toEqual(expected);
+    }
+  });
 
   it.each(agentVitestProjectOwners.coreIsolated.include)(
     "routes isolated agent test %s to the isolated agents-core shard",

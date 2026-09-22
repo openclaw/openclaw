@@ -197,7 +197,10 @@ export function createBlockReplyDeliveryHandler(params: {
       params.applyReplyToMode(mediaNormalizedPayload),
     );
     if (blockPayload.text?.trim() !== payload.text?.trim()) {
-      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+      setReplyPayloadMetadata(blockPayload, {
+        blockSourceText: undefined,
+        blockSourceRange: undefined,
+      });
     }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 

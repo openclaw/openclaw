@@ -22,6 +22,7 @@ import {
 } from "../../infra/update-post-core-context.js";
 import {
   createManagedUpdateRequesterAuthority,
+  createManagedUpdateRequesterContinuationAuthority,
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
@@ -155,9 +156,15 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
         async (executor) => {
           const fence = await executor.enter(root);
           const requester = resolveManagedUpdateRequester(record.origin.requester);
-          const requesterAuthority = requester
-            ? await createManagedUpdateRequesterAuthority(requester, env)
-            : undefined;
+          const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+            ? await createManagedUpdateRequesterContinuationAuthority(
+                requester,
+                { runId, executor: fence },
+                env,
+              )
+            : requester
+              ? await createManagedUpdateRequesterAuthority(requester, env)
+              : undefined;
           fence.assertCurrent();
           const current = getUpdateRun(runId, { env });
           if (!inPostCore(current) || current?.createdAtMs !== record.createdAtMs) {
@@ -220,6 +227,8 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
 async function resumePostCoreUpdateInternal(
   params: ResumePostCoreUpdateParams,
 ): Promise<{ pluginUpdate: PostCorePluginUpdateResult; result: UpdateRunResult }> {
+  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
+  const postCoreUpdate = process.env[POST_CORE_UPDATE_ENV] === "1";
   const { assertCurrent } = createUpdateCommandAuthority({ opts: params.opts }, "Post-core update");
   assertCurrent?.();
   if (
@@ -265,6 +274,23 @@ async function resumePostCoreUpdateInternal(
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
         const doctorWarnings: PluginUpdateWarning[] = [];
+        const recordDoctorWarnings = (additionalWarnings: string[] = []) => {
+          const warnings = [
+            ...additionalWarnings,
+            ...doctorWarnings.map((warning) => warning.message),
+          ];
+          if (!postCoreUpdate || !runId || warnings.length === 0) {
+            return;
+          }
+          try {
+            // Settled diagnostics survive later failure without claiming candidate completion.
+            recordPostCoreUpdateEvidence(runId, { warnings });
+          } catch (error) {
+            defaultRuntime.error(
+              `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
+            );
+          }
+        };
         const onDoctorWarnings = (warnings: string[]) => {
           doctorWarnings.push(
             ...warnings.map((message) => ({
@@ -273,6 +299,7 @@ async function resumePostCoreUpdateInternal(
               guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
             })),
           );
+          recordDoctorWarnings();
         };
         if (!parentOwnsCompletion) {
           const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
@@ -299,6 +326,7 @@ async function resumePostCoreUpdateInternal(
           });
           if (warning) {
             doctorWarnings.push(warning);
+            recordDoctorWarnings();
           }
         }
 
@@ -343,6 +371,7 @@ async function resumePostCoreUpdateInternal(
             onWarnings: onDoctorWarnings,
           });
           pluginUpdate = completed.pluginUpdate;
+          recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));
         }
         // Only the target process may restamp an unchanged downgrade config.
         const finalSnapshot = await readConfigFileSnapshot({ observe: false });
@@ -398,7 +427,6 @@ async function resumePostCoreUpdateInternal(
   }
   const { pluginUpdate } = outcome;
   assertCurrent?.();
-  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
   const result: UpdateRunResult = {
     status: pluginUpdate.status === "error" ? "error" : "ok",
     mode: "unknown",
@@ -408,7 +436,7 @@ async function resumePostCoreUpdateInternal(
     durationMs: 0,
     postUpdate: { plugins: pluginUpdate },
   };
-  if (process.env[POST_CORE_UPDATE_ENV] === "1" && runId) {
+  if (postCoreUpdate && runId) {
     try {
       recordPostCoreUpdateEvidence(runId, {
         candidate:

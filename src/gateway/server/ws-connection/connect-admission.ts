@@ -34,6 +34,7 @@ import {
   resolveGatewayAuthPolicyGeneration,
 } from "../../auth-policy.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
+import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -144,15 +145,7 @@ export function resolveEffectiveConnectionScopes(params: {
   const verifiedIdentity = params.verifiedIdentity;
   let identityScopes: OperatorScope[] = [];
   if (params.role === "operator" && verifiedIdentity) {
-    const exactIdentityScopes = params.identityScopes?.[verifiedIdentity];
-    identityScopes = exactIdentityScopes ?? [];
-    if (exactIdentityScopes === undefined && verifiedIdentity.includes("@")) {
-      const normalizedIdentity = verifiedIdentity.toLowerCase();
-      identityScopes =
-        Object.entries(params.identityScopes ?? {}).find(
-          ([identity]) => identity.includes("@") && identity.toLowerCase() === normalizedIdentity,
-        )?.[1] ?? [];
-    }
+    identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
   }
   const scopes = applyConnectionScopeCap({
     scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
