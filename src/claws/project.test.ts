@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
-import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
-import { dirname, join, sep } from "node:path";
+import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
 import { buildClawProject } from "./project-build.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
@@ -89,39 +88,77 @@ describe("Claw projects", () => {
     expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
-  it("refuses to publish and removes staging when a completed file fails to close", async () => {
-    const nativeConfig = getFsSafeNativeConfig();
+  it("refuses to publish and removes staging when a completed file fails to close", () => {
     const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
     const output = join(outputDirectory, "claw.tgz");
-    const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
-    const open = fs.open;
-    let closeAttempts = 0;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (
-        String(args[0]).startsWith(`${outputDirectory}${sep}`) &&
-        (await handle.stat()).isFile()
-      ) {
-        const close = handle.close.bind(handle);
-        vi.spyOn(handle, "close").mockImplementation(async () => {
-          await close();
-          closeAttempts += 1;
-          throw closeError;
-        });
-      }
-      return handle;
+    const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const script = [
+      'import fs from "node:fs/promises";',
+      'import { sep } from "node:path";',
+      'import { configureFsSafeNative } from "./src/infra/fs-safe-defaults.ts";',
+      'import { buildClawProject } from "./src/claws/project-build.ts";',
+      `const outputDirectory = ${JSON.stringify(outputDirectory)};`,
+      `const output = ${JSON.stringify(output)};`,
+      `const project = ${JSON.stringify(project)};`,
+      'const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });',
+      "const open = fs.open;",
+      "let closeAttempts = 0;",
+      "fs.open = async (...args) => {",
+      "  const handle = await open(...args);",
+      "  if (String(args[0]).startsWith(`${outputDirectory}${sep}`) && (await handle.stat()).isFile()) {",
+      "    const close = handle.close.bind(handle);",
+      "    handle.close = async () => {",
+      "      await close();",
+      "      closeAttempts += 1;",
+      "      throw closeError;",
+      "    };",
+      "  }",
+      "  return handle;",
+      "};",
+      'configureFsSafeNative({ mode: "off" });',
+      "let caught;",
+      "try {",
+      "  await buildClawProject(project, output);",
+      "} catch (error) {",
+      "  caught = error;",
+      "}",
+      "const entries = await fs.readdir(outputDirectory);",
+      "process.stdout.write(JSON.stringify({",
+      "  sameError: caught === closeError,",
+      "  message: caught instanceof Error ? caught.message : String(caught),",
+      '  code: caught && typeof caught === "object" && "code" in caught ? caught.code : undefined,',
+      "  closeAttempts,",
+      "  entries,",
+      "}));",
+    ].join("\n");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+        },
+        timeout: 60_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      sameError: true,
+      message: "staged file close failed",
+      code: "EIO",
+      closeAttempts: 1,
+      entries: [],
     });
-    try {
-      configureFsSafeNative({ mode: "off" });
-      await expect(
-        buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
-      ).rejects.toBe(closeError);
-      expect(closeAttempts).toBe(1);
-      await expect(readdir(outputDirectory)).resolves.toEqual([]);
-    } finally {
-      configureFsSafeNative(nativeConfig);
-      vi.restoreAllMocks();
-    }
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
