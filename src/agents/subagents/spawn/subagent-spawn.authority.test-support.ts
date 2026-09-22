@@ -284,7 +284,12 @@ export function installSpawnAuthorityFixture() {
         clearConfigCache();
         await flushLogger();
         resetLogger();
-        await rm(stateDir, { recursive: true, force: true });
+        // Resource cleanup finished; removal failure must not retain a retired owner.
+        try {
+          await rm(stateDir, { recursive: true, force: true });
+        } catch (error) {
+          failures.push(error);
+        }
         restoreActivePluginRegistrySnapshot(pluginSnapshot);
         env.restore();
         deliveries?.[Symbol.dispose]();
