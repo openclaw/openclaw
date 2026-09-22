@@ -18,7 +18,9 @@ import {
   createSiliconFlowThinkingWrapper,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "../../llm/providers/stream-wrappers/moonshot.js";
+import { createOpenAIResponsesServiceTierWrapper } from "../../llm/providers/stream-wrappers/openai-service-tier.js";
 import {
+  createOpenAICompletionsStoreCompatWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -38,10 +40,6 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
-import {
-  getModelProviderRequestRouteFacts,
-  resolveProviderRequestPolicyConfig,
-} from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -554,39 +552,6 @@ function createParallelToolCallsWrapper(
   };
 }
 
-function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean {
-  if (model.api !== "openai-completions") {
-    return false;
-  }
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  const capabilities =
-    getModelProviderRequestRouteFacts(model)?.capabilities ??
-    resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      compat,
-      capability: "llm",
-      transport: "stream",
-    }).capabilities;
-  return !capabilities.usesKnownNativeOpenAIRoute;
-}
-
-function createOpenAICompletionsStoreCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = requireBaseStreamFn(baseStreamFn);
-  return (model, context, options) => {
-    if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      delete payloadObj.store;
-    });
-  };
-}
-
 function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(sanitizeExtraParamsRecord(value) ?? {}).filter(
@@ -716,6 +681,10 @@ function applyPostPluginStreamWrappers(
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
+
+  if (ctx.model?.compat?.supportsServiceTier === true) {
+    ctx.agent.streamFn = createOpenAIResponsesServiceTierWrapper(ctx.agent.streamFn, streamParams);
+  }
 
   if (!ctx.providerWrapperHandled) {
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({

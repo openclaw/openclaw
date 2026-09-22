@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+} from "../llm/providers/openai-fast-mode.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
@@ -41,7 +45,7 @@ export function createModelFastModeResolver(params: {
     runtimeId?: string,
   ): boolean | undefined => {
     const policy = policies.get(normalizeProviderId(entry.provider));
-    if (!policy || (evaluation.routeResolution !== null && !evaluation.selectedRoute)) {
+    if (evaluation.routeResolution !== null && !evaluation.selectedRoute) {
       return undefined;
     }
     const route = evaluation.selectedRoute ?? entry;
@@ -52,15 +56,38 @@ export function createModelFastModeResolver(params: {
         modelId: entry.id,
         agentId: params.agentId,
       });
+    const effectiveParams = Object.assign(
+      {},
+      defaultParams,
+      modelParams,
+      agentModelParams,
+      agentParams,
+    );
+    const selectedRuntime = runtimeId ?? entry.nativeRuntime;
+    if (!policy) {
+      if (selectedRuntime !== "openclaw" || entry.compat?.supportsServiceTier === undefined) {
+        return undefined;
+      }
+      return (
+        normalizeOpenAIServiceTier(effectiveParams.serviceTier ?? effectiveParams.service_tier) ===
+          undefined &&
+        supportsOpenAIResponsesFastMode({
+          ...route,
+          provider: entry.provider,
+          compat: entry.compat,
+        })
+      );
+    }
     return policy({
       provider: entry.provider,
       modelId: entry.id,
       api: route.api,
       baseUrl: route.baseUrl,
       authMode: evaluation.selectedAuthMode,
-      runtimeId: runtimeId ?? entry.nativeRuntime,
+      runtimeId: selectedRuntime,
+      compat: entry.compat,
       modelParams: entry.params,
-      params: Object.assign({}, defaultParams, modelParams, agentModelParams, agentParams),
+      params: effectiveParams,
       requestCapabilities: resolveProviderRequestCapabilities({
         provider: entry.provider,
         modelId: entry.id,

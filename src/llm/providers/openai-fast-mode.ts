@@ -17,9 +17,9 @@ export function supportsOpenAIResponsesFastMode(model: {
   provider: string;
   api?: string;
   baseUrl?: string;
+  compat?: unknown;
 }): boolean {
   return (
-    model.provider === "openai" &&
     (model.api === "openai-responses" ||
       model.api === "openai-chatgpt-responses" ||
       model.api === "azure-openai-responses") &&

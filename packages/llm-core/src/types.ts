@@ -594,6 +594,8 @@ export interface OpenAIResponsesCompat {
    * `store: true` turns. Default: false.
    */
   supportsResponsesContinuation?: boolean;
+  /** Whether this Responses route accepts OpenAI service tiers (including priority). */
+  supportsServiceTier?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

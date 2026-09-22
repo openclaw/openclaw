@@ -7,6 +7,38 @@ import {
 } from "./model-select-state.ts";
 
 describe("chat-model-select-state", () => {
+  it.each([true, false, undefined])(
+    "uses explicit custom-provider Fast capability %s",
+    (supportsFastMode) => {
+      const catalog = [
+        { id: "custom-model", name: "Custom model", provider: "custom-provider", supportsFastMode },
+      ];
+      const sessionsResult = createSessionsListResult({
+        model: "custom-model",
+        modelProvider: "custom-provider",
+        defaultsModel: "custom-model",
+        defaultsProvider: "custom-provider",
+      });
+      expect(
+        resolveChatFastModeSelectState({
+          activeRunId: null,
+          catalog,
+          connected: true,
+          currentModelOverride: "custom-provider/custom-model",
+          fastModeTarget: sessionsResult.sessions[0],
+          gatewayAvailable: true,
+          loading: false,
+          sending: false,
+          sessionsResult,
+          stream: null,
+        }),
+      ).toMatchObject({
+        supported: supportsFastMode === true,
+        disabled: supportsFastMode !== true,
+      });
+    },
+  );
+
   it.each([false, true])(
     "retains current Fast support=%s without offering a denied model",
     (supportsFastMode) => {

@@ -17,7 +17,6 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
-  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -43,19 +42,21 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
-import {
-  normalizeOpenAIServiceTier,
-  supportsOpenAIResponsesFastMode,
-  type OpenAIServiceTier,
-} from "../openai-fast-mode.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
+export {
+  createOpenAIFastModeWrapper,
+  createOpenAIServiceTierWrapper,
+  resolveOpenAIFastMode,
+  resolveOpenAIServiceTier,
+} from "./openai-service-tier.js";
+
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
-type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
@@ -121,12 +122,42 @@ function shouldUseCodexNativeTransport(model: {
   return resolveOpenAIRequestCapabilities(model).endpointClass === "openai";
 }
 
-function shouldApplyOpenAIServiceTier(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  return resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" }).allowsServiceTier;
+function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  const capabilities =
+    getModelProviderRequestRouteFacts(model)?.capabilities ??
+    resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      api: model.api,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      compat,
+      capability: "llm",
+      transport: "stream",
+    }).capabilities;
+  return !capabilities.usesKnownNativeOpenAIRoute;
+}
+
+export function createOpenAICompletionsStoreCompatWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  if (!baseStreamFn) {
+    throw new Error("Cannot apply stream policy without a lifecycle-owned base stream.");
+  }
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      delete payloadObj.store;
+    });
+  };
 }
 
 function isCodeModeEnabled(config?: OpenClawConfig): boolean {
@@ -287,54 +318,6 @@ function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function resolveOpenAIServiceTier(
-  extraParams: Record<string, unknown> | undefined,
-): OpenAIServiceTier | undefined {
-  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
-  const normalized = normalizeOpenAIServiceTier(raw);
-  if (raw !== undefined && normalized === undefined) {
-    const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
-  }
-  return normalized;
-}
-
-function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
-  if (typeof value === "function") {
-    return normalizeOpenAIFastMode((value as () => unknown)());
-  }
-  const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode;
-}
-
-/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function resolveOpenAIFastMode(
-  extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
-  const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
-  const normalized = normalizeOpenAIFastMode(raw);
-  if (
-    raw !== undefined &&
-    normalized === undefined &&
-    typeof raw !== "function" &&
-    normalizeFastMode(raw) !== "auto"
-  ) {
-    const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
-  }
-  return normalized;
-}
-
-function applyOpenAIFastModePayloadOverrides(params: {
-  payloadObj: Record<string, unknown>;
-  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
-}): void {
-  if (params.payloadObj.service_tier === undefined && shouldApplyOpenAIServiceTier(params.model)) {
-    params.payloadObj.service_tier = "priority";
-  }
-}
-
-/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -488,50 +471,6 @@ export function createOpenAIThinkingLevelWrapper(
       ) {
         (existingReasoning as Record<string, unknown>).effort = reasoningEffort;
         raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
-      }
-    });
-  };
-}
-
-/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenAIFastModeWrapper(
-  baseStreamFn: StreamFn | undefined,
-  enabled: DynamicFastMode = true,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
-      return underlying(model, context, options);
-    }
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIFastModePayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
-            model,
-          });
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
-}
-
-/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenAIServiceTierWrapper(
-  baseStreamFn: StreamFn | undefined,
-  serviceTier: OpenAIServiceTier,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!shouldApplyOpenAIServiceTier(model)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      if (payloadObj.service_tier === undefined) {
-        payloadObj.service_tier = serviceTier;
       }
     });
   };

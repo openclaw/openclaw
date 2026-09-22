@@ -25,6 +25,55 @@ describe("models.list configured static entries", () => {
   });
 
   it.each([
+    { name: "opted in", supportsServiceTier: true, serviceTier: undefined, expected: true },
+    { name: "opted out", supportsServiceTier: false, serviceTier: undefined, expected: false },
+    {
+      name: "undeclared",
+      supportsServiceTier: undefined,
+      serviceTier: undefined,
+      expected: undefined,
+    },
+    { name: "explicit tier", supportsServiceTier: true, serviceTier: "flex", expected: false },
+  ])(
+    "publishes custom Responses Fast support with the default runtime: $name",
+    async ({ supportsServiceTier, serviceTier, expected }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "custom-responses-catalog-" },
+        async (state) => {
+          const cfg: OpenClawConfig = {
+            agents: {
+              defaults: {
+                model: "custom-provider/custom-model",
+                models: { "custom-provider/custom-model": { params: { serviceTier } } },
+              },
+            },
+          };
+          const result = await listModels({
+            cfg,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            view: "configured",
+            metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+            catalog: [
+              {
+                id: "custom-model",
+                name: "Custom model",
+                provider: "custom-provider",
+                api: "openai-responses",
+                baseUrl: "https://example.invalid/v1",
+                compat: { supportsServiceTier },
+              },
+            ],
+          });
+          expect(result.models).toHaveLength(1);
+          expect(result.models[0]?.supportsFastMode).toBe(expected);
+          expect(result.models[0]).not.toHaveProperty("agentRuntime");
+        },
+      );
+    },
+  );
+
+  it.each([
     { name: "automatic", utilityModel: undefined, defaultUtilityModel: "small" },
     { name: "explicit", utilityModel: "custom/explicit", defaultUtilityModel: "small" },
     { name: "disabled", utilityModel: "", defaultUtilityModel: "small" },

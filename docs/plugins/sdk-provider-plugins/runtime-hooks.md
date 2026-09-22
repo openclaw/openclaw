@@ -330,10 +330,15 @@ managed-provider selection must remain authoritative.
 and registered on the provider. Return `false` only for a confirmed no-op
 Fast choice, `true` for an applicable local request mapping, or `undefined`
 when facts are missing. `ProviderFastModePolicyContext` carries the selected
-model, route, auth mode, runtime, request parameters and transport policy;
+model, route, model `compat`, auth mode, runtime, request parameters and transport policy;
 credentials are not included. Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
+For custom `openai-responses` models without a provider Fast policy,
+`compat.supportsServiceTier: true` opts into the shared OpenClaw runtime tier
+mapping and catalog support. It enables only service tiers, not other OpenAI
+payload features. Explicit service-tier parameters take precedence over Fast.
+See [custom Responses Fast mode](/providers/openai/advanced#fast-mode-on-custom-responses-endpoints).
 
 </Accordion>

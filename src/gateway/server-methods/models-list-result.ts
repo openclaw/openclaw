@@ -220,7 +220,11 @@ function createPublicModelsListProjector(params: {
     const projectedAvailability = params.preserveUnknownAvailability
       ? evaluation.availability
       : (evaluation.availability ?? false);
-    const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+    const supportsFastMode = params.fastMode(
+      entry,
+      evaluation,
+      preparedEntry.agentRuntime?.id ?? "openclaw",
+    );
     return Object.assign(
       {},
       preparedEntry,

@@ -73,6 +73,61 @@ describe("private selected Fast metadata", () => {
       undefined,
     ]);
   });
+  it("projects opt-in custom Responses support using the selected route and effective tier", () => {
+    const entry: ModelCatalogEntry = {
+      id: "custom-model",
+      name: "Custom model",
+      provider: "custom-provider",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+      compat: { supportsServiceTier: true },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
+    const resolve = createModelFastModeResolver({
+      cfg: {},
+      agentId: "main",
+      catalog: [entry],
+      metadataSnapshot,
+    });
+    const evaluation = { availability: true, routeResolution: null };
+    expect(resolve(entry, evaluation, "openclaw")).toBe(true);
+    expect(resolve({ ...entry, compat: undefined }, evaluation, "openclaw")).toBeUndefined();
+    expect(
+      resolve({ ...entry, compat: { supportsServiceTier: false } }, evaluation, "openclaw"),
+    ).toBe(false);
+    expect(resolve(entry, evaluation, "codex")).toBeUndefined();
+    expect(resolve({ ...entry, api: "openai-completions" }, evaluation, "openclaw")).toBe(false);
+    expect(
+      resolve(
+        entry,
+        {
+          ...evaluation,
+          selectedRoute: {
+            api: "openai-completions",
+            baseUrl: entry.baseUrl!,
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        },
+        "openclaw",
+      ),
+    ).toBe(false);
+    expect(
+      resolve(
+        entry,
+        { availability: undefined, routeResolution: { kind: "indeterminate" } },
+        "openclaw",
+      ),
+    ).toBeUndefined();
+    const explicit = createModelFastModeResolver({
+      cfg: { agents: { entries: { main: { params: { service_tier: "flex" } } } } },
+      agentId: "main",
+      catalog: [entry],
+      metadataSnapshot,
+    });
+    expect(explicit(entry, evaluation, "openclaw")).toBe(false);
+  });
+
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
     expect(
