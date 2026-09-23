@@ -13,7 +13,6 @@ import {
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -437,7 +436,6 @@ async function sendFollowupPayloads(params: {
     }
   };
   let deliveredCrossChannelOrigin = false;
-  let deliveredOriginFinal = false;
   const provider = resolveOriginMessageProvider({
     provider: turn.queued.run.messageProvider,
   });
@@ -520,19 +518,7 @@ async function sendFollowupPayloads(params: {
           );
         }
         deliveredCrossChannelOrigin ||= crossChannelOrigin;
-        deliveredOriginFinal ||= params.kind === "final" && isReplyPayloadTerminalContent(payload);
       }
-    }
-  }
-  if (deliveredOriginFinal) {
-    // Origin delivery bypasses the source channel's own final-reply path, so
-    // its progress UI only learns about a confirmed final through this hook.
-    try {
-      await defaults.opts?.onQueuedFollowupFinalDelivered?.();
-    } catch (error) {
-      defaultRuntime.error?.(
-        `followup queue: queued final delivery cleanup failed: ${formatErrorMessage(error)}`,
-      );
     }
   }
   // A delivered supplement cannot settle missing terminal content, while a

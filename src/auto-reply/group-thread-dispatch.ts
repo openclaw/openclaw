@@ -206,7 +206,6 @@ function prepareParticipant(
         onQueuedFollowupReplyBatch: undefined,
         onQueuedFollowupAdmitted: undefined,
         onQueuedFollowupSettled: undefined,
-        onQueuedFollowupFinalDelivered: undefined,
         queuedDeliveryCorrelations: undefined,
       },
       { sessionKey },

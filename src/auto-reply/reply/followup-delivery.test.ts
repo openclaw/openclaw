@@ -1028,30 +1028,4 @@ describe("deliverFollowupDecision", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
-
-  it.each([
-    ["a delivered final", { ok: true, delivered: true }, "final", 1],
-    ["a partially failed final that was delivered", { ok: false, delivered: true }, "final", 1],
-    ["a failed final", { ok: false, delivered: false, error: "offline" }, "final", 0],
-    ["a delivered block", { ok: true, delivered: true }, "block", 0],
-  ] as const)(
-    "reports the queued final delivery to the source channel after %s",
-    async (_label, routeResult, kind, expectedCalls) => {
-      deliveryState.routeReply.mockReset();
-      deliveryState.routeReply.mockResolvedValue(routeResult);
-      const onQueuedFollowupFinalDelivered = vi.fn();
-      const defaults = createDefaults(vi.fn(async (_payload: ReplyPayload) => {}));
-
-      await deliverFollowupDecision({
-        decision: { kind: "deliver", payloads: [{ text: "answer" }] },
-        turn: createTurn(),
-        defaults: { ...defaults, opts: { ...defaults.opts, onQueuedFollowupFinalDelivered } },
-        runId: "run-1",
-        runFollowup: vi.fn(async () => {}),
-        kind,
-      });
-
-      expect(onQueuedFollowupFinalDelivered).toHaveBeenCalledTimes(expectedCalls);
-    },
-  );
 });
