@@ -93,6 +93,16 @@ function prepareWorkshop(baseline: DatabaseSync, target: DatabaseSync): void {
     if (!tableExists(target, table)) {
       refuse(table, "migration-owned table is missing");
     }
+    // Reintroduced migration fields are candidate-owned facts, not permission
+    // to overwrite them with B's older attribution. Even nullable columns can
+    // contain acknowledged writes; refuse before rebuilding either table.
+    const restoredColumns =
+      table === proposals ? ["workspace_dir", "claim_released_time"] : ["workspace_dir"];
+    for (const column of restoredColumns) {
+      if (tableHasColumn(baseline, table, column) && tableHasColumn(target, table, column)) {
+        refuse(table, `candidate column ${column} collides with a restored migration field`);
+      }
+    }
     const currentRows = rows(target, `SELECT rowid AS __recovery_rowid__, * FROM ${table}`);
     for (const current of currentRows) {
       if (table === proposals) {

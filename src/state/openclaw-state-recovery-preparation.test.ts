@@ -1,5 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { versionedStateMigrations } from "./openclaw-state-db-maintenance.js";
@@ -10,6 +13,31 @@ import {
 import { prepareOpenClawStateRecoveryCopy } from "./openclaw-state-recovery-preparation.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
+const privateCoordinator = vi.hoisted(() => ({ root: undefined as string | undefined }));
+vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: () => {
+    const root = privateCoordinator.root;
+    if (!root || fsSync.realpathSync(root) !== root || !fsSync.lstatSync(root).isDirectory()) {
+      throw new Error("Recovery fixture requires its physically private handoff directory");
+    }
+    return root;
+  },
+}));
+
+beforeEach(async () => {
+  privateCoordinator.root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "recovery-preparation-handoff-")),
+  );
+});
+afterEach(async () => {
+  const root = privateCoordinator.root;
+  privateCoordinator.root = undefined;
+  if (root) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("shared-state recovery preparation", () => {
   it.each([
     { older: 15, newer: 16, change: "preserve" },
@@ -18,6 +46,9 @@ describe("shared-state recovery preparation", () => {
     ...[
       "preserve",
       "new proposal",
+      "proposal workspace collision",
+      "proposal claim collision",
+      "review workspace collision",
       "owner collision",
       "unknown schema",
       "prepared worker",
@@ -28,9 +59,14 @@ describe("shared-state recovery preparation", () => {
     "prepares real v$older -> v$newer with $change, leaving B/C immutable",
     async ({ older, newer, change }) =>
       withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
-        const baselinePath = state.path("baseline.sqlite");
-        const candidatePath = state.path("candidate.sqlite");
-        const targetPath = state.path("prepared.sqlite");
+        const privateStateRoot = await fs.realpath(state.root);
+        const selectedStateDir = await fs.realpath(state.stateDir);
+        expect(path.relative(privateStateRoot, selectedStateDir)).not.toMatch(/^\.\.(?:[/\\]|$)/);
+        // Explicit paths are canonical before every SQLite connection in this
+        // test. Handoff resolution is independently pinned above, never HOME-only.
+        const baselinePath = path.join(privateStateRoot, "baseline.sqlite");
+        const candidatePath = path.join(privateStateRoot, "candidate.sqlite");
+        const targetPath = path.join(privateStateRoot, "prepared.sqlite");
         const store = openOpenClawStateDatabase({ env: state.env, path: baselinePath });
         store.db.exec(`
         ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
@@ -97,6 +133,15 @@ describe("shared-state recovery preparation", () => {
             candidate.exec(`INSERT INTO skill_workshop_proposals
             (proposal_id,record_json,owner_agent_id,kind,status,created_at,updated_at,draft_hash)
             VALUES ('new','{}','main','create','pending','now','now','new-hash')`);
+          } else if (change === "proposal workspace collision") {
+            candidate.exec(`ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT;
+              UPDATE skill_workshop_proposals SET workspace_dir='candidate workspace'`);
+          } else if (change === "proposal claim collision") {
+            candidate.exec(`ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
+              UPDATE skill_workshop_proposals SET claim_released_time=999`);
+          } else if (change === "review workspace collision") {
+            candidate.exec(`ALTER TABLE skill_workshop_collection_reviews ADD COLUMN workspace_dir TEXT;
+              UPDATE skill_workshop_collection_reviews SET workspace_dir='candidate review workspace'`);
           } else if (change === "owner collision") {
             candidate.exec(
               "UPDATE skill_workshop_proposals SET owner_agent_id='other' WHERE proposal_id='kept'",
@@ -180,7 +225,11 @@ describe("shared-state recovery preparation", () => {
             prepared.close();
           }
         } else {
-          await expect(prepare).rejects.toThrow(/recovery refused/);
+          await expect(prepare).rejects.toThrow(
+            change.endsWith("collision") && change !== "owner collision"
+              ? /candidate column .* collides with a restored migration field/
+              : /recovery refused/,
+          );
         }
         expect(await fs.readFile(baselinePath)).toEqual(baselineBytes);
         expect(await fs.readFile(candidatePath)).toEqual(candidateBytes);
