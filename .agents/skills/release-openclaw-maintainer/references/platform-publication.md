@@ -1,5 +1,13 @@
 # Native release platforms
 
+## Decoupling
+
+npm + ClawHub publication is the priority path. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates it: a native
+failure is classified and fixed in parallel, not a reason to re-cut or re-run
+npm validation. Native lanes start as soon as the tag exists, alongside the
+npm publish, not after it.
+
 Apps are independent publication tasks. They do not block npm, Docker, GitHub
 release finalization, or stable main closeout. Record pending platforms
 explicitly and call each complete only after its assets and updater evidence
