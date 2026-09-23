@@ -173,6 +173,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       leaseMs: options.leaseMs ?? 60_000,
       waitMs: 5_000,
       prepareDatabase: true,
+      reclaimDeadProcessOwner: true,
       heartbeat: "worker",
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",

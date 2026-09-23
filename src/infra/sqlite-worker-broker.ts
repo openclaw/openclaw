@@ -223,7 +223,7 @@ export class SqliteWorkerBroker {
           ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
           ...(options.preparation ? { preparation: options.preparation } : {}),
-          ...(/\.[cm]?ts$/.test(modulePath)
+          ...(/\.[cm]?ts$/.test(modulePath) && !slot.sourceLoaderPreloaded
             ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
             : {}),
         },

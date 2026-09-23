@@ -26,6 +26,7 @@ import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLeaseExpiry,
+  reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
   type OpenClawStateLeaseIdentity,
@@ -116,7 +117,7 @@ export function acquireOpenClawStateLeaseInWorker(
   databasePath: string,
   open: () => OpenClawStateDatabase,
 ) {
-  const { identity, leaseMs, operationLabel, schemaPolicy } = input;
+  const { identity, leaseMs, operationLabel, schemaPolicy, processOwner } = input;
   const shared = input.observeExpiry ? takeLeaseExpiryObservation(identity) : undefined;
   try {
     return withLeaseWriteTransaction(
@@ -133,7 +134,15 @@ export function acquireOpenClawStateLeaseInWorker(
       (db) => {
         const facts = { kind: "state-lease-acquire", identity };
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
-        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs);
+        if (processOwner) {
+          reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+        }
+        const result = acquireOpenClawStateLeaseInTransaction(
+          db,
+          identity,
+          leaseMs,
+          processOwner ? JSON.stringify({ owner: processOwner }) : null,
+        );
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
         if (shared && result.kind === "acquired") {
           stageLeaseExpiryObservation(db, shared, result.expiresAt);

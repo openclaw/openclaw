@@ -60,6 +60,7 @@ it.each(["execute", "close"] as const)(
     };
     const slot: Slot = {
       worker: new Worker(new URL("file:///synthetic/sqlite-store.worker.js")),
+      sourceLoaderPreloaded: false,
       receiveReply: edge.forbidden,
       actors: new Set(),
       queue: [],

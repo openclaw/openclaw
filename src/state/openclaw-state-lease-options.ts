@@ -16,6 +16,8 @@ export type OpenClawStateLeaseOptions = {
   signal?: AbortSignal;
   /** Maintenance prepares normal storage before waiting for its operation lease. */
   prepareDatabase?: boolean;
+  /** Recover only predecessors whose recorded same-host process is provably gone. */
+  reclaimDeadProcessOwner?: boolean;
   /** Maintenance can block the event loop for longer than the lease duration. */
   heartbeat?: "worker";
   /** Stable diagnostic noun used in errors. */
@@ -94,6 +96,7 @@ export function validateOpenClawStateLeaseOptions(options: OpenClawStateLeaseOpt
     waitMs: validateDuration(options.waitMs, `${leaseLabel} waitMs`, 0, MAX_TIMER_TIMEOUT_MS),
     signal: options.signal,
     prepareDatabase: options.prepareDatabase === true,
+    reclaimDeadProcessOwner: options.reclaimDeadProcessOwner === true,
     heartbeat: options.heartbeat,
     leaseLabel,
     operationLabel,

@@ -1,16 +1,6 @@
-import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
-import type {
-  TaskAgentEventInput,
-  TaskAgentEventReceipt,
-} from "./task-registry-agent-event.operation.js";
-import type {
-  TaskRegistryRestoreResult,
-  TaskMirroredFlowSyncOutcome,
-} from "./task-registry-restore.worker.js";
+import type { TaskRegistryObservers, TaskRegistryStore } from "./task-registry-runtime.types.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
@@ -23,62 +13,11 @@ import {
   withTaskRegistrySqliteMutation,
   settleTaskRegistrySqliteWrites,
 } from "./task-registry.store.sqlite.js";
-import type {
-  TaskExecutionRestoreStore,
-  TaskLiveFlowAuthority,
-  TaskLiveFlowSyncOutcome,
-  TaskRegistryMutationScope,
-  TaskRegistryStoreSnapshot,
-  TaskRegistryObserverEvent,
-  TaskRegistryObservers,
-} from "./task-registry.store.types.js";
+import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
+export type { TaskRegistryObservers, TaskRegistryStore } from "./task-registry-runtime.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
-
-export type TaskRegistryStore = TaskExecutionRestoreStore & {
-  runAgentEventMutationAsync(
-    context: OpenClawStateWorkerContext,
-    input: TaskAgentEventInput,
-    assertCurrent: () => void,
-    onGranted: (owner: SqliteWorkerNativeSettlementOwner) => void,
-  ): Promise<TaskAgentEventReceipt | null>;
-  settleAgentEventWrites(join: (deadlineMs: number) => void): void;
-  runInitialMutationAsync<Key extends keyof TaskInitialWorkerOperations>(
-    context: OpenClawStateWorkerContext,
-    command: { type: Key; input: TaskInitialWorkerOperations[Key]["input"] },
-    assertCurrent: () => void,
-    onGranted?: (owner: SqliteWorkerNativeSettlementOwner) => void,
-  ): Promise<TaskInitialWorkerOperations[Key]["output"]>;
-  syncLiveTaskFlowAsync(
-    context: OpenClawStateWorkerContext,
-    params: { taskId: string; flowId: string },
-    authority: TaskLiveFlowAuthority,
-  ): Promise<TaskLiveFlowSyncOutcome>;
-  withSnapshotAsync<T>(
-    context: OpenClawStateWorkerContext,
-    consume: (snapshot: TaskRegistryRestoreResult, reconcileFlows: () => Promise<void>) => T,
-  ): Promise<T>;
-  syncTaskFlowAsync: (
-    context: OpenClawStateWorkerContext,
-    params: { taskId: string; expectedParentFlowId?: string },
-  ) => Promise<TaskMirroredFlowSyncOutcome>;
-  loadMutationSnapshotAsync: (
-    context: OpenClawStateWorkerContext,
-    scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
-  ) => Promise<TaskRegistryStoreSnapshot>;
-  loadMutationSnapshot?: (
-    scopes: readonly TaskRegistryMutationScope[],
-  ) => TaskRegistryStoreSnapshot;
-  listTasksForOwnerKey?: (
-    context: OpenClawStateWorkerContext,
-    ownerKey: string,
-    assertCurrent: () => void,
-  ) => Promise<TaskRecord[]>;
-  deleteTaskWithDeliveryState: (taskId: string) => void;
-  upsertDeliveryState: (state: TaskDeliveryState) => void;
-  close?: () => void;
-};
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
   async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
@@ -151,14 +90,14 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
   close: closeTaskRegistryDatabase,
 };
 
-let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
+const runtime = getTaskRegistryProcessState().runtime;
 
 export function getTaskRegistryStore(): TaskRegistryStore {
-  return configuredTaskRegistryStore;
+  return (runtime.store ??= defaultTaskRegistryStore);
 }
 
 export function getTaskRegistryObservers(): TaskRegistryObservers | null {
-  return getTaskRegistryProcessState().observers;
+  return runtime.observers;
 }
 
 /** Subscribe at the publication owner; readers recheck current task authority. */
@@ -175,17 +114,17 @@ export function configureTaskRegistryRuntime(params: {
   observers?: TaskRegistryObservers | null;
 }) {
   if (params.store) {
-    configuredTaskRegistryStore = params.store;
+    runtime.store = params.store;
   }
   if ("observers" in params) {
-    getTaskRegistryProcessState().observers = params.observers ?? null;
+    runtime.observers = params.observers ?? null;
   }
 }
 
 export function resetTaskRegistryRuntimeForTests() {
-  configuredTaskRegistryStore.close?.();
-  configuredTaskRegistryStore = defaultTaskRegistryStore;
-  getTaskRegistryProcessState().observers = null;
+  getTaskRegistryStore().close?.();
+  runtime.store = defaultTaskRegistryStore;
+  runtime.observers = null;
 }
 
 const storeLog = createSubsystemLogger("tasks/registry");

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
@@ -39,6 +40,7 @@ export type OpenClawStateLeaseLifecycleOperations = {
       operationLabel: string;
       observeExpiry?: true;
       schemaPolicy?: "existing";
+      processOwner?: StateLeaseProcessOwner;
     };
     output: OpenClawStateLeaseAcquisition;
   };

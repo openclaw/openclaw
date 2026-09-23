@@ -108,6 +108,7 @@ export const forcedUnitFastTestFiles = [
   "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
   "src/entry.test.ts",
+  "src/infra/exec-control-command-guard.test.ts",
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
   "src/install-sh-version.test.ts",

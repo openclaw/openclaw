@@ -545,9 +545,17 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it("preserves the refusal when reacquiring the same port fails", async () => {
+  it("preserves the refusal when reacquiring the same port fails", async ({ signal }) => {
     const control = await createGatewayControl();
-    const { instance } = await createFakeGateway("held-unrelated", 1_000, 1_500, control);
+    const { instance } = await createFakeGateway("held-unrelated", 1_000, 1_500, control, {
+      signal,
+    });
+    // This case tests refusal/port ownership, not the native process bootstrap deadline.
+    // Keep the readiness budget fixed until the held child actually exits.
+    signal.throwIfAborted();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
     const competitor = net.createServer((socket) => socket.destroy());
     const startup = trackOperation(instance.startGateway());
     const outcome = startup.catch((error: unknown) => error);
@@ -559,6 +567,7 @@ describe("openclaw test instance", () => {
       });
       await control.release();
       const error = await outcome;
+      restoreClock();
       expect(error).toBeInstanceOf(AggregateError);
       expect((error as AggregateError).errors).toEqual([
         expect.objectContaining({ message: expect.stringContaining("unrelated startup failure") }),
@@ -570,6 +579,8 @@ describe("openclaw test instance", () => {
       expect(competitor.listening).toBe(true);
       await expectPathMissing(instance.state.root);
     } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
       control.unblock();
       await outcome;
       if (competitor.listening) {

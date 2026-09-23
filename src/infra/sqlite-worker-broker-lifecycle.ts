@@ -46,14 +46,13 @@ export function createSqliteWorkerLifecycle({
     if (process.versions.bun && process.platform === "darwin") {
       ensureSqliteLibrarySelected();
     }
+    const sourceLoaderPreloaded = options.carrierUrl.pathname.endsWith(".ts");
     options.assertCurrent?.();
     const worker = runOutsideCaller(() =>
       createCpuTrackedWorker(options.carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
-        execArgv: options.carrierUrl.pathname.endsWith(".ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
+        execArgv: sourceLoaderPreloaded ? ["--import", import.meta.resolve("tsx/esm")] : [],
       }),
     );
     const exited = createDeferredCore();
@@ -61,6 +60,8 @@ export function createSqliteWorkerLifecycle({
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
+      // Re-registering TSX stacks transform hooks; reuse the source worker bootstrap.
+      sourceLoaderPreloaded,
       receiveReply: (reply, pumping) => receiveSqliteWorkerReply(slot, reply, replyOwner, pumping),
       actors: new Set(),
       queue: [],

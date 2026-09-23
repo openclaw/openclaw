@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   detectUnsafeExecControlShellCommand,
   rejectUnsafeExecControlShellCommand,
@@ -9,6 +9,14 @@ function nestedCommandSubstitution(inner: string, depth: number): string {
 }
 
 describe("exec control command guard", () => {
+  beforeEach(() => {
+    // These cases exercise traversal depth/work limits, not the parser's wall-clock budget.
+    vi.useFakeTimers({ toFake: ["performance"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rejects a control command below deeply nested command substitutions", async () => {
     const command = nestedCommandSubstitution("/approve abc123 allow-once", 5_000);
 

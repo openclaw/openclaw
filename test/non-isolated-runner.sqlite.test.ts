@@ -77,7 +77,11 @@ export default defineConfig({
     expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
     for (const file of Object.keys(files).filter((name) => !name.startsWith("13-"))) {
-      const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
+      const owner = file.endsWith("-task-store.test.ts")
+        ? "taskRegistry.state"
+        : file.startsWith("12-")
+          ? "stateReadWorkers"
+          : "sharedStateWorkerOwner";
       expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
     }
     expect(output).toContain(
@@ -98,8 +102,8 @@ export default defineConfig({
     expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 7,
-      numPassedTests: 7,
+      numTotalTests: 9,
+      numPassedTests: 9,
       numFailedTests: 0,
       numPendingTests: 0,
       numTodoTests: 0,

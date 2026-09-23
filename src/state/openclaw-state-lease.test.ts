@@ -1,15 +1,21 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
+import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
+import { readOpenClawStateLease } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
@@ -19,6 +25,69 @@ afterEach(() => {
 });
 
 describe("OpenClaw state lease", () => {
+  it("recovers agent maintenance after its owner dies without stealing a live lease", async () => {
+    await withOpenClawTestState({ label: "agent-maintenance-owner-crash" }, async (state) => {
+      const maintenanceUrl = resolveRuntimeWorkerUrl(
+        stateNativeProcessEntrypoints.agentMaintenanceLease,
+      );
+      const childScript = await state.writeText(
+        "maintenance-owner.mjs",
+        `
+          import { withAgentDatabaseMaintenanceLease } from ${JSON.stringify(maintenanceUrl.href)};
+          await withAgentDatabaseMaintenanceLease({ env: process.env, leaseMs: 300_000 }, async () => {
+            process.send("owned");
+            await new Promise(() => {});
+          });
+        `,
+      );
+      const child = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(maintenanceUrl).slice(0, -1), childScript],
+        { env: { ...process.env, ...state.env }, stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+      let stderr = "";
+      child.stderr?.on("data", (chunk) => {
+        stderr = `${stderr}${chunk}`.slice(-5_000);
+      });
+      try {
+        const [message] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+        expect(message, stderr).toBe("owned");
+        let entered = false;
+        const enterMaintenance = () =>
+          withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
+            lease.assertOwned();
+            entered = true;
+          });
+        await expect(enterMaintenance()).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_HELD",
+          outcome: { kind: "held" },
+        });
+        expect(entered).toBe(false);
+
+        // Unlike process.exit(), abrupt service replacement cannot run exit cleanup.
+        const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
+        expect(child.kill("SIGKILL")).toBe(true);
+        await closed;
+        const held = readOpenClawStateLease(
+          openOpenClawStateDatabase({ env: state.env }).db,
+          AGENT_DATABASE_MAINTENANCE_LEASE,
+        );
+        expect(held?.expiresAt).toBeGreaterThan(Date.now());
+
+        await enterMaintenance();
+        expect(entered).toBe(true);
+        expect(
+          readOpenClawStateLease(
+            openOpenClawStateDatabase({ env: state.env }).db,
+            AGENT_DATABASE_MAINTENANCE_LEASE,
+          ),
+        ).toBeUndefined();
+      } finally {
+        await stopChildProcess(child, 5_000, { force: true });
+      }
+    });
+  });
+
   it.each([undefined, "worker"] as const)(
     "releases ownership when a CLI exits with %s renewal",
     async (heartbeat) => {

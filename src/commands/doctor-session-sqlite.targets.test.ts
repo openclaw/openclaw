@@ -28,7 +28,8 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
-const { autoCleanupTempDirs, createLegacyStore } = useDoctorSessionSqliteTestFixture();
+const { autoCleanupTempDirs, createLegacyStore, createHistoricalRestoreStore } =
+  useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
   it.each(["destination", "shared-state"])(
@@ -114,6 +115,53 @@ describe("runDoctorSessionSqlite", () => {
     );
     expect(fs.existsSync(sqlitePath)).toBe(false);
   });
+
+  it.each(["restore", "recover"] as const)(
+    "keeps retained-agent archives available to explicit bulk %s",
+    async (mode) => {
+      const { store, manifest, manifestPath } = createHistoricalRestoreStore(2);
+      const moves = manifest.targets[0]!.completedMoves;
+      const sourcePaths = moves.map((move) => move.sourcePath);
+      const original = moves.map((move) => fs.readFileSync(move.archivePath));
+      expect(sourcePaths.every((file) => !fs.existsSync(file))).toBe(true);
+      const sqlitePath = resolveTargetSqlitePath(
+        { agentId: "main", storePath: store.storePath },
+        store.env,
+      );
+      if (mode === "recover") {
+        manifest.failedAt = "2026-09-01T00:00:00.000Z";
+        fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+      }
+      beginAgentDeletionJournal(
+        {
+          agentId: "main",
+          operationId: "retained-bulk-recovery",
+          agentDir: path.dirname(sqlitePath),
+          workspaceDir: path.join(store.stateDir, "workspace-retired"),
+          sessionsDir: store.sessionDir,
+          deleteFiles: false,
+        },
+        { env: store.env },
+      );
+      runOpenClawStateWriteTransaction(
+        (database) =>
+          completeAgentDeletionJournalInDatabase(database, "main", "retained-bulk-recovery"),
+        { env: store.env },
+      );
+
+      const report = await runDoctorSessionSqlite({
+        allAgents: true,
+        cfg: { agents: { ownership: "explicit", entries: { active: {} } } },
+        env: store.env,
+        mode,
+      });
+
+      const restored = report.targets.flatMap((target) => target.restore?.restoredFiles ?? []);
+      expect(restored).toEqual(expect.arrayContaining(sourcePaths));
+      expect(report.targets.flatMap((target) => target.restore?.conflicts ?? [])).toEqual([]);
+      expect(sourcePaths.map((file) => fs.readFileSync(file))).toEqual(original);
+    },
+  );
 
   it("imports explicit stores into the agent database owned by the path", async () => {
     const store = createLegacyStore({ agentDirName: "codex-proof" });

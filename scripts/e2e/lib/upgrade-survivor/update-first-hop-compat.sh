@@ -194,6 +194,17 @@ run_positive_hops() {
   setup_lane "$lane" 18792
   local first_pid
   first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
+  # Supervisor liveness precedes startup's config read. Seed only after the
+  # published Gateway is ready, with reload disabled by setup_lane.
+  openclaw_e2e_wait_gateway_ready "$first_pid" \
+    "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG" 360 18792 \
+    >"$ARTIFACT_DIR/$lane-source-readiness.log" 2>&1
+  local preservation=scripts/e2e/lib/upgrade-survivor/first-hop-config-preservation.mjs
+  local candidate_version
+  candidate_version="$(tar -xOf "$CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+  node "$preservation" seed-skills "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  node "$preservation" seed "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR" "$candidate_version"
+  openclaw config validate --json >"$ARTIFACT_DIR/$lane-config-admission.json"
 
   run_update "$lane-first" "$CANDIDATE_PACKAGE"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
@@ -216,14 +227,55 @@ run_positive_hops() {
   record_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
+  # Check before mock configuration can overwrite evidence from the old updater.
+  node "$preservation" assert-hop "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  openclaw config validate --json >"$ARTIFACT_DIR/$lane-first-config-validation.json"
+  # Standalone Doctor needs exclusive state ownership. This fixture has command-level
+  # systemd shims, not the native D-Bus broker used for Doctor's automatic restoration.
+  # Park the verified first-hop service explicitly; do not weaken maintenance admission.
+  systemctl --user stop openclaw-gateway.service \
+    >"$ARTIFACT_DIR/$lane-doctor-service-stop.stdout" \
+    2>"$ARTIFACT_DIR/$lane-doctor-service-stop.stderr" || return "$?"
+  local stopped_status=0
+  systemctl --user is-active openclaw-gateway.service \
+    >"$ARTIFACT_DIR/$lane-doctor-service-state.txt" 2>&1 || stopped_status="$?"
+  if [ "$stopped_status" -ne 3 ]; then
+    echo "standalone Doctor requires a confirmed inactive fixture service (status $stopped_status)" >&2
+    return 1
+  fi
+  # Independently check the controlled single-agent requirements before Doctor can write.
+  openclaw skills list --agent main --json >"$ARTIFACT_DIR/positive-skills-status.json"
+  node "$preservation" bind-repair "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  local command phase doctor_status preservation_status
+  for command in assert-repair assert-doctor; do
+    phase=repair
+    if [ "$command" = assert-doctor ]; then phase=fresh; fi
+    doctor_status=0
+    openclaw doctor --fix --non-interactive \
+      >"$ARTIFACT_DIR/$lane-$phase-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-$phase-doctor.stderr" \
+      || doctor_status="$?"
+    preservation_status=0
+    # Capture even failed Doctor writes, but never replace their original exit status.
+    node "$preservation" "$command" "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR" "$doctor_status" \
+      || preservation_status="$?"
+    if [ "$doctor_status" -ne 0 ]; then return "$doctor_status"; fi
+    if [ "$preservation_status" -ne 0 ]; then return "$preservation_status"; fi
+  done
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
+  systemctl --user start openclaw-gateway.service \
+    >"$ARTIFACT_DIR/$lane-doctor-service-start.stdout" \
+    2>"$ARTIFACT_DIR/$lane-doctor-service-start.stderr" || return "$?"
+  wait_service_active
+  local post_doctor_pid
+  post_doctor_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
+  record_service_state "$ARTIFACT_DIR/$lane-service-after-doctor.txt"
 
   run_update "$lane-second" "$FUTURE_PACKAGE"
   assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-second-build-info.json"
   wait_service_active
   local future_pid
   future_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-  if [ "$future_pid" = "$candidate_pid" ]; then
+  if [ "$future_pid" = "$post_doctor_pid" ]; then
     echo "second hop did not replace the managed service process" >&2
     return 1
   fi
@@ -235,7 +287,7 @@ run_positive_hops() {
   record_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
   record_service_state "$ARTIFACT_DIR/$lane-service-after-second.txt"
-  printf '%s\n' "$first_pid" "$candidate_pid" "$future_pid" \
+  printf '%s\n' "$first_pid" "$candidate_pid" "$post_doctor_pid" "$future_pid" \
     >"$ARTIFACT_DIR/$lane-service-pids.txt"
   stop_lane
 }
@@ -256,14 +308,14 @@ node -e '
   const root = process.argv[1];
   const read = name => JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
   const source = read("source.json");
-  const [sourcePid, candidatePid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
+  const [sourcePid, candidatePid, postDoctorPid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
   fs.writeFileSync(path.join(root, "summary.json"), `${JSON.stringify({
     source,
     negativeControl: source.expectedMissingChunk
       ? { status: "passed", exit: 1, missingChunk: source.expectedMissingChunk }
       : source.negativeControl,
     firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0, build: read("positive-first-build-info.json"), beforePid: sourcePid, afterPid: candidatePid },
-    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
+    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: postDoctorPid, afterPid: futurePid },
   }, null, 2)}\n`);
 ' "$ARTIFACT_DIR"
 

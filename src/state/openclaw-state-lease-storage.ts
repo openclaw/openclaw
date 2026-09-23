@@ -6,6 +6,7 @@ import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -66,7 +67,12 @@ export function readLeaseDatabase<T>(
 
 export async function acquireLease(
   database: OpenClawStateLeaseDatabase,
-  input: { identity: OpenClawStateLeaseIdentity; leaseMs: number; operationLabel: string },
+  input: {
+    identity: OpenClawStateLeaseIdentity;
+    leaseMs: number;
+    operationLabel: string;
+    processOwner?: StateLeaseProcessOwner;
+  },
   assertCurrent: () => void,
   signal?: AbortSignal,
 ) {

@@ -1,7 +1,9 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -104,6 +106,13 @@ async function runStateLeaseOwnerInScope<T>(
 ): Promise<T> {
   const validated = validateOpenClawStateLeaseOptions(invocation.options);
   const owner = randomUUID();
+  const processOwner = validated.reclaimDeadProcessOwner
+    ? {
+        pid: process.pid,
+        host: hostname(),
+        startedAt: getFileLockProcessStartTime(process.pid),
+      }
+    : undefined;
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
@@ -297,10 +306,16 @@ async function runStateLeaseOwnerInScope<T>(
                 validated.operationLabel,
                 signal,
                 expiryObservation !== undefined,
+                processOwner,
               )
             : acquireLease(
                 validated.database,
-                { identity, operationLabel: validated.operationLabel, leaseMs: validated.leaseMs },
+                {
+                  identity,
+                  operationLabel: validated.operationLabel,
+                  leaseMs: validated.leaseMs,
+                  ...(processOwner ? { processOwner } : {}),
+                },
                 assertCurrent,
                 signal,
               );

@@ -22,7 +22,17 @@ IMAGE_NAME="$(
 )"
 SKIP_BUILD="${OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-1200s}"
-ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat}"
+# The trusted harness can live outside the selected workspace collected by CI.
+ARTIFACT_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+if [ -n "${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-}" ]; then
+  # Explicit paths belong to the caller; preserve that exact output contract.
+  ARTIFACT_DIR="$OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR"
+else
+  # Retain prior captures without colliding with write-once observations.
+  ARTIFACT_BASE="$ARTIFACT_ROOT/.artifacts/docker-tests/update-first-hop-compat"
+  mkdir -p "$ARTIFACT_BASE"
+  ARTIFACT_DIR="$(mktemp -d "$ARTIFACT_BASE/run.XXXXXX")"
+fi
 SOURCE_PACKAGE="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ:-}"
 FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-first-hop.XXXXXX")"
 PACKAGE_TGZ=""
@@ -116,7 +126,10 @@ for version in "${SOURCE_VERSIONS[@]}"; do
   } >"$lane_artifact_dir/inputs.txt"
 
   echo "Running packaged updater first-hop compatibility Docker E2E (${version:-explicit source})..."
+  # The synthetic service manager detaches Gateway descendants. Reap adopted
+  # exits like systemd so zombie process groups cannot stall restart settlement.
   docker_e2e_run_with_harness \
+    --init \
     -e OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 \
     -e OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR=/tmp/openclaw-update-first-hop-artifacts \
     -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$expected_missing_chunk" \

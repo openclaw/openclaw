@@ -25,6 +25,11 @@ export const stateNativeProcessEntrypoints = {
     sourceWorkerName: "openclaw-state-lease",
     distWorkerPath: "state/openclaw-state-lease.js",
   },
+  agentMaintenanceLease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "openclaw-agent-db-maintenance-lease",
+    distWorkerPath: "state/openclaw-agent-db-maintenance-lease.js",
+  },
   loggingState: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../logging/state",

@@ -14,12 +14,12 @@ import {
   isEquivalentTaskRecord,
   listTasksFromIndex,
 } from "./task-registry-records.js";
+import type { TaskRegistryObservers, TaskRegistryStore } from "./task-registry-runtime.types.js";
 import type {
   TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
   TaskRegistryStoreSnapshot,
-  TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 import type { TaskRunOwner } from "./task-run-owner.types.js";
@@ -127,6 +127,17 @@ export type TaskRegistryEventMutations = {
 
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
 type TaskRegistryProcessState = {
+  // Store selection and restore authority must share the lifetime of their projection.
+  runtime: { store?: TaskRegistryStore; observers: TaskRegistryObservers | null };
+  restore:
+    | { status: "uninitialized"; admission?: OpenClawStateDatabaseReadAdmission }
+    | { status: "restoring" | "ready"; admission: OpenClawStateDatabaseReadAdmission }
+    | {
+        status: "failed";
+        error: Error;
+        admission: OpenClawStateDatabaseReadAdmission;
+        store: TaskRegistryStore;
+      };
   tasks: Map<string, TaskRecord>;
   taskDeliveryStates: Map<string, TaskDeliveryState>;
   taskIdsByRunId: Map<string, Set<string>>;
@@ -147,8 +158,6 @@ type TaskRegistryProcessState = {
     events: TaskRegistryEventMutations;
   };
   changeListeners: Set<(event?: TaskRegistryObserverEvent) => void>;
-  // SDK and Gateway module instances must publish to the same lifecycle observer.
-  observers: TaskRegistryObservers | null;
   projection: {
     epoch: number;
     dirty: boolean;
@@ -167,6 +176,8 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     [TASK_REGISTRY_PROCESS_STATE_KEY]?: TaskRegistryProcessState;
   };
   globalState[TASK_REGISTRY_PROCESS_STATE_KEY] ??= {
+    runtime: { observers: null },
+    restore: { status: "uninitialized" },
     tasks: new Map<string, TaskRecord>(),
     taskDeliveryStates: new Map<string, TaskDeliveryState>(),
     taskIdsByRunId: new Map<string, Set<string>>(),
@@ -179,7 +190,6 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskProgressBatches: new Map<string, TaskProgressBatch>(),
     runOwners: new Map<string, TaskRunOwner>(),
     changeListeners: new Set(),
-    observers: null,
     projection: {
       epoch: 0,
       dirty: false,

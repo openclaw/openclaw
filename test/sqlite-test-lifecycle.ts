@@ -13,6 +13,8 @@ const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 // These owners retain module closures and each other's lifecycle callbacks.
 // Keep their native custody intact through drainage, then retire the whole generation.
 export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
+  // The selected default task store retains this generation's SQLite callbacks.
+  [source("src/tasks/task-registry.process-state.ts"), Symbol.for("openclaw.taskRegistry.state")],
   [
     source("src/state/openclaw-state-worker-store.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),

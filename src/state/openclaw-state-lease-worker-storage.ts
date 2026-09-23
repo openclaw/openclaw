@@ -1,4 +1,5 @@
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateWorkerLeaseContext } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
@@ -39,6 +40,7 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
       operationLabel: string,
       signal?: AbortSignal,
       observeExpiry = false,
+      processOwner?: StateLeaseProcessOwner,
     ): Promise<OpenClawStateLeaseAcquisition> {
       return owner.runLifecycle("acquire", async (admission) => {
         const { runOpenClawStateWorkerOperation } =
@@ -54,6 +56,7 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
                   leaseMs,
                   operationLabel,
                   ...(observeExpiry ? { observeExpiry: true as const } : {}),
+                  ...(processOwner ? { processOwner } : {}),
                 },
               },
               { signal },
