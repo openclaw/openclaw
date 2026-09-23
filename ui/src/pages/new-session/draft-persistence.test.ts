@@ -21,12 +21,17 @@ type StoreReadResult =
         writeId: string;
       };
     }
-  | { status: "not-found"; revision?: number; writeId?: string };
+  | { status: "not-found"; revision?: number; writeId?: string }
+  | { status: "storage-failed" };
 
 const store = vi.hoisted(() => {
   const pendingReads: Array<(result: unknown) => void> = [];
   return {
     pendingReads,
+    hydrateDurableComposerAttachments:
+      vi.fn<
+        typeof import("../chat/durable-composer-persistence.ts").hydrateDurableComposerAttachments
+      >(),
     readDurableComposerDraft: vi.fn(
       () =>
         new Promise((resolve) => {
@@ -60,7 +65,14 @@ vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
 // files' module singletons.
 vi.mock("../chat/durable-composer-persistence.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat/durable-composer-persistence.ts")>();
-  return { ...actual, writeDurableComposerSnapshot: store.writeDurableComposerSnapshot };
+  store.hydrateDurableComposerAttachments.mockImplementation(
+    actual.hydrateDurableComposerAttachments,
+  );
+  return {
+    ...actual,
+    writeDurableComposerSnapshot: store.writeDurableComposerSnapshot,
+    hydrateDurableComposerAttachments: store.hydrateDurableComposerAttachments,
+  };
 });
 
 async function resolvePendingRead(result: StoreReadResult) {
@@ -96,6 +108,82 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it.each(["read", "attachments"] as const)(
+    "never flushes model-only edits after failed %s restoration",
+    async (failure) => {
+      const flow = createFlow();
+      const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
+      flow.draftPersistence.modelSelection = {
+        read: () => selection,
+        restore: vi.fn(),
+        retire: vi.fn(),
+      };
+      flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+      flow.draftPersistence.activateRoute("failed-restoration");
+      flow.draftPersistence.captureSubmission();
+      flow.draftPersistence.noteModelSelectionMutation();
+      const saved = {
+        status: "found" as const,
+        draft: { revision: 10, text: "Keep saved content", attachments: [], writeId: "saved" },
+      };
+      await resolvePendingRead(saved);
+      if (failure === "attachments") {
+        store.hydrateDurableComposerAttachments.mockRejectedValueOnce(
+          new Error("Attachment unavailable"),
+        );
+      }
+      await resolvePendingRead(failure === "read" ? { status: "storage-failed" } : saved);
+      await settle();
+      flow.draftPersistence.persistNow();
+      expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+      // A later deliberate retry can rehydrate and commit the retained model intent.
+      flow.draftPersistence.noteModelSelectionMutation();
+      await resolvePendingRead(saved);
+      await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
+      flow.draftPersistence.persistNow();
+      await vi.waitFor(() =>
+        expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+          expect.objectContaining({ text: "Keep saved content", modelSelection: selection }),
+        ),
+      );
+      flow.disconnect();
+    },
+  );
+
+  it("rehydrates a canceled pristine read before persisting a model-only retry", async () => {
+    const flow = createFlow();
+    const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
+    flow.draftPersistence.modelSelection = {
+      read: () => selection,
+      restore: vi.fn(),
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("canceled-pristine");
+    flow.draftPersistence.captureSubmission();
+    flow.draftPersistence.noteModelSelectionMutation();
+    // The canceled read may publish lineage, but must not authorize writing empty content.
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
+    });
+    await settle();
+    flow.draftPersistence.persistNow();
+    expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
+    });
+    await vi.waitFor(() => expect(flow.message).toBe("Saved unsent message"));
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "Saved unsent message", modelSelection: selection }),
+      ),
+    );
+    flow.disconnect();
+  });
+
   it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
     const flow = createFlow();
     let selected = "openai/first";

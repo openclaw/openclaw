@@ -32,6 +32,7 @@ import {
 } from "./model-selection.ts";
 import {
   reconcileDraftModelSelection,
+  createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftDevicePlacementUnsupportedReason,
   resolveDraftCloudRuntimeUnsupportedReason,
@@ -51,11 +52,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private initialModel: string | undefined;
   private initialModelPending = false;
   private agentId = "";
-  private metadataState: NewSessionModelMetadata = {
-    catalog: [],
-    hasSnapshot: false,
-    status: "idle",
-  };
+  private metadataState = createEmptyDraftModelMetadata();
   private metadataRequest: AbortController | undefined;
   private metadataClient: NewSessionMetadataClient | undefined;
   private metadataScope: ModelCatalogReadScope | undefined;
@@ -297,11 +294,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
 
   private clearDraftAccount() {
     if (!this.draftAccount) {
-      return;
+      return false;
     }
     this.draftAccount = undefined;
     this.clearMetadataSubscription();
-    this.metadataState = { catalog: [], hasSnapshot: false, status: "idle" };
+    this.metadataState = createEmptyDraftModelMetadata();
+    return true;
   }
 
   private retryPickerCatalogs() {
@@ -328,11 +326,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       this.resetSelection();
       this.initialModel = undefined;
       this.initialModelPending = false;
-      this.updateMetadataState({
-        catalog: [],
-        hasSnapshot: false,
-        status: "idle",
-      });
+      this.updateMetadataState(createEmptyDraftModelMetadata());
       return;
     }
     this.updateMetadataState({
@@ -373,11 +367,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       }
       this.agentId = normalizedAgentId;
       this.metadataClient = undefined;
-      this.metadataState = {
-        catalog: [],
-        hasSnapshot: false,
-        status: "idle",
-      };
+      this.metadataState = createEmptyDraftModelMetadata();
     }
     this.metadataIdentityId = snapshot?.selfUser?.id;
     this.metadataHello = snapshot?.hello;
@@ -538,6 +528,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     }
     this.pendingSelectionGeneration = ++this.selectionGeneration;
     this.pendingPreference = { fastMode: this.fastMode };
+    // Account previews are draft-local, not the user’s persistent account preference.
+    if (!restoredOnly && this.clearDraftAccount()) {
+      this.load(this.pendingContext, this.agentId, true, { agent: this.pendingAgent });
+    }
     this.notify();
   }
 
@@ -687,6 +681,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.metadataState.displayOnly = false;
         const runtimeChanged = this.agentRuntime !== selection.agentRuntime;
         this.applyModelSelection(selection);
+        this.markExplicitSelection();
         const target =
           resolveDraftModelTarget(selection.model, undefined, this.catalog, this.agentRuntime) ??
           defaultTarget;
@@ -700,7 +695,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           };
         }
         this.contextWindow = "";
-        this.markExplicitSelection();
         this.persistSelection(runtimeChanged ? (this.agentRuntime ?? "") : undefined);
         this.onDraftSelectionChange?.();
       },

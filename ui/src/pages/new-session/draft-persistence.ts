@@ -58,7 +58,8 @@ export class NewSessionDraftPersistence {
         retire: () => void;
       }
     | undefined;
-  private restorePromise: Promise<void> | undefined;
+  private restorePromise: Promise<boolean> | undefined;
+  private contentReconciled = false;
   private pendingModelSelectionMutation = false;
   private gatewayOwner = "";
   private recoveryScope = "";
@@ -108,6 +109,7 @@ export class NewSessionDraftPersistence {
     this.persistNow();
     this.restoreGeneration += 1;
     this.restoredIdentity = "";
+    this.contentReconciled = false;
     this.routeKey = "";
     this.gatewayOwner = gatewayOwner;
     this.recoveryScope = recoveryScope;
@@ -152,6 +154,7 @@ export class NewSessionDraftPersistence {
         this.pendingModelSelectionMutation = false;
       }
       this.routeKey = routeKey;
+      this.contentReconciled = false;
       this.revision = 0;
     }
   }
@@ -167,6 +170,7 @@ export class NewSessionDraftPersistence {
       return;
     }
     this.restoredIdentity = identity;
+    this.contentReconciled = false;
     if (this.read().incognito) {
       void this.retireActive();
       return;
@@ -182,12 +186,22 @@ export class NewSessionDraftPersistence {
     );
     const restoring = this.restoreScope(scope, generation, mutationGeneration, signature);
     this.restorePromise = restoring;
-    void restoring.finally(() => {
-      if (this.restorePromise === restoring) {
-        this.restorePromise = undefined;
-        this.flushModelSelectionMutation();
-      }
-    });
+    void restoring.then(
+      (reconciled) => {
+        if (this.restorePromise === restoring) {
+          this.restorePromise = undefined;
+          this.contentReconciled = reconciled;
+          this.flushModelSelectionMutation();
+        }
+      },
+      () => {
+        if (this.restorePromise === restoring) {
+          this.restorePromise = undefined;
+          this.contentReconciled = false;
+          reportDurableComposerStorageError(scope, this.onStorageError);
+        }
+      },
+    );
   }
 
   noteDraftReplaced() {
@@ -201,11 +215,20 @@ export class NewSessionDraftPersistence {
   }
 
   noteModelSelectionMutation() {
-    // An editable draft may have a failed submission capture; new input owns it again.
+    // A pristine submission cancels content hydration; a rejected create must not
+    // let the next model-only edit CAS-write the still-empty composer over that content.
+    const rehydrate =
+      !this.contentReconciled &&
+      this.mutationGeneration === this.pristineMutationBaseline &&
+      (this.submittedMutation === this.mutation || !this.restorePromise);
     this.submittedMutation = null;
-    // Model edits must not turn an outstanding message restore into an empty-text overwrite.
     this.pendingModelSelectionMutation = true;
-    this.flushModelSelectionMutation();
+    if (rehydrate) {
+      this.restoredIdentity = "";
+      this.activateRoute(this.routeKey);
+    } else {
+      this.flushModelSelectionMutation();
+    }
   }
 
   private flushModelSelectionMutation() {
@@ -213,6 +236,7 @@ export class NewSessionDraftPersistence {
       this.pendingModelSelectionMutation &&
       !this.restorePromise &&
       this.restoredIdentity &&
+      (this.contentReconciled || this.mutationGeneration > this.pristineMutationBaseline) &&
       !this.disconnected &&
       this.submittedMutation !== this.mutation
     ) {
@@ -275,6 +299,9 @@ export class NewSessionDraftPersistence {
     // Freeze pristine restoration; a dirty draft must still finish its CAS
     // retry under the captured mutation until acceptance retires that work.
     if (this.mutationGeneration === this.pristineMutationBaseline) {
+      if (this.restorePromise) {
+        this.contentReconciled = false;
+      }
       this.restoreGeneration += 1;
     }
     this.persistNow();
@@ -512,12 +539,12 @@ export class NewSessionDraftPersistence {
     generation: number,
     mutationGeneration: number,
     signature: string,
-  ) {
+  ): Promise<boolean> {
     const { readDurableComposerDraft } = await durableComposerStore;
     const result = await readDurableComposerDraft(scope);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);
-      return;
+      return false;
     }
     const storedRevision = result.status === "found" ? result.draft.revision : result.revision;
     const storedWriteId = result.status === "found" ? result.draft.writeId : result.writeId;
@@ -540,11 +567,11 @@ export class NewSessionDraftPersistence {
           current.mentions,
         )
     ) {
-      return;
+      return false;
     }
     this.reconcileHandoffCommit();
     if (this.submittedMutation === this.mutation && this.mutation.committedRevision > 0) {
-      return;
+      return false;
     }
     // Restore only into a pristine composer: anything the user typed on this
     // route wins over the stored draft, even when the stored revision is
@@ -564,7 +591,7 @@ export class NewSessionDraftPersistence {
       }
       this.pending = this.snapshot();
       this.persistNow();
-      return;
+      return true;
     }
     let attachments: ChatAttachment[] = [];
     if (result.status === "found") {
@@ -572,7 +599,7 @@ export class NewSessionDraftPersistence {
         attachments = await hydrateDurableComposerAttachments(result.draft.attachments);
       } catch {
         reportDurableComposerStorageError(scope, this.onStorageError);
-        return;
+        return false;
       }
     }
     const hydratedCurrent = this.read();
@@ -590,7 +617,7 @@ export class NewSessionDraftPersistence {
           hydratedCurrent.mentions,
         )
     ) {
-      return;
+      return false;
     }
     this.revision = storedRevision;
     if (result.status === "found" && result.draft.mentions) {
@@ -602,6 +629,7 @@ export class NewSessionDraftPersistence {
       result.status === "found" ? result.draft.modelSelection : undefined,
     );
     this.mutation.committedRevision = storedRevision;
+    return true;
   }
 
   private reconcileHandoffCommit() {

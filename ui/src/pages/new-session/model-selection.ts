@@ -117,6 +117,9 @@ export class NewSessionModelSelection {
     }
     this.restoredSelection = false;
     this.explicitSelection = false;
+    if (!restoredOnly) {
+      this.fastModeSelected = false;
+    }
     this.pendingDraftSelection = undefined;
     this.selected = "";
     this.agentRuntime = undefined;
