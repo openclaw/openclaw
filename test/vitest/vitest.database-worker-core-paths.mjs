@@ -575,6 +575,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-memory-write-admission.test.ts",
   "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-db-read-admission.test.ts",
+  "src/state/openclaw-state-db-schema-policy.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "src/tasks/task-registry.test.ts",
   "src/tasks/task-registry.test-support.test.ts",

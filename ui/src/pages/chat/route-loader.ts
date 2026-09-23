@@ -528,7 +528,7 @@ export async function loadChatRoute(
   const resolution = revalidatedResolution
     ? { ...revalidatedResolution, isCurrent: isResolutionSourceCurrent }
     : localRow
-      ? ({ kind: "unique", session: localRow, isCurrent: isResolutionSourceCurrent } as const)
+      ? { kind: "unique" as const, session: localRow, isCurrent: isResolutionSourceCurrent }
       : await resolveShortSessionReference(context, target, routeLocation, signal);
   if (resolution.kind === "prepared") {
     const canonicalLocationReady = resolution.resolution

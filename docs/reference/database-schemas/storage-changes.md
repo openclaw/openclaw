@@ -1884,6 +1884,18 @@ an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
 
+Prepared node-workspace registration, binding, mutation completion, and retirement
+run in the same shared-state worker as the node launch journal. Existing-only
+reads do not create a database or run schema opening. Filesystem preparation and
+workspace serialization stay on the host; writes recheck cancellation and host
+ownership at transaction admission. Retiring rows remain cleanup-only after a
+lost mutation permit, and successful overlays return only after durable
+completion. Retention fences legacy synchronous acquisitions while awaiting the
+retirement tombstone, then preserves the existing path checks before removal.
+The deprecated public synchronous workspace capability retains its read path;
+internal callers and bundled plugins use its async companion. Table shape,
+identifiers, transaction boundaries, and retained recovery state are unchanged.
+
 Session membership, participant display facts, and category membership are prepared
 in the existing session read worker and retained by the session-row projection.
 Store admission acquires a compact snapshot; committed session publications refresh
