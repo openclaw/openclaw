@@ -56,7 +56,7 @@ function sessionStoreTargetsFixture(params: {
           storeTarget: { agentId, storePath: params.storePath },
           entry,
           readSourceEntry,
-          resolveSourceKey: (key: string) => key,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
         },
       ] as const;
     }),

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
@@ -155,6 +156,49 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
     membership: new Set(),
     generation: Symbol("row"),
   };
+}
+
+/** Seed the complete identity inventory before any row selects its stored lineage. */
+export function seedSessionRowEntries(params: {
+  targets: GatewayStoredSessionTargets;
+  rows: ReadonlyMap<string, Row>;
+  replaced: ReadonlySet<string>;
+  remove: (id: string) => void;
+  put: (row: Row) => void;
+}) {
+  const { targets, rows, replaced, remove, put } = params;
+  const admitted = new Set<string>();
+  const acquisitions: Array<{ row: Row; entry: SessionEntry }> = [];
+  for (const [key, target] of targets) {
+    const entry = target.entry;
+    if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
+      continue;
+    }
+    const fields = {
+      key: target.storeKey ?? key,
+      agentId: target.agentId,
+      storeTarget: target.storeTarget,
+    };
+    const id = identity(fields);
+    admitted.add(id);
+    if (!rows.has(id) || replaced.has(target.storeTarget.storePath)) {
+      remove(id);
+      const row = create(fields, entry);
+      put(row);
+      acquisitions.push({ row, entry });
+    } else {
+      const row = rows.get(id)!;
+      if (row.entry?.archivedAt !== undefined) {
+        acquisitions.push({ row, entry });
+      }
+    }
+  }
+  for (const id of rows.keys()) {
+    if (!admitted.has(id)) {
+      remove(id);
+    }
+  }
+  return acquisitions;
 }
 
 export function renewGeneration(row: Row): Row {

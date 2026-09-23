@@ -45,9 +45,9 @@ export function createSessionModelSources(
         physicalStores.set(physicalKey, physical);
       }
       const { entries: store, readers } = physical;
-      return (logicalAgentId: string, key: string, entry: SessionEntry) => {
-        store[key] = entry;
-        const identity = logicalKey(logicalAgentId, key);
+      return (logicalAgentId: string, storedKey: string, entry: SessionEntry) => {
+        store[storedKey] = entry;
+        const identity = logicalKey(logicalAgentId, storedKey);
         // Preserve target-order selection within an owner, including hidden sentinels.
         if (!logicalEntries.has(identity)) {
           logicalEntries.set(identity, entry);

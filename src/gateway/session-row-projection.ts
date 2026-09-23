@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -146,29 +145,8 @@ export async function createSessionRowProjection(params: {
     dirty,
     put,
     config: () => cfg,
-    refreshLineage(row) {
-      if (!row.storedEntry) {
-        return;
-      }
-      const lineage = records.readSessionRowLineage(
-        row,
-        row.storedEntry,
-        cfg,
-        metadata.current,
-        referenced,
-      );
-      if (
-        records.sameParents(row.parents, lineage.parents) &&
-        isDeepStrictEqual(row.entry, lineage.entry)
-      ) {
-        return;
-      }
-      // Cold children retain metadata/indices; both parents must drop stale child links.
-      const next = { ...row, ...lineage, pendingDatabaseFacts: undefined };
-      put(next);
-      markRelated(row, false);
-      markRelated(next, false);
-    },
+    context: () => metadata.current,
+    referenced,
     enqueue: (id, change) => backfill.enqueue(id, change),
     release(id) {
       transcriptUpdates.remove(id);
@@ -249,7 +227,6 @@ export async function createSessionRowProjection(params: {
   function topology() {
     const revision = epoch;
     cfg = params.getConfig?.() ?? cfg;
-    const admitted = new Set<string>();
     const storeRead = createStoreRead({ stores, rows, byStore });
     const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
       includeIncognito: false,
@@ -264,36 +241,13 @@ export async function createSessionRowProjection(params: {
         }
       },
     });
-    const acquisitions: Array<{ row: records.Row; entry: SessionEntry }> = [];
-    for (const [key, target] of loaded.targetsBySessionKey) {
-      const entry = target.entry;
-      if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
-        continue;
-      }
-      const fields = {
-        key: target.storeKey ?? key,
-        agentId: target.agentId,
-        storeTarget: target.storeTarget,
-      };
-      const id = records.identity(fields);
-      admitted.add(id);
-      if (!rows.has(id) || storeRead.replaced.has(target.storeTarget.storePath)) {
-        remove(id);
-        const row = records.create(fields, entry);
-        put(row);
-        acquisitions.push({ row, entry });
-      } else {
-        const row = rows.get(id)!;
-        if (row.entry?.archivedAt !== undefined) {
-          acquisitions.push({ row, entry });
-        }
-      }
-    }
-    for (const id of rows.keys()) {
-      if (!admitted.has(id)) {
-        remove(id);
-      }
-    }
+    const acquisitions = records.seedSessionRowEntries({
+      targets: loaded.targetsBySessionKey,
+      rows,
+      replaced: storeRead.replaced,
+      remove,
+      put,
+    });
     stores = storeRead.sources;
     // Every stored identity must be visible before an earlier store selects a later parent.
     for (const { row, entry } of acquisitions) {
