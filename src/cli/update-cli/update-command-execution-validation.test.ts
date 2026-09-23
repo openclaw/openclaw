@@ -33,6 +33,68 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update validation", () => {
+  it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      [false, true].map((changed) => ({ kind, changed })),
+    ),
+  )(
+    "checks admitted configuration before $kind rehearsal (changed=$changed)",
+    async ({ kind, changed }) => {
+      const { revalidateUpdateDatabaseContext } = await vi.importActual<
+        typeof import("./update-command-managed-context.js")
+      >("./update-command-managed-context.js");
+      let current = schemaContext("default");
+      mocks.captureSchemaContext.mockImplementation(async () => current);
+      mocks.captureManagedPreflight.mockImplementation(async () => current);
+      mocks.revalidateSchemaContext.mockImplementation(revalidateUpdateDatabaseContext);
+      vi.spyOn(configFile, "readConfigFileSnapshot").mockImplementation(
+        async () => current.configSnapshot,
+      );
+      const runStagedUpdate = async ({
+        inspectGitTarget,
+        validateCandidate,
+      }: {
+        inspectGitTarget?: (target: {
+          schemaVersions: { state: number; agent: number };
+        }) => Promise<void>;
+        validateCandidate: (root: string) => Promise<unknown>;
+      }) => {
+        await inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
+        // Staging/building is outside the admission window and can take minutes.
+        if (changed) {
+          const config = { gateway: { port: 19002 } };
+          current = {
+            ...current,
+            config,
+            configSnapshot: {
+              ...current.configSnapshot,
+              raw: JSON.stringify(config),
+              sourceConfig: config,
+              config,
+            },
+          };
+        }
+        await validateCandidate("/candidate");
+        return successfulUpdate;
+      };
+      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
+      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
+
+      const execution = await executeMutableUpdate(executionParams(kind));
+
+      expect(execution?.result.status).toBe(changed ? "error" : "ok");
+      expect(mocks.validateCanary).toHaveBeenCalledTimes(changed ? 0 : 1);
+      expect(mocks.serviceStopped).toBe(false);
+      expect(execution?.mutationStarted).toBe(false);
+      if (changed) {
+        expect(execution?.result.reason).toBe("database-schema-preflight");
+        expect(execution?.failure?.detail).toContain(
+          "configuration changed during database admission",
+        );
+      }
+    },
+  );
+
   it.each(["package", "git"] as const)(
     "continues the %s update with the recorded readiness warning instead of inference repair",
     async (kind) => {

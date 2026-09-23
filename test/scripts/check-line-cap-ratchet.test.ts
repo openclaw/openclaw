@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compareLineCapViolations, main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -57,6 +58,24 @@ function fixture(lines = 5, severity = "warn", ignorePatterns: string[] = []) {
 }
 
 describe("line-cap growth ratchet", () => {
+  it("warns for CI growth, writes the summary, and still rejects broken source", () => {
+    const root = fixture();
+    const summary = path.join(root, "summary.md");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    fs.writeFileSync(path.join(root, "src/file.ts"), source(6));
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    vi.stubEnv("GITHUB_ACTIONS", "true");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("::warning file=src/file.ts,line=1,col=0,"),
+    );
+    expect(fs.readFileSync(summary, "utf8")).toContain("5 -&gt; 6 counted lines");
+    fs.writeFileSync(path.join(root, "src/file.ts"), "export const = broken;");
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
+
   it("measures ignored repository-contained scratch while preserving explicit exclusions", () => {
     const root = fixture(5, "warn", ["src/ignored/**"]);
     fs.writeFileSync(path.join(root, ".gitignore"), ".artifacts/\n");

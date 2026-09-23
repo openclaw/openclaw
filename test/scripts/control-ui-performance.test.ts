@@ -19,8 +19,18 @@ const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const baselineUpdateCommand =
   'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 
-function runControlUiPerformanceCli(scriptPath: string, args: string[], cwd: string) {
-  const env = { ...process.env };
+function runControlUiPerformanceCli(
+  scriptPath: string,
+  args: string[],
+  cwd: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GITHUB_ACTIONS: "",
+    GITHUB_STEP_SUMMARY: "",
+    ...extraEnv,
+  };
   delete env.TSX_DISABLE_CACHE;
   return spawnSync(process.execPath, [fs.realpathSync(scriptPath), ...args], {
     cwd,
@@ -61,6 +71,10 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   fs.mkdirSync(assetsDir, { recursive: true });
   const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
   fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
+  fs.copyFileSync(
+    path.resolve("scripts/lib/check-limits.mts"),
+    path.join(scriptLibDir, "check-limits.mts"),
+  );
   fs.copyFileSync(
     path.resolve("scripts/lib/control-ui-i18n-config.ts"),
     path.join(scriptLibDir, "control-ui-i18n-config.ts"),
@@ -535,6 +549,50 @@ describe("Control UI performance budgets", () => {
     ]);
   });
 
+  it.each(["size", "baseline"])(
+    "warns about %s growth in Actions while local CI stays strict",
+    (kind) => {
+      const { rootDir, scriptPath, configDir } = createCliFixture(kind === "size" ? 51_201 : 15);
+      if (kind === "baseline") {
+        fs.writeFileSync(
+          path.join(configDir, "control-ui-startup-budget-baseline.json"),
+          JSON.stringify(startupBaseline(CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1)),
+        );
+      }
+      const local = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, { CI: "1" });
+      const summaryPath = path.join(rootDir, "summary.md");
+      const actions = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, {
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: summaryPath,
+      });
+
+      expect(local.status, local.stderr).toBe(1);
+      expect(actions.status, actions.stderr).toBe(0);
+      expect(JSON.parse(actions.stdout).violations).toEqual(JSON.parse(local.stdout).violations);
+      expect(actions.stderr).toContain("::warning file=");
+      expect(fs.readFileSync(summaryPath, "utf8")).toContain("Control UI asset budget");
+    },
+  );
+
+  it("keeps deferred-asset startup isolation blocking in Actions", () => {
+    const { rootDir, scriptPath, distDir } = createCliFixture();
+    for (const suffix of ["", ".gz", ".br"]) {
+      fs.writeFileSync(path.join(distDir, `assets/mermaid.min-a.js${suffix}`), "x");
+    }
+    fs.appendFileSync(
+      path.join(distDir, "index.html"),
+      '<link rel="modulepreload" href="./assets/mermaid.min-a.js">',
+    );
+    const result = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, {
+      GITHUB_ACTIONS: "true",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).violations).toEqual([
+      expect.objectContaining({ metric: "startup Mermaid JS assets" }),
+    ]);
+    expect(result.stderr).not.toContain("::warning");
+  });
+
   it.each(["missing baseline", "malformed baseline", "missing sidecar", "missing base dist"])(
     "still rejects a %s in report-only mode",
     (invalid) => {
@@ -729,7 +787,7 @@ describe("Control UI performance budgets", () => {
     });
   });
 
-  it("fails closed when the startup baseline exceeds the configured cap", () => {
+  it("reports a startup baseline above the configured cap as a budget violation", () => {
     const { distDir, writeAsset } = createDistFixture();
     fs.writeFileSync(
       path.join(distDir, "index.html"),
@@ -748,12 +806,9 @@ describe("Control UI performance budgets", () => {
       }),
     );
 
-    expect(() => runControlUiPerformanceCheck(distDir, undefined, baselinePath)).toThrow(
-      new RegExp(
-        `startupJsGzipBytes at most ${CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes}`,
-        "u",
-      ),
-    );
+    expect(runControlUiPerformanceCheck(distDir, undefined, baselinePath).violations).toEqual([
+      expect.objectContaining({ metric: "startup JS gzip baseline" }),
+    ]);
   });
 
   it("updates the baseline from generated or explicitly measured metrics", () => {

@@ -440,13 +440,20 @@ export async function updateGitCheckout(params: {
             gitRoot = await opts.publishGitCheckout();
             publishedCandidate = true;
           }
-          runtimePromotion = await prepareGitRuntimePromotion(
-            gitRoot,
-            root,
-            runInspectionCommand,
-            timeoutMs,
-            cleanupRoot,
-          );
+          // Filesystem staging shares command steps' progress, heartbeat, and failure reporting.
+          await runStep({
+            ...inspectionWorkStep("preflight-runtime-stage", [], root),
+            runCommand: async () => {
+              runtimePromotion = await prepareGitRuntimePromotion(
+                gitRoot,
+                root,
+                runInspectionCommand,
+                timeoutMs,
+                cleanupRoot,
+              );
+              return { code: 0, stdout: "", stderr: "" };
+            },
+          });
         },
       });
       if (selected.status !== "ok") {

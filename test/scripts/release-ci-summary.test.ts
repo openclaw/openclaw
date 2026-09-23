@@ -1971,7 +1971,7 @@ function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
   const jobs = [{ ...fixture.parentJob, name: "test" }];
   const performanceJobs = [{ ...fixture.parentJob, name: "Verify artifact-only report mode" }];
   const jobsForChild = (key: string) => (key === "productPerformance" ? performanceJobs : jobs);
-  Object.assign(fixture.manifest, {
+  const manifest = Object.assign(fixture.manifest, {
     childEvidence: Object.fromEntries(
       plannedChildren
         .filter((child) => child.selected)
@@ -2015,7 +2015,7 @@ function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
     ),
     loadExecutionPlan: vi.fn<() => ReleaseExecutionPlan | undefined>(() => executionPlan),
   };
-  return { ...fixture, client, executionPlan };
+  return { ...fixture, client, executionPlan, manifest };
 }
 
 function createReleaseCiWatchFixture(states: ReleaseCiWatchState[]) {
@@ -2742,6 +2742,88 @@ describe("release CI summary child correlation", () => {
     performance.conclusion = "failure";
     await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
   });
+
+  it.each(["carried-guard", "newer-guard-failure", "earlier-publisher"])(
+    "verifies effective artifact-only performance evidence after a targeted retry: %s",
+    async (scenario) => {
+      const fixture = trustedMainNpmFixture("stable");
+      const performance = expectDefined(
+        fixture.runs.find((run) => run.path === ".github/workflows/openclaw-performance.yml"),
+        "performance child",
+      );
+      const runId = String(performance.id);
+      const guard = { ...fixture.parentJob, name: "Verify artifact-only report mode" };
+      const benchmark = { ...fixture.parentJob, name: "Run performance benchmark" };
+      const originalJobs = [
+        guard,
+        { ...benchmark, conclusion: "failure" },
+        {
+          ...fixture.parentJob,
+          name: "Publish mock provider report",
+          conclusion: scenario === "earlier-publisher" ? "success" : "skipped",
+        },
+      ];
+      const retryJobs = [
+        { ...benchmark, run_attempt: 2 },
+        ...(scenario === "newer-guard-failure"
+          ? [{ ...guard, conclusion: "failure", run_attempt: 2 }]
+          : []),
+      ];
+      const composite = composeReleaseAttemptJobs(
+        [
+          { jobs: originalJobs, runAttempt: 1 },
+          { jobs: retryJobs, runAttempt: 2 },
+        ],
+        { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
+      );
+      Object.assign(performance, {
+        run_attempt: 2,
+        triggering_actor: { login: "release-maintainer" },
+      });
+      Object.assign(
+        expectDefined(fixture.manifest.childEvidence.productPerformance, "performance evidence"),
+        {
+          compositeJobsSha256: composite.sha256,
+          effectiveRunAttempt: 2,
+          jobs: composite.jobs,
+          observedRunAttempts: [1, 2],
+          triggeringActor: performance.triggering_actor.login,
+        },
+      );
+      const getOriginalJobs = fixture.client.getRunAttemptJobs;
+      const result = validateReleaseRunEvidence(
+        {
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        {
+          ...fixture.client,
+          getRunAttemptJobs: (childRunId: string, runAttempt: number) =>
+            childRunId === runId
+              ? runAttempt === 1
+                ? originalJobs
+                : retryJobs
+              : getOriginalJobs(childRunId),
+        },
+      );
+      if (scenario === "carried-guard") {
+        expect((await result).children).toContainEqual(
+          expect.objectContaining({
+            reportPublication: "artifact-only",
+            role: "productPerformance",
+            runAttempt: 2,
+          }),
+        );
+      } else {
+        await expect(result).rejects.toThrow(
+          scenario === "newer-guard-failure"
+            ? "performance artifact-only guard is missing or unsuccessful"
+            : "performance report publisher was not skipped",
+        );
+      }
+    },
+  );
 
   it.each(["context", "blocking-performance", "soak-control", "soak", "missing-plan"])(
     "rejects incomplete npm stable qualification: %s",
@@ -4370,36 +4452,26 @@ describe("release CI summary child correlation", () => {
     ).toThrow("release validation manifest performance report publication mode is invalid");
   });
 
-  it("requires a successful artifact-only performance guard for the current attempt", () => {
+  it("requires a successful artifact-only performance guard and skipped publishers", () => {
     const guard = {
       conclusion: "success",
       name: "Verify artifact-only report mode",
-      run_attempt: 2,
       status: "completed",
     };
     const skippedPublisher = {
       conclusion: "skipped",
       name: "Publish mock provider report",
-      run_attempt: 2,
       status: "completed",
     };
-    expect(
-      validatePerformanceArtifactOnlyJobs(
-        [{ ...guard, conclusion: "failure", run_attempt: 1 }, guard, skippedPublisher],
-        2,
-      ),
-    ).toBe(guard);
-    expect(() => validatePerformanceArtifactOnlyJobs([skippedPublisher], 2)).toThrow(
+    expect(validatePerformanceArtifactOnlyJobs([guard, skippedPublisher])).toBe(guard);
+    expect(() => validatePerformanceArtifactOnlyJobs([skippedPublisher])).toThrow(
       "performance artifact-only guard is missing or unsuccessful",
     );
     expect(() =>
-      validatePerformanceArtifactOnlyJobs([{ ...guard, conclusion: "failure" }], 2),
+      validatePerformanceArtifactOnlyJobs([{ ...guard, conclusion: "failure" }]),
     ).toThrow("performance artifact-only guard is missing or unsuccessful");
     expect(() =>
-      validatePerformanceArtifactOnlyJobs(
-        [guard, { ...skippedPublisher, conclusion: "success" }],
-        2,
-      ),
+      validatePerformanceArtifactOnlyJobs([guard, { ...skippedPublisher, conclusion: "success" }]),
     ).toThrow("performance report publisher was not skipped");
   });
 

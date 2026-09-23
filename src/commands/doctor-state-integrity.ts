@@ -1566,7 +1566,7 @@ export async function noteStateIntegrity(
     await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
-  for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+  for (const warning of await describeHeartbeatSessionTargetIssues(cfg)) {
     warnings.push(warning);
   }
 

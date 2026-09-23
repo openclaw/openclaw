@@ -99,7 +99,7 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
-import { createReplyModelLevelResolver } from "./reply-model-levels.js";
+import { createReplyProbeModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
@@ -1003,11 +1003,15 @@ export async function getReplyFromConfig(
   const queueModeOverride = inlineActionResult.queueModeOverride;
   const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
-  const runAutoFallbackPrimaryProbe = directives.hasModelDirective
-    ? undefined
-    : autoFallbackPrimaryProbe;
-  const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
-  const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
+  const runAutoFallbackPrimaryProbe =
+    directives.hasModelDirective ||
+    (autoFallbackPrimaryProbe &&
+      internalResolvedOpts?.operatorAuthority?.modelPolicy &&
+      !internalResolvedOpts.operatorAuthority.modelPolicy.allows(autoFallbackPrimaryProbe))
+      ? undefined
+      : autoFallbackPrimaryProbe;
+  let runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
+  let runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
   let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
@@ -1035,6 +1039,7 @@ export async function getReplyFromConfig(
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
         preparedModelCatalog,
+        operatorAuthority: internalResolvedOpts?.operatorAuthority,
       });
     } catch (error) {
       if (
@@ -1049,35 +1054,19 @@ export async function getReplyFromConfig(
       }
       return { text: error.message };
     }
-    const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);
-    const hasTurnOrSessionThinkLevel =
-      thinkingLevelOverride !== undefined ||
-      directives.thinkLevel !== undefined ||
-      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined);
-    const hasExplicitThinkLevel =
-      hasTurnOrSessionThinkLevel ||
-      configuredThinkingDefault !== undefined ||
-      runModelState.hasConfiguredThinkingDefault === true;
-    const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
-    const hasExplicitReasoningLevel =
-      directives.reasoningLevel !== undefined ||
-      rawSessionReasoningLevel != null ||
-      agentEntry?.reasoningDefault != null ||
-      agentCfg?.reasoningDefault != null;
-    resolveRunModelLevels = createReplyModelLevelResolver({
+    if (runModelState.operatorModelOverride) {
+      runProvider = runModelState.provider;
+      runModel = runModelState.model;
+    }
+    resolveRunModelLevels = await createReplyProbeModelLevelResolver({
       modelState: runModelState,
-      selection: {
-        provider: runModelState.provider,
-        model: runModelState.model,
-        thinkLevel: hasTurnOrSessionThinkLevel
-          ? (await resolveModelLevels()).resolvedThinkLevel
-          : undefined,
-        thinkingExplicit: hasExplicitThinkLevel,
-        reasoningLevel: hasExplicitReasoningLevel
-          ? (await resolveModelLevels()).resolvedReasoningLevel
-          : "off",
-        reasoningExplicit: hasExplicitReasoningLevel,
-      },
+      previous: resolveModelLevels,
+      directives,
+      sessionEntry,
+      thinkingLevelOverride: resolvedOpts?.thinkingLevelOverride,
+      configuredThinkingDefault,
+      hasConfiguredReasoningDefault:
+        agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null,
     });
   }
   const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
