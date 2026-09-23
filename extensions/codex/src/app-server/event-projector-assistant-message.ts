@@ -1,7 +1,7 @@
 import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import {
-  type NormalizedUsage,
-  type AgentHarnessAttemptParamsV2,
+import type {
+  NormalizedUsage,
+  AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexAsyncQuestion } from "./async-questions.js";

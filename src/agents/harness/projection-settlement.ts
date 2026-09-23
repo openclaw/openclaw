@@ -27,7 +27,7 @@ export class AgentHarnessProjectionSettlement<
             }
             // Reserve before invocation so reentrant callbacks retain source order.
             // Only presentation detaches; the terminal owner joins these promises.
-            const completion = createDeferred<void>();
+            const completion = createDeferred();
             this.pending.set(completion.promise, stage);
             const settled = () => {
               this.pending.delete(completion.promise);
