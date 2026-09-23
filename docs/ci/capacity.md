@@ -625,6 +625,16 @@ child spans of 569.841 and 620.791 seconds replace the stale 136-second weight
 with a rounded median of 595 seconds. Plugin fallback costs have a separate
 estimator and are not inputs to this compact timing reducer.
 
+The September 23 scoped refresh uses successful main runs `35791016837` and
+`35792496414` for the five second-tier compact rows and their displaced groups.
+Complete Gateway-methods generations replace the stale 510-second parent with
+1,023 seconds; partial stripe samples do not supply a parent total. The same
+reducer refreshes 25 other eligible Blacksmith compact prices, including the
+197-second media/UI group and 226-second security group. Partial inventories
+preserve unrelated timing entries. Worker limits, runner classes, admission
+budgets, and matrix caps stay unchanged; exact-head CI measures the resulting
+packing rather than treating estimates as a wall-time guarantee.
+
 The September 16 compact refresh sampled all 168 successful compact jobs in six
 green main runs: `35117379165`, `35120372547`, `35123270863`, `35124135571`,
 `35125714752`, and `35126089717`. Their 132 complete selector generations contain
