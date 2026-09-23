@@ -190,9 +190,11 @@ export function classifyHeartbeatAgentOutcome(params: {
       mediaUrls: undefined,
     });
   const shouldSkipMain =
-    normalized.shouldSkip &&
-    !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
+    // The structured notification decision also covers failure warnings and media.
+    heartbeatToolResponse?.notify === false ||
+    (normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
   if (hasExplicitFailure) {
     return {
       kind: "failure",
