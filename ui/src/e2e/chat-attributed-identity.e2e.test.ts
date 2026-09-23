@@ -509,6 +509,44 @@ suite.define(() => {
       hoveredNameBox?.x ?? 0,
     );
 
+    // Own actions used to sit inside the metadata flex row, unlike peer and
+    // assistant actions. Large touch targets must not center the timestamp
+    // below the visible icons in any of those production renderers.
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ height: 760, width });
+      for (const group of [ownGroup, peerGroup, page.locator(".chat-group.assistant").last()]) {
+        await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
+        await expect(group).toHaveClass(/\bchat-group--meta-revealed\b/u);
+        const alignment = await group.locator(".chat-group-footer").evaluate((footer) => {
+          const centerY = (element: Element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.top + bounds.height / 2;
+          };
+          return {
+            time: centerY(footer.querySelector(".chat-group-timestamp")!),
+            icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
+              centerY,
+            ),
+            targets: [...footer.querySelectorAll(".chat-group-footer-actions button")].map(
+              (button) => {
+                const bounds = button.getBoundingClientRect();
+                return { width: bounds.width, height: bounds.height };
+              },
+            ),
+          };
+        });
+        expect(alignment.icons.length).toBeGreaterThan(0);
+        for (const center of alignment.icons) {
+          expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
+        }
+        for (const target of alignment.targets) {
+          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.height).toBeGreaterThanOrEqual(44);
+        }
+        await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
+      }
+    }
+
     const footerOrder = await peerGroup
       .locator(".chat-group-footer")
       .locator("button, .chat-sender-name, .chat-group-timestamp")

@@ -663,8 +663,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   : ""
               }${sendStatus ? " chat-group-footer--send-status" : ""}"
             >
+              ${isPeerGroup ? nothing : userFooterActions}
               <div class="chat-group-footer__meta">
-                ${isPeerGroup ? nothing : userFooterActions}
                 ${
                   normalizedRole === "user" && !sourceOnly && avatarPlacement === "footer"
                     ? renderChatAuthorAvatar(group.sender)

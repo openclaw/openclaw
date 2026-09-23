@@ -204,9 +204,7 @@
   flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
-}
-
-.chat-group.user.chat-group--peer .chat-group-footer__meta {
+  /* Text shares the compact 24px visual row, never the larger touch hit area. */
   min-height: 24px;
 }
 
@@ -759,7 +757,8 @@ img.chat-avatar {
   }
 
   .chat-group-footer {
-    margin-top: 4px;
+    /* Keep the aligned visual row close to the bubble above the larger hit areas. */
+    margin-top: 3px;
   }
 
   :where(.chat-thread) .chat-group {
@@ -806,7 +805,9 @@ img.chat-avatar {
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
     min-height: 44px;
-    /* Grow touch targets downward without pushing labels away from bubbles. */
+    /* Keep 14px icons centered on the metadata’s 24px visual row while
+       the remaining touch target extends downward. */
+    padding-top: 5px;
     align-items: flex-start;
   }
 }
