@@ -1,0 +1,9 @@
+{
+  "name": "@openclaw/continuity-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Opt-in synthetic persistent-agent continuity experiment",
+  "type": "module",
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*" },
+  "openclaw": { "extensions": ["./index.ts"] }
+}

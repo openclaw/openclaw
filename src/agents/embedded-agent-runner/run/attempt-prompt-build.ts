@@ -146,6 +146,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   }
   const hookCtx = {
     runId: attempt.runId,
+    ...(attempt.jobId ? { jobId: attempt.jobId } : {}),
     trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
     agentId: input.hookAgentId,
     sessionKey: attempt.sessionKey,

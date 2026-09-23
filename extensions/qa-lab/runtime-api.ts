@@ -40,7 +40,7 @@ export {
   sendQaBusMessage,
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
-export { createQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
+export { createQaLiveLaneGateway } from "./gateway-runtime-api.js";
 export { runLiveTransportQaSuiteCommand } from "./src/live-transports/shared/live-transport-suite.runtime.js";
 export {
   acquireQaCredentialLease,
