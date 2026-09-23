@@ -8,8 +8,12 @@ import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import * as stateCache from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
@@ -108,6 +112,71 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
       expect(workers).toHaveLength(2);
     } finally {
       vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+test("retains a late lease receipt for exact cleanup after source read admission is revoked", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId: "synthetic-late-lease",
+      sessionKey: "agent:main:synthetic-late-lease",
+    };
+    ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const databaseOptions = {
+      agentId: scope.agentId,
+      env: state.env,
+      path: openOpenClawAgentDatabase(scope).path,
+    };
+    const entry = loadSessionEntry(scope);
+    assert.ok(entry);
+    const sharedPath = resolveOpenClawStateSqlitePath(state.env);
+    const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
+    const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
+    let child: Worker | undefined;
+    let revoked = false;
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
+      const worker = spawn(data);
+      child = worker;
+      worker.prependListener("message", (message: { type: string }) => {
+        if (message.type === "lease") {
+          // Native acquisition already committed, but its notification has not reached the owner.
+          stateCache.closeOpenClawStateDatabaseByPath(sharedPath);
+          revoked = true;
+          expect(() => admission.assertCurrent()).toThrow("read admission changed");
+        }
+      });
+      return worker;
+    });
+    try {
+      await expect(
+        runSqliteSessionReclamation({
+          forceInProcess: false,
+          plan: createSessionEntryReclamationPlan({
+            databaseOptions,
+            deleteParams: {
+              archiveTranscript: false,
+              storePath: databaseOptions.path,
+              target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+            },
+            preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
+            materializedPlans: [],
+          }),
+        }),
+      ).rejects.toThrow("OpenClaw state database read admission changed");
+      expect(revoked).toBe(true);
+      expect(child?.threadId).toBe(-1);
+      expect(loadSessionEntry(scope)).toEqual(entry);
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      expect(
+        openOpenClawStateDatabase({ env: state.env })
+          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?")
+          .all(databaseOptions.path),
+      ).toEqual([]);
+    } finally {
       vi.restoreAllMocks();
     }
   });

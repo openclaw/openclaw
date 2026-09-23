@@ -477,6 +477,11 @@ export class SqliteReclamationWorker {
         try {
           // First creation binds the captured path admission; replacement still revokes it.
           publishOpenClawStateDatabaseWorkerAdmission(this.stateContext.admission);
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        try {
+          // Revoked read authority cannot discard an already acquired exact cleanup receipt.
           if (
             message.receipt.agentId !== this.options.agentId ||
             message.receipt.path !== this.options.path ||
@@ -489,6 +494,8 @@ export class SqliteReclamationWorker {
           this.lease = message.receipt;
         } catch (error) {
           this.failure ??= toStringifiedError(error);
+        }
+        if (this.failure) {
           this.requestTermination(transport);
         }
       }
