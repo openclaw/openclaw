@@ -629,6 +629,7 @@ export function prepareAgentRuntimeAuth(
     configuredAuthMode: automaticRouteAuthMode,
     ...(runtimeAuthOwner ? { runtimeAuthOwner } : {}),
     ...(runtimeAuthOwner &&
+    !requestedProfileId &&
     !hasAuthoredProviderRoute(configuredProvider, params.provider, params.modelId)
       ? { allowNativeAuthOnSingleRoute: true }
       : {}),

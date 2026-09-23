@@ -6,6 +6,7 @@ import {
 } from "../model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
+import { waitForPreparedModelCatalogForeground } from "../prepared-model-runtime.catalog-foreground-wait.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import type { AgentHarness } from "./types.js";
 
@@ -55,15 +56,45 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     catalog.authoritative === false
       ? undefined
       : findOwnedEntry(catalog, provider, modelId, harness.id);
-  if (!entry && snapshot.loadFullModelCatalog) {
+  if (!entry && snapshot.loadNativeModelCatalog) {
+    try {
+      const loaded = await waitForPreparedModelCatalogForeground({
+        acquisition: snapshot.loadNativeModelCatalog({
+          provider,
+          modelId,
+          runtime: harness.id,
+        }),
+        waitMs: 12_000,
+        fallback: () => snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog,
+      });
+      // Prefer the refresh result when it contains the requested row. Some snapshots
+      // publish inventory through an accessor that still points at the previous view.
+      const refreshedEntry = findOwnedEntry(loaded, provider, modelId, harness.id);
+      if (refreshedEntry) {
+        // This exact-runtime acquisition can be a partial full-catalog publication. Its
+        // selected owner's row is still usable after the readiness checks below.
+        catalog = loaded;
+        entry = refreshedEntry;
+      } else {
+        catalog = snapshot.readFullModelCatalog?.() ?? loaded;
+        entry =
+          catalog.authoritative === false
+            ? undefined
+            : findOwnedEntry(catalog, provider, modelId, harness.id);
+      }
+    } catch {
+      return undefined;
+    }
+    if (!snapshot.isCurrent()) {
+      return undefined;
+    }
+  } else if (!entry && snapshot.loadFullModelCatalog) {
     try {
       const loaded = await snapshot.loadFullModelCatalog({
         refresh: true,
         providerIds: [provider],
         foregroundWaitMs: 12_000,
       });
-      // Prefer the refresh result when it contains the requested row. Some snapshots
-      // publish inventory through an accessor that still points at the previous view.
       const refreshedEntry = findOwnedEntry(loaded, provider, modelId, harness.id);
       catalog = refreshedEntry ? loaded : (snapshot.readFullModelCatalog?.() ?? loaded);
     } catch {

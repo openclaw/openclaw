@@ -24,8 +24,16 @@ export async function waitForPreparedModelCatalogForeground(params: {
   try {
     return await Promise.race([
       params.acquisition,
-      new Promise<ModelCatalogSnapshot>((resolve) => {
-        timer = setTimeout(() => resolve(params.fallback()), params.waitMs);
+      new Promise<ModelCatalogSnapshot>((resolve, reject) => {
+        timer = setTimeout(() => {
+          try {
+            resolve(params.fallback());
+          } catch (error) {
+            reject(
+              error instanceof Error ? error : new Error("Prepared model catalog fallback failed"),
+            );
+          }
+        }, params.waitMs);
         timer.unref?.();
       }),
     ]);

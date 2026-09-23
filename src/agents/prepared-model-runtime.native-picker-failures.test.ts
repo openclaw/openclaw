@@ -35,7 +35,14 @@ const runtimeFixture = usePreparedModelRuntimeHarness({ label: "native-picker" }
 });
 const { mocks } = runtimeFixture;
 
-async function fixture(standalone = false, cold = false, runtimeA = "native-a") {
+async function fixture(
+  standalone = false,
+  cold = false,
+  runtimeA = "native-a",
+  options: {
+    readinessRuntimes?: readonly string[];
+  } = {},
+) {
   const { resolveNativeModelPrimary } =
     await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
@@ -58,6 +65,12 @@ async function fixture(standalone = false, cold = false, runtimeA = "native-a") 
           supports: () => ({ supported: true }),
           runAttempt: vi.fn(),
           loadModelCatalog,
+          ...(options.readinessRuntimes?.includes(entry.nativeRuntime)
+            ? {
+                authBootstrap: "harness" as const,
+                readModelCatalogReadiness: () => ({ accountType: "native" }),
+              }
+            : {}),
         },
       });
     }
@@ -203,7 +216,9 @@ it("reuses published native facts without renewing providers during warm API and
 it.each([false, true])(
   "carries a cold native selection into a stable run lease (standalone=%s)",
   async (standalone) => {
-    const { input, owner, b, loadA, loadB } = await fixture(standalone, true);
+    const { input, owner, b, loadA, loadB } = await fixture(standalone, true, "native-a", {
+      readinessRuntimes: ["native-b"],
+    });
     expect(loadA).not.toHaveBeenCalled();
     expect(loadB).not.toHaveBeenCalled();
     const selected = {
