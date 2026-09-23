@@ -12,6 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  getRegistryWorktreeProvisionedStateInDatabase,
   listRegistryWorktreesInDatabase,
   rowToRecord,
   WORKTREE_RECORD_COLUMNS,
@@ -356,15 +357,73 @@ export function updateRegistryWorktree(
   );
 }
 
+/** Retired snapshots cannot discard provisioned data or another lifecycle's custody. */
+function assertSnapshotRetirementInDatabase(
+  db: DatabaseSync,
+  observed: ManagedWorktreeRecord,
+): void {
+  const row = executeSqliteQuerySync(
+    db,
+    kyselyFor(db).selectFrom("worktrees").selectAll().where("id", "=", observed.id),
+  ).rows[0];
+  if (
+    observed.removedAt === undefined ||
+    !row ||
+    JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
+  ) {
+    throw new Error("Worktree snapshot retirement identity changed");
+  }
+  const provisioned = getRegistryWorktreeProvisionedStateInDatabase(db, observed.id);
+  const chunk = executeSqliteQuerySync(
+    db,
+    kyselyProvisionedFor(db)
+      .selectFrom("worktree_provisioned_file_chunks")
+      .select("worktree_id")
+      .where("worktree_id", "=", observed.id)
+      .limit(1),
+  ).rows[0];
+  if (provisioned === undefined || provisioned.length !== 0 || chunk) {
+    throw new Error("Worktree snapshot retains provisioned data; retain its custody");
+  }
+  const leases = collectLiveRunLeases(
+    db,
+    kyselyLeaseFor(db),
+    worktreeRunLeaseScope(observed.id),
+    {},
+  );
+  if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
+    throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
+  }
+}
+
+export function assertRegistrySnapshotRetirement(
+  env: NodeJS.ProcessEnv,
+  observed: ManagedWorktreeRecord,
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => assertSnapshotRetirementInDatabase(db, observed), {
+    env,
+  });
+}
+
 export function deleteRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  options: { assertCurrent?: () => void; removalToken?: string } = {},
+  options: {
+    assertCurrent?: () => void;
+    removalToken?: string;
+    expectedRetired?: ManagedWorktreeRecord;
+  } = {},
 ): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       // Validate before deleting either the record or its provisioned recovery chunks.
       options.assertCurrent?.();
+      if (options.expectedRetired) {
+        if (options.expectedRetired.id !== id) {
+          throw new Error("Worktree snapshot retirement ID changed");
+        }
+        assertSnapshotRetirementInDatabase(db, options.expectedRetired);
+      }
       assertRegistryMutationCustody(db, kyselyLeaseFor(db), id, options.removalToken);
       executeSqliteQuerySync(
         db,

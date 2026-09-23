@@ -10,15 +10,17 @@ import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit 
 import { snapshotProvisionedFiles } from "./provisioned-files.js";
 import {
   deleteRegistryWorktree,
+  assertRegistrySnapshotRetirement,
   assertWorktreeRemovalClaim,
   getRegistryWorktree,
 } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
+import { resolveRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
 import { clearExactRestoreReceipt, readExactRestoreReceipt } from "./snapshot-restore-exact.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord, RetireManagedWorktreeSnapshotParams } from "./types.js";
 
 /** Existing snapshot worker and effect owners, supplied with this operation's Git policy. */
 export async function captureManagedWorktreeSnapshot(params: {
@@ -158,14 +160,168 @@ export function assertExactSnapshotRecordCurrent(
   }
 }
 
+/** Preparation remains under the allocation owner; Git commits exact ref custody atomically. */
+async function prepareExactSnapshotRetirement(params: {
+  record: ManagedWorktreeRecord;
+  expected: RetireManagedWorktreeSnapshotParams;
+  signal?: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  const { record, expected, signal, assertCurrent } = params;
+  const ref = `refs/openclaw/snapshots/${record.id}`;
+  if (
+    expected.id !== record.id ||
+    expected.expectedSnapshotRef !== ref ||
+    record.snapshotRef !== ref ||
+    record.removedAt !== expected.expectedRemovedAt ||
+    !Number.isSafeInteger(expected.expectedRemovedAt) ||
+    expected.expectedRemovedAt < 0 ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(expected.expectedSnapshotOid) ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(expected.expectedRetainedSourceOid) ||
+    !/^refs\/(?:heads|remotes)\//u.test(expected.retainedSourceRef)
+  ) {
+    throw new Error("Invalid exact snapshot retirement identity or retained source ref");
+  }
+  const options = {
+    signal,
+    beforeRun: assertCurrent,
+    env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0" },
+  };
+  await requireGit(record.repoRoot, ["check-ref-format", ref], options);
+  await requireGit(record.repoRoot, ["check-ref-format", expected.retainedSourceRef], options);
+  const repository = await resolveRepository(record.repoRoot);
+  assertCurrent();
+  if (
+    repository.repoRoot !== record.repoRoot ||
+    repository.fingerprint !== record.repoFingerprint
+  ) {
+    throw new Error("Worktree snapshot repository identity changed");
+  }
+  if (
+    (await worktreePathExists(record.path)) ||
+    (await listGitWorktrees(record.repoRoot, options)).some(
+      (entry) => path.resolve(entry.path) === path.resolve(record.path),
+    )
+  ) {
+    throw new Error("Worktree snapshot still has a checkout or Git registration");
+  }
+  for (const [reference, oid] of [
+    [ref, expected.expectedSnapshotOid],
+    [expected.retainedSourceRef, expected.expectedRetainedSourceOid],
+  ] as const) {
+    const symbolic = await runGit(record.repoRoot, ["symbolic-ref", "--quiet", reference], options);
+    if (symbolic.code !== 1) {
+      throw new Error("Snapshot retirement requires direct, not symbolic, refs");
+    }
+    if (
+      (await requireGit(
+        record.repoRoot,
+        ["show-ref", "--verify", "--hash", reference],
+        options,
+      )) !== oid
+    ) {
+      throw new Error("Snapshot retirement ref OID changed");
+    }
+  }
+  const pendingRef = `refs/openclaw/removals/${record.id}`;
+  const pending = await runGit(
+    record.repoRoot,
+    ["show-ref", "--verify", "--quiet", pendingRef],
+    options,
+  );
+  if (pending.code !== 1) {
+    throw new Error("Snapshot retirement has pending removal custody");
+  }
+  const snapshotTree = await requireGit(
+    record.repoRoot,
+    ["rev-parse", `${expected.expectedSnapshotOid}^{tree}`],
+    options,
+  );
+  const retainedTree = await requireGit(
+    record.repoRoot,
+    ["rev-parse", `${expected.expectedRetainedSourceOid}^{tree}`],
+    options,
+  );
+  if (snapshotTree !== retainedTree) {
+    throw new Error("Snapshot contains source not covered by the retained commit");
+  }
+  const parents = (
+    await requireGit(
+      record.repoRoot,
+      ["rev-list", "--parents", "-n", "1", expected.expectedSnapshotOid],
+      options,
+    )
+  ).split(" ");
+  if (parents.length !== 2) {
+    throw new Error("Snapshot parent custody is unavailable");
+  }
+  await requireGit(
+    record.repoRoot,
+    ["merge-base", "--is-ancestor", parents[1]!, expected.expectedRetainedSourceOid],
+    options,
+  );
+  assertCurrent();
+  return async (assertProjectionCurrent: () => void) => {
+    const beforeRun = () => {
+      assertCurrent();
+      assertProjectionCurrent();
+    };
+    if (
+      (await worktreePathExists(record.path)) ||
+      (await listGitWorktrees(record.repoRoot, { ...options, beforeRun })).some(
+        (entry) => path.resolve(entry.path) === path.resolve(record.path),
+      )
+    ) {
+      throw new Error("Worktree snapshot checkout or Git registration reappeared");
+    }
+    // One transaction verifies the retained source and absent removal pin while
+    // deleting only the observed snapshot. Verification must lock the retained
+    // ref chain; no-deref is scoped to the pending pin and snapshot deletion.
+    await requireGit(record.repoRoot, ["update-ref", "--stdin"], {
+      ...options,
+      beforeRun,
+      input: `start\nverify ${expected.retainedSourceRef} ${expected.expectedRetainedSourceOid}\noption no-deref\nverify ${pendingRef} ${"0".repeat(expected.expectedSnapshotOid.length)}\noption no-deref\ndelete ${ref} ${expected.expectedSnapshotOid}\nprepare\ncommit\n`,
+    });
+  };
+}
+
 /** Retire the restore entry point before releasing accepted projection custody. */
 export async function retireManagedWorktreeSnapshot(params: {
   record: ManagedWorktreeRecord;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  expected?: RetireManagedWorktreeSnapshotParams;
 }) {
   const { record, env, signal } = params;
+  if (params.expected) {
+    const { localWorkspaceStore } =
+      await import("../../gateway/worker-environments/local-workspace-store.js");
+    const projectionStore = localWorkspaceStore(env);
+    const assertCurrent = () => {
+      params.assertCurrent();
+      assertRegistrySnapshotRetirement(env, record);
+      if (projectionStore.get(record.id)) {
+        throw new Error(
+          "Snapshot retains local workspace projection custody; preserve its recovery data",
+        );
+      }
+    };
+    assertCurrent();
+    const retireSnapshot = await prepareExactSnapshotRetirement({
+      record,
+      expected: params.expected,
+      signal,
+      assertCurrent,
+    });
+    const { expireLocalWorkspaceProjection } =
+      await import("../../gateway/worker-environments/local-workspace-projection.js");
+    await expireLocalWorkspaceProjection({ worktree: record, env, assertCurrent, retireSnapshot });
+    assertCurrent();
+    deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+    // Retained source refs remain owned, including an otherwise empty source repository.
+    return;
+  }
   const exactRecord = record.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-");
   const expirationToken = exactRecord ? randomUUID() : undefined;
   let claimed = false;
