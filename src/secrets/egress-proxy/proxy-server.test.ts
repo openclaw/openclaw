@@ -710,6 +710,126 @@ describe("secret egress proxy", () => {
     );
   });
 
+  it("substitutes a sentinel carried as an upstream Basic credential", async () => {
+    const secret = "basic-secret-value";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    // Clients that only speak Basic base64-encode user and password together, so
+    // the literal sentinel never reaches the plaintext matcher.
+    const encoded = Buffer.from(`oauth2:${sentinel}`).toString("base64");
+    expect(encoded).not.toContain(SECRET_SENTINEL_PREFIX);
+
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: `Basic ${encoded}` } }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests).toHaveLength(1);
+    expect(originRequests[0]?.headers.authorization).toBe(
+      `Basic ${Buffer.from(`oauth2:${secret}`).toString("base64")}`,
+    );
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({ kind: "forwarded", host: "localhost", substituted: true }),
+    );
+  });
+
+  it("substitutes a sentinel carried as the Basic username", async () => {
+    const secret = "basic-user-secret-value";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic-user" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+
+    await expect(
+      requestThroughTunnel({
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${sentinel}:`).toString("base64")}`,
+        },
+      }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests[0]?.headers.authorization).toBe(
+      `Basic ${Buffer.from(`${secret}:`).toString("base64")}`,
+    );
+  });
+
+  it("leaves a Basic credential without a sentinel unchanged", async () => {
+    const secret = "unrelated-basic-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic-untouched" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    const unrelated = Buffer.from("oauth2:already-real-token").toString("base64");
+
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: `Basic ${unrelated}` } }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests[0]?.headers.authorization).toBe(`Basic ${unrelated}`);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: "forwarded",
+      host: "localhost",
+      substituted: false,
+    });
+  });
+
+  it.each([
+    { label: "malformed base64", value: "Basic !!!not-base64!!!" },
+    { label: "no credential separator", value: null },
+  ])("forwards $label upstream unchanged", async (testCase) => {
+    const secret = "malformed-basic-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic-malformed" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    const authorization = testCase.value ?? `Basic ${Buffer.from(sentinel).toString("base64")}`;
+
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: authorization } }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests[0]?.headers.authorization).toBe(authorization);
+  });
+
+  it("forwards a non-UTF-8 Basic credential unchanged instead of rewriting it", async () => {
+    const secret = "binary-basic-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic-binary" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    // A binary or Latin-1 password is not valid UTF-8. Decoding it lossily and
+    // re-encoding would silently replace those bytes, so it must pass through.
+    const binary = Buffer.concat([
+      Buffer.from("oauth2:", "utf8"),
+      Buffer.from([0xff, 0xfe, 0x80]),
+      Buffer.from(`:${sentinel}`, "utf8"),
+    ]);
+    const authorization = `Basic ${binary.toString("base64")}`;
+
+    await expect(
+      requestThroughTunnel({ headers: { Authorization: authorization } }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests[0]?.headers.authorization).toBe(authorization);
+  });
+
+  it("refuses a Basic credential bound to a different host before egress", async () => {
+    const secret = "basic-wrong-host-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-basic-wrong-host" });
+    proxyEnv = registerSentinel({
+      sentinel,
+      allowedHosts: ["api.example.com"],
+      name: "GIT_TOKEN",
+    });
+
+    const result = await requestThroughTunnel({
+      headers: {
+        Authorization: `Basic ${Buffer.from(`oauth2:${sentinel}`).toString("base64")}`,
+      },
+    });
+
+    expect(result).toMatchObject({ status: 502 });
+    expect(result.body).toContain("openclaw secrets store set GIT_TOKEN --allow-host localhost");
+    expect(originRequests).toEqual([]);
+    expect(JSON.stringify(originRequests)).not.toContain(secret);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: "refused",
+      host: "localhost",
+      reason: "destination-not-allowed",
+    });
+  });
+
   it.each([
     { label: "an unbound host", allowedHosts: ["api.example.com"] },
     { label: "no bound hosts", allowedHosts: [] },
@@ -742,16 +862,24 @@ describe("secret egress proxy", () => {
     },
   );
 
-  it.each(["url", "header", "body"] as const)(
+  it.each(["url", "header", "body", "basic"] as const)(
     "refuses an unresolved sentinel in the %s",
     async (location) => {
       const unknown = tamperSentinel(
         mintSecretSentinel(`unknown-${location}`, { label: `egress-${location}` }),
       );
       const before = originRequests.length;
+      // A Basic credential must refuse too: an unresolvable placeholder may not
+      // travel upstream just because it arrived base64-encoded.
+      const basicCredential = `Basic ${Buffer.from(`oauth2:${unknown}`).toString("base64")}`;
       const result = await requestThroughTunnel({
         path: location === "url" ? `/refuse?token=${unknown}` : "/refuse",
-        headers: location === "header" ? { "X-Token": unknown } : undefined,
+        headers:
+          location === "header"
+            ? { "X-Token": unknown }
+            : location === "basic"
+              ? { Authorization: basicCredential }
+              : undefined,
         bodyChunks: location === "body" ? [unknown] : undefined,
       });
 
