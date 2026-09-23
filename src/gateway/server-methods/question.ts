@@ -3,8 +3,8 @@ import {
   ErrorCodes,
   errorShape,
   type Question,
-  type QuestionRecord,
   type QuestionRequestParams,
+  type QuestionRecord,
   type QuestionResolvedEvent,
   validateQuestionGetParams,
   validateQuestionListParams,
@@ -14,7 +14,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -24,35 +23,29 @@ import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
-import {
-  authorizeCurrentOperatorRoleScopes,
-  hasOperatorBoundary,
-} from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
 import {
   QuestionManager,
   QuestionManagerError,
-  QuestionManagerErrorCodes,
-  type QuestionOwnRunAccess,
+  type QuestionObservation,
 } from "../question-manager.js";
+import {
+  withQuestionSessionAccess,
+  withPreparedQuestionSessions,
+  type PreparedQuestionSession,
+  questionNotFound,
+  prepareQuestionAuthorization,
+  questionBroadcastOptions,
+} from "../question-session-access.js";
+import type { QuestionSessionAccess } from "../question-session-access.types.js";
 import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import {
-  authorizeIncognitoSessionTarget,
-  authorizeOwnSessionMutation,
-} from "../session-sharing-policy.js";
-import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
-import {
-  authorizeSessionSharing,
-  authorizeSessionSharingTarget,
-  createSessionListEntryFilter,
-  isGatewayAdmin,
-  resolveSessionSharingTarget,
-} from "../session-sharing.js";
+import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -69,51 +62,6 @@ function managerError(error: unknown, respond: RespondFn): boolean {
     errorShape(ErrorCodes.INVALID_REQUEST, error.message, { details: { reason: error.code } }),
   );
   return true;
-}
-
-function questionNotFound(id: string) {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `question '${id}' was not found`, {
-    details: { reason: QuestionManagerErrorCodes.NOT_FOUND },
-  });
-}
-
-function authorizeQuestionRecord(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  question: QuestionRecord;
-  access: "read" | "mutate";
-  ownRunAccess?: QuestionOwnRunAccess;
-}): ReturnType<typeof errorShape> | null {
-  if (usesOwnRunQuestionAccess(params.client)) {
-    return params.ownRunAccess?.canAccess(params.client, params.cfg)
-      ? null
-      : questionNotFound(params.question.id);
-  }
-  if (
-    isGatewayAdmin(params.client) ||
-    !hasOperatorBoundary(params.client, params.cfg) ||
-    !params.question.sessionKey
-  ) {
-    return null;
-  }
-  const target = resolveSessionSharingTarget({
-    cfg: params.cfg,
-    sessionKey: params.question.sessionKey,
-    agentId: params.question.agentId,
-  });
-  const canSeeSession =
-    target &&
-    (createSessionListEntryFilter({ cfg: params.cfg, client: params.client })?.(
-      target.canonicalKey,
-      target.entry,
-    ) ??
-      true);
-  if (!target || !canSeeSession) {
-    return questionNotFound(params.question.id);
-  }
-  return params.access === "mutate"
-    ? authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target })
-    : null;
 }
 
 function normalizeQuestions(params: QuestionRequestParams): Question[] {
@@ -162,10 +110,15 @@ export function createQuestionHandlers(
       if (!assertValidParams(params, validateQuestionRequestParams, "question.request", respond)) {
         return;
       }
-      const authority = readGatewayRequestMutationAuthority(options);
-      authority.assertCurrent();
       let request = params as QuestionRequestParams;
       const storeBound = request.questions.some((question) => question.secretStore);
+      const authority = readGatewayRequestMutationAuthority(options);
+      authority.assertCurrent();
+      const narrow = usesOwnRunQuestionAccess(client);
+      let sessionAccess: QuestionSessionAccess | undefined;
+      let accepted = false;
+      const requiresSharing = () =>
+        !isGatewayAdmin(client) && hasOperatorBoundary(client, context.getRuntimeConfig());
       // Store-bound questions end in a secret-store write on resolve. Without
       // this gate any operator.questions client could mint and self-answer one,
       // bypassing the operator.admin requirement on secrets.store.set.
@@ -182,13 +135,15 @@ export function createQuestionHandlers(
       }
       const identity = client?.internal?.agentRuntimeIdentity;
       const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
-      if (storeBound && (!identity || !validateAuthority)) {
+      if ((storeBound || narrow) && (!identity || !validateAuthority)) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "secret store questions require trusted agent runtime authority",
+            storeBound
+              ? "secret store questions require trusted agent runtime authority"
+              : "question creation requires trusted agent runtime authority",
           ),
         );
         return;
@@ -197,22 +152,35 @@ export function createQuestionHandlers(
       // Revalidate this exact claim even if another execution reuses its runId.
       const requester = identity ? structuredClone(identity) : undefined;
       const operatorAuthority = client?.internal?.operatorRunAuthority;
-      const ownRun = usesOwnRunQuestionAccess(client);
-      let sessionFacts: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-      let ownRunAccess: QuestionOwnRunAccess | undefined;
-      let registered = false;
       const isRequesterActive =
         requester && validateAuthority
           ? () => {
               try {
                 operatorAuthority?.assertCurrent();
-                sessionFacts?.readCurrent(context.getRuntimeConfig());
+                sessionAccess?.assertSourceCurrent();
                 return validateAuthority(requester);
               } catch {
                 return false;
               }
             }
           : undefined;
+      if (
+        narrow &&
+        (!operatorAuthority ||
+          storeBound ||
+          request.questions.some((question) => question.isSecret) ||
+          isRequesterActive?.() !== true)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Session-scoped questions require an ordinary question and a live agent requester.",
+          ),
+        );
+        return;
+      }
       if (requester) {
         request = {
           ...request,
@@ -222,22 +190,8 @@ export function createQuestionHandlers(
         };
       }
       try {
-        if (
-          ownRun &&
-          (!requester ||
-            !operatorAuthority ||
-            !isRequesterActive ||
-            request.questions.some((question) => question.isSecret || question.secretStore))
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.FORBIDDEN,
-              "Session-scoped questions require an ordinary question from your own active agent run.",
-            ),
-          );
-          return;
+        if (narrow && operatorAuthority) {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
         }
         const requestedSession = request.sessionKey
           ? resolveRequestedSessionAgentId(
@@ -250,152 +204,193 @@ export function createQuestionHandlers(
           respond(false, undefined, requestedSession.error);
           return;
         }
-        let sessionKey: string | undefined;
-        if (ownRun && operatorAuthority && requestedSession?.ok && request.sessionKey) {
-          assertAdmittedRunOperatorAuthority(operatorAuthority);
-          const profileId = operatorAuthority.profileId;
-          try {
-            operatorAuthority.assertCurrent();
-            sessionFacts = await prepareSessionMutationFacts({
-              cfg: context.getRuntimeConfig(),
-              agentId: requestedSession.agentId,
-              sessionKey: request.sessionKey,
-            });
-          } catch {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "Question session authority is no longer available.",
-              ),
-            );
+        if (narrow && requestedSession?.ok) {
+          // Starting a prompt retains the admitted producer's agent ceiling.
+          const agentError = authorizeGatewaySessionCreation({
+            cfg: context.getRuntimeConfig(),
+            client,
+            agentId: requestedSession.agentId,
+          });
+          if (agentError) {
+            respond(false, undefined, agentError);
             return;
           }
-          const prepared = sessionFacts;
-          const canSelect: QuestionOwnRunAccess["canSelect"] = (recipient) =>
-            Boolean(
-              recipient &&
-              !recipient.invalidated &&
-              (recipient.connect.role ?? "operator") === "operator" &&
-              !authorizeOwnSessionMutation({
-                client: recipient,
-                target: null,
-                expectedProfileId: profileId,
-              }),
-            );
-          ownRunAccess = {
-            canSelect,
-            release: prepared.release,
-            canAccess: (recipient, cfg) => {
-              if (!canSelect(recipient)) {
-                return false;
+        }
+        const sessionKey =
+          request.sessionKey && requestedSession?.ok
+            ? resolveStoredSessionKeyForAgentStore({
+                cfg: context.getRuntimeConfig(),
+                agentId: requestedSession.agentId,
+                sessionKey: request.sessionKey,
+              })
+            : undefined;
+        const create = (prepared?: PreparedQuestionSession) => {
+          if (sessionKey && requiresSharing()) {
+            const authorizationError = prepared?.authorizeMutation(client);
+            if (!prepared?.target || authorizationError) {
+              respond(
+                false,
+                undefined,
+                authorizationError ?? errorShape(ErrorCodes.FORBIDDEN, "Session is unavailable."),
+              );
+              return;
+            }
+          }
+          if (narrow) {
+            authority.assertCurrent();
+            if (!sessionAccess || !prepared?.canAccess(client, "mutate", true, sessionAccess)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.FORBIDDEN,
+                  "Session-scoped questions require your own materialized ordinary session.",
+                ),
+              );
+              return;
+            }
+          }
+          const broadcastQuestion = (
+            event: string,
+            payload: unknown,
+            observation: QuestionObservation | null,
+            current: PreparedQuestionSession | undefined,
+            expectedRecord?: QuestionRecord,
+          ) => {
+            const scoped =
+              sessionKey && context.getRuntimeConfig().gateway?.roles
+                ? {
+                    sessionKeys: [sessionKey],
+                    ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),
+                  }
+                : undefined;
+            let publishing = true;
+            const retained = questionBroadcastOptions({
+              observation,
+              prepared: current,
+              expectedRecord,
+              cfg: context.getRuntimeConfig(),
+              isPublishing: () => publishing,
+            });
+            try {
+              if (scoped || retained) {
+                context.broadcast(event, payload, { ...scoped, ...retained });
+              } else {
+                context.broadcast(event, payload);
               }
+            } finally {
+              publishing = false;
+            }
+          };
+          // Preparation yielded; every caller must still own this initial mutation.
+          authority.assertCurrent();
+          // The manager awaits returned promises while its public callback type stays void.
+          const managerRequest = {
+            ...(request.id ? { id: request.id } : {}),
+            questions: normalizeQuestions(request),
+            ...(requestedSession?.ok
+              ? { agentId: requestedSession.agentId }
+              : request.agentId
+                ? { agentId: request.agentId }
+                : {}),
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(request.runId ? { runId: request.runId } : {}),
+            timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
+            isRequesterActive,
+            sessionAccess,
+            requesterRun: requester?.operationalRunInstance,
+            registerHumanInputWait:
+              requester && isRequesterActive
+                ? (isPending: () => boolean) =>
+                    registerActiveEmbeddedRunHumanInputWait(requester.delegatedAuthority, isPending)
+                : undefined,
+            onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+              handleQuestionChannelResolved(event);
+              let consumed = false;
               try {
-                if (authorizeCurrentOperatorRoleScopes(recipient, cfg)) {
-                  return false;
-                }
-                const { target } = prepared.readCurrent(cfg);
-                return (
-                  !authorizeOwnSessionMutation({
-                    client: recipient,
-                    target,
-                    expectedProfileId: profileId,
-                  }) &&
-                  !authorizeIncognitoSessionTarget({
-                    client: recipient,
-                    sessionKey: target.canonicalKey,
-                    target,
-                  })
+                await withPreparedQuestionSessions(
+                  options,
+                  [
+                    {
+                      ...observation.record,
+                      sessionAccess: observation.sessionAccess,
+                    },
+                  ],
+                  ([current]) => {
+                    consumed = true;
+                    if (!observation.isCurrent()) {
+                      return;
+                    }
+                    broadcastQuestion("question.resolved", event, observation, current);
+                  },
+                  {
+                    assertCurrent: () => {
+                      if (!observation.isCurrent()) {
+                        throw new Error("Question publication owner retired");
+                      }
+                    },
+                  },
                 );
-              } catch {
-                return false;
+              } catch (error) {
+                if (consumed || !observation.isCurrent()) {
+                  throw error;
+                }
+                // A failed optional read grants no narrow access. Publish only to
+                // recipients the sharing owner admits with unknown session facts.
+                broadcastQuestion("question.resolved", event, observation, undefined);
               }
             },
           };
-          sessionKey = prepared.readCurrent(context.getRuntimeConfig()).target.canonicalKey;
-        } else {
-          sessionKey =
-            request.sessionKey && requestedSession?.ok
-              ? resolveStoredSessionKeyForAgentStore({
-                  cfg: context.getRuntimeConfig(),
-                  agentId: requestedSession.agentId,
-                  sessionKey: request.sessionKey,
-                })
-              : undefined;
-        }
-        if (ownRun && !ownRunAccess?.canAccess(client, context.getRuntimeConfig())) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.FORBIDDEN,
-              "Session-scoped questions require your own active session.",
-            ),
+          const record = manager.request(managerRequest);
+          accepted = true;
+          handleQuestionChannelRequested(record);
+          broadcastQuestion(
+            "question.requested",
+            record,
+            manager.observe(record.id, record),
+            prepared,
+            record,
           );
-          return;
-        }
-        if (!ownRun && sessionKey && hasOperatorBoundary(client, context.getRuntimeConfig())) {
-          const authorizationError = authorizeSessionSharing({
-            cfg: context.getRuntimeConfig(),
-            client,
-            sessionKey,
-            agentId: requestedSession?.ok ? requestedSession.agentId : undefined,
-          });
-          if (authorizationError) {
-            respond(false, undefined, authorizationError);
-            return;
-          }
-        }
-        authority.assertCurrent();
-        const access = ownRunAccess;
-        const questionRecipient = access
-          ? (recipient: GatewayClient) =>
-              !usesOwnRunQuestionAccess(recipient) ||
-              access.canAccess(recipient, context.getRuntimeConfig())
-          : undefined;
-        const broadcastQuestion = (
-          event: "question.requested" | "question.resolved",
-          payload: QuestionRecord | QuestionResolvedEvent,
-        ) => {
-          if (sessionKey && (questionRecipient || context.getRuntimeConfig().gateway?.roles)) {
-            context.broadcast(event, payload, {
-              sessionKeys: [sessionKey],
-              ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),
-              ...(questionRecipient ? { questionRecipient } : {}),
-            });
-          } else {
-            context.broadcast(event, payload);
-          }
+          respond(true, { id: record.id, expiresAtMs: record.expiresAtMs }, undefined);
         };
-        const record = manager.request({
-          ...(request.id ? { id: request.id } : {}),
-          questions: normalizeQuestions(request),
-          ...(requestedSession?.ok
-            ? { agentId: requestedSession.agentId }
-            : request.agentId
-              ? { agentId: request.agentId }
-              : {}),
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(request.runId ? { runId: request.runId } : {}),
-          timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
-          isRequesterActive,
-          ownRunAccess,
-          requesterRun: requester?.operationalRunInstance,
-          registerHumanInputWait:
-            requester && isRequesterActive
-              ? (isPending) =>
-                  registerActiveEmbeddedRunHumanInputWait(requester.delegatedAuthority, isPending)
-              : undefined,
-          onResolved: (event) => {
-            handleQuestionChannelResolved(event);
-            broadcastQuestion("question.resolved", event);
-          },
-        });
-        registered = true;
-        handleQuestionChannelRequested(record);
-        broadcastQuestion("question.requested", record);
-        respond(true, { id: record.id, expiresAtMs: record.expiresAtMs }, undefined);
+        if (sessionKey && requestedSession?.ok) {
+          let consumed = false;
+          try {
+            await withQuestionSessionAccess(
+              options,
+              sessionKey,
+              requestedSession.agentId,
+              (access, prepared) => {
+                consumed = true;
+                sessionAccess = request.questions.some(
+                  (question) => question.isSecret || question.secretStore,
+                )
+                  ? undefined
+                  : access;
+                try {
+                  return create(prepared);
+                } finally {
+                  if (!sessionAccess) {
+                    access?.release();
+                  }
+                }
+              },
+              {
+                assertCurrent: authority.assertCurrent,
+                includeMembers: !narrow && requiresSharing(),
+              },
+            );
+          } catch (error) {
+            // Broad/system workflows do not acquire narrow grants when optional facts fail.
+            // A required sharing check or a started mutation cannot use this outcome.
+            if (consumed || narrow || requiresSharing()) {
+              throw error;
+            }
+            create();
+          }
+        } else {
+          create();
+        }
       } catch (error) {
         if (error instanceof QuestionRequestValidationError) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
@@ -413,61 +408,68 @@ export function createQuestionHandlers(
           throw error;
         }
       } finally {
-        if (!registered) {
-          sessionFacts?.release();
+        if (!accepted) {
+          sessionAccess?.release();
         }
       }
     },
     "question.waitAnswer": async (options) => {
-      const { params, respond, client, context } = options;
+      const { params, respond } = options;
       if (
         !assertValidParams(params, validateQuestionWaitAnswerParams, "question.waitAnswer", respond)
       ) {
         return;
       }
       const request = params;
-      const authority = readGatewayRequestMutationAuthority(options);
       try {
-        authority.assertCurrent();
-        const question = canSelectQuestion(manager, request.id, client)
+        readGatewayRequestMutationAuthority(options).assertCurrent();
+        const question = canSelectQuestion(manager, request.id, options.client)
           ? manager.get(request.id)
           : null;
-        const ownRunAccess = manager.getOwnRunAccess(request.id);
         if (!question) {
           respond(false, undefined, questionNotFound(request.id));
           return;
         }
-        let authorizationError = authorizeQuestionRecord({
-          cfg: context.getRuntimeConfig(),
-          client,
-          question,
-          access: "read",
-          ownRunAccess,
-        });
-        if (authorizationError) {
-          respond(false, undefined, authorizationError);
-          return;
-        }
-        const answer = await manager.waitAnswer(
-          request.id,
-          request.timeoutMs,
-          request.includeResolutionId,
+        const observation = question ? manager.observe(request.id, question) : null;
+        const authorize = prepareQuestionAuthorization(options, observation, request.id, "read");
+        const target = authorize.target;
+        const waiting = await withPreparedQuestionSessions(
+          options,
+          [target],
+          ([prepared]) => {
+            const error = authorize.authorize(prepared);
+            if (error) {
+              respond(false, undefined, error);
+              return undefined;
+            }
+            // Register without yielding between final authorization and the exact-entry waiter.
+            return {
+              answer: manager.waitAnswer(
+                request.id,
+                request.timeoutMs,
+                request.includeResolutionId,
+              ),
+            };
+          },
+          { assertCurrent: authorize.assertCurrent },
         );
-        authority.assertCurrent();
-        // Reauthorize the original question's immutable routing, not a getter
-        // that could expire/cancel it merely because this observer stopped.
-        authorizationError = authorizeQuestionRecord({
-          cfg: context.getRuntimeConfig(),
-          client,
-          question,
-          access: "read",
-          ownRunAccess,
-        });
-        if (authorizationError) {
-          respond(false, undefined, authorizationError);
+        if (!waiting) {
           return;
         }
-        respond(true, answer, undefined);
+        const answer = await waiting.answer;
+        await withPreparedQuestionSessions(
+          options,
+          [target],
+          ([prepared]) => {
+            const error = authorize.authorize(prepared);
+            if (error) {
+              respond(false, undefined, error);
+              return;
+            }
+            respond(true, answer, undefined);
+          },
+          { assertCurrent: authorize.assertCurrent },
+        );
       } catch (error) {
         if (!managerError(error, respond)) {
           throw error;
@@ -475,122 +477,145 @@ export function createQuestionHandlers(
       }
     },
     "question.resolve": async (options) => {
-      const { params, respond, client, context } = options;
+      const { params, respond, client } = options;
       if (!assertValidParams(params, validateQuestionResolveParams, "question.resolve", respond)) {
         return;
       }
       const request = params;
       try {
         readGatewayRequestMutationAuthority(options).assertCurrent();
-        const question = canSelectQuestion(manager, request.id, client)
+        const question = canSelectQuestion(manager, request.id, options.client)
           ? manager.get(request.id)
           : null;
         if (!question) {
           respond(false, undefined, questionNotFound(request.id));
           return;
         }
-        const authorizationError = authorizeQuestionRecord({
-          cfg: context.getRuntimeConfig(),
-          client,
-          question,
-          access: "mutate",
-          ownRunAccess: manager.getOwnRunAccess(request.id),
-        });
-        if (authorizationError) {
-          respond(false, undefined, authorizationError);
-          return;
-        }
-        if ("cancel" in request) {
-          respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
-          return;
-        }
-        const secretQuestion = question.questions[0];
-        const binding = secretQuestion?.secretStore;
-        if (!binding) {
-          if (request.secretStoreAllowedHosts !== undefined) {
+        const observation = question ? manager.observe(request.id, question) : null;
+        const authorize = prepareQuestionAuthorization(options, observation, request.id, "mutate");
+        let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
+        await withPreparedQuestionSessions(
+          options,
+          [authorize.target],
+          ([prepared]) => {
+            const authorizationError = authorize.authorize(prepared);
+            if (authorizationError) {
+              respond(false, undefined, authorizationError);
+              return;
+            }
+            if ("cancel" in request) {
+              respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
+              return;
+            }
+            const secretQuestion = question?.questions[0];
+            const binding = secretQuestion?.secretStore;
+            if (!binding || !question) {
+              if (request.secretStoreAllowedHosts !== undefined) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    "Secret store allowed hosts require a store-bound question.",
+                  ),
+                );
+                return;
+              }
+              respond(
+                true,
+                manager.resolve(request.id, request.answers, request.resolvedBy, {
+                  resolutionId: request.resolutionId,
+                }),
+                undefined,
+              );
+              return;
+            }
+            const submittedAnswers = request.answers.answers;
+            const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
+              ? submittedAnswers[secretQuestion.questionId]
+              : undefined;
+            const value = values?.[0];
+            if (
+              Object.keys(submittedAnswers).length !== 1 ||
+              values?.length !== 1 ||
+              value === undefined
+            ) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `question '${secretQuestion.questionId}' requires exactly one secret value`,
+                ),
+              );
+              return;
+            }
+            registerSecretValueForRedaction(value);
+            const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
+            let saved = false;
+            try {
+              // Only the synthetic marker enters state, fanout, and waiting agents.
+              // The manager validates liveness and settles before refresh can yield.
+              const result = manager.resolve(
+                request.id,
+                { answers: { [secretQuestion.questionId]: ["stored"] } },
+                request.resolvedBy,
+                {
+                  resolutionId: request.resolutionId,
+                  commit: () => {
+                    storeWriteService.write({
+                      name: binding.name,
+                      value,
+                      kind: "secret",
+                      ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                      updatedBy: storeWriteService.resolveUpdatedBy(client),
+                    });
+                    saved = true;
+                  },
+                },
+              );
+              reload = { name: binding.name, result };
+            } catch (error) {
+              if (managerError(error, respond)) {
+                return;
+              }
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  !saved && error instanceof SecretStoreValidationError
+                    ? ErrorCodes.INVALID_REQUEST
+                    : ErrorCodes.UNAVAILABLE,
+                  saved
+                    ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                    : error instanceof SecretStoreValidationError
+                      ? error.message
+                      : "Secret store entry could not be saved.",
+                ),
+              );
+            }
+          },
+          {
+            assertCurrent: authorize.assertCurrent,
+            includeMembers:
+              !readGatewayRequestMutationAuthority(options).sessionScope &&
+              hasOperatorBoundary(client, options.context.getRuntimeConfig()),
+          },
+        );
+        if (reload) {
+          try {
+            await storeWriteService.reloadReference(reload.name);
+            respond(true, reload.result, undefined);
+          } catch {
             respond(
               false,
               undefined,
               errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "Secret store allowed hosts require a store-bound question.",
+                ErrorCodes.UNAVAILABLE,
+                "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer.",
               ),
             );
-            return;
           }
-          respond(
-            true,
-            manager.resolve(request.id, request.answers, request.resolvedBy, {
-              resolutionId: request.resolutionId,
-            }),
-            undefined,
-          );
-          return;
-        }
-        const submittedAnswers = request.answers.answers;
-        const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
-          ? submittedAnswers[secretQuestion.questionId]
-          : undefined;
-        const value = values?.[0];
-        if (
-          Object.keys(submittedAnswers).length !== 1 ||
-          values?.length !== 1 ||
-          value === undefined
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `question '${secretQuestion.questionId}' requires exactly one secret value`,
-            ),
-          );
-          return;
-        }
-        registerSecretValueForRedaction(value);
-        const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
-        let saved = false;
-        try {
-          // Only the synthetic marker enters state, fanout, and waiting agents.
-          // The manager validates liveness and settles before refresh can yield.
-          const result = manager.resolve(
-            request.id,
-            { answers: { [secretQuestion.questionId]: ["stored"] } },
-            request.resolvedBy,
-            {
-              resolutionId: request.resolutionId,
-              commit: () => {
-                storeWriteService.write({
-                  name: binding.name,
-                  value,
-                  kind: "secret",
-                  ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-                  updatedBy: storeWriteService.resolveUpdatedBy(client),
-                });
-                saved = true;
-              },
-            },
-          );
-          await storeWriteService.reloadReference(binding.name);
-          respond(true, result, undefined);
-        } catch (error) {
-          if (managerError(error, respond)) {
-            return;
-          }
-          respond(
-            false,
-            undefined,
-            errorShape(
-              !saved && error instanceof SecretStoreValidationError
-                ? ErrorCodes.INVALID_REQUEST
-                : ErrorCodes.UNAVAILABLE,
-              saved
-                ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
-                : error instanceof SecretStoreValidationError
-                  ? error.message
-                  : "Secret store entry could not be saved.",
-            ),
-          );
         }
       } catch (error) {
         if (!managerError(error, respond)) {
@@ -598,55 +623,73 @@ export function createQuestionHandlers(
         }
       }
     },
-    "question.get": (options) => {
-      const { params, respond, client, context } = options;
+    "question.get": async (options) => {
+      const { params, respond } = options;
       if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
         return;
       }
-      readGatewayRequestMutationAuthority(options).assertCurrent();
       const id = (params as { id: string }).id;
-      const question = canSelectQuestion(manager, id, client) ? manager.get(id) : null;
+      readGatewayRequestMutationAuthority(options).assertCurrent();
+      const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
       if (!question) {
         respond(false, undefined, questionNotFound(id));
         return;
       }
-      const authorizationError = authorizeQuestionRecord({
-        cfg: context.getRuntimeConfig(),
-        client,
-        question,
-        access: "read",
-        ownRunAccess: manager.getOwnRunAccess(id),
+      const observation = manager.observe(id, question);
+      const authorize = prepareQuestionAuthorization(options, observation, id, "read");
+      await withPreparedQuestionSessions(
+        options,
+        [authorize.target],
+        ([prepared]) => {
+          const error = authorize.authorize(prepared);
+          if (error) {
+            respond(false, undefined, error);
+            return;
+          }
+          respond(true, { question: observation!.record }, undefined);
+        },
+        { assertCurrent: authorize.assertCurrent },
+      ).catch((error: unknown) => {
+        if (!managerError(error, respond)) {
+          throw error;
+        }
       });
-      if (authorizationError) {
-        respond(false, undefined, authorizationError);
-        return;
-      }
-      respond(true, { question }, undefined);
     },
-    "question.list": (options) => {
-      const { params, respond, client, context } = options;
+    "question.list": async (options) => {
+      const { params, respond } = options;
       if (!assertValidParams(params, validateQuestionListParams, "question.list", respond)) {
         return;
       }
       readGatewayRequestMutationAuthority(options).assertCurrent();
-      const cfg = context.getRuntimeConfig();
-      const questions = manager
+      const records = manager
         .list(
-          usesOwnRunQuestionAccess(client)
-            ? (question) => canSelectQuestion(manager, question.id, client)
+          usesOwnRunQuestionAccess(options.client)
+            ? (question) => canSelectQuestion(manager, question.id, options.client)
             : undefined,
         )
-        .filter(
-          (question) =>
-            !authorizeQuestionRecord({
-              cfg,
-              client,
-              question,
-              access: "read",
-              ownRunAccess: manager.getOwnRunAccess(question.id),
-            }),
-        );
-      respond(true, { questions }, undefined);
+        .map((question) => {
+          const observation = manager.observe(question.id, question);
+          return {
+            question,
+            observation,
+            authorize: prepareQuestionAuthorization(options, observation, question.id, "read"),
+          };
+        });
+      await withPreparedQuestionSessions(
+        options,
+        records.map(({ authorize }) => authorize.target),
+        (prepared) => {
+          const questions = records.flatMap(({ question, observation, authorize }, index) =>
+            observation?.record === question &&
+            question.status === "pending" &&
+            !authorize.authorize(prepared[index])
+              ? [question]
+              : [],
+          );
+          respond(true, { questions }, undefined);
+        },
+        { assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent },
+      );
     },
   };
 }

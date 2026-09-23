@@ -116,36 +116,52 @@ function createNativeThread(): { latest: CodexTurn } {
     },
   };
 }
-async function prepare(acknowledgment?: Acknowledgment, native = createNativeThread()) {
+async function prepare(
+  acknowledgment?: Acknowledgment,
+  native = createNativeThread(),
+  usesSupervisionConnection = true,
+) {
   const request = vi.fn(
-    (
+    async (
       method: string,
-      _payload: { input?: CodexUserInput[] },
+      _payload: { threadId?: string; input?: CodexUserInput[] },
       options: { assertCurrent?: () => void },
     ) => {
       options.assertCurrent?.();
       if (method === "thread/turns/list") {
-        return Promise.resolve({ data: [native.latest] });
+        return { data: [native.latest] };
       }
       if (method === "turn/start") {
         native.latest = { id: "new-turn", status: "inProgress", items: [] };
-        return Promise.resolve({ turn: native.latest });
+        return { turn: native.latest };
       }
       throw new Error(`Unexpected fixture method: ${method}`);
     },
   );
   const client = { request, addNotificationHandler: () => () => {} };
+  const liveThreadOwnership = { assertCurrent: vi.fn(), release: vi.fn(), forget: vi.fn() };
+  const route = { armTurn: vi.fn(), cancelTurn: vi.fn() };
+  const nativeProcessAuthority = { bindTurn: vi.fn() };
   const releaseCurrentRoute = vi.fn();
   const turnState = { codexTurnPromptText: "" };
   const resources = {
     state: {
       client,
-      thread: { threadId: "same-thread", lifecycle: { action: "started" } },
+      thread: {
+        threadId: "same-thread",
+        lifecycle: { action: "started" },
+        connectionScope: usesSupervisionConnection ? "supervision" : "managed",
+        modelProvider: "openai",
+        model: "test-model",
+        liveThreadOwnership,
+      },
       codexExecutionCwd: "/synthetic/workspace",
     },
     releaseCurrentRoute,
+    nativeProcessAuthority,
     prompt: {
       turnState,
+      systemPromptReport: { injectedWorkspaceFiles: [] },
       codexModelInputHistoryMessages: [],
       contextImageGroups: [],
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
@@ -168,7 +184,7 @@ async function prepare(acknowledgment?: Acknowledgment, native = createNativeThr
             },
             mutable: { pluginAppServer: {} },
             appServer: { start: { transport: "stdio" } },
-            usesSupervisionConnection: true,
+            usesSupervisionConnection,
             runAbortController: new AbortController(),
             assertCurrent: vi.fn(),
           },
@@ -180,10 +196,46 @@ async function prepare(acknowledgment?: Acknowledgment, native = createNativeThr
   const prepared = await prepareCodexAttemptTurnRequest(
     resources,
     turnRuntime,
-    async () => ({ armTurn: vi.fn(), cancelTurn: vi.fn() }),
+    async () => route,
     async () => true,
   );
-  return { prepared, request, client, releaseCurrentRoute, resources };
+  return {
+    prepared,
+    request,
+    client,
+    releaseCurrentRoute,
+    resources,
+    route,
+    nativeProcessAuthority,
+    liveThreadOwnership,
+  };
+}
+
+type SelectionChange = "thread" | "thread ID" | "owner" | "released owner" | "model" | "provider";
+function changeSelection(attempt: Awaited<ReturnType<typeof prepare>>, kind: SelectionChange) {
+  const { thread } = attempt.resources.state;
+  switch (kind) {
+    case "thread":
+      attempt.resources.state.thread = { ...thread, threadId: "replacement-thread" };
+      break;
+    case "thread ID":
+      thread.threadId = "replacement-thread";
+      break;
+    case "owner":
+      thread.liveThreadOwnership = { ...attempt.liveThreadOwnership, assertCurrent: vi.fn() };
+      break;
+    case "released owner":
+      attempt.liveThreadOwnership.assertCurrent.mockImplementation(() => {
+        throw new Error("Codex thread subscription ownership changed");
+      });
+      break;
+    case "model":
+      thread.model = "changed-model";
+      break;
+    case "provider":
+      thread.modelProvider = "changed-provider";
+      break;
+  }
 }
 async function start(acknowledged: boolean) {
   const attempt = await prepare(acknowledged ? createAcknowledgment().acknowledgment : undefined);
@@ -192,6 +244,138 @@ async function start(acknowledged: boolean) {
 }
 
 describe("native acknowledged turn requests", () => {
+  it.each<SelectionChange>(["thread", "thread ID", "owner", "released owner", "model", "provider"])(
+    "rejects a changed %s after reading the native provider review",
+    async (kind) => {
+      const host = createAcknowledgment();
+      const native = createNativeThread();
+      const attempt = await prepare(host.acknowledgment, native);
+      const request = attempt.request.getMockImplementation()!;
+      attempt.request.mockImplementation(async (...args) => {
+        const response = await request(...args);
+        if (args[0] === "thread/turns/list") {
+          changeSelection(attempt, kind);
+        }
+        return response;
+      });
+      await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(/ownership changed/);
+      expect(attempt.request.mock.calls.map(([method]) => method)).toEqual(["thread/turns/list"]);
+      expect(native.latest.status).toBe("failed");
+      expect(host.acceptNativeTurn).not.toHaveBeenCalled();
+      expect(references.accepted).not.toHaveBeenCalled();
+      expect(cleanup.interrupt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rechecks the selected model immediately before writing turn/start", async () => {
+    const host = createAcknowledgment();
+    const native = createNativeThread();
+    const attempt = await prepare(host.acknowledgment, native);
+    attempt.route.armTurn.mockImplementationOnce(() => changeSelection(attempt, "model"));
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow("Could not continue this chat");
+    expect(native.latest.status).toBe("failed");
+    expect(attempt.route.cancelTurn).toHaveBeenCalledOnce();
+    expect(host.acceptNativeTurn).not.toHaveBeenCalled();
+    expect(cleanup.interrupt).not.toHaveBeenCalled();
+  });
+
+  it.each<SelectionChange>(["thread", "thread ID"])(
+    "settles the dispatched thread when its %s changes before the accepted response",
+    async (kind) => {
+      const host = createAcknowledgment();
+      const attempt = await prepare(host.acknowledgment);
+      const request = attempt.request.getMockImplementation()!;
+      attempt.request.mockImplementation(async (...args) => {
+        const response = await request(...args);
+        if (args[0] === "turn/start") {
+          changeSelection(attempt, kind);
+        }
+        return response;
+      });
+      await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
+        "Could not continue this chat",
+      );
+      expect(attempt.nativeProcessAuthority.bindTurn).toHaveBeenCalledExactlyOnceWith(
+        attempt.client,
+        "same-thread",
+        "new-turn",
+      );
+      expect(cleanup.interrupt).toHaveBeenCalledExactlyOnceWith(attempt.client, {
+        threadId: "same-thread",
+        turnId: "new-turn",
+      });
+      expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
+      expect(host.acceptNativeTurn).not.toHaveBeenCalled();
+      expect(references.accepted).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a released live owner while the host acknowledges the accepted native turn", async () => {
+    const host = createAcknowledgment();
+    const attempt = await prepare(host.acknowledgment);
+    const accept = host.acceptNativeTurn.getMockImplementation()!;
+    host.acceptNativeTurn.mockImplementationOnce(async (accepted) => {
+      await Promise.resolve();
+      changeSelection(attempt, "released owner");
+      await accept(accepted);
+    });
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow("Could not continue this chat");
+    expect(host.acknowledgment.read().phase).toBe("pending");
+    expect(cleanup.interrupt).toHaveBeenCalledExactlyOnceWith(attempt.client, {
+      threadId: "same-thread",
+      turnId: "new-turn",
+    });
+    expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
+  });
+
+  it("preserves host acceptance if the selected model changes after acknowledgment", async () => {
+    const host = createAcknowledgment();
+    const attempt = await prepare(host.acknowledgment);
+    const accept = host.acceptNativeTurn.getMockImplementation()!;
+    host.acceptNativeTurn.mockImplementationOnce(async (accepted) => {
+      await accept(accepted);
+      changeSelection(attempt, "model");
+    });
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow("Could not continue this chat");
+    expect(host.acknowledgment.read().phase).toBe("accepted");
+    expect(cleanup.interrupt).toHaveBeenCalledExactlyOnceWith(attempt.client, {
+      threadId: "same-thread",
+      turnId: "new-turn",
+    });
+    expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("accepts a stable tuple (supervision: %s)", async (supervised) => {
+    const host = createAcknowledgment();
+    const attempt = await prepare(host.acknowledgment, createNativeThread(), supervised);
+    if (!supervised) {
+      delete attempt.resources.state.thread.liveThreadOwnership;
+    }
+    await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
+      turn: { turn: { id: "new-turn", status: "inProgress" } },
+      upstreamUserText: "literal steer",
+    });
+    expect(host.acknowledgment.read().phase).toBe("accepted");
+    expect(cleanup.interrupt).not.toHaveBeenCalled();
+    expect(attempt.releaseCurrentRoute).not.toHaveBeenCalled();
+  });
+
+  it("selects the replacement thread on a fresh ordinary retry", async () => {
+    const attempt = await prepare(undefined, createNativeThread(), false);
+    attempt.request.mockRejectedValueOnce(new Error("context overflow"));
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow("context overflow");
+    changeSelection(attempt, "thread");
+    await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
+      turn: { turn: { id: "new-turn" } },
+    });
+    expect(attempt.request.mock.calls.map(([, payload]) => payload.threadId)).toEqual([
+      "same-thread",
+      "replacement-thread",
+    ]);
+    expect(references.accepted).toHaveBeenCalledOnce();
+    expect(cleanup.interrupt).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "reconciles an accepted turn when host clear fails, then rejects a fresh old-review acknowledgment (interrupt confirmed: %s)",
     async (interrupted) => {

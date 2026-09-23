@@ -11,6 +11,7 @@ import type {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
+import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -121,6 +122,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 
 export async function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
+  authority?: ApprovalRequestAuthority;
   client?: GatewayClient | null;
   cfg?: OpenClawConfig;
   approvalKind?: ChannelApprovalKind;
@@ -134,7 +136,8 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     expiresAtMs: number;
   }>
 > {
-  const records = await params.manager.listPendingRecords();
+  const records = await params.manager.listPendingRecords(params.authority);
+  params.authority?.assertCurrent();
   const cfg = params.getCfg?.() ?? params.cfg;
   return records
     .filter(
@@ -173,6 +176,7 @@ function resolveLookupError(params: {
 async function resolveApprovalRecordForState<TPayload>(
   params: {
     manager: ExecApprovalManager<TPayload>;
+    authority?: ApprovalRequestAuthority;
     inputId: string;
     client?: GatewayClient | null;
     cfg?: OpenClawConfig;
@@ -197,11 +201,14 @@ async function resolveApprovalRecordForState<TPayload>(
   const resolvedId = await params.manager.lookupApprovalId(params.inputId, {
     includeResolved: expectedState === "resolved",
     filter: visible,
+    authority: params.authority,
   });
+  params.authority?.assertCurrent();
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return { ok: false, response: resolveLookupError({ ...params, resolvedId }) };
   }
-  const snapshot = await params.manager.getSnapshot(resolvedId.id);
+  const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
+  params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
   return !snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)
     ? { ok: false, response: "missing" }
@@ -210,6 +217,7 @@ async function resolveApprovalRecordForState<TPayload>(
 
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
+  authority?: ApprovalRequestAuthority;
   inputId: string;
   client?: GatewayClient | null;
   cfg?: OpenClawConfig;

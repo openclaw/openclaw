@@ -1,8 +1,34 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
+import type { NodeWorkerPreparedWorkspaceKernel } from "./node-worker-prepared-workspace-store.kernel.js";
 import type { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 
 export type NodeWorkerJournalWorkerOperations = {
+  "nodeWorker.prepared.find": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["find"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["find"]>;
+  };
+  "nodeWorker.prepared.list": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["list"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["list"]>;
+  };
+  "nodeWorker.prepared.register": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["register"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["register"]>;
+  };
+  "nodeWorker.prepared.bind": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["bind"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["bind"]>;
+  };
+  "nodeWorker.prepared.retire": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["retire"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["retire"]>;
+  };
+  "nodeWorker.prepared.completeMutation": {
+    input: Parameters<NodeWorkerPreparedWorkspaceKernel["completeMutation"]>;
+    output: ReturnType<NodeWorkerPreparedWorkspaceKernel["completeMutation"]>;
+  };
+
   "nodeWorker.launch.claimObservation": {
     input: Parameters<NodeWorkerLaunchKernel["claimObservation"]>;
     output: ReturnType<NodeWorkerLaunchKernel["claimObservation"]>;
@@ -69,6 +95,13 @@ export function isNodeWorkerJournalCommand(command: {
 }
 
 const nodeWorkerJournalCommands = {
+  "nodeWorker.prepared.find": true,
+  "nodeWorker.prepared.list": true,
+  "nodeWorker.prepared.register": true,
+  "nodeWorker.prepared.bind": true,
+  "nodeWorker.prepared.retire": true,
+  "nodeWorker.prepared.completeMutation": true,
+
   "nodeWorker.launch.claimObservation": true,
   "nodeWorker.launch.claim": true,
   "nodeWorker.launch.listNonterminal": true,

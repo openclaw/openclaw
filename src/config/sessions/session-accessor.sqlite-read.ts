@@ -307,22 +307,30 @@ export function readTranscriptEventAtSeqSync(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "checkpoint", () => {
-    const db = getSessionKysely(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", "=", seq),
-    );
-    return row
-      ? {
-          event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: sqliteNumber(row.seq),
-        }
-      : undefined;
+    return readTranscriptEventAtSeqInTransaction(database, resolved.sessionId, seq);
   });
+}
+
+/** Reads one raw row within the caller's already validated transcript snapshot. */
+export function readTranscriptEventAtSeqInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  seq: number,
+): SessionTranscriptEventRow | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
+      .where("session_id", "=", sessionId)
+      .where("seq", "=", seq),
+  );
+  return row
+    ? {
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        seq: sqliteNumber(row.seq),
+      }
+    : undefined;
 }
 
 /** Select the same fenced rows for synchronous materialization and worker transfer. */

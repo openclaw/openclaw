@@ -25,6 +25,7 @@ import {
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readExactSessionEntryRow,
+  readSessionEntryTargetRow,
   readSessionEntryRowScan,
 } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionEntryWriteQueries } from "./session-accessor.sqlite-entry-write-queries.js";
@@ -52,8 +53,7 @@ import {
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
-  assertCanonicalSqliteSessionKeysCurrent,
-  assertCanonicalSessionKeyWriteMatchesDatabase,
+  assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
@@ -151,29 +151,14 @@ export function resolveLifecyclePrimaryEntry(
   target: { canonicalKey: string; storeKeys: string[] },
   options: { allowCanonicalMove?: boolean } = {},
 ): SqliteLifecycleTargetSnapshot[number] | undefined {
-  const rows = target.storeKeys.flatMap((key) => {
-    const sessionKey = key.trim();
-    const row = readExactSessionEntryRow(database, sessionKey);
-    return row ? [{ sessionKey, entry: row.entry, rawRow: row.row }] : [];
-  });
-  if (rows.length > 1) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `duplicate rows resolve to canonical session key ${target.canonicalKey}`,
-    );
-  }
-  const [row] = rows;
-  if (row && row.sessionKey !== target.canonicalKey && options.allowCanonicalMove !== true) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
-    );
-  }
-  return row
+  const row = readSessionEntryTargetRow(database, target, options);
+  return row?.entry
     ? {
         entry: row.entry,
-        sessionKey: row.sessionKey,
+        sessionKey: row.row.session_key,
         persistedRows: {
           lookupKeys: target.storeKeys.map((key) => key.trim()),
-          rows: [row.rawRow],
+          rows: [row.row],
         },
       }
     : undefined;
@@ -184,7 +169,6 @@ export function readLifecycleTargetSnapshot(
   target: { canonicalKey: string; storeKeys: string[] },
   options: { allowCanonicalMove?: boolean } = {},
 ): SqliteLifecycleTargetSnapshot {
-  assertCanonicalSqliteSessionKeysCurrent(database);
   const normalized = normalizeLifecycleTarget(target);
   const row = resolveLifecyclePrimaryEntry(database, normalized, options);
   return row ? [row] : [];
@@ -458,8 +442,8 @@ export function writeSessionEntry(
   } = {},
 ): SessionEntry {
   if (!options.allowStoredAliases) {
-    assertCanonicalSessionKeyWriteMatchesDatabase(database, sessionKey);
-    assertCanonicalSessionEntryLineageWrite(database, entry);
+    assertCanonicalSessionKeyWrite(sessionKey);
+    assertCanonicalSessionEntryLineageWrite(entry);
     if (resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry) !== sessionKey) {
       throw canonicalSessionKeyMigrationRequiredError(
         `refusing non-canonical session key write ${sessionKey}`,

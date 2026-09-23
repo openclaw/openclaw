@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { pluginRetentionEntrypoints } from "./retention-runtime.test-support.js";
 
 it.each(["retirement", "live-grant"])(
   "preserves native registered access-signal ownership through %s",
@@ -10,10 +11,8 @@ it.each(["retirement", "live-grant"])(
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(
-          new URL("./gateway-access-policy-registration.test-support.ts", import.meta.url),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(pluginRetentionEntrypoints.accessPolicy),
         ),
         scenario,
       ],

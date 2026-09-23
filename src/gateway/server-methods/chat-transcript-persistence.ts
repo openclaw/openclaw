@@ -27,7 +27,11 @@ import {
   extractAssistantPhaseText,
   readAssistantTextBlocksForPhase,
 } from "../../shared/chat-message-content.js";
-import type { AbortedPartialSnapshot, ChatAbortOrigin } from "./chat-aborted-partial.js";
+import {
+  abortedPartialPersistenceError,
+  type AbortedPartialSnapshot,
+  type ChatAbortOrigin,
+} from "./chat-aborted-partial.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -409,10 +413,11 @@ export async function appendAssistantTranscriptMessage(params: {
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
-}): Promise<void> {
+}): Promise<string | undefined> {
+  let warning: string | undefined;
   for (const snapshot of params.snapshots) {
     if (!snapshot.ok) {
-      throw snapshot.error;
+      throw abortedPartialPersistenceError(snapshot.error, warning);
     }
     const appended = await appendAssistantTranscriptMessage(snapshot.value);
     if (appended.skipped) {
@@ -424,8 +429,11 @@ export async function persistAbortedPartials(params: {
       if (snapshot.abortOrigin === "placement-abandon") {
         throw new Error(error);
       }
+      warning =
+        "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat.";
     }
   }
+  return warning;
 }
 
 async function touchAssistantTranscriptSessionEntry(

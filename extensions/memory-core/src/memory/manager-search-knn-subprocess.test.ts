@@ -11,8 +11,13 @@ import {
   SQLITE_IDLE_HANDLE_TTL_MS,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { vectorKnnParentEntrypoint } from "./manager-search-knn-runtime.test-support.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
@@ -350,11 +355,7 @@ describe("memory vector KNN subprocess boundary", () => {
         const result = await promisify(childProcess.execFile)(
           process.execPath,
           [
-            "--import",
-            import.meta.resolve("tsx"),
-            fileURLToPath(
-              new URL("./fixtures/manager-search-knn-parent.fixture.mjs", import.meta.url),
-            ),
+            ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(vectorKnnParentEntrypoint)),
             JSON.stringify({
               expireIdle,
               databasePaths: fixtures.map((fixture) => fixture.databasePath),

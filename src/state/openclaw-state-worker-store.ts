@@ -647,8 +647,7 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
         operation,
         options?.assertCurrent,
         options?.createAdmission,
-        // Commands with live admission retain lifecycle custody through native settlement.
-        options?.requireStateLifecycle === true || options?.createAdmission !== undefined,
+        options?.requireStateLifecycle === true,
       );
     } finally {
       releaseOperation();

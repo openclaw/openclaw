@@ -121,7 +121,6 @@ export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutation,
-  authorizeSessionSharing,
   authorizeSessionSharingTarget,
   canAccessIncognitoSession,
   canManageSessionSharing,

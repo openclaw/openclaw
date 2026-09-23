@@ -413,6 +413,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       providerReviewNotice: this.providerReview.notice(),
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
+      progressCardLifetime: progressPresentation?.lifetime,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,
@@ -472,6 +473,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
+      realtimeTalkInputNotice: state.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,
@@ -614,6 +616,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state as never);
+        state.requestUpdate?.();
+      },
+      onDismissRealtimeTalkInputNotice: () => {
+        state.realtimeTalkInputNotice = null;
         state.requestUpdate?.();
       },
       onAbort: sessionActionCallbacks.onAbort,

@@ -12,6 +12,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   relativeInput?: boolean;
   validationResult?: "failed" | "skipped";
   validationClockAdvanceMs?: number;
+  terminalParentExitProbe?: true;
   cancelDuringValidation?: boolean;
   cancelAtActivation?: "requester" | "inspection";
   runnerFallback?: boolean;

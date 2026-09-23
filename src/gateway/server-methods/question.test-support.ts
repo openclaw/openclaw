@@ -62,11 +62,12 @@ export function installQuestionTestHooks() {
     handlers = createQuestionHandlers(manager, storeWriteService);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     releaseAgentRunDelegatedAuthority(requesterAuthority);
     unregisterAuthorityClosed();
     clearAgentRunContext(requestParams.runId);
     manager.close();
+    await manager.drain();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -82,6 +83,7 @@ export async function callQuestionRpc(
 ) {
   const calls: Parameters<RespondFn>[] = [];
   const respond: RespondFn = (...args) => calls.push(args);
+  const cfg = options?.cfg ?? {};
   const request = {
     req: { type: "req" as const, id: "request-1", method, params },
     params,
@@ -93,7 +95,7 @@ export async function callQuestionRpc(
       broadcast,
       questionManager: manager,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-      getRuntimeConfig: () => options?.cfg ?? {},
+      getRuntimeConfig: () => cfg,
     }),
   };
   if (options?.registered) {

@@ -588,7 +588,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
       // -1: channel-message pins its published compatibility exports explicitly.
-      49,
+      // -1: infra-runtime pins its existing diagnostics type-query surface.
+      48,
       env,
     ),
   };

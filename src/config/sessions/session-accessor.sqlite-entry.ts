@@ -4,8 +4,11 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   createOpenClawAgentDatabaseClaim,
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
   type OpenClawAgentDatabaseClaim,
 } from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
@@ -61,7 +64,6 @@ import {
   cloneSessionEntry,
   getSessionKysely,
   resolveSqliteScope,
-  resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
@@ -73,7 +75,11 @@ import {
   readSessionEntriesByStatus,
   selectSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
+import type {
+  CapturedSessionEntryReadSource,
+  SessionEntryListScope,
+  SessionEntryReadScope,
+} from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -397,24 +403,43 @@ export async function patchSessionEntryTarget(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
-  const resolved = resolveSqliteStoreScope(scope.storePath, { agentId: scope.agentId });
+  const source = scope.readSource;
+  const resolved: ResolvedSqliteScope = source
+    ? {
+        agentId: scope.agentId ?? source.agentId,
+        databaseAgentId: source.agentId,
+        env: scope.env,
+        path: source.path,
+        ownerStorePath: source.path,
+        sessionKey: "",
+      }
+    : resolveSqliteScope({
+        agentId: scope.agentId,
+        env: scope.env,
+        sessionKey: "",
+        storePath: scope.storePath,
+      });
   return await patchSqliteSessionEntrySnapshot({
     operationLabel: "session-entry-target.patch",
+    capturedSource: source,
     validateCanonicalKeys: true,
     options,
     readSnapshot: (database) => readLifecycleTargetSnapshot(database, scope.target),
     resolved,
     sessionKey: scope.target.canonicalKey,
-    storePath: resolveSessionStorePathForScope({
-      agentId: scope.agentId,
-      sessionKey: scope.target.canonicalKey,
-      storePath: scope.storePath,
-    }),
+    storePath:
+      source?.path ??
+      resolveSessionStorePathForScope({
+        agentId: scope.agentId,
+        sessionKey: scope.target.canonicalKey,
+        storePath: scope.storePath,
+      }),
     update,
   });
 }
 
 type SqliteSessionEntrySnapshotPatchParams = {
+  capturedSource?: CapturedSessionEntryReadSource;
   operationLabel: "session-entry.patch" | "session-entry-target.patch";
   validateCanonicalKeys: boolean;
   options: SqliteSessionEntryPatchOptions;
@@ -444,16 +469,45 @@ async function patchSqliteSessionEntrySnapshot(
   resolved.path = databasePath;
   databaseOptions.path = databasePath;
   const incognito = isIncognitoOpenClawAgentSqlitePath(databasePath, databaseOptions);
-  const withDatabase = <T>(operation: () => T | Promise<T>) =>
-    !incognito && !getOpenClawAgentDatabaseIfOpen(databaseOptions)
-      ? withOpenClawAgentDatabaseAsync(databaseOptions, operation)
+  const captured = params.capturedSource;
+  const assertCapturedSource = (database?: OpenClawAgentDatabase) => {
+    if (!captured) {
+      return;
+    }
+    if (typeof captured.databaseIdentity === "string") {
+      assertExistingDatabaseIdentity(databasePath, `file:${captured.databaseIdentity}`);
+    }
+    const current = database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions);
+    if (!current) {
+      if (typeof captured.databaseIdentity === "symbol") {
+        throw new Error("Captured session database is no longer open");
+      }
+      return;
+    }
+    const physical = readOpenClawAgentDatabaseIdentity(current);
+    if (
+      current.agentId !== captured.agentId ||
+      physical.identity !== captured.databaseIdentity ||
+      physical.birthtime !== captured.databaseBirthtime ||
+      !isOpenClawAgentDatabasePathCurrent(current)
+    ) {
+      throw new Error("Captured session database changed before update");
+    }
+  };
+  const assertCurrent = captured ? () => assertCapturedSource() : undefined;
+  const withDatabase = <T>(operation: () => T | Promise<T>) => {
+    assertCurrent?.();
+    return !incognito && !getOpenClawAgentDatabaseIfOpen(databaseOptions)
+      ? withOpenClawAgentDatabaseAsync(databaseOptions, operation, assertCurrent)
       : operation();
+  };
   let wrote = false;
   const committed = await runExclusiveSqliteSessionWrite(
     resolved,
     async () =>
       withDatabase(async () => {
         const database = openOpenClawAgentDatabase(databaseOptions);
+        assertCapturedSource(database);
         const prepared = params.readSnapshot(database);
         const existing = prepared[0]?.entry;
         const writeBase = existing ?? options.fallbackEntry;
@@ -486,6 +540,7 @@ async function patchSqliteSessionEntrySnapshot(
         return withDatabase(() => {
           let result: SessionEntry | null = null;
           const publish = runOpenClawAgentWriteTransaction((writeDatabase) => {
+            assertCapturedSource(writeDatabase);
             if (options.shouldCommit?.() === false) {
               return undefined;
             }

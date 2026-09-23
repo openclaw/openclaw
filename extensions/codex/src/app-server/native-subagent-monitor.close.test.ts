@@ -13,7 +13,10 @@ import {
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { createCodexNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
+import {
+  createCodexNativeSubagentMonitorRuntime,
+  defaultNativeSubagentMonitorRuntime,
+} from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
@@ -26,10 +29,137 @@ import {
   nativeCompletionNotification,
   notifyChildStarted,
   registerParent,
+  registerCodexNativeSubagentMonitor,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
+
+describe("Codex native close delivery persistence", () => {
+  it.each([true, false])(
+    "preserves accepted completion delivery across close when completionBeforeClose=%s",
+    async (completionBeforeClose) => {
+      await withStateDirEnv("codex-r2-close-", async ({ stateDir }) => {
+        const requesterSessionKey = `agent:main:r2-close-${completionBeforeClose}`;
+        const host = await createAdmittedHostCapabilityTestFixture({
+          runId: `r2-close-parent-${completionBeforeClose}`,
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          config: {},
+        });
+        const scope = host.agentHarnessTaskRuntimeScope;
+        if (!scope) {
+          throw new Error("task runtime scope missing");
+        }
+        const client = createClient();
+        client.request.mockImplementation(async (method) => {
+          if (method === "thread/unsubscribe") {
+            return { status: "unsubscribed" } as never;
+          }
+          if (method === "thread/loaded/list") {
+            return { data: [], nextCursor: null } as never;
+          }
+          throw new Error(`unexpected request: ${method}`);
+        });
+        ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
+        const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+        const parent = registerCodexNativeSubagentMonitor({
+          client: client as never,
+          parentThreadId: "parent-thread",
+          requesterSessionKey,
+          taskRuntimeScope: scope,
+          agentId: "main",
+          runtime: {
+            ...defaultNativeSubagentMonitorRuntime,
+            deliverAgentHarnessTaskCompletion: deliver,
+          },
+        });
+        let database: DatabaseSync | undefined;
+        try {
+          parent.bindTurn("parent-turn");
+          await notifyChildStarted(client);
+          await client.notify({
+            method: "turn/started",
+            params: {
+              threadId: "child-thread",
+              turn: { id: "child-turn", status: "inProgress", items: [], error: null },
+            },
+          });
+          await client.notify(closeAgentNotification({ method: "item/started" }));
+          if (completionBeforeClose) {
+            await client.notify(
+              childTurnCompletedNotification({
+                status: "completed",
+                items: [
+                  {
+                    type: "agentMessage",
+                    id: "r2-final",
+                    phase: "final_answer",
+                    text: "R2 accepted result",
+                  },
+                ],
+              }),
+            );
+          }
+          database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+            readOnly: true,
+          });
+          const readTask = () =>
+            database!
+              .prepare(
+                "SELECT status, delivery_status, terminal_summary, error FROM task_runs WHERE run_id = ?",
+              )
+              .get("codex-thread:child-thread");
+          const beforeClose = readTask();
+          expect(beforeClose).toMatchObject(
+            completionBeforeClose
+              ? {
+                  status: "succeeded",
+                  delivery_status: "pending",
+                  terminal_summary: "R2 accepted result",
+                }
+              : { status: "running", delivery_status: "not_applicable" },
+          );
+          // Codex captures previous_status before awaiting child shutdown.
+          await client.notify(
+            closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
+          );
+          const afterClose = readTask();
+          await parent.unregister();
+          const afterParentRelease = readTask();
+          if (completionBeforeClose) {
+            expect.soft(afterClose).toMatchObject({
+              status: "succeeded",
+              delivery_status: "pending",
+              terminal_summary: "R2 accepted result",
+            });
+            expect.soft(afterParentRelease).toMatchObject({
+              status: "succeeded",
+              delivery_status: "delivered",
+              terminal_summary: "R2 accepted result",
+            });
+            expect(deliver).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({ result: "R2 accepted result" }),
+            );
+          } else {
+            expect(afterParentRelease).toMatchObject({
+              status: "cancelled",
+              delivery_status: "not_applicable",
+              terminal_summary: "Subagent was closed.",
+            });
+            expect(deliver).not.toHaveBeenCalled();
+          }
+        } finally {
+          await parent.unregister();
+          client.close();
+          database?.close();
+          host.closeHost();
+          host.closeAdmission();
+        }
+      });
+    },
+  );
+});
 
 describe("Codex native close admission", () => {
   it("does not publish a claim invalidated before the factory await resumes", async () => {

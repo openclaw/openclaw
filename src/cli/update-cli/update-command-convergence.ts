@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
-import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  normalizeUpdatePostInstallDoctorWarnings,
+} from "../../infra/update-doctor-result.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -156,6 +159,7 @@ export async function convergeUpdatePlugins(params: {
         doctorWarnings.push(...warnings);
       };
       let targetRuntimeConverged = false;
+      let maintenanceDeferred = false;
       if (shouldResumePostCoreInFreshProcess) {
         if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
           await params.beforeDoctor?.();
@@ -255,12 +259,13 @@ export async function convergeUpdatePlugins(params: {
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
+        const producedPluginUpdate = postCorePluginUpdate;
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
-          pluginUpdate: postCorePluginUpdate,
-          freshDoctorRequired: postCorePluginUpdate.changed,
+          pluginUpdate: producedPluginUpdate,
+          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,
@@ -268,15 +273,30 @@ export async function convergeUpdatePlugins(params: {
           timeoutMs: params.updateStepTimeoutMs,
           onWarnings: collectDoctorWarnings,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+        }).catch((error: unknown) => {
+          if (
+            !(error instanceof DoctorMaintenanceRefusalError) ||
+            error.refusal.kind !== "deferred"
+          ) {
+            throw error;
+          }
+          maintenanceDeferred = true;
+          postCorePluginUpdate = { ...producedPluginUpdate, status: "warning" };
+          if (!doctorWarnings.includes(error.message)) {
+            collectDoctorWarnings([error.message]);
+          }
+          return undefined;
         });
         assertCurrent?.();
-        postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
-        postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+        if (completedPluginUpdate) {
+          postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+          postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+        }
       } else if (params.candidateRuntime) {
         postUpdateConfigSnapshot = await readConfigFileSnapshot({ observe: false });
       }
       assertCurrent?.();
-      if (params.candidateRuntime && postUpdateConfigSnapshot) {
+      if (!maintenanceDeferred && params.candidateRuntime && postUpdateConfigSnapshot) {
         await persistValidatedDowngradeConfig(postUpdateConfigSnapshot, assertCurrent);
         assertCurrent?.();
       }

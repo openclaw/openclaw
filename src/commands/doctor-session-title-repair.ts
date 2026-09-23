@@ -15,13 +15,13 @@ import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js"
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
 import { hasExplicitSessionName, sessionTitleRequests } from "../gateway/session-title-state.js";
 import { sqliteMessageEventWithSeq } from "../gateway/session-transcript-entry-message.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
 type SessionTitleRepairScope = {

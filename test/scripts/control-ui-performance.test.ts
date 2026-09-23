@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { build } from "tsdown";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics,
@@ -13,6 +14,7 @@ import {
 } from "../../scripts/check-control-ui-performance.mts";
 
 const tempDirs: string[] = [];
+const preparedScripts = new Map<string, string | Uint8Array>();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const baselineUpdateCommand =
   'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
@@ -20,11 +22,12 @@ const baselineUpdateCommand =
 function runControlUiPerformanceCli(scriptPath: string, args: string[], cwd: string) {
   const env = { ...process.env };
   delete env.TSX_DISABLE_CACHE;
-  return spawnSync(
-    process.execPath,
-    ["--import", tsxImport, fs.realpathSync(scriptPath), ...args],
-    { cwd, env, encoding: "utf8", timeout: 10_000 },
-  );
+  return spawnSync(process.execPath, [fs.realpathSync(scriptPath), ...args], {
+    cwd,
+    env,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
 }
 
 function createDistFixture() {
@@ -47,6 +50,7 @@ function createDistFixture() {
 function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
   tempDirs.push(rootDir);
+  fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}\n');
   const scriptsDir = path.join(rootDir, "scripts");
   const scriptLibDir = path.join(scriptsDir, "lib");
   const configDir = path.join(rootDir, "config");
@@ -88,8 +92,43 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     path.join(configDir, "control-ui-startup-budget-baseline.json"),
     JSON.stringify(startupBaseline(65)),
   );
+  for (const [relative, contents] of preparedScripts) {
+    const output = path.join(rootDir, relative);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, contents);
+  }
+  if (preparedScripts.size > 0) {
+    fs.copyFileSync(path.join(scriptsDir, "check-control-ui-performance.js"), scriptPath);
+  }
   return { rootDir, scriptPath, configDir, distDir };
 }
+
+beforeAll(async () => {
+  const { rootDir } = createCliFixture();
+  const { bundles } = await build({
+    config: false,
+    cwd: rootDir,
+    root: rootDir,
+    entry: ["scripts/check-control-ui-performance.mts"],
+    outDir: rootDir,
+    unbundle: true,
+    format: "esm",
+    platform: "node",
+    dts: false,
+    clean: false,
+    write: false,
+    treeshake: false,
+    outExtensions: () => ({ js: ".js" }),
+    outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
+    logLevel: "silent",
+  });
+  for (const bundle of bundles) {
+    for (const output of bundle.chunks) {
+      preparedScripts.set(output.fileName, output.type === "chunk" ? output.code : output.source);
+    }
+    await bundle[Symbol.asyncDispose]();
+  }
+});
 
 function createMetrics(startupJsGzipBytes: number) {
   return {

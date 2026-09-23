@@ -21,6 +21,40 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    readArchivePruning: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-archive-pruning", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-archive-pruning"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of archive pruning",
+            );
+          }
+          return value.result;
+        },
+      ),
+    readColdMetadata: async (input) =>
+      await runRequest(
+        () => ({ kind: "cold-metadata", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "cold-metadata"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of cold metadata",
+            );
+          }
+          return value;
+        },
+      ),
     searchTranscripts: async (params) =>
       await runRequest(
         () => ({ kind: "transcript-search", params }),
@@ -68,6 +102,23 @@ export function createSessionHistoryWorkerReaders(
           return value.fields;
         },
       ),
+    readRowBackfill: async (params) =>
+      await runRequest(
+        () => ({ kind: "session-row-backfill", params }),
+        JSON.stringify(params).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-row-backfill"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of transcript fields",
+            );
+          }
+          return value.fields;
+        },
+      ),
     run: async (prepare, inputBytes) =>
       await runRequest(prepare, inputBytes, (value) => {
         if (
@@ -76,6 +127,7 @@ export function createSessionHistoryWorkerReaders(
           (value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "recent" &&
             value.kind !== "message-lookup")
         ) {
           throw new Error("Session history worker returned metadata instead of history");
@@ -143,6 +195,24 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readCurrentTurnEntry: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "current-turn-entry", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "current-turn-entry"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of a current-turn entry",
+            );
+          }
+          return value;
+        },
+        signal,
+      ),
     readUsageCache: async (input) =>
       await runRequest(
         () => ({ kind: "usage-cache", ...input }),
@@ -229,6 +299,23 @@ export function createSessionHistoryWorkerReaders(
         },
       );
     },
+    readProgressCard: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-progress-card", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-progress-card"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of a progress card",
+            );
+          }
+          return value.card;
+        },
+      ),
     readEntries: async (scope) =>
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),

@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { readDeferredPluginSessionImport } from "../../infra/deferred-plugin-session-sources.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { createAgentDatabaseDeletionClassifier } from "../../state/agent-deletion-discovery.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -33,7 +34,11 @@ import {
   resolveSqliteTargetFromSessionStorePath,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
-import { resolveAllAgentSessionStoreTargetsSync, resolveSessionStoreTargets } from "./targets.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+} from "./targets.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
@@ -71,13 +76,30 @@ export function assertSessionStoreMigrationComplete(params: {
     const sourcePath = path.resolve(target.storePath);
     sourcesByPath.set(sourcePath, [...(sourcesByPath.get(sourcePath) ?? []), target]);
   }
-  const legacyStore = [...sourcesByPath].find(([storePath, candidates]) => {
-    if (storePath.endsWith(".sqlite") || !fs.existsSync(storePath)) {
-      return false;
-    }
+  const legacySources = [...sourcesByPath].filter(
+    ([storePath]) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath),
+  );
+  if (legacySources.length === 0) {
+    return;
+  }
+  const deletionSnapshot = readAgentDatabaseDeletionSnapshot(env);
+  const classifyDeletion =
+    deletionSnapshot &&
+    createAgentDatabaseDeletionClassifier({
+      env,
+      retainedDeletions: deletionSnapshot.retainedDeletions,
+      registeredAgentDatabases: deletionSnapshot.registeredAgentDatabases,
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(
+        params.cfg,
+        readOptions,
+      ),
+    });
+  const legacyStore = legacySources.find(([storePath, candidates]) => {
     type SourceOwner = {
       target: { agentId: string; storePath: string; sqlitePath?: string };
       destination: string;
+      retained: boolean;
+      imported: boolean;
     };
     const owners = new Map<string, SourceOwner>();
     for (const target of candidates) {
@@ -90,19 +112,41 @@ export function assertSessionStoreMigrationComplete(params: {
           agentId: target.agentId,
           ...readOptions,
         }).path;
+      const deletion =
+        classifyDeletion?.(storePath, target.agentId) ??
+        classifyDeletion?.(destination, target.agentId);
+      const retained = deletion !== undefined && deletion !== "unavailable";
       owners.set(`${target.agentId}\0${destination}`, {
         target: { ...target, agentId: target.agentId },
         destination,
+        retained,
+        imported:
+          !retained &&
+          readDeferredPluginSessionImport({
+            cfg: params.cfg,
+            target: { ...target, agentId: target.agentId },
+            sqlitePath: destination,
+            env,
+            purpose: "readiness",
+          }) !== undefined,
       });
+    }
+    // A shared path still needs record-level ownership even when every candidate is held.
+    if (
+      [...owners.values()].every(
+        ({ target, retained, imported }) =>
+          (imported || retained) && !shouldFilterLegacySessionRecordsByTarget(target),
+      )
+    ) {
+      return false;
     }
     // A roster entry is only a possible importer. Inspect retained source ownership
     // here, never in runtime session access, and bind parsed bytes to every receipt.
     const issues: Array<{ code: string; message: string; sessionKey?: string }> = [];
     const source = readLegacySessionStoreEntries({ storePath }, issues);
     if (issues.some((issue) => issue.code !== "entry_invalid") || !source.bytes) {
-      return true;
+      return [...owners.values()].some(({ imported, retained }) => !imported && !retained);
     }
-    const sourceSha256 = createHash("sha256").update(source.bytes).digest("hex");
     // Empty indexes may have unindexed history: retain the existing requirement
     // for every named owner's verified receipt rather than infer ownership here.
     const required = new Set<SourceOwner>(source.entries.length === 0 ? owners.values() : []);
@@ -121,29 +165,25 @@ export function assertSessionStoreMigrationComplete(params: {
       required.add(matches[0]!);
     }
     let hasUnindexedHistory: boolean | undefined;
-    return [...required].some(({ target, destination }) => {
-      const receipt = readDeferredPluginSessionImport({
-        cfg: params.cfg,
-        target,
-        sqlitePath: destination,
-        env,
-        purpose: "readiness",
-      });
+    return [...required].some(({ target, destination, retained, imported }) => {
+      if (
+        imported ||
+        (retained &&
+          (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target)))
+      ) {
+        return false;
+      }
       // Owners without a database cannot have completed a core session import.
       // Without a receipt or unindexed history, demanding one deadlocks startup:
       // Doctor refuses to create a database just for the receipt.
-      if (!receipt && source.entries.length === 0 && !fs.existsSync(destination)) {
+      if (source.entries.length === 0 && !fs.existsSync(destination)) {
         hasUnindexedHistory ??=
           listLegacySessionTranscriptFiles(path.dirname(storePath)).length > 0;
         if (!hasUnindexedHistory) {
           return false;
         }
       }
-      return (
-        !receipt ||
-        receipt.sources.find((entry) => path.resolve(entry.path) === storePath)?.identity.sha256 !==
-          sourceSha256
-      );
+      return true;
     });
   })?.[0];
   if (legacyStore) {

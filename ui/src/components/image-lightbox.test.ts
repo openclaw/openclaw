@@ -11,6 +11,8 @@ import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 vi.mock("@panzoom/panzoom", () => ({
   default: vi.fn(() => ({
     destroy: vi.fn(),
+    getScale: vi.fn(() => 1),
+    pan: vi.fn(),
     reset: vi.fn(),
     resetStyle: vi.fn(),
     zoomIn: vi.fn(),
@@ -366,6 +368,76 @@ describe("openclaw-image-lightbox", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
     expect(root?.activeElement).toBe(zoomIn);
+  });
+
+  it("pans zoomed images with Shift+arrows while plain arrows still navigate the gallery", async () => {
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        decode = async () => {};
+      },
+    );
+    const { modal, dialogAdapter } = await renderLightbox();
+    const initialSource = modal.src;
+    const nextSource = "https://example.com/next.png";
+    modal.gallery = {
+      index: 0,
+      items: [
+        async () => ({ src: initialSource, title: "Generated lobster" }),
+        async () => ({ src: nextSource, title: "Next image" }),
+      ],
+    };
+    await modal.updateComplete;
+    const image = modal.shadowRoot!.querySelector<HTMLImageElement>(".image")!;
+    image.dispatchEvent(new Event("load"));
+    const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+    const press = (key: string, modifiers: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+      });
+      dialogAdapter.dispatchEvent(event);
+      return event;
+    };
+
+    expect(press("ArrowRight", { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(panzoom.pan).not.toHaveBeenCalled();
+    await modal.updateComplete;
+    expect(image.src).toBe(initialSource);
+
+    vi.mocked(panzoom.getScale).mockReturnValue(2);
+    for (const [key, x, y] of [
+      ["ArrowLeft", -24, 0],
+      ["ArrowRight", 24, 0],
+      ["ArrowUp", 0, -24],
+      ["ArrowDown", 0, 24],
+    ] as const) {
+      expect(press(key, { shiftKey: true }).defaultPrevented).toBe(true);
+      expect(panzoom.pan).toHaveBeenLastCalledWith(x, y, { relative: true, animate: false });
+    }
+    expect(press("ArrowRight", { shiftKey: true, metaKey: true }).defaultPrevented).toBe(false);
+    expect(panzoom.pan).toHaveBeenCalledTimes(4);
+    expect(image.src).toBe(initialSource);
+
+    for (const [key, source] of [
+      ["ArrowRight", nextSource],
+      ["ArrowLeft", initialSource],
+    ] as const) {
+      await new Promise<void>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (image.src === source) {
+            observer.disconnect();
+            resolve();
+          }
+        });
+        observer.observe(image, { attributes: true, attributeFilter: ["src"] });
+        expect(press(key).defaultPrevented).toBe(true);
+      });
+      expect(image.src).toBe(source);
+    }
   });
 
   it("emits one close event for the close button and modal cancellation", async () => {

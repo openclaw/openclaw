@@ -108,6 +108,8 @@ describe("CLI runtime admission", () => {
         "--config",
         "test/vitest/vitest.gateway-server.config.ts",
         "--exclude",
+        "server.acp-native-model.product.test.ts",
+        "--exclude",
         "server-sidecar-retention.test.ts",
         "--exclude",
         "server.config-patch.test.ts",

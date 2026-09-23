@@ -127,34 +127,47 @@ describe("gateway auxiliary authority lifecycle", () => {
       onAgentRunAuthorityClosed,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
-    const operationalRunInstance = Object.freeze({
-      instanceId: "egress-proxy-instance",
-      runId: "egress-proxy-run",
-    });
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const generation = new AbortController();
-    const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
-    const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
-    record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
-    const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
+    vi.useFakeTimers();
+    const restoreClock = installTestApprovalClock();
+    try {
+      const operationalRunInstance = Object.freeze({
+        instanceId: "egress-proxy-instance",
+        runId: "egress-proxy-run",
+      });
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const generation = new AbortController();
+      const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
+      const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
+      record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
+      const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
 
-    generation.abort();
+      generation.abort();
 
-    await expect(pending).resolves.toBeNull();
-    expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe("cancelled");
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
-      scoped,
-      "approval-scope-closed",
-    );
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+      await expect(pending).resolves.toBeNull();
+      expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe(
+        "cancelled",
+      );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
+        scoped,
+        "approval-scope-closed",
+      );
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
 
-    releaseAgentRunDelegatedAuthority(authority);
+      releaseAgentRunDelegatedAuthority(authority);
 
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
-    expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
-      expect.objectContaining({ operationalRunInstance }),
-      undefined,
-    );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
+      expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
+        expect.objectContaining({ operationalRunInstance }),
+        undefined,
+      );
+    } finally {
+      try {
+        await gatewayAux.stopOperatorInteractions();
+      } finally {
+        restoreClock?.();
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("retires one request approval while its sibling and admitted run remain live", async () => {
@@ -274,10 +287,17 @@ describe("gateway auxiliary authority lifecycle", () => {
           rotateAgentRunRegistryLifecycleGeneration();
         }
         // get/list also check liveness, so assert push delivery before either read.
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-          id: question.id,
-          status: "cancelled",
-        });
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith(
+          { id: question.id, status: "cancelled" },
+          {
+            record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+            ordinary: false,
+            sessionAccess: undefined,
+            isCurrent: expect.any(Function),
+            refreshRequester: expect.any(Function),
+          },
+        );
+        expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
         await expect(answer).resolves.toEqual({ status: "cancelled" });
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
@@ -485,7 +505,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     const pluginDecision = (await gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000))
       .decision;
     const questionResolved = vi.fn();
-    gatewayAux.questionManager.request({
+    const question = gatewayAux.questionManager.request({
       questions: [
         {
           questionId: "key",
@@ -511,8 +531,16 @@ describe("gateway auxiliary authority lifecycle", () => {
     placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: "cancelled" }),
+      { id: question.id, status: "cancelled" },
+      {
+        record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+        ordinary: false,
+        sessionAccess: undefined,
+        isCurrent: expect.any(Function),
+        refreshRequester: expect.any(Function),
+      },
     );
+    expect(questionResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
     await expect(execDecision).resolves.toBeNull();
     await expect(pluginDecision).resolves.toBeNull();
     await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));

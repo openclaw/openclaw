@@ -31,6 +31,22 @@
       "claude-cli": {
         "models": [
           {
+            "id": "claude-opus-5-5",
+            "name": "Claude Opus 5.5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
             "id": "claude-opus-5",
             "name": "Claude Opus 5 (Claude CLI)",
             "reasoning": true,
@@ -147,6 +163,29 @@
         "api": "anthropic-messages",
         "defaultUtilityModel": "claude-haiku-4-5",
         "models": [
+          {
+            "id": "claude-opus-5-5",
+            "name": "Claude Opus 5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
+          },
           {
             "id": "claude-fable-5-1",
             "name": "Claude Fable 5.1",
@@ -301,8 +340,10 @@
           "fable-5.1": "claude-fable-5-1",
           "fable-5-1": "claude-fable-5-1",
           "haiku": "claude-haiku-4-5",
+          "opus-5.5": "claude-opus-5-5",
+          "opus-5-5": "claude-opus-5-5",
           "opus-5": "claude-opus-5",
-          "opus": "claude-opus-5",
+          "opus": "claude-opus-5-5",
           "opus-4.8": "claude-opus-4-8",
           "opus-4.7": "claude-opus-4-7",
           "opus-4.6": "claude-opus-4-6",
@@ -409,7 +450,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-5"
+        "image": "claude-opus-5-5"
       },
       "autoPriority": {
         "image": 20

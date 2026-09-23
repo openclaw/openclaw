@@ -32,6 +32,7 @@ import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-hel
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
 
 type ReadTaskHistory = NonNullable<AgentHarness["taskHistory"]>["read"];
@@ -79,8 +80,15 @@ async function withHistoryState(run: () => Promise<void>) {
     try {
       await run();
     } finally {
-      resetTaskRegistryForTests();
-      restoreActivePluginRegistrySnapshot(registry);
+      try {
+        await disposeSessionReadContexts();
+      } finally {
+        try {
+          resetTaskRegistryForTests();
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+        }
+      }
     }
   });
 }

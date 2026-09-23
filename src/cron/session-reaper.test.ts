@@ -3,12 +3,15 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   listKnownSessionStoreAgentIds,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -17,12 +20,16 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
@@ -114,7 +121,8 @@ describe("sweepCronRunSessions", () => {
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
@@ -130,6 +138,7 @@ describe("sweepCronRunSessions", () => {
       },
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
+        skillsSnapshot: { prompt: "retained prompt", skills: [] },
         updatedAt: now - 25 * 3_600_000, // 25h ago — expired
       },
       "agent:main:cron:job1:run:old-run:subagent:worker": {
@@ -185,37 +194,121 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
-  it("lists entries via the read-only accessor to avoid per-open integrity checks (#142476)", async () => {
+  it("keeps an idle sweep off the host data-SQL path", async () => {
     const now = Date.now();
-    // A store with nothing to prune still gets fully listed every sweep: this is the
-    // fleet-wide hot path from #142476, where the reaper opens every agent database on
-    // a fixed interval. The writable listing (listSessionEntriesCore) runs a synchronous
-    // PRAGMA integrity_check plus foreign-key check on every open and stalls the event
-    // loop; the reaper must use the read-only listing, which skips that gate.
     await seedSessionEntries(storePath, {
       "agent:main:cron:job1:run:recent-run": {
         sessionId: "recent-run",
-        updatedAt: now - 1 * 3_600_000, // not expired — no mutation runs
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:main": {
+        sessionId: "unrelated",
+        updatedAt: now,
+        skillsSnapshot: { prompt: "unrelated prompt".repeat(1_000), skills: [] },
       },
     });
-
-    const readOnlySpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
-    const coreSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+    const hostSql = observeHostDataSql();
     try {
-      const result = await sweepCronRunSessions({
-        sessionStorePath: storePath,
-        nowMs: now,
-        log,
+      expect(await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).toEqual({
+        swept: true,
+        pruned: 0,
       });
-
-      // Nothing to prune, but the store was still listed on this sweep.
-      expect(result).toEqual({ swept: true, pruned: 0 });
-      // Routing: the listing hot path uses the read-only open, not the integrity-gated one.
-      expect(readOnlySpy).toHaveBeenCalled();
-      expect(coreSpy).not.toHaveBeenCalled();
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
     } finally {
-      readOnlySpy.mockRestore();
-      coreSpy.mockRestore();
+      hostSql.restore();
+    }
+  });
+
+  it.each(["invalid JSON", "missing timestamp", "noncanonical key", "invalid participant"])(
+    "refuses selection when an unrelated row has %s",
+    async (defect) => {
+      const exactStorePath = path.join(tmpDir, "shared.sqlite");
+      const sessionKey = "agent:main:matrix:group:!room:example.org";
+      await seedSessionEntries(exactStorePath, {
+        [sessionKey]: { sessionId: "unrelated", updatedAt: 1 },
+      });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
+      if (defect === "invalid participant") {
+        await sessionAccessor.recordSessionParticipant(
+          { agentId: "main", storePath: exactStorePath, sessionKey },
+          {
+            identity: { type: "agent", id: "peer" },
+            promptedAt: 1,
+          },
+        );
+        database.db
+          .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
+          .run("{}", sessionKey);
+      } else if (defect === "noncanonical key") {
+        database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+          JSON.stringify({
+            sessionId: "unrelated",
+            updatedAt: 1,
+            delivery: {
+              kind: "external",
+              route: { channel: "matrix", accountId: "work", target: { to: "!Room:example.org" } },
+              context: { channel: "matrix", accountId: "work", to: "!Room:example.org" },
+              origin: { provider: "matrix", to: "!Room:example.org", accountId: "work" },
+            },
+          }),
+          sessionKey,
+        );
+      } else {
+        database.db
+          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run(
+            defect === "invalid JSON" ? "{" : JSON.stringify({ sessionId: "unrelated" }),
+            sessionKey,
+          );
+      }
+      const warn = vi.fn();
+      expect(
+        await sweepCronRunSessions({
+          sessionStorePath: exactStorePath,
+          nowMs: Date.now(),
+          log: { ...log, warn },
+        }),
+      ).toEqual({ swept: false, pruned: 0 });
+      expect(warn).toHaveBeenCalledWith(
+        { err: expect.stringMatching(/canonical|invalid persisted|participant identity/) },
+        "cron-reaper: failed to sweep session store",
+      );
+    },
+  );
+
+  it("keeps a candidate whose retained prompt changes after worker discovery", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job:run:changed";
+    const entry = {
+      sessionId: "changed",
+      updatedAt: now - 25 * 3_600_000,
+      skillsSnapshot: { prompt: "before", skills: [] },
+    };
+    await seedSessionEntries(storePath, { [sessionKey]: entry });
+    const read = sessionEntryReader.readExpiredCronRunEntriesInWorker;
+    const intercept = vi
+      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .mockImplementationOnce(async (input) => {
+        const candidates = await read(input);
+        expect(candidates[0]?.entry.skillsSnapshot?.prompt).toBe("before");
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            ...entry,
+            skillsSnapshot: { prompt: "after", skills: [] },
+          },
+        );
+        return candidates;
+      });
+    try {
+      expect(
+        (await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).pruned,
+      ).toBe(0);
+      expect(readSessionEntries(storePath)[sessionKey]?.skillsSnapshot?.prompt).toBe("after");
+    } finally {
+      intercept.mockRestore();
     }
   });
 
@@ -282,7 +375,11 @@ describe("sweepCronRunSessions", () => {
         storePath: exactStorePath,
         sessionKey: mainKey,
       },
-      { sessionId: "main-run", updatedAt: now - 1 * 3_600_000 },
+      {
+        sessionId: "main-run",
+        updatedAt: now - 1 * 3_600_000,
+        skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+      },
     );
     await replaceSessionEntry(
       {
@@ -326,6 +423,22 @@ describe("sweepCronRunSessions", () => {
         log,
       }),
     ).toEqual({ swept: true, pruned: 0 });
+    const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
+    let foregroundRead:
+      | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
+      | undefined;
+    if (!process.versions.bun) {
+      const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
+      vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
+        const closing = closeResources(key);
+        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+          agentId: "main",
+          storePath: exactStorePath,
+          sessionKeys: [mainKey],
+        });
+        return closing;
+      });
+    }
     const result = await sweepCronRunSessionsImpl({
       agentId: "ops",
       sessionStorePath: exactStorePath,
@@ -334,6 +447,21 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result).toEqual({ swept: true, pruned: 1 });
+    if (!process.versions.bun) {
+      expect(foregroundRead).toBeDefined();
+      expect(await foregroundRead).toMatchObject({
+        entries: [
+          {
+            sessionKey: mainKey,
+            entry: {
+              sessionId: "main-run",
+              skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+            },
+          },
+        ],
+      });
+      expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+    }
     expect(
       sessionAccessor.loadSessionEntry({
         agentId: "main",
@@ -860,10 +988,8 @@ describe("sweepCronRunSessions", () => {
       code: "EACCES",
     });
     const listSpy = vi
-      .spyOn(sessionAccessor, "listSessionEntriesReadOnly")
-      .mockImplementation(() => {
-        throw eacces;
-      });
+      .spyOn(sessionEntryReader, "readExpiredCronRunEntriesInWorker")
+      .mockRejectedValue(eacces);
 
     try {
       const first = await sweepCronRunSessions({

@@ -33,6 +33,7 @@ export type ChatRealtimeState = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
+  realtimeTalkInputNotice: string | null;
   realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
@@ -61,6 +62,7 @@ export function createInitialChatRealtimeState(): Pick<
     realtimeTalkActive: false,
     realtimeTalkStatus: "idle",
     realtimeTalkDetail: null,
+    realtimeTalkInputNotice: null,
     realtimeTalkUseSystemDefault: null,
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
@@ -96,6 +98,7 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkActive = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
+  state.realtimeTalkInputNotice = null;
   state.realtimeTalkInputLevel.set(0);
   state.realtimeTalkVideoStream = null;
   state.realtimeTalkCameraDevices = [];
@@ -271,6 +274,7 @@ export function attachChatRealtimeActions(
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
+    state.realtimeTalkInputNotice = null;
     state.realtimeTalkVideoCapable = false;
     state.realtimeTalkVideoPending = false;
     state.realtimeTalkCameraError = false;
@@ -292,6 +296,7 @@ export function attachChatRealtimeActions(
           state.realtimeTalkCameraError = false;
           state.realtimeTalkActive = status !== "idle";
           if (status === "idle" || status === "error") {
+            state.realtimeTalkInputNotice = null;
             state.realtimeTalkInputLevel.set(0);
           }
           state.requestUpdate();
@@ -310,6 +315,13 @@ export function attachChatRealtimeActions(
             autoEnableCameraAttempted = true;
             void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
           }
+        },
+        onInputNotice: (detail) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkInputNotice = formatUiExternalText(detail);
+          state.requestUpdate();
         },
         onVideoCapability: (capable) => {
           if (state.realtimeTalkSession !== session) {

@@ -37,7 +37,6 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   SqliteSessionArtifactPreparationDiagnostics,
-  SqliteSessionArchivePruningDiagnostics,
   SqliteSessionDatabaseAdmissionDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
@@ -193,39 +192,6 @@ function artifactPreparationLogFields(diagnostics: SqliteSessionArtifactPreparat
   };
 }
 
-function archivePruningLogFields(diagnostics: SqliteSessionArchivePruningDiagnostics) {
-  const milliseconds = (value: number | undefined) =>
-    value === undefined ? undefined : Math.round(value);
-  return {
-    trigger: diagnostics.trigger,
-    admissionMs: milliseconds(diagnostics.admissionMs),
-    cachedAdmissions: diagnostics.cachedAdmissions,
-    asyncAdmissions: diagnostics.asyncAdmissions,
-    checkpointCalls: diagnostics.checkpointCalls,
-    checkpointIncomplete: diagnostics.checkpointIncomplete,
-    checkpoint: diagnostics.checkpoint,
-    totalBytesBefore: diagnostics.totalBytesBefore,
-    totalBytesAfter: diagnostics.totalBytesAfter,
-    walBytesBefore: diagnostics.walBytesBefore,
-    walBytesAfter: diagnostics.walBytesAfter,
-    checkpointMs: milliseconds(diagnostics.checkpointMs),
-    checkpointMaxMs: milliseconds(diagnostics.checkpointMaxMs),
-    vacuumMs: milliseconds(diagnostics.vacuumMs),
-    vacuumPasses: diagnostics.vacuumPasses,
-    vacuumPagesRequested: diagnostics.vacuumPagesRequested,
-    queryMs: milliseconds(diagnostics.queryMs),
-    rowDeletionMs: milliseconds(diagnostics.rowDeletionMs),
-    fileRemovalMs: milliseconds(diagnostics.fileRemovalMs),
-    removedFiles: diagnostics.removedFiles,
-    missingFiles: diagnostics.missingFiles,
-    failedRemovals: diagnostics.failedRemovals,
-    measurementMs: milliseconds(diagnostics.measurementMs),
-    measurements: diagnostics.measurements,
-    legacyInventoryMs: milliseconds(diagnostics.legacyInventoryMs),
-    completed: diagnostics.completed === true,
-  };
-}
-
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
@@ -234,9 +200,32 @@ export async function runExclusiveSqliteSessionWrite<T>(
   writer: "foreground" | "worker" = "foreground",
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
+  const timing: StoreWriterTiming = {};
+  return observeSqliteSessionWrite(
+    scope,
+    () =>
+      writer === "worker"
+        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
+        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing),
+    operation,
+    diagnostics,
+    writer,
+    timing,
+  );
+}
+
+/** Observe multi-unit maintenance without retaining foreground admission between units. */
+async function observeSqliteSessionWrite<T>(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
+  diagnostics?: SqliteSessionWriteDiagnostics,
+  writer: "foreground" | "worker" = "foreground",
+  timing: StoreWriterTiming = {},
+): Promise<T> {
+  const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
-  const timing: StoreWriterTiming = {};
   const timingFields = (completedAt: number) => ({
     pid: process.pid,
     threadId,
@@ -248,9 +237,6 @@ export async function runExclusiveSqliteSessionWrite<T>(
       : {}),
     ...(diagnostics?.artifactPreparation
       ? { artifactPreparation: artifactPreparationLogFields(diagnostics.artifactPreparation) }
-      : {}),
-    ...(diagnostics?.archivePruning
-      ? { archivePruning: archivePruningLogFields(diagnostics.archivePruning) }
       : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
@@ -280,9 +266,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
       fn,
     );
   try {
-    const result = await (writer === "worker"
-      ? runOpenClawAgentWorkerWrite(databaseOptions, owned, timing)
-      : runOpenClawAgentWriteAdmission(databaseOptions, owned, false, timing));
+    const result = await owned();
     completedAt = performance.now();
     if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(

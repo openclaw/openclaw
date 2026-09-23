@@ -15,6 +15,7 @@ type GithubIssueBrowserFallback =
   | { reason: "url-too-long"; status: "unavailable" };
 
 type GithubIssueBrowserFallbackReason =
+  | "browser-requested"
   | "authentication-unavailable"
   | "cli-unavailable"
   | "transport-unavailable";
@@ -125,7 +126,7 @@ export function prepareGithubIssue(input: { body: string; title: string }): Prep
   };
 }
 
-function browserFallbackResult(
+export function browserFallbackResult(
   issue: PreparedGithubIssue,
   reason: GithubIssueBrowserFallbackReason,
 ): GithubIssueSubmitResult {

@@ -3,18 +3,34 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { SqliteWorkerCommand } from "../sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
+import { getSqliteWorkerStateContext } from "../sqlite-worker-state-context.js";
 import {
   readCurrentConversationBindingResolutionInDatabase,
+  readCurrentConversationBindingSelectionInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
 import type {
   CurrentConversationBindingWorkerOperations,
   CurrentConversationBindingTouch,
 } from "./current-conversation-bindings.worker-contract.js";
-import type { SessionBindingRecord } from "./session-binding.types.js";
+import type { ConversationRef, SessionBindingRecord } from "./session-binding.types.js";
+
+/** Worker-local reads cannot inherit the host's retained discovery snapshot. */
+export function readCurrentConversationBindingSelectionInWorker(
+  conversations: readonly ConversationRef[],
+  databasePath: string,
+): ReadonlyArray<SessionBindingRecord | null> {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readCurrentConversationBindingSelectionInDatabase(db, conversations),
+      { path: databasePath, env: getSqliteWorkerStateContext().environment },
+    ) ?? conversations.map(() => null)
+  );
+}
 
 /** The caller holds the shared-state write transaction and current host admission. */
 function touchCurrentConversationBindingInDatabase(
@@ -59,7 +75,10 @@ function touchCurrentConversationBindingInDatabase(
 }
 
 export function executeCurrentConversationBindingCommand(
-  command: SqliteWorkerCommand<CurrentConversationBindingWorkerOperations>,
+  command: Exclude<
+    SqliteWorkerCommand<CurrentConversationBindingWorkerOperations>,
+    { type: "conversationBindings.readSelection" }
+  >,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SessionBindingRecord | null {
   if (command.type === "conversationBindings.resolve") {

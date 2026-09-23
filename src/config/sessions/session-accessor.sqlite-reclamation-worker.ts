@@ -264,7 +264,8 @@ export class SqliteReclamationWorker {
       this.unregisterAgent();
       throw error;
     }
-    process.on("beforeExit", this.beforeExit);
+    // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+    process.once("beforeExit", this.beforeExit);
   }
 
   matches(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): boolean {

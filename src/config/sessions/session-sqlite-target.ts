@@ -298,7 +298,7 @@ export function resolveUnsuffixedSqliteTargetFromSessionStorePath(
   const resolved = path.resolve(storePath);
   if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
     const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
-    return { path: resolved, ...(agentId ? { agentId } : {}) };
+    return { path: resolved, ...(agentId ? { agentId } : { shared: true }) };
   }
   const sessionsDir = path.dirname(resolved);
   if (path.basename(resolved) !== "sessions.json") {
@@ -337,7 +337,7 @@ export function resolveSqliteTargetFromSessionStorePath(
   if (unsuffixedTarget.agentId) {
     return unsuffixedTarget;
   }
-  if (path.resolve(storePath).endsWith(".sqlite")) {
+  if (unsuffixedTarget.shared) {
     const registeredDatabases = readSessionStoreRegistryRows(
       options.registeredDatabases,
       options.env,
@@ -394,7 +394,7 @@ export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: stri
 /** List inspection candidates without opening stores or assigning writable ownership. */
 export function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-  if (unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")) {
+  if (unsuffixedTarget.agentId || unsuffixedTarget.shared) {
     return [unsuffixedTarget.path];
   }
   const directory = path.dirname(unsuffixedTarget.path);

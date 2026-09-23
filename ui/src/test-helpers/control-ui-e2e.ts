@@ -1619,9 +1619,7 @@ function installControlUiMockGateway(
       return sessions.abortRuns(
         params.sessionKey,
         typeof params.runId === "string" ? params.runId : undefined,
-        Array.isArray(response.runIds)
-          ? response.runIds.filter((id): id is string => typeof id === "string")
-          : undefined,
+        response,
       );
     }
     if (

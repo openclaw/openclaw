@@ -202,6 +202,13 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
     }),
     createDoctorHealthContribution({
+      id: "doctor:acp-agent-model",
+      label: "ACP agent model",
+      updateWork: { kind: "inspection", scope: "agent" },
+      healthCheckIds: ["core/doctor/acp-agent-model"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/acp-agent-model"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
       updateWork: { kind: "inspection", scope: "run" },

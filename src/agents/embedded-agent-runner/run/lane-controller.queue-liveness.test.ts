@@ -270,6 +270,7 @@ describe("queued embedded run context liveness", () => {
       expect(changed).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:subagent:queued",
         agentId: undefined,
+        scope: "runtime",
       });
       changed.mockClear();
       clock.mockReturnValue(admissionAt);
@@ -285,8 +286,8 @@ describe("queued embedded run context liveness", () => {
       });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
       expect(changed.mock.calls).toEqual([
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
       ]);
       expect(localTurn).not.toHaveBeenCalled();
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import os from "node:os";
@@ -124,6 +124,23 @@ const resolvePackagedCompileCacheDirectory = () => {
   );
 };
 
+const resolveCompileCacheRespawnLauncher = () => {
+  const moduleLauncher = fileURLToPath(import.meta.url);
+  const invokedLauncher = process.argv[1];
+  if (invokedLauncher) {
+    try {
+      // npm/pnpm's lexical install path matters only when it identifies this module.
+      if (realpathSync(invokedLauncher) === realpathSync(moduleLauncher)) {
+        return invokedLauncher;
+      }
+    } catch {
+      // An unavailable entry path cannot identify this launcher.
+    }
+  }
+  // Public cli-entry imports can belong to another application or have no argv[1].
+  return moduleLauncher;
+};
+
 const respawnWithoutCompileCacheIfNeeded = () => {
   if (!isSourceCheckoutLauncher()) {
     return false;
@@ -142,7 +159,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };
@@ -169,8 +186,7 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   };
   return runRespawnedChild(
     process.execPath,
-    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };

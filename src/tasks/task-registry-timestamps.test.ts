@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import { setTaskCleanupAfterById, updateTaskStateByRunId } from "./task-registry-record-api.js";
 import { readTaskRegistryRevision } from "./task-registry-state.js";
 import { finalizeTaskRecordByRunId, getTaskById, markTaskTerminalById } from "./task-registry.js";
@@ -113,6 +114,7 @@ describe("task registry terminal update timestamps", () => {
 
   it("records the transition time when a generic update becomes terminal", async () => {
     await withTaskRegistryTempDir(async () => {
+      using deliveries = captureTaskDeliveryWork();
       const task = createTaskFixture("cli", {
         runId: "run-generic-terminal",
         task: "Generic terminal transition",
@@ -124,6 +126,7 @@ describe("task registry terminal update timestamps", () => {
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(300);
 
       updateTaskStateByRunId({ runId: "run-generic-terminal", status: "failed" });
+      await deliveries.settle();
       nowSpy.mockRestore();
 
       expect(requireTaskById(task.taskId)).toMatchObject({

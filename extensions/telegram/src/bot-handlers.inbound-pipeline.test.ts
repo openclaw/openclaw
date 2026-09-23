@@ -6,26 +6,19 @@ import {
 } from "./bot-handlers.debounce-key.js";
 
 describe("buildTelegramInboundDebounceKey", () => {
-  it("uses the resolved account id instead of literal default when provided", () => {
+  it("isolates accounts and senders while normalizing the absent account", () => {
+    const conversationKey = "12345";
+    const senderId = "67890";
+    const defaultKey = buildTelegramInboundDebounceKey({ conversationKey, senderId });
     expect(
-      buildTelegramInboundDebounceKey({
-        accountId: "work",
-        conversationKey: "12345",
-        senderId: "67890",
-        debounceLane: "default",
-      }),
-    ).toBe("telegram:work:12345:67890:default");
-  });
-
-  it("falls back to literal default only when account id is actually absent", () => {
+      buildTelegramInboundDebounceKey({ accountId: "default", conversationKey, senderId }),
+    ).toBe(defaultKey);
     expect(
-      buildTelegramInboundDebounceKey({
-        accountId: undefined,
-        conversationKey: "12345",
-        senderId: "67890",
-        debounceLane: "forward",
-      }),
-    ).toBe("telegram:default:12345:67890:forward");
+      buildTelegramInboundDebounceKey({ accountId: "work", conversationKey, senderId }),
+    ).not.toBe(defaultKey);
+    expect(buildTelegramInboundDebounceKey({ conversationKey, senderId: "67891" })).not.toBe(
+      defaultKey,
+    );
   });
 
   it("keeps scoped topic thread ids in the conversation key", () => {
@@ -51,14 +44,12 @@ describe("buildTelegramInboundDebounceKey", () => {
         accountId: "default",
         conversationKey: topic100,
         senderId: "42",
-        debounceLane: "default",
       }),
     ).not.toBe(
       buildTelegramInboundDebounceKey({
         accountId: "default",
         conversationKey: topic200,
         senderId: "42",
-        debounceLane: "default",
       }),
     );
   });

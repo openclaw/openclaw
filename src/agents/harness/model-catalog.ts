@@ -1,4 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog-outcome.js";
+import { copyProviderCatalogOutcomes } from "../../plugins/provider-catalog-result.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -6,7 +10,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { normalizeOptionalAgentRuntimeId, isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
@@ -31,7 +35,13 @@ import type {
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
-import type { AgentHarnessModelCatalogParams } from "./types.js";
+import type { AgentHarnessModelCatalogParams, AgentHarnessModelCatalogResult } from "./types.js";
+
+function isCatalogRowList(
+  result: AgentHarnessModelCatalogResult,
+): result is readonly ModelCatalogEntry[] {
+  return Array.isArray(result);
+}
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -144,11 +154,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
   includesProvider?: (provider: string) => boolean;
+  normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
   const prepared = params.preparedSnapshot ?? params.snapshot;
+  const normalizeProvider = params.normalizeProvider ?? normalizeProviderId;
   const runtimeProviders = new Map<string, Set<string>>();
   const addRuntime = (value: string, provider: string) => {
     const runtime = normalizeOptionalAgentRuntimeId(value);
@@ -267,14 +279,25 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       params.onDiscoveryStarted?.(provider);
     }
     let listedRows: readonly ModelCatalogEntry[];
+    let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
-      listedRows = await harness.loadModelCatalog({
+      const loaded = await harness.loadModelCatalog({
         config: params.observationConfig ?? params.cfg,
         agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
       });
+      // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
+      if (isCatalogRowList(loaded)) {
+        listedRows = loaded;
+      } else {
+        listedRows = loaded.entries;
+        outcomes = copyProviderCatalogOutcomes(loaded);
+        for (const outcome of outcomes) {
+          outcome.provider = normalizeProvider(outcome.provider);
+        }
+      }
     } catch (error) {
       if (!isCurrent()) {
         return params.snapshot;
@@ -289,6 +312,34 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
+    const previousOutcomes =
+      result.nativeProviderOutcomes && Object.hasOwn(result.nativeProviderOutcomes, runtime)
+        ? (result.nativeProviderOutcomes[runtime] ?? [])
+        : [];
+    const scopedOutcomes = includesProvider
+      ? [
+          ...previousOutcomes.filter((outcome) => !includesProvider(outcome.provider)),
+          ...outcomes.filter((outcome) => includesProvider(outcome.provider)),
+        ]
+      : outcomes;
+    if (!isDeepStrictEqual(previousOutcomes, scopedOutcomes)) {
+      const nativeProviderOutcomes = {
+        ...result.nativeProviderOutcomes,
+        [runtime]: scopedOutcomes,
+      };
+      if (!scopedOutcomes.length) {
+        delete nativeProviderOutcomes[runtime];
+      }
+      if (result === params.snapshot) {
+        result = { ...params.snapshot };
+      }
+      result.nativeProviderOutcomes = nativeProviderOutcomes;
+    }
+    const failedProviders = new Set(
+      scopedOutcomes
+        .filter((outcome) => outcome.status !== "ready")
+        .map(({ provider }) => provider),
+    );
     completedRows.push(...scopedRows);
     discovered = true;
     const rows = enrichHarnessRows(scopedRows, prepared);
@@ -305,6 +356,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     // The scope predicate can change owners between rows, so retention keeps identity live.
     const retain = (entry: ModelCatalogEntry) =>
       entry.nativeRuntime !== runtime ||
+      failedProviders.has(normalizeProvider(entry.provider)) ||
       configuredKeys.has(resolveModelCatalogIdentityKey(entry)) ||
       (includesProvider !== undefined && !includesProvider(entry.provider));
     const retainedEntries = result.entries.filter(retain);
@@ -398,6 +450,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
   includesProvider?: (provider: string) => boolean;
+  normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
@@ -409,7 +462,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     agentDir,
     workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
+    defaultModel: resolveNativeModelPrimary(params.input.config, agentId),
     nativeSelection: params.nativeSelection,
     snapshot: params.snapshot,
     preparedSnapshot: params.preparedSnapshot,
@@ -418,6 +471,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,
     includesProvider: params.includesProvider,
+    normalizeProvider: params.normalizeProvider,
     onDiscoveryStarted: params.onDiscoveryStarted,
     onDiscoveryCompleted: params.onDiscoveryCompleted,
     onError: params.onError,

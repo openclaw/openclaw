@@ -6,6 +6,8 @@ import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
+import { ExecApprovalManager } from "./exec-approval-manager.js";
+import * as approvalFixtures from "./exec-approval-manager.test-support.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
   createApprovalClientLookup,
@@ -21,6 +23,10 @@ import {
   waitForApprovalRequested,
 } from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import {
+  withAcceptedExecApproval,
+  withRequestedExecApproval,
+} from "./server-methods/exec-approval.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -31,6 +37,61 @@ afterEach(() => {
 });
 
 describe("approval fixture request ownership", () => {
+  it.for(["accepted", "requested"] as const)(
+    "prepares the real approval worker before starting a %s request",
+    async (kind, testContext) => {
+      const prepared = createDeferredCore();
+      const releasePreparation = createDeferredCore();
+      const attemptedCreate = createDeferredCore();
+      const prepare = approvalFixtures.createPreparedTestApprovalManager;
+      let preparedManager: unknown;
+      vi.spyOn(approvalFixtures, "createPreparedTestApprovalManager").mockImplementationOnce(
+        async (...args) => {
+          const fixture = await prepare(...args);
+          preparedManager = fixture.manager;
+          prepared.resolve();
+          await releasePreparation.promise;
+          return fixture;
+        },
+      );
+      const earlyCreate = vi
+        .spyOn(ExecApprovalManager.prototype, "create")
+        .mockImplementation(() => {
+          attemptedCreate.resolve();
+          throw new Error("Approval record created before worker preparation completed");
+        });
+      const withApproval =
+        kind === "accepted" ? withAcceptedExecApproval : withRequestedExecApproval;
+      const request = withApproval(
+        testContext,
+        { request: { id: `prepared-${kind}`, twoPhase: true } },
+        async ({ manager, id, requestPromise }) => {
+          expect(manager).toBe(preparedManager);
+          expect(await manager.resolve(id, "deny")).toBe(true);
+          await requestPromise;
+        },
+      );
+      const settled = Promise.allSettled([request]);
+      try {
+        expect(
+          await Promise.race([
+            prepared.promise.then(() => "prepared"),
+            attemptedCreate.promise.then(() => "record-created"),
+            request.then(() => "request-completed"),
+          ]),
+        ).toBe("prepared");
+        expect(earlyCreate).not.toHaveBeenCalled();
+        earlyCreate.mockRestore();
+        releasePreparation.resolve();
+        await request;
+      } finally {
+        earlyCreate.mockRestore();
+        releasePreparation.resolve();
+        await settled;
+      }
+    },
+  );
+
   it.for(["broadcast", "broadcastToConnIds"] as const)(
     "waits for each real registration before observing %s",
     async (transport, testContext) => {
@@ -89,6 +150,74 @@ describe("approval fixture request ownership", () => {
       });
     },
   );
+
+  it("does not expose a registered approval before publication", async (testContext) => {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    const { manager } = fixture;
+    const registered = createDeferredCore<string>();
+    let registeredId: string | undefined;
+    const release = createDeferredCore();
+    const published = createDeferredCore();
+    const register = manager.register.bind(manager);
+    const held = vi.spyOn(manager, "register").mockImplementationOnce(async (record, timeout) => {
+      const result = await register(record, timeout);
+      registeredId = record.id;
+      registered.resolve(record.id);
+      await release.promise;
+      return result;
+    });
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([createOperatorClient()]),
+    });
+    const publication = vi.mocked(context.broadcastToConnIds);
+    publication.mockImplementation((event) => {
+      if (event === "plugin.approval.requested") {
+        published.resolve();
+      }
+    });
+    await fixture.run(async () => {
+      vi.useFakeTimers();
+      const pending = fixture.track(invokeDemoPolicy(context, createOperatorClient()));
+      try {
+        const id = await Promise.race([
+          registered.promise,
+          pending.then(() => {
+            throw new Error("Approval request completed before registration");
+          }),
+        ]);
+        const readiness = Promise.allSettled([
+          expectSinglePendingApproval(manager, context, () => pending).then((result) => {
+            expect(publication).toHaveBeenCalled();
+            return result;
+          }),
+        ]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(publication).not.toHaveBeenCalled();
+        release.resolve();
+        const [result] = await readiness;
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+        expect(result.value.record.id).toBe(id);
+      } finally {
+        release.resolve();
+        try {
+          if (registeredId !== undefined) {
+            await Promise.race([published.promise, pending]);
+            expect(await manager.resolve(registeredId, "deny")).toBe(true);
+          }
+          await pending;
+        } finally {
+          vi.useRealTimers();
+          held.mockRestore();
+        }
+      }
+    });
+  });
 
   it("waits for the real RPC accepted tuple after held registration", async (testContext) => {
     const fixture = createTestApprovalFixture(testContext);

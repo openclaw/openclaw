@@ -30,7 +30,7 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation";
+      scope?: "automation" | "runtime";
       /** An uncertain storage result requires worker reconciliation before facts are reused. */
       factsInvalidated?: true;
       /** Omission is a metadata notification; storage owners publish their changed facts. */

@@ -4799,6 +4799,7 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
 }
 
 .page-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.03em;

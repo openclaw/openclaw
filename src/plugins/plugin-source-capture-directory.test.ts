@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
@@ -12,10 +13,12 @@ import {
   createPluginSourceCaptureRoot,
   sweepPluginSourceCaptureDirectories,
 } from "./plugin-source-capture-directory.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const artifactModule = new URL("./plugin-generation-artifact.ts", import.meta.url).href;
+const artifactUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.artifact);
+const artifactModule = artifactUrl.href;
+const runtimeArgs = resolveRuntimeWorkerArgv(artifactUrl).slice(0, -1);
 const hour = 60 * 60 * 1_000;
 const capturedSource = "module.exports = 'captured';\n";
 
@@ -65,8 +68,8 @@ const childCapture = `
   import fs from "node:fs";
   import path from "node:path";
   import { capturePluginGenerationArtifact } from ${JSON.stringify(artifactModule)};
-  import { createPluginSourceCaptureRoot } from ${JSON.stringify(new URL("./plugin-source-capture-directory.ts", import.meta.url).href)};
-  import { withPluginSourceCaptureDirectory } from ${JSON.stringify(new URL("./plugin-package-metadata-capture.ts", import.meta.url).href)};
+  import { createPluginSourceCaptureRoot } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)};
+  import { withPluginSourceCaptureDirectory } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)};
   const source = process.argv[1];
   const worker = process.argv[2] === "worker"
     ? createPluginSourceCaptureRoot(process.env.OPENCLAW_STATE_DIR, "openclaw-model-catalog-")
@@ -90,12 +93,11 @@ it.each(["natural", "failure", "explicit", "signal"])(
   (mode) => {
     const stateDir = temp.make("plugin-capture-exit-");
     const source = createSource();
-    const signalModule = new URL("../cli/signal-exit-barrier.ts", import.meta.url).href;
+    const signalModule = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.signalExit).href;
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        loader,
+        ...runtimeArgs,
         "--input-type=module",
         "-e",
         `${childCapture}
@@ -131,8 +133,7 @@ async function startCliCapture(stateDir: string, source: string, worker: boolean
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      loader,
+      ...runtimeArgs,
       "--input-type=module",
       "-e",
       `${childCapture}
@@ -313,12 +314,13 @@ it.each(["before command", "inside command"])(
   (importOrder) => {
     const stateDir = temp.make("plugin-capture-context-");
     const source = createSource();
-    const cleanupModule = new URL("../cli/runtime-cleanup-scope.ts", import.meta.url).href;
+    const cleanupModule = resolveRuntimeWorkerUrl(
+      pluginProcessRuntimeEntrypoints.cleanupScope,
+    ).href;
     const result = execFileSync(
       process.execPath,
       [
-        "--import",
-        loader,
+        ...runtimeArgs,
         "--input-type=module",
         "--eval",
         `

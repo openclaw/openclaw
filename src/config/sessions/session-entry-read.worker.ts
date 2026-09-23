@@ -2,13 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  isOpenClawAgentDatabasePathCurrent,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-read.js";
+import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
@@ -44,6 +48,24 @@ export function readExactSessionEntriesWithLifecycle(
         : withSqlitePostCommitPublications(database.db, () =>
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
+              if (request.projection === "replacement") {
+                const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+                if (typeof identity !== "string" || !request.replacementSelection) {
+                  throw new Error(
+                    "Session replacement snapshot requires its durable owner and selection",
+                  );
+                }
+                const replacement = readSessionEntryReplacementState(
+                  database,
+                  request.replacementSelection,
+                );
+                return {
+                  kind: "session-exact-entries" as const,
+                  entries: replacement.entries,
+                  lifecycleTimestamps: {},
+                  replacement: { ...replacement, databaseIdentity: identity },
+                };
+              }
               const selected = expectDefined(
                 readExactSessionEntryCandidatesInDatabase(
                   database,
@@ -79,7 +101,30 @@ export function readExactSessionEntriesWithLifecycle(
               const entry = selected.value.find(
                 ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
               )?.entry;
+              const identity = request.includeAuthorization
+                ? readOpenClawAgentDatabaseIdentity(database)
+                : undefined;
+              if (
+                identity &&
+                (typeof identity.identity !== "string" ||
+                  !isOpenClawAgentDatabasePathCurrent(database))
+              ) {
+                throw new Error("Session database physical identity changed");
+              }
               return {
+                ...(identity && typeof identity.identity === "string"
+                  ? { databaseIdentity: { ...identity, identity: identity.identity } }
+                  : {}),
+                ...(request.includeMembers
+                  ? {
+                      members: Object.fromEntries(
+                        selected.value.map(({ sessionKey }) => [
+                          sessionKey,
+                          listSessionMembersInDatabase(database, sessionKey),
+                        ]),
+                      ),
+                    }
+                  : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
                 lifecycleTimestamps: resolveSessionLifecycleTimestamps({

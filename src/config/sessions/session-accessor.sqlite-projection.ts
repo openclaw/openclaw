@@ -177,10 +177,11 @@ export async function applySessionStoreProjection<T>(params: {
         });
         return {
           deletedEntries: deletedOwners,
-          commit: () =>
+          commit: (assertSourceCurrent) =>
             withSqliteSessionDatabase(toDatabaseOptions(resolved), () => {
               runOpenClawAgentWriteTransaction(
                 (transactionDb) => {
+                  assertSourceCurrent?.();
                   for (const sessionKey of changedKeys) {
                     const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
                     if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {

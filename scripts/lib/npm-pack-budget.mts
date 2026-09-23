@@ -2,9 +2,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 
 // Both bundled fs-safe loader layouts need all native targets (~31 MiB),
-// alongside mirrored runtime dependencies and bundled documentation. Keep the
-// remaining headroom bounded so accidental build/pack duplication still fails.
-const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 235 * 1024 * 1024;
+// alongside mirrored runtime dependencies, bundled documentation, the portable
+// cloud SQLite worker bundle (~46 MiB) and bundled chrome-devtools-mcp (~13 MiB).
+// Keep the remaining headroom bounded so accidental build/pack duplication still fails.
+// Must match the default in scripts/test-install-sh-docker.sh.
+const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 320 * 1024 * 1024;
 
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;

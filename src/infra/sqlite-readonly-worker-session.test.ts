@@ -1,10 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
+import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
 import {
+  createSqliteReadOnlyWorkerScope,
+  resolveSqliteInspectionSignal,
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -251,5 +257,71 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
     );
   } finally {
     timer.mockRestore();
+  }
+});
+
+it("carries only its captured read scope and refuses callbacks after owner retirement", async () => {
+  const caller = new AsyncLocalStorage<string>();
+  const withoutOwner = captureSqliteReadOnlyWorkerScope();
+  const controller = new AbortController();
+  const owner = createSqliteReadOnlyWorkerScope({
+    signal: controller.signal,
+    deadlineOwnedByCaller: false,
+  });
+  const other = createSqliteReadOnlyWorkerScope();
+  const run = owner.run(() => caller.run("startup", captureSqliteReadOnlyWorkerScope));
+  const signal = owner.run(() => resolveSqliteInspectionSignal());
+  try {
+    await other.run(() =>
+      caller.run("request", () =>
+        run(async () => {
+          await Promise.resolve();
+          expect(resolveSqliteInspectionSignal()).toBe(signal);
+          expect(caller.getStore()).toBe("request");
+          expect(withoutOwner(() => resolveSqliteInspectionSignal())).toBeUndefined();
+          expect(resolveSqliteInspectionSignal()).toBe(signal);
+        }),
+      ),
+    );
+    const late = vi.fn();
+    const aborted = new Error("captured owner cancelled");
+    controller.abort(aborted);
+    expect(() => run(late)).toThrow(aborted);
+    await owner.close();
+    expect(() => other.run(() => run(late))).toThrow("scope closed");
+    expect(late).not.toHaveBeenCalled();
+  } finally {
+    await Promise.all([owner.close(), other.close()]);
+  }
+});
+
+it("counts admitted read-only session children in node spawn diagnostics", () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const events: unknown[] = [];
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "diagnostic.child_process.spawn") {
+      events.push(event);
+    }
+  });
+  try {
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    const { child } = createSession();
+    now = 60_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([]);
+    child.emit("spawn");
+    now = 120_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([
+      expect.objectContaining({ family: process.versions.bun ? "other" : "node", count: 1 }),
+    ]);
+  } finally {
+    stop();
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    clock.mockRestore();
   }
 });
