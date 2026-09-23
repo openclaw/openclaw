@@ -56,6 +56,7 @@ import {
 } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const tempDirs: string[] = [];
 const uiCompanionTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -128,6 +129,40 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
+function syntheticCoreTestOwnerEnv(dir: string, env: NodeJS.ProcessEnv, recorderPath?: string) {
+  const ownerPath = path.join(dir, "compiler-owner.mjs");
+  writeFileSync(
+    ownerPath,
+    `${recorderPath ? `import recorder from ${JSON.stringify(pathToFileURL(recorderPath).href)};` : "const recorder = null;"}
+async function check(args) {
+  if (!recorder) return 0;
+  const finish = recorder.start("pnpm", args);
+  try {
+    await Promise.resolve();
+    return recorder.result("pnpm", args);
+  } finally {
+    finish();
+  }
+}
+export function createChangedCoreTestCheck() {
+  return {
+    checkBoundary: () => check(["lint:tmp:tsgo-core-boundary"]),
+    checkTypes: () => check(["tsgo:core:test"]),
+  };
+}
+`,
+  );
+  return preparedScriptWrapperEnv(
+    [
+      [
+        pathToFileURL(path.join(repoRoot, "scripts/run-tsgo-core-test-shards.mts")),
+        pathToFileURL(ownerPath),
+      ],
+    ],
+    env,
+  );
+}
+
 function createRootTestLintFixture() {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-root-lint-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -195,11 +230,11 @@ function createRootTestLintFixture() {
     chmodSync(path.join(binDir, bin), 0o755);
     writeRepoFile(dir, `bin/${bin}.cmd`, "@echo off\r\nexit /b 0\r\n");
   }
-  const env: NodeJS.ProcessEnv = {
+  const env = syntheticCoreTestOwnerEnv(dir, {
     ...createNestedGitEnv(),
     OXC_LOG: "debug",
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-  };
+  });
   delete env.OPENCLAW_TESTBOX;
   delete env.OPENCLAW_OXLINT_SKIP_PREPARE;
   return {
@@ -242,7 +277,7 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
   });
 }
 
-// Keep the real gate and managed children; only the external check commands are synthetic.
+// Keep the real gate and managed children; check owners share one synthetic recorder.
 function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
   paths = ["src/gateway/server-runtime-state.ts"],
@@ -258,17 +293,25 @@ function runChangedCheckWithRecordedCommands(
     childPath,
     `
 const fs = require("node:fs");
-const bin = process.argv[2];
-const args = process.argv.slice(3);
 const events = ${JSON.stringify(eventsPath)};
 const active = ${JSON.stringify(path.join(dir, "active"))};
-const record = (event) => fs.appendFileSync(events, JSON.stringify({event, bin, args}) + "\\n");
-fs.mkdirSync(active);
-record("start");
-process.on("exit", () => { record("finish"); fs.rmdirSync(active); });
-if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
-  console.error("Synthetic check failure: " + args[0]);
-  process.exitCode = 23;
+exports.start = (bin, args) => {
+  const record = (event) => fs.appendFileSync(events, JSON.stringify({event, bin, args}) + "\\n");
+  fs.mkdirSync(active);
+  record("start");
+  return () => { record("finish"); fs.rmdirSync(active); };
+};
+exports.result = (bin, args) => {
+  if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
+    console.error("Synthetic check failure: " + args[0]);
+    return 23;
+  }
+  return 0;
+};
+if (require.main === module) {
+  const bin = process.argv[2], args = process.argv.slice(3);
+  process.on("exit", exports.start(bin, args));
+  process.exitCode = exports.result(bin, args);
 }
 `,
   );
@@ -288,14 +331,18 @@ if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
   const result = runRepoScript(
     "scripts/check-changed.mjs",
     ["--", ...paths],
-    {
-      ...createNestedGitEnv(),
-      CI: "",
-      GITHUB_ACTIONS: "",
-      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-      OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    },
+    syntheticCoreTestOwnerEnv(
+      dir,
+      {
+        ...createNestedGitEnv(),
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+        OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      childPath,
+    ),
     cwd,
   );
   const events: { event: string; bin: string; args: string[] }[] = readFileSync(eventsPath, "utf8")
