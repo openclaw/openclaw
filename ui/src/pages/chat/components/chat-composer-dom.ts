@@ -122,15 +122,22 @@ export function replaceComposerPopoverAnchor(
   return next;
 }
 
-function updateTextareaOverflow(el: HTMLTextAreaElement) {
-  const scrollable = el.scrollHeight > el.clientHeight + 1;
+function updateTextareaOverflow(
+  el: HTMLTextAreaElement,
+  scrollHeight = el.scrollHeight,
+  clientHeight = el.clientHeight,
+) {
+  const scrollable = scrollHeight > clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
   const canFade =
-    scrollable && el.clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
+    scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
-  const fadeBottom = canFade && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-  el.style.overflowY = scrollable ? "auto" : "hidden";
+  const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
+  const overflow = scrollable ? "auto" : "hidden";
+  if (el.style.overflowY !== overflow) {
+    el.style.overflowY = overflow;
+  }
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
 }
@@ -149,16 +156,53 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
   const scrollPosition = thread ? captureChatSessionScrollPosition(thread) : null;
-  // Hide the browser's scrollbar while measuring; restore it only when the
-  // final CSS-constrained height actually clips the draft.
-  el.style.overflowY = "hidden";
-  el.style.height = "auto";
   // The owning surface declares its cap in CSS. Retain the historical fallback
   // for detached/test controls whose computed max-height is not a pixel value.
   const style = getComputedStyle(el);
   const computedMaxHeight = style.maxHeight.trim();
   const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
   const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
+  const borderBox = style.boxSizing === "border-box";
+  const naturalHeight =
+    Number.parseFloat(style.lineHeight) * el.rows +
+    (borderBox ? Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom) : 0);
+  const minHeight = Math.max(
+    Number.parseFloat(style.minHeight),
+    Math.round(naturalHeight) +
+      (borderBox
+        ? Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth)
+        : 0),
+  );
+  const assignedHeight = /^(\d+(?:\.\d+)?)px$/u.exec(el.style.height);
+  // Intermediate drafts still need the normal shrink measurement. The previous
+  // assignment only selects candidates; actual layout must prove either bound.
+  if (
+    !assignedHeight ||
+    Number(assignedHeight[1]) <= minHeight ||
+    (pixelMaxHeight && Number(assignedHeight[1]) >= maxHeight)
+  ) {
+    const height = Number.parseFloat(style.height);
+    const scrollHeight = el.scrollHeight;
+    const clientHeight = el.clientHeight;
+    const overflows = scrollHeight > clientHeight + 1;
+    // Rows and padding can exceed the CSS minimum. At the cap, a classic
+    // scrollbar may itself cause overflow by narrowing text; measure it hidden.
+    const atMinimum = !overflows && height === minHeight;
+    const atMaximum =
+      overflows &&
+      pixelMaxHeight &&
+      height >= maxHeight &&
+      el.offsetWidth - el.clientWidth <=
+        Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+    if (atMinimum || atMaximum) {
+      updateTextareaOverflow(el, scrollHeight, clientHeight);
+      return;
+    }
+  }
+  // Hide the browser's scrollbar while measuring; restore it only when the
+  // final CSS-constrained height actually clips the draft.
+  el.style.overflowY = "hidden";
+  el.style.height = "auto";
   // scrollHeight includes padding but not borders. Bordered answer fields share
   // this owner with the borderless composer and must not scroll on a single line.
   const borderHeight = style.boxSizing === "border-box" ? el.offsetHeight - el.clientHeight : 0;

@@ -314,7 +314,8 @@ describe("mock scenario tool routing", () => {
       expectOpenAiNonStreamingResponsesJson(server, {
         tools: catalogTools,
         input,
-        instructions: "Runtime: embedded | sessionId=qa-terminal-parent",
+        instructions:
+          "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=qa-terminal-parent",
       });
     const call = outputItem(await request());
     input.push(
@@ -329,6 +330,20 @@ describe("mock scenario tool routing", () => {
       ),
     );
     expect(outputText(await request())).toBe("Worker started.");
+    await server.terminalRequesters.settle({
+      call: async () => ({
+        sessions: [
+          {
+            key: "agent:qa:main",
+            agentId: "qa",
+            sessionId: "qa-terminal-parent",
+            hasActiveRun: false,
+            status: "done",
+            abortedLastRun: false,
+          },
+        ],
+      }),
+    });
     const child = await expectOpenAiNonStreamingResponsesJson(server, {
       instructions: "# Subagent Context\n- Your session: agent:qa:subagent:routed-child.",
       tools: catalogTools,

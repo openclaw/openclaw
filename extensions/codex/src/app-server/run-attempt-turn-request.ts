@@ -7,12 +7,16 @@ import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
-import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import {
+  assertCodexSessionRuntimeOwnership,
+  requireCodexSupervisionModelSelection,
+} from "./binding-connection.js";
 import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
+import { readCodexRuntimeModelId } from "./model-runtime.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
@@ -141,6 +145,9 @@ export async function prepareCodexAttemptTurnRequest(
     const selectedThread = resourceState.thread;
     const { threadId, liveThreadOwnership, model, modelProvider } = selectedThread;
     const turnClient = resourceState.client;
+    const nativeModel = usesSupervisionConnection
+      ? requireCodexSupervisionModelSelection(selectedThread)
+      : undefined;
     const assertTurnCurrent = () => {
       connection.assertCurrent();
       liveThreadOwnership?.assertCurrent();
@@ -160,9 +167,10 @@ export async function prepareCodexAttemptTurnRequest(
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
-    const inferenceRoute = usesSupervisionConnection
-      ? undefined
-      : getCodexInferenceThread(resourceState.client, resourceState.thread.threadId);
+    const inferenceRoute = getCodexInferenceThread(
+      resourceState.client,
+      resourceState.thread.threadId,
+    );
     const turnStartParams = buildTurnStartParams(runtimeParams, {
       threadId: resourceState.thread.threadId,
       cwd: resourceState.codexExecutionCwd,
@@ -191,20 +199,47 @@ export async function prepareCodexAttemptTurnRequest(
         (tool) => tool.name === "session_status",
       ),
     });
+    // Prepared runtime mappings retain catalog authorization; a retry must
+    // authorize the model actually encoded for the substituted turn.
+    const authorizedModel = nativeModel
+      ? { provider: nativeModel.modelProvider, model: nativeModel.model }
+      : effectiveRuntimeModelId === readCodexRuntimeModelId(params.model, params.modelId)
+        ? { provider: params.provider, model: params.modelId }
+        : turnStartParams.model
+          ? {
+              provider: modelProvider ?? params.provider,
+              model: turnStartParams.model,
+            }
+          : undefined;
+    connection.bindModelExecution(authorizedModel);
+    const nativeRequestModel = turnStartParams.model ?? model;
+    const modelMapping =
+      authorizedModel && nativeRequestModel
+        ? {
+            nativeModel: {
+              provider: modelProvider ?? params.provider,
+              model: nativeRequestModel,
+            },
+            authorizedModel,
+          }
+        : undefined;
     if (inferenceRoute) {
-      prompt.setParentLocalEgress();
+      if (!usesSupervisionConnection) {
+        prompt.setParentLocalEgress();
+      }
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
       const registration = inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
-        text:
-          buildCodexParentLocalInstructions(runtimeParams, {
-            turnScopedDeveloperInstructions:
-              workspaceBootstrapContext.turnScopedDeveloperInstructions,
-            skillsCollaborationInstructions: context.skillsCollaborationInstructions,
-            memoryCollaborationInstructions:
-              workspaceBootstrapContext.memoryCollaborationInstructions,
-          }) ?? "",
+        text: usesSupervisionConnection
+          ? ""
+          : (buildCodexParentLocalInstructions(runtimeParams, {
+              turnScopedDeveloperInstructions:
+                workspaceBootstrapContext.turnScopedDeveloperInstructions,
+              skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+              memoryCollaborationInstructions:
+                workspaceBootstrapContext.memoryCollaborationInstructions,
+            }) ?? ""),
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
@@ -295,6 +330,7 @@ export async function prepareCodexAttemptTurnRequest(
       acceptedTurnId = startedTurn.turn.id;
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
+      resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
       // Fitting may drop or truncate references; only acknowledge the complete block.
       if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();

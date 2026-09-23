@@ -56,6 +56,22 @@ type Terminal = {
   settled: Promise<unknown>;
 };
 
+function createSourceBoundHostCapabilities(signal: AbortSignal) {
+  const bindModelExecution = () => ({
+    signal,
+    assertCurrent: () => signal.throwIfAborted(),
+    release: () => {},
+  });
+  return createCodexTestHostCapabilities({
+    bindModelExecution,
+    retainSourceAuthority: () => ({
+      ...bindModelExecution(),
+      modelPolicyRequired: false,
+      bindModelExecution,
+    }),
+  });
+}
+
 async function fixture(options: { failSettlement?: boolean } = {}) {
   // Keep the attempt budget under test control while sockets, workers, and real children progress.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -155,13 +171,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       runId: `${actor}-run-${turns.length + 1}`,
       prompt: `${actor} qualification turn`,
     });
-    params.hostCapabilities = createCodexTestHostCapabilities({
-      retainSourceAuthority: () => ({
-        assertCurrent: () => source.signal.throwIfAborted(),
-        signal: source.signal,
-        release: () => {},
-      }),
-    });
+    params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
     params.senderId = actor;
     params.onAgentEvent = (event) => {
       events.push(event);
@@ -388,13 +398,7 @@ function createSandboxPolicyRun() {
   const controller = new AbortController();
   const preparation: string[] = [];
   const exec = createRuntimeDynamicTool("exec");
-  params.hostCapabilities = createCodexTestHostCapabilities({
-    retainSourceAuthority: () => ({
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-      release: () => {},
-    }),
-  });
+  params.hostCapabilities = createSourceBoundHostCapabilities(controller.signal);
   params.sandbox = {
     ...createSandboxContext({}),
     sessionKey: params.sessionKey!,
@@ -491,7 +495,7 @@ describe("native background process source authority", () => {
       expect(f.harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
       expect(staff.terminal.alive).toBe(true);
       guest.revoke();
-      expect(readAttemptTerminal(await guest.run).aborted).toBe(true);
+      await expect(guest.run).rejects.toBe(guest.sourceSignal.reason);
       expect(f.harness.requests).toContainEqual({
         method: "turn/interrupt",
         params: { threadId: f.threadId, turnId: guest.turnId },

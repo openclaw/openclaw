@@ -218,6 +218,15 @@ inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
 
+Native Codex staff work without a model policy has a limited attribution case
+when qualified native hooks are disabled or unavailable: previously accepted
+unrestricted input mixed with other work may continue under the receiver's valid
+authority after its sender loses authorization or becomes restricted. Direct and
+otherwise unambiguously bound work still observes revocation. See the
+[native model-policy boundary](/plugins/codex-harness/routing#operator-role-model-permissions).
+Visitor Access requires an explicit model policy; its Codex runs require the
+qualified integration.
+
 The optional `sandbox` policy defaults to `"inherit"`, which keeps the agent's
 configured sandbox mode. Set `sandbox: "required"` to sandbox every new session
 created by an authenticated person with that role, even when the agent's

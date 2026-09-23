@@ -106,6 +106,8 @@ export function createTelegramDispatchHttpFixture() {
           await Promise.race([held.release.promise, stopped]);
         }
         response.setHeader("content-type", "application/json");
+        // Idle keep-alive expiry must not race later fixture requests under load.
+        response.setHeader("connection", "close");
         const rejection = await Promise.race([
           Promise.resolve(respondToCall?.({ method, fields })),
           stopped,

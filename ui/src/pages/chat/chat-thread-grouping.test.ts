@@ -341,6 +341,76 @@ describe("explicit answer visibility across continuations", () => {
   beforeEach(() => resetChatThreadState());
 
   it.each([
+    { name: "settled Codex answer", terminal: true, preserved: true },
+    { name: "intermediate Codex text", terminal: false, preserved: false },
+    { name: "explicit commentary", terminal: true, phase: "commentary", preserved: false },
+    { name: "interrupted Codex text", terminal: true, aborted: true, preserved: false },
+    { name: "legacy unphased reply", terminal: true, legacy: true, preserved: false },
+  ])(
+    "classifies $name before an unscoped delivery notice",
+    ({ terminal, phase, aborted, legacy, preserved }) => {
+      const runId = "completed-run";
+      const messages = [
+        { role: "user", content: "Inspect the file", timestamp: 1, __openclaw: { runId } },
+        {
+          role: "toolResult",
+          toolCallId: "read-file",
+          toolName: "exec",
+          content: "File inspected",
+          timestamp: 2,
+          __openclaw: { runId },
+        },
+        {
+          role: "assistant",
+          content: "File verified — café 雪 🦞",
+          stopReason: "stop",
+          ...(phase ? { phase } : {}),
+          ...(aborted ? { openclawAbort: { aborted: true } } : {}),
+          timestamp: 3,
+          __openclaw: {
+            runId,
+            ...(!legacy ? { mirrorOrigin: "codex-app-server", runTerminal: terminal } : {}),
+          },
+        },
+        {
+          role: "assistant",
+          content: "Gateway restart config-patch ok",
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          stopReason: "stop",
+          timestamp: 4,
+        },
+      ];
+      for (const history of [messages, structuredClone(messages)]) {
+        const items = coalesceAgentRunFrames(
+          coalesceActivityRuns(
+            collapseCompletedTurnWork(cachedGroups(history), {
+              sessionKey: "agent:main:dashboard:answers",
+              runWorking: false,
+            }),
+          ),
+        );
+        const parts = items.flatMap((item) =>
+          item.kind === "agent-run-frame" ? item.parts : [item],
+        );
+        expect(
+          parts
+            .filter((item) => item.kind === "group")
+            .flatMap((item) => item.messages.map(({ message }) => message)),
+        ).toEqual([messages[0], ...(preserved ? [messages[2]] : []), messages[3]]);
+        expect(
+          parts
+            .filter((item) => item.kind === "work-group")
+            .flatMap((item) =>
+              item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+            ),
+        ).toEqual([messages[1], ...(!preserved ? [messages[2]] : [])]);
+      }
+    },
+  );
+
+  it.each([
     { phase: "final_answer", tool: true },
     { phase: "final_answer", tool: false },
     { phase: "commentary", tool: true },

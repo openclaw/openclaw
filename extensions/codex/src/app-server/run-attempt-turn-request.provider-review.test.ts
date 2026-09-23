@@ -21,7 +21,6 @@ vi.mock("./attempt-diagnostics.js", () => ({
   createCodexModelCallDiagnosticEmitter: () => ({ setRequestPayloadBytes: vi.fn() }),
   utf8JsonByteLength: () => 1,
 }));
-vi.mock("./binding-connection.js", () => ({ assertCodexSessionRuntimeOwnership: vi.fn() }));
 vi.mock("./client-runtime.js", () => ({
   prepareCodexWorkspaceReferences: () => ({
     include: !references.delivered,
@@ -187,6 +186,7 @@ async function prepare(
             usesSupervisionConnection,
             runAbortController: new AbortController(),
             assertCurrent: vi.fn(),
+            bindModelExecution: vi.fn(),
           },
         },
       },
