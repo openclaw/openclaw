@@ -601,7 +601,7 @@ async function resolveProviderRefs(params: {
       });
     }
     if (params.providerConfig.source === "store") {
-      return resolveStoreRefs({
+      return await resolveStoreRefs({
         refs: params.refs,
         providerName: params.providerName,
         onRefError: params.onRefError,

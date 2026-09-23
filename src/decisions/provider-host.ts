@@ -201,6 +201,15 @@ export class DecisionProviderHost {
     };
   }
 
+  /** Setup consumes admission/credential health, not whether a model is already selected. */
+  inspectSetup(config: OpenClawConfig): "configured" | "setup-required" | "auth-rejected" {
+    const facts = this.inspect(config);
+    if (!facts.credentialReady) {
+      return "setup-required";
+    }
+    return this.generation(config).authFailed ? "auth-rejected" : "configured";
+  }
+
   async evaluate(
     batch: DecisionBatch,
     options: Options,

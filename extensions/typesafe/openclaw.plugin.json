@@ -29,7 +29,7 @@
   "uiHints": {
     "apiKey": {
       "label": "TypeSafe API credential",
-      "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
+      "help": "Hosted Jev only. Add a key through Settings → Models → Connect provider, or use an existing SecretRef. Ignored for a local baseUrl. Never paste credentials in chat.",
       "sensitive": true
     },
     "timeoutMs": {
@@ -104,6 +104,23 @@
       "provider": "typesafe",
       "id": "jev-latest",
       "name": "Jev",
+      "setup": [
+        {
+          "kind": "local-server",
+          "label": "TypeSafe",
+          "help": "Start your System One server separately and set its loopback origin in the plugin settings. No API key is needed. The server chooses the checkpoint; this connection applies to every model from this plugin. OpenClaw does not verify the server or download weights here.",
+          "configuredPath": "baseUrl",
+          "documentationUrl": "https://docs.openclaw.ai/plugins/typesafe#local-system-one-server",
+          "whenConfigured": "baseUrl"
+        },
+        {
+          "kind": "api-key",
+          "label": "TypeSafe",
+          "help": "Add your TypeSafe API key. It is stored securely. Saving a key does not verify it or run a paid evaluation.",
+          "credentialPath": "apiKey",
+          "documentationUrl": "https://docs.openclaw.ai/plugins/typesafe"
+        }
+      ],
       "capabilities": {
         "questionTypes": [
           "boolean",
@@ -120,6 +137,23 @@
       "provider": "typesafe",
       "id": "jev-1.13.0",
       "name": "Jev 1.13.0",
+      "setup": [
+        {
+          "kind": "local-server",
+          "label": "TypeSafe",
+          "help": "Start your System One server separately and set its loopback origin in the plugin settings. No API key is needed. The server chooses the checkpoint; this connection applies to every model from this plugin. OpenClaw does not verify the server or download weights here.",
+          "configuredPath": "baseUrl",
+          "documentationUrl": "https://docs.openclaw.ai/plugins/typesafe#local-system-one-server",
+          "whenConfigured": "baseUrl"
+        },
+        {
+          "kind": "api-key",
+          "label": "TypeSafe",
+          "help": "Add your TypeSafe API key. It is stored securely. Saving a key does not verify it or run a paid evaluation.",
+          "credentialPath": "apiKey",
+          "documentationUrl": "https://docs.openclaw.ai/plugins/typesafe"
+        }
+      ],
       "capabilities": {
         "questionTypes": [
           "boolean",
@@ -136,6 +170,15 @@
       "provider": "typesafe",
       "id": "kev-latest",
       "name": "Kev (local server)",
+      "setup": [
+        {
+          "kind": "local-server",
+          "label": "TypeSafe",
+          "help": "Start your System One server separately and set its loopback origin in the plugin settings. No API key is needed. The server chooses the checkpoint; this connection applies to every model from this plugin. OpenClaw does not verify the server or download weights here.",
+          "configuredPath": "baseUrl",
+          "documentationUrl": "https://docs.openclaw.ai/plugins/typesafe#local-system-one-server"
+        }
+      ],
       "capabilities": {
         "questionTypes": [
           "boolean",

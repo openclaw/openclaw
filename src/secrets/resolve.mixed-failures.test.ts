@@ -7,9 +7,9 @@ import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { resolveSecretRefValues, resolveSecretRefValuesSettledByProvider } from "./resolve.js";
 
 const { readValue } = vi.hoisted(() => ({ readValue: vi.fn() }));
-vi.mock("./store/secret-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store/secret-store.js")>();
-  return { ...actual, readSecretStoreValue: readValue };
+vi.mock("./store/secret-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store/secret-store-worker.js")>();
+  return { ...actual, readSecretStoreValueAsync: readValue };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

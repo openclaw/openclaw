@@ -191,6 +191,16 @@ export function createGatewayAuxHandlers(
     },
     { cacheRejections: true },
   );
+  const loadPluginCredentialSetHandlers = createLazyPromise(
+    async () => {
+      const [{ createPluginCredentialSetHandlers }, service] = await Promise.all([
+        import("./server-methods/plugins.credentials-set.js"),
+        loadSecretStoreWriteService(),
+      ]);
+      return createPluginCredentialSetHandlers(service);
+    },
+    { cacheRejections: true },
+  );
   const questionManager = new QuestionManager(() =>
     params.log.warn?.("Question terminal publication failed; answer state retained."),
   );
@@ -504,6 +514,10 @@ export function createGatewayAuxHandlers(
       "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
+      "plugins.credentials.set": createLazyHandler(
+        "plugins.credentials.set",
+        loadPluginCredentialSetHandlers,
+      ),
       "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
       "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
       "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),

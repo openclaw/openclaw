@@ -394,6 +394,41 @@ const enSettings = {
     },
   },
   modelProviders: {
+    decisionSetup: {
+      title: "Connect {provider}",
+      entry: "Decision model setup",
+      optional: "Optional: For tasks such as sorting requests and rating their urgency.",
+      pending: "After connecting, return to {model}. Your current decision model stays unchanged.",
+      scope: "Shared by all agents",
+      shared:
+        "Provider connections are shared by all agents. Choosing a model changes only this setting.",
+      use: "Use {model}",
+      confirm: "Use {model} as your decision model?",
+      configured: "Configured · not verified",
+      required: "Setup needed",
+      addKey: "Add API key",
+      connectServer: "Connect server",
+      setUpModel: "Set up model",
+      ready: "Setup configured",
+      rejected: "Connection needs attention",
+      unknown: "Check local setup",
+      unverified:
+        "Saving settings does not verify this provider or run an evaluation. Usage charges may apply when a hosted model is used.",
+      manage: "Open plugin settings",
+      docs: "Setup instructions",
+      retry: "Refresh setup status",
+      saved: "API key saved",
+      notReady:
+        "API key saved, but this provider is not available yet. Check the plugin settings before choosing the model.",
+      updateKey: "Update API key",
+      failed: "Could not save this connection. Your selected model is unchanged.",
+      local:
+        "Complete the provider setup before using this model. Local files and servers are not verified here.",
+      admin: "Administrator access is required to change the shared provider connection.",
+      selectionStale: "This model is no longer available. Refresh Models and choose another model.",
+      stale:
+        "This model setting changed while setup was open. Close this dialog and choose the model again.",
+    },
     title: "Configured providers",
     configureModels: "Model setup",
     login: {
@@ -405,7 +440,7 @@ const enSettings = {
       noMatches: "No providers match your search.",
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
-      description: "Save credentials for this agent. Choose the active model separately.",
+      description: "Connect a provider, then choose which model to use.",
       done: "Provider credentials saved.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:

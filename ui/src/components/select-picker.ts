@@ -12,6 +12,7 @@ export type PickerOption = {
   value: string;
   label: string;
   description?: string;
+  status?: "warning" | "danger";
   labelStyle?: string;
   disabled?: boolean;
 };
@@ -323,7 +324,7 @@ export class SelectPicker<
           <span class="picker-select__label" style=${option.labelStyle ?? nothing}
             >${option.label}</span
           >
-          ${option.description ? html`<span class="picker-select__description">${option.description}</span>` : nothing}
+          ${option.description ? html`<span class="picker-select__description" data-status=${option.status ?? nothing}>${option.description}</span>` : nothing}
         </span>
         <span class="picker-select__check" aria-hidden="true"
           >${option.value === this.params.value ? icons.check : nothing}</span
@@ -366,7 +367,11 @@ export class SelectPicker<
             <span class="picker-select__label">${selected?.label ?? this.params.label}</span>
             ${
               this.params.showSelectedDescription && selected?.description
-                ? html`<span class="picker-select__description">${selected.description}</span>`
+                ? html`<span
+                    class="picker-select__description"
+                    data-status=${selected.status ?? nothing}
+                    >${selected.description}</span
+                  >`
                 : nothing
             }
           </span>

@@ -9,6 +9,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
   DecisionBatch,
@@ -140,6 +141,17 @@ describe("registered decision capability", () => {
       status: "unavailable",
       reason: "not-configured",
     });
+    expect(call).not.toHaveBeenCalled();
+  });
+  it("reports setup from credential health before selection without evaluating a model", () => {
+    const call = vi.fn(async () => answer);
+    let ready = false;
+    const { registry } = registered(call, () => ready);
+    const host = registry.decisionProviders[0]!.host;
+    expect(host.inspectSetup({})).toBe("setup-required");
+    ready = true;
+    expect(host.inspect({})).toMatchObject({ configured: false, callable: false });
+    expect(host.inspectSetup({})).toBe("configured");
     expect(call).not.toHaveBeenCalled();
   });
   it("preserves choice, fractional score, Boolean, usage and local provenance", async () => {
@@ -454,12 +466,22 @@ describe("fault settlement and generation health", () => {
       .mockResolvedValue(answer);
     const host = registered(callback);
     expect(await host.run()).toMatchObject({ reason: "authentication" });
+    expect(host.registry.decisionProviders[0]!.host.inspectSetup(config)).toBe("auth-rejected");
     expect(await host.run()).toMatchObject({ reason: "circuit-open" });
     expect(callback).toHaveBeenCalledTimes(1);
     const anotherModel: OpenClawConfig = {
       agents: { defaults: { decisionModel: "fixture/another-v1" } },
     };
     expect(await host.run(options(), anotherModel)).toMatchObject({ reason: "circuit-open" });
+    expect(host.registry.decisionProviders[0]!.host.inspectSetup(anotherModel)).toBe(
+      "auth-rejected",
+    );
+    expect(
+      host.registry.decisionProviders[0]!.host.inspectSetup({
+        ...anotherModel,
+        plugins: { entries: { owner: { config: { endpoint: "updated" } } } },
+      }),
+    ).toBe("configured");
     expect(
       await host.run(options(), {
         ...anotherModel,
@@ -468,6 +490,21 @@ describe("fault settlement and generation health", () => {
     ).toMatchObject({
       status: "ok",
     });
+  });
+  it("does not carry setup authentication rejection into a new secret generation", async () => {
+    const callback = vi.fn<DecisionProviderV1["evaluate"]>().mockResolvedValue({
+      status: "unavailable",
+      reason: "authentication",
+    });
+    const { registry, run } = registered(callback, () => true);
+    const host = registry.decisionProviders[0]!.host;
+    expect(await run()).toMatchObject({ reason: "authentication" });
+    expect(host.inspectSetup(config)).toBe("auth-rejected");
+    const rejectedGeneration = host.inspect(config).runtimeGeneration;
+    clearSecretsRuntimeSnapshotState();
+    expect(host.inspectSetup(config)).toBe("configured");
+    expect(host.inspect(config).runtimeGeneration).not.toBe(rejectedGeneration);
+    expect(callback).toHaveBeenCalledOnce();
   });
   it("bounds recovery to one half-open trial", async () => {
     let now = 0;

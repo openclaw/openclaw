@@ -107,6 +107,26 @@ wa-select.settings-select wa-option::part(checked-icon),
   color: inherit;
 }
 
+/* Status is secondary text, not the normal selection or keyboard-focus accent. */
+.picker-select .picker-select__description[data-status="warning"] {
+  color: var(--warn);
+}
+
+.picker-select .picker-select__description[data-status="danger"] {
+  color: var(--danger);
+}
+
+.picker-select__description[data-status] {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-subtle);
+}
+
+.picker-select__description[data-status="danger"] {
+  background: var(--danger-subtle);
+}
+
 /* The model picker composes the shared picker and loads this same stylesheet. */
 .model-picker {
   display: grid;

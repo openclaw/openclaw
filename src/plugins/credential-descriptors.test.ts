@@ -38,6 +38,71 @@ beforeEach(() => {
 });
 
 describe("nonactivating credential descriptor discovery", () => {
+  it("projects concrete string capability inputs from installed manifest metadata", () => {
+    expect(
+      resolvePluginCredentialDescriptors({
+        ...manifest,
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "service.apiKey", expected: "string", ownerKind: "capability" }],
+          },
+        },
+        configUiHints: { "service.apiKey": { label: "Service key", placeholder: "Paste key" } },
+      }),
+    ).toEqual([
+      {
+        path: ["plugins", "entries", "example", "config", "service", "apiKey"],
+        label: "Service key",
+        envVars: [],
+        placeholder: "Paste key",
+        storage: "protected",
+      },
+    ]);
+    expect(mocks.registry).toHaveBeenCalledTimes(1);
+    expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
+  });
+
+  it("does not promote wildcard, route, undeclared-type, or unsafe manifest paths", () => {
+    expect(
+      resolvePluginCredentialDescriptors({
+        ...manifest,
+        configContracts: {
+          secretInputs: {
+            paths: [
+              { path: "accounts.*.key", expected: "string", ownerKind: "capability" },
+              { path: "route.key", expected: "string", ownerKind: "route" },
+              { path: "legacy.key", ownerKind: "capability" },
+              { path: "__proto__.key", expected: "string", ownerKind: "capability" },
+            ],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+  it("upgrades a provider descriptor once while preserving its presentation metadata", () => {
+    mocks.registry.mockReturnValue({ webSearchProviders: [{ pluginId: "example", provider }] });
+    expect(
+      resolvePluginCredentialDescriptors({
+        ...manifest,
+        configContracts: {
+          secretInputs: {
+            paths: [
+              { path: "key", expected: "string", ownerKind: "capability" },
+              { path: "key", expected: "string", ownerKind: "capability" },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        path: ["plugins", "entries", "example", "config", "key"],
+        label: "Example key",
+        envVars: ["EXAMPLE_KEY"],
+        storage: "protected",
+      },
+    ]);
+  });
+
   it("promotes only owned declared credential paths once, preserving provider metadata", () => {
     const declared = {
       ...provider,

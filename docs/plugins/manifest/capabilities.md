@@ -134,6 +134,62 @@ Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
 
+An optional ordered `setup` array describes model-specific preparation. The
+first alternative whose `whenConfigured` field is present in plugin config,
+or which omits that condition, is selected. Put conditional overrides before an
+unconditional fallback; the array order is meaningful.
+
+| Field              | Meaning                                                                       |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `kind`             | Required: `api-key`, `local-server`, or `local-model`.                        |
+| `label`, `help`    | Required setup label and instructions.                                        |
+| `documentationUrl` | Optional setup documentation link.                                            |
+| `whenConfigured`   | Optional plugin-relative config path selecting this alternative when present. |
+| `credentialPath`   | Optional plugin-relative path for hosted credential setup.                    |
+| `configuredPath`   | Optional plugin-relative field providing local configuration evidence.        |
+
+For example, a hosted model can preserve a configured local-server override:
+
+```json
+{
+  "provider": "example-decisions",
+  "id": "fast",
+  "name": "Fast decisions",
+  "setup": [
+    {
+      "kind": "local-server",
+      "label": "Local server",
+      "help": "Start the server and configure its origin in plugin settings.",
+      "whenConfigured": "baseUrl",
+      "configuredPath": "baseUrl"
+    },
+    {
+      "kind": "api-key",
+      "label": "Hosted credential",
+      "help": "Save a protected API key. Saving does not run an evaluation.",
+      "credentialPath": "apiKey"
+    }
+  ]
+}
+```
+
+Paths are relative to `plugins.entries.<plugin-id>.config`, not arbitrary
+configuration write targets. A credential path must exactly match a
+`configContracts.secretInputs.paths` entry with `ownerKind: "capability"` and
+`expected: "string"`. A wildcard, route-owned secret, or undeclared field does not authorize this
+credential form. The public catalog exposes only the selected setup descriptor,
+with an eligible credential target expanded to rooted path tokens; it never
+returns a credential value.
+
+API-key readiness uses an already registered host's prepared credential and
+observed authentication state, independently of whether an agent selected the
+model. Listing does not activate a plugin, resolve a secret, or call inference.
+A local `configuredPath` is configuration evidence only, not a server or
+artifact check. A configured field still requires an admitted, locally ready provider;
+a missing field or unavailable provider reports `setup-required`. Without a declared
+configuration marker, local preparation remains `unknown`;
+models without setup metadata use manual plugin configuration. Neither case
+should be presented as a verified model or forced through an API-key form.
 `capabilities` is optional static metadata. It describes provider support for
 discovery and guidance; it does not prove that credentials or the runtime are
 ready, and its limits do not raise OpenClaw's host admission bounds.

@@ -15,6 +15,7 @@ export const PluginCredentialDescriptorSchema = Type.Object(
     placeholder: Type.Optional(text),
     signupUrl: Type.Optional(text),
     requiresCredential: Type.Optional(Type.Boolean()),
+    storage: Type.Optional(Type.Literal("protected")),
   },
   closed,
 );
@@ -61,3 +62,15 @@ export type PluginsCredentialsInspectResult = Static<typeof PluginsCredentialsIn
 export const validatePluginsCredentialsInspectParams = lazyCompile(
   PluginsCredentialsInspectParamsSchema,
 );
+
+export const PluginsCredentialsSetParamsSchema = Type.Object(
+  { pluginId: text, path, baseHash: text, value: Type.String({ minLength: 1, maxLength: 65536 }) },
+  closed,
+);
+export const PluginsCredentialsSetResultSchema = Type.Object(
+  { saved: Type.Literal(true), warning: Type.Optional(Type.String()) },
+  closed,
+);
+export type PluginsCredentialsSetParams = Static<typeof PluginsCredentialsSetParamsSchema>;
+export type PluginsCredentialsSetResult = Static<typeof PluginsCredentialsSetResultSchema>;
+export const validatePluginsCredentialsSetParams = lazyCompile(PluginsCredentialsSetParamsSchema);

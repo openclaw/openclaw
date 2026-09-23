@@ -48,9 +48,22 @@ that does not make the packaged plugin compatible with OpenClaw `2026.9.5`.
 
 ## Enable and configure
 
-For hosted Jev, create a protected credential in Settings → Secrets, then reference it from the
-plugin configuration. Merge this example into your existing configuration; keep
-any other entries in `plugins.allow`.
+For hosted Jev, use **Connect provider** in Settings → Models, or open setup
+from a Jev entry in the **Decision** picker. Save the key in the protected
+credential form, never in chat. You can also create a credential in
+Settings → Secrets and reference it from the plugin configuration below. Merge
+the example into your existing configuration; keep other entries in
+`plugins.allow`.
+
+Saving configures the credential but does **not** verify it with TypeSafe. The
+plugin's documented hosted validation path is a paid evaluation; setup does not
+run one implicitly. A configured badge means a credential is available, not
+that TypeSafe accepted it. A later authentication rejection is reported as such.
+
+The credential belongs to the global plugin configuration and is shared by
+agents using it. The pending agent selection changes only when you explicitly
+choose **Use** after saving. Provider-only setup leaves all model selections
+unchanged.
 
 ```json5
 {
@@ -169,6 +182,12 @@ The endpoint applies to every request from this plugin, including requests
 whose model label names Jev. Model selection does not choose between hosted and
 local endpoints. The `kev-latest` label requires `baseUrl` and is never sent to
 the hosted TypeSafe endpoint.
+
+Setup follows the same rule: a configured `baseUrl` shows local-server
+instructions even for Jev labels. Adding a hosted credential does not remove
+the override or switch the plugin to hosted mode. The local configured badge
+only records that `baseUrl` is present; OpenClaw does not probe the server
+when listing models or opening setup. Verify the running server separately.
 
 `baseUrl` accepts HTTP or HTTPS on `localhost`, `127.0.0.1`, or `[::1]`, with an
 optional port and trailing slash. Supply the origin, without `/v1`, credentials,

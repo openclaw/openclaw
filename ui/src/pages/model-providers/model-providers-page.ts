@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -27,7 +26,6 @@ import {
   modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   modelProviderErrorMessage,
-  readModelBehaviorConfig,
   runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
   type ModelBehaviorConfig,
@@ -37,6 +35,7 @@ import {
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
 import {
   buildModelProviderCards,
+  buildConfiguredProviderIds,
   buildSelectableDefaultModels,
   buildUnconfiguredProviderOptions,
   readModelProviderConfig,
@@ -51,6 +50,7 @@ import {
   type ModelProvidersData,
 } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
+import { createGlobalModelSettings } from "./model-settings.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
 import { updateRecordEntry } from "./record-state.ts";
@@ -224,13 +224,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     onError: (error) =>
       this.setMessage("connection", { kind: "error", text: modelProviderErrorMessage(error) }),
   });
+  private readonly modelSettings = createGlobalModelSettings(this, {
+    getScope: () => ({ context: this.context, agentId: this.selectedAgentId }),
+    getDraft: () => this.defaultsDraft,
+    onChange: (defaults) => void this.saveDefaults(defaults),
+  });
   private readonly login = new ModelProviderLoginController(this, {
     getScope: () => ({
       context: this.context,
       agentId: this.selectedAgentId,
       authStatus: this.data?.authStatus ?? null,
+      decisionModels: this.modelSettings.decisionModels(),
     }),
-    canStart: () => this.canMutate(),
+    canStart: () => this.canMutate() && !this.modelSettings.decision.busy,
+    onDecisionSetup: (model) => this.modelSettings.decision.open(model),
     onDiscover: () => {
       this.setMessage("connection", null);
       void this.discovery.open();
@@ -568,6 +575,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!defaults) {
       return;
     }
+    this.defaultsDraft = defaults;
+    this.setMessage("defaults", null);
     await this.patchConfig({
       key: "defaults",
       raw: buildDefaultsPatch(defaults),
@@ -593,27 +602,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const configObject = currentConfigObject(this.context.runtimeConfig.state);
     const config = readModelProviderConfig(configObject);
-    const catalog =
-      gatewaySnapshot.client && this.selectedAgentId
-        ? modelCatalog.peekModelCatalog(
-            gatewaySnapshot.client,
-            { agentId: this.selectedAgentId },
-            { allowStale: true },
-          )
-        : undefined;
-    const configuredDefaults = {
-      ...config.defaults,
-      ...readModelBehaviorConfig(asConfigRecord(asConfigRecord(configObject?.agents)?.defaults)),
-    };
-    const defaults = this.defaultsDraft ?? configuredDefaults;
-    const stageDefaults = (patch: Partial<DefaultsDraft>) => {
-      this.defaultsDraft = { ...(this.defaultsDraft ?? configuredDefaults), ...patch };
-      this.setMessage("defaults", null);
-      void this.saveDefaults(this.defaultsDraft);
-    };
+    const catalog = this.modelSettings.catalog();
+    const defaults = this.modelSettings.currentDefaults();
     const cards = buildModelProviderCards({
       ...data,
       models: catalog?.models ?? null,
+      decisionModels: catalog?.decisionModels,
       providerOutcomes: catalog ? (catalog.providerOutcomes ?? []) : data.providerOutcomes,
       pendingProviders: catalog?.pendingProviders,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
@@ -621,12 +615,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
     });
-    const configuredProviderIds = new Set([
-      ...config.providerIds,
-      ...(data.authStatus?.providers
-        .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
-        .map((provider) => provider.provider) ?? []),
-    ]);
+    const configuredProviderIds = buildConfiguredProviderIds(config.providerIds, data.authStatus);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
     const login = this.login.pageActions;
@@ -657,7 +646,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
       configuredModels: buildSelectableDefaultModels(catalog?.models ?? null, defaults),
       decisionModels: catalog?.decisionModels ?? [],
-      defaultModels: defaults,
+      defaultModels: this.modelSettings.currentDefaults(),
       authStatus: data.authStatus,
       automaticUtilityModel: catalog?.defaultModels?.automaticUtilityModel,
       thinkingLevel: defaults.thinkingLevel,
@@ -718,12 +707,16 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onAddProviderIdChange: (provider) => (this.addProviderId = provider),
       onAddProviderKeyChange: (value) => (this.addProviderKey = value),
       onAddProvider: () => void this.addProvider(),
-      ...modelDefaultsActions(() => this.defaultsDraft ?? configuredDefaults, stageDefaults),
+      ...modelDefaultsActions(this.modelSettings.currentDefaults, this.modelSettings.stageDefaults),
+      onDecisionChange: (value) =>
+        this.modelSettings.decision.choose(value, (decisionModel) =>
+          this.modelSettings.stageDefaults({ decisionModel }),
+        ),
       onCatalogRetry: () => this.catalogDiscovery.retry(),
       ...this.login.providerActions,
     });
     return renderModelProvidersPageShell({
-      body,
+      body: html`${body}${this.modelSettings.decision.render()}`,
       loginMessage: this.messages.connection ?? login.loginMessage,
       login: html`${login.login}${this.discovery.render({
         agentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,

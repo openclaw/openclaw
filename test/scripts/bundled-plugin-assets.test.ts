@@ -10,6 +10,7 @@ import {
   readBundledPluginAssetHooks,
   runBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mts";
+import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import {
   createRunNodePathClassifier,
@@ -178,64 +179,34 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("bounds stalled asset hooks and reports the affected plugin safely", async () => {
-    await withPluginAssetFixture(async (rootDir) => {
-      const pluginDir = path.join(rootDir, "extensions", "canvas");
-      const packagePath = path.join(pluginDir, "package.json");
-      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
-        openclaw: { assetScripts: { build: string } };
-      };
-      packageJson.openclaw.assetScripts.build = "node scripts/launch-stall.mjs";
-      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
-      fs.mkdirSync(path.join(pluginDir, "scripts"));
-      const pidFile = path.join(pluginDir, "stall.pid");
-      const readyFile = path.join(pluginDir, "stall.ready");
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "stall.mjs"),
-        [
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          `writeFileSync(${JSON.stringify(readyFile)}, String(process.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
+  it("delegates the timeout and reports the affected plugin safely", async () => {
+    // Process-tree settlement belongs to managed-child-process.test.ts. This adapter
+    // must forward its deadline and sanitize failure text, not race process startup.
+    const run = vi
+      .spyOn(managedChild, "runManagedCommand")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("private hook command"), { code: "ETIMEDOUT" }),
       );
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "launch-stall.mjs"),
-        [
-          'import { spawn } from "node:child_process";',
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          'const child = spawn(process.execPath, ["scripts/stall.mjs"], { stdio: "ignore" });',
-          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
-      );
-
-      let thrown: unknown;
-      let childPid = 0;
-      try {
-        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 500 });
-      } catch (error) {
-        thrown = error;
-      }
-      try {
-        childPid = Number(fs.readFileSync(pidFile, "utf8"));
-        // Timeout rejection must join cleanup, not leave the caller to poll for it.
-        expect(isProcessAlive(childPid)).toBe(false);
-        expect(fs.readFileSync(readyFile, "utf8")).toBe(String(childPid));
-        expect(thrown).toMatchObject({
+    try {
+      await withPluginAssetFixture(async (rootDir) => {
+        await expect(
+          runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 500 }),
+        ).rejects.toMatchObject({
           code: "ETIMEDOUT",
           message: "Bundled plugin asset build hook timed out after 500ms: canvas",
         });
-        expect((thrown as Error).message).not.toContain("launch-stall.mjs");
-      } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-      }
-    });
+        expect(run).toHaveBeenCalledExactlyOnceWith({
+          bin: "node --import tsx scripts/bundle-a2ui.mts",
+          cwd: path.join(rootDir, "extensions", "canvas"),
+          env: process.env,
+          shell: true,
+          stdio: "inherit",
+          timeoutMs: 500,
+        });
+      });
+    } finally {
+      run.mockRestore();
+    }
   });
 
   it("skips cleanly when a requested plugin is absent", async () => {
@@ -309,21 +280,3 @@ describe("bundled plugin assets", () => {
     });
   });
 });
-
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}

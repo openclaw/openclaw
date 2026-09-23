@@ -2,22 +2,23 @@ import type { SecretRef } from "../config/types.secrets.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { providerResolutionError, refResolutionError } from "./resolve-errors.js";
 import type { SecretRefErrorHandler } from "./resolve-types.js";
-import { readSecretStoreValue, SECRET_STORE_VALUE_MAX_BYTES } from "./store/secret-store.js";
+import { SECRET_STORE_VALUE_MAX_BYTES } from "./store/secret-store-validation-error.js";
+import { readSecretStoreValueAsync } from "./store/secret-store-worker.js";
 
 // Store values intentionally support large PEM/JSON payloads, so this batch cap is
 // independent from the 256 KiB request cap used by file and exec providers.
 const STORE_SECRET_REF_BATCH_MAX_BYTES = 512 * SECRET_STORE_VALUE_MAX_BYTES;
 
-export function resolveStoreRefs(params: {
+export async function resolveStoreRefs(params: {
   refs: SecretRef[];
   providerName: string;
   onRefError: SecretRefErrorHandler;
   database?: OpenClawStateDatabaseOptions;
-}): Map<string, unknown> {
+}): Promise<Map<string, unknown>> {
   const resolved = new Map<string, unknown>();
   let resolvedBytes = 0;
   for (const ref of params.refs) {
-    const result = readSecretStoreValue({
+    const result = await readSecretStoreValueAsync({
       scope: { kind: "team" },
       name: ref.id,
       database: params.database,

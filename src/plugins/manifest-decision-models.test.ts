@@ -34,6 +34,20 @@ it("discovers only decision models owned by the manifest without executing its r
         { provider: "fixture", id: "fast", name: "Duplicate" },
         { provider: "other", id: "foreign", name: "Unowned" },
         { provider: "fixture", id: "missing-name" },
+        {
+          provider: "fixture",
+          id: "hosted",
+          name: "Hosted",
+          setup: [
+            {
+              kind: "api-key",
+              label: "Fixture",
+              help: "Add your API key",
+              credentialPath: "apiKey",
+            },
+            { kind: "api-key", label: "Unsafe", help: "Ignored", credentialPath: "__proto__.key" },
+          ],
+        },
       ],
     }),
   );
@@ -57,6 +71,14 @@ it("discovers only decision models owned by the manifest without executing its r
         requiresBooleanCriteria: true,
         confidence: "none",
       },
+    },
+    {
+      provider: "fixture",
+      id: "hosted",
+      name: "Hosted",
+      setup: [
+        { kind: "api-key", label: "Fixture", help: "Add your API key", credentialPath: "apiKey" },
+      ],
     },
   ]);
   expect(result.manifest.providers ?? []).toEqual([]);

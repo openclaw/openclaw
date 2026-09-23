@@ -8,9 +8,9 @@ const storeMocks = vi.hoisted(() => ({
   readValue: vi.fn(),
 }));
 
-vi.mock("./store/secret-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store/secret-store.js")>();
-  return { ...actual, readSecretStoreValue: storeMocks.readValue };
+vi.mock("./store/secret-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store/secret-store-worker.js")>();
+  return { ...actual, readSecretStoreValueAsync: storeMocks.readValue };
 });
 
 const roots: string[] = [];

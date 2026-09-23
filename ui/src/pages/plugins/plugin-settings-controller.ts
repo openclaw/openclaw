@@ -55,6 +55,45 @@ export class PluginSettingsController {
       saveError: runtime.state.lastError,
       onDiscard: () => runtime.discardFormValue(field.path),
       onCommit: async (path, value) => {
+        if (descriptor.storage === "protected" && typeof value === "string") {
+          const connection = this.options.gateway.capture();
+          if (!connection) {
+            return false;
+          }
+          const result = await runtime.runExternalMutation(
+            (client) => {
+              const baseHash = runtime.state.configSnapshot?.hash;
+              if (!baseHash) {
+                throw new Error(
+                  "Configuration is unavailable; reload Settings before saving the credential.",
+                );
+              }
+              return client.request<{ saved: true; warning?: string }>("plugins.credentials.set", {
+                pluginId: detail.pluginId,
+                path,
+                baseHash,
+                value,
+              });
+            },
+            {
+              canDispatch: () =>
+                this.options.canEdit() &&
+                this.options.isSettings() &&
+                this.options.getDetail() === detail &&
+                this.options.gateway.isCurrent(connection),
+            },
+          );
+          if (!result.ok) {
+            throw new Error(result.error);
+          }
+          const warning = [
+            result.value.warning,
+            !result.refresh.ok ? result.refresh.error : undefined,
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return { saved: true, ...(warning ? { warning } : {}) };
+        }
         const previous = this.write;
         const accepted = field.onPatch(path, value);
         // Nested drafts may accept an edit without publishing a complete value.

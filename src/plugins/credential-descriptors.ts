@@ -1,4 +1,5 @@
 import type { PluginCredentialDescriptor } from "../../packages/gateway-protocol/src/schema/plugin-credentials.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
@@ -95,5 +96,49 @@ export function resolvePluginCredentialDescriptors(
         .map((entry) => entry.provider),
     );
   }
-  return projectPluginCredentialDescriptors(manifest.id, providers);
+  const fields = new Map(
+    projectPluginCredentialDescriptors(manifest.id, providers).map((field) => [
+      JSON.stringify(field.path),
+      field,
+    ]),
+  );
+  for (const input of manifest.configContracts?.secretInputs?.paths ?? []) {
+    if (input.ownerKind !== "capability" || input.expected !== "string") {
+      continue;
+    }
+    // Config contracts use dot-separated segments, not the richer authoring
+    // field-path grammar. Do not reinterpret brackets or expand wildcard owners.
+    const segments = input.path.split(".");
+    if (
+      segments.some(
+        (part) =>
+          !part ||
+          part !== part.trim() ||
+          part.includes("*") ||
+          part.includes("[") ||
+          part.includes("]") ||
+          isBlockedObjectKey(part),
+      )
+    ) {
+      continue;
+    }
+    const path = ["plugins", "entries", manifest.id, "config", ...segments];
+    if (path.length > 32 || path.some((part) => part.length > 512)) {
+      continue;
+    }
+    const key = JSON.stringify(path);
+    const existing = fields.get(key);
+    const hint = manifest.configUiHints?.[input.path];
+    const label = existing?.label ?? hint?.label ?? input.path;
+    const placeholder = existing?.placeholder ?? hint?.placeholder;
+    fields.set(key, {
+      ...existing,
+      path,
+      label: label.trim() ? label.slice(0, 512) : input.path.slice(0, 512),
+      envVars: existing?.envVars ?? [],
+      ...(placeholder ? { placeholder: placeholder.slice(0, 512) } : {}),
+      storage: "protected",
+    });
+  }
+  return [...fields.values()];
 }

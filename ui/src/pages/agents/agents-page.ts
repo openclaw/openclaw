@@ -77,7 +77,7 @@ import {
   setIdentityDraftField,
   togglePinnedAgent,
 } from "./identity-actions.ts";
-import { createAgentModelActions } from "./model-config.ts";
+import { createAgentModelSettings } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 import {
   navigateToAgent,
@@ -116,6 +116,11 @@ class AgentsPage
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() decisionModels: DecisionModelEntry[] = [];
   @state() chatModelCatalogStatus = createPanelRefreshStatus();
+  private readonly modelSettings = createAgentModelSettings(this, {
+    getScope: () => ({ context: this.context, agentId: this.resolveSelectedAgentId() }),
+    getModels: () => this.decisionModels,
+    onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(this),
+  });
   private chatModelCatalogPending: Promise<unknown> | null = null;
   private chatModelCatalogRequest: AbortController | null = null;
   @state() agentFilesLoading = false;
@@ -1052,6 +1057,7 @@ class AgentsPage
     };
     this.syncGitHubIdentity(selectedAgentId);
     return html`
+      ${this.modelSettings.decision.render()}
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
@@ -1254,13 +1260,7 @@ class AgentsPage
                 this.context.runtimeConfig.patchForm([...target.path, "skills"], []);
               }
             },
-            ...createAgentModelActions({
-              getRuntimeConfig: () => this.context.runtimeConfig,
-              canUpdate: (agentId) =>
-                agentId === this.resolveSelectedAgentId() &&
-                this.canCall("config.set", "operator.admin"),
-              onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(this),
-            }),
+            ...this.modelSettings.actions,
             // Availability facts (provider keys added/removed, new models) go
             // stale in the per-agent cache; opening the picker re-reads them,
             // mirroring the chat composer's on-open refresh.

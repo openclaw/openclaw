@@ -127,6 +127,32 @@ export const ModelsListResultSchema = closedObject({
         provider: NonEmptyString,
         name: NonEmptyString,
         pluginId: NonEmptyString,
+        readiness: Type.Optional(
+          Type.Union([
+            Type.Literal("configured"),
+            Type.Literal("setup-required"),
+            Type.Literal("auth-rejected"),
+            Type.Literal("unknown"),
+          ]),
+        ),
+        setup: Type.Optional(
+          closedObject({
+            kind: Type.Union([
+              Type.Literal("api-key"),
+              Type.Literal("local-server"),
+              Type.Literal("local-model"),
+            ]),
+            label: NonEmptyString,
+            help: NonEmptyString,
+            documentationUrl: Type.Optional(NonEmptyString),
+            credentialPath: Type.Optional(
+              Type.Array(Type.Union([NonEmptyString, Type.Integer({ minimum: 0 })]), {
+                minItems: 5,
+                maxItems: 32,
+              }),
+            ),
+          }),
+        ),
         capabilities: Type.Optional(
           closedObject({
             questionTypes: Type.Array(

@@ -15,6 +15,10 @@ const storeMocks = vi.hoisted(() => ({
   collectRefKeys: vi.fn((_config: unknown, _name: string) => new Set<string>()),
 }));
 
+vi.mock("../../secrets/store/secret-store-worker.js", () => ({
+  purgeExpiredSecretStoreEntriesAsync: storeMocks.purgeEntries,
+}));
+
 vi.mock("../../secrets/runtime-state.js", () => ({
   collectSecretStoreRefKeysInSnapshot: storeMocks.collectRefKeys,
   getActiveSecretsRuntimeSnapshotState: storeMocks.getSnapshot,

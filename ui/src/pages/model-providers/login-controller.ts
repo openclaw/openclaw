@@ -2,6 +2,7 @@ import { html, nothing, type ReactiveController, type ReactiveControllerHost } f
 import { createRef, ref } from "lit/directives/ref.js";
 import type { ModelAuthStatusResult, ProviderLoginOption } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { WizardLoginController } from "../../components/wizard-login-controller.ts";
 import { renderWizardSingleChoice } from "../../components/wizard-step-controls.ts";
@@ -23,12 +24,14 @@ type LoginControllerOptions = {
     context: ApplicationContext;
     agentId: string | null;
     authStatus?: ModelAuthStatusResult | null;
+    decisionModels?: readonly DecisionModelEntry[];
   };
   canStart: () => boolean;
   canContinue: () => boolean;
   refresh: () => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
+  onDecisionSetup?: (model: DecisionModelEntry) => void;
 };
 
 type LoginProvider = {
@@ -36,6 +39,7 @@ type LoginProvider = {
   label: string;
   choices: ProviderLoginOption[];
   apiKeyProvider?: string;
+  decisionModel?: DecisionModelEntry;
 };
 
 export class ModelProviderLoginController implements ReactiveController {
@@ -144,6 +148,20 @@ export class ModelProviderLoginController implements ReactiveController {
         }
       }
     }
+    if (this.options.onDecisionSetup) {
+      for (const model of this.options.getScope().decisionModels ?? []) {
+        if (!model.setup || (providers && !providers.includes(model.provider))) {
+          continue;
+        }
+        const group: LoginProvider = groups.get(model.provider) ?? {
+          id: model.provider,
+          label: model.setup.label,
+          choices: [],
+        };
+        group.decisionModel ??= model;
+        groups.set(model.provider, group);
+      }
+    }
     for (const group of groups.values()) {
       group.label ||= providerDisplayLabel(group.id);
       group.choices.sort(
@@ -198,7 +216,12 @@ export class ModelProviderLoginController implements ReactiveController {
           : providers && available.length === 1
             ? available[0]
             : undefined;
-        if (provider?.apiKeyProvider && !provider.choices.length) {
+        if (provider?.decisionModel && !provider.choices.length && !provider.apiKeyProvider) {
+          this.reset();
+          this.options.onDecisionSetup?.(provider.decisionModel);
+          return;
+        }
+        if (provider?.apiKeyProvider && !provider.choices.length && !provider.decisionModel) {
           this.reset();
           this.options.onApiKey?.(provider.apiKeyProvider);
           return;
@@ -336,6 +359,28 @@ export class ModelProviderLoginController implements ReactiveController {
                             })}
                           </div>
                           ${
+                            provider.decisionModel
+                              ? html`<button
+                                  class="btn"
+                                  data-models-login-decision
+                                  ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
+                                  @click=${() => {
+                                    if (
+                                      this.picker !== picker ||
+                                      !picker.isCurrent() ||
+                                      !provider.decisionModel
+                                    ) {
+                                      return;
+                                    }
+                                    this.reset();
+                                    this.options.onDecisionSetup?.(provider.decisionModel);
+                                  }}
+                                >
+                                  ${t("modelProviders.decisionSetup.entry")}
+                                </button>`
+                              : nothing
+                          }
+                          ${
                             provider.apiKeyProvider
                               ? html`
                                   <button
@@ -399,7 +444,20 @@ export class ModelProviderLoginController implements ReactiveController {
                                       ) {
                                         return;
                                       }
-                                      if (group.apiKeyProvider && !group.choices.length) {
+                                      if (
+                                        group.decisionModel &&
+                                        !group.choices.length &&
+                                        !group.apiKeyProvider
+                                      ) {
+                                        this.reset();
+                                        this.options.onDecisionSetup?.(group.decisionModel);
+                                        return;
+                                      }
+                                      if (
+                                        group.apiKeyProvider &&
+                                        !group.choices.length &&
+                                        !group.decisionModel
+                                      ) {
                                         this.reset();
                                         this.options.onApiKey?.(group.apiKeyProvider);
                                         return;
@@ -415,6 +473,9 @@ export class ModelProviderLoginController implements ReactiveController {
                                       <span>
                                         ${[
                                           ...group.choices.map((choice) => choice.label),
+                                          ...(group.decisionModel
+                                            ? [t("chat.modelControls.decisionLabel")]
+                                            : []),
                                           ...(group.apiKeyProvider
                                             ? [t("modelProviders.status.apiKey")]
                                             : []),

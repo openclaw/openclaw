@@ -57,6 +57,32 @@ describe("plugin ownership and configuration", () => {
     plugin.register(api);
     expect(registerTool).not.toHaveBeenCalled();
     expect(manifest.contracts).toEqual({ decisionProviders: ["typesafe"] });
+    expect(manifest.decisionModels).toEqual([
+      expect.objectContaining({
+        provider: "typesafe",
+        id: "jev-latest",
+        name: "Jev",
+        setup: [
+          expect.objectContaining({ kind: "local-server" }),
+          expect.objectContaining({ kind: "api-key" }),
+        ],
+      }),
+      expect.objectContaining({
+        provider: "typesafe",
+        id: "jev-1.13.0",
+        name: "Jev 1.13.0",
+        setup: [
+          expect.objectContaining({ kind: "local-server" }),
+          expect.objectContaining({ kind: "api-key" }),
+        ],
+      }),
+      expect.objectContaining({
+        provider: "typesafe",
+        id: "kev-latest",
+        name: "Kev (local server)",
+        setup: [expect.objectContaining({ kind: "local-server" })],
+      }),
+    ]);
     expect(manifest.providers).toBeUndefined();
     expect(manifest.modelCatalog).toBeUndefined();
     expect(manifest.controlUi).toBeUndefined();

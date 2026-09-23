@@ -1,15 +1,20 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 // Agent model selection staged against the runtime config form, split out of
 // agents-page.ts to keep that page inside the TS LOC ratchet.
+import type { ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { DecisionModelSetupController } from "../model-providers/decision-setup-controller.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
-export function createAgentModelActions(params: {
+function createAgentModelActions(params: {
   getRuntimeConfig: () => RuntimeConfig;
   canUpdate: (agentId: string) => boolean;
   onPrimaryChanged: () => void;
+  onDecisionSetup?: (model: string | null, commit: () => void) => void;
 }) {
   return {
     onModelChange: (agentId: string, modelId: string | null) => {
@@ -20,7 +25,16 @@ export function createAgentModelActions(params: {
     },
     onDecisionModelChange: (agentId: string, modelId: string | null) => {
       if (params.canUpdate(agentId)) {
-        stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+        const commit = () => {
+          if (params.canUpdate(agentId)) {
+            stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+          }
+        };
+        if (params.onDecisionSetup) {
+          params.onDecisionSetup(modelId, commit);
+        } else {
+          commit();
+        }
       }
     },
     onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
@@ -127,4 +141,39 @@ function stageAgentModelFallbacks(
     existingModelParts(entry.existing).primary,
     normalizeStringEntries(fallbacks),
   );
+}
+
+/** One composition binds setup and staged model edits to the current agent. */
+export function createAgentModelSettings(
+  host: ReactiveControllerHost,
+  options: {
+    getScope: () => { context: ApplicationContext; agentId: string | null };
+    getModels: () => readonly DecisionModelEntry[];
+    onPrimaryChanged: () => void;
+  },
+) {
+  const decision = new DecisionModelSetupController(host, {
+    getScope: options.getScope,
+    getModels: options.getModels,
+    getSelection: () => {
+      const { context, agentId } = options.getScope();
+      const value = agentId
+        ? context.runtimeConfig.agentEntry(agentId)?.entry.decisionModel
+        : undefined;
+      return typeof value === "string" ? value : null;
+    },
+  });
+  const actions = createAgentModelActions({
+    getRuntimeConfig: () => options.getScope().context.runtimeConfig,
+    canUpdate: (agentId) => {
+      const current = options.getScope();
+      return (
+        current.agentId === agentId &&
+        canCallGatewayMethod(current.context.gateway.snapshot, "config.set", "operator.admin")
+      );
+    },
+    onPrimaryChanged: options.onPrimaryChanged,
+    onDecisionSetup: (value, commit) => decision.choose(value, commit),
+  });
+  return { decision, actions };
 }

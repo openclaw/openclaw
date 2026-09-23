@@ -35,24 +35,26 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    ((input.command.type === "acpSessions.metadata" &&
-      Array.isArray(input.command.entries) &&
-      input.command.entries.length <= 64 &&
-      input.command.entries.every(
-        (entry) =>
-          isRecord(entry) &&
-          Array.isArray(entry.keys) &&
-          entry.keys.length <= 3 &&
-          entry.keys.every((key) => typeof key === "string") &&
-          (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
-          (entry.entry === undefined ||
-            (isRecord(entry.entry) &&
-              (entry.entry.lifecycleRevision === undefined ||
-                typeof entry.entry.lifecycleRevision === "string") &&
-              (entry.entry.sessionId === undefined || typeof entry.entry.sessionId === "string") &&
-              (entry.entry.sessionStartedAt === undefined ||
-                typeof entry.entry.sessionStartedAt === "number"))),
-      )) ||
+    ((input.command.type === "secrets.store.read" && typeof input.command.name === "string") ||
+      (input.command.type === "acpSessions.metadata" &&
+        Array.isArray(input.command.entries) &&
+        input.command.entries.length <= 64 &&
+        input.command.entries.every(
+          (entry) =>
+            isRecord(entry) &&
+            Array.isArray(entry.keys) &&
+            entry.keys.length <= 3 &&
+            entry.keys.every((key) => typeof key === "string") &&
+            (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
+            (entry.entry === undefined ||
+              (isRecord(entry.entry) &&
+                (entry.entry.lifecycleRevision === undefined ||
+                  typeof entry.entry.lifecycleRevision === "string") &&
+                (entry.entry.sessionId === undefined ||
+                  typeof entry.entry.sessionId === "string") &&
+                (entry.entry.sessionStartedAt === undefined ||
+                  typeof entry.entry.sessionStartedAt === "number"))),
+        )) ||
       (input.command.type === "mcpOAuth.statuses" &&
         Array.isArray(input.command.input) &&
         input.command.input.every((key) => typeof key === "string")) ||

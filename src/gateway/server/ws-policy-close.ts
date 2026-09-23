@@ -15,6 +15,7 @@ const policyMethods = new Set([
   "config.apply",
   "secrets.reload",
   "secrets.store.set",
+  "plugins.credentials.set",
   "secrets.store.delete",
   "device.pair.remove",
   "device.token.rotate",

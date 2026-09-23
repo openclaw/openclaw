@@ -132,3 +132,43 @@ describe("renderModelPicker", () => {
     }
   });
 });
+
+it("retains accessible setup text and semantic status without disabling the setup choice", async () => {
+  const container = document.createElement("div");
+  render(
+    renderModelPicker({
+      label: "Decision model",
+      value: "fixture/pending",
+      showSelectedDetail: true,
+      options: [
+        {
+          value: "fixture/pending",
+          label: "Pending model",
+          detail: "Add API key",
+          status: "warning",
+        },
+        {
+          value: "fixture/broken",
+          label: "Selected connection",
+          detail: "Connection needs attention",
+          status: "danger",
+        },
+        { value: "fixture/ready", label: "Ready model", detail: "Configured" },
+      ],
+      onChange: vi.fn(),
+    }),
+    container,
+  );
+  await updatePickers(container);
+  expect(container.querySelector("button")?.getAttribute("aria-label")).toContain("Add API key");
+  expect(
+    container.querySelector(".picker-select__trigger [data-status=warning]")?.textContent,
+  ).toBe("Add API key");
+  const pending = container.querySelector('[data-value="fixture/pending"]');
+  expect(pending?.getAttribute("aria-disabled")).toBe("false");
+  expect(pending?.querySelector("[data-status=warning]")).not.toBeNull();
+  expect(
+    container.querySelector('[data-value="fixture/broken"] [data-status=danger]'),
+  ).not.toBeNull();
+  expect(container.querySelector('[data-value="fixture/ready"] [data-status]')).toBeNull();
+});

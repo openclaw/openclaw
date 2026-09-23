@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
+import {
+  decisionModelSetupLabel,
+  type DecisionModelEntry,
+} from "../../components/decision-model-picker.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
@@ -25,9 +28,10 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
-import type { ModelProviderRowMessage } from "./config-mutation.ts";
+import { renderProviderConnectionDialog } from "./connection-dialog.ts";
 import type {
   DefaultModelSelection,
   ModelPickerEntry,
@@ -358,6 +362,35 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
 }
 
 function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewProps) {
+  if (card.decisionModels?.length && card.modelCount === 0) {
+    return html` <div
+      class="settings-row settings-row--stacked model-providers__row"
+      data-provider-id=${card.id}
+    >
+      <div class="model-providers__head">
+        <div class="model-providers__identity">
+          ${renderProviderBrandIcon(card.id, { className: "model-providers__icon" })}
+          <div class="settings-row__text">
+            <span class="settings-row__title">${card.displayName}</span
+            ><span class="settings-row__desc"
+              >${t("chat.modelControls.decisionLabel")} ·
+              ${t("modelProviders.decisionSetup.scope")}</span
+            >
+          </div>
+        </div>
+      </div>
+      ${card.decisionModels.map((model) => html`<div class="settings-row"><span>${model.name}</span><span class="muted">${decisionModelSetupLabel(model) ?? t("modelProviders.decisionSetup.unknown")}</span></div>`)}
+      <div class="model-providers__card-actions">
+        <button
+          class="btn btn--sm"
+          ?disabled=${!props.canMutate || props.loginBusy}
+          @click=${() => props.onConnect(card)}
+        >
+          ${card.decisionModels.some((model) => model.setup?.kind === "api-key" && (model.readiness === "configured" || model.readiness === "auth-rejected")) ? t("modelProviders.decisionSetup.updateKey") : t("modelProviders.login.action")}
+        </button>
+      </div>
+    </div>`;
+  }
   const models = modelsText(card);
   const message = props.messages[`key:${card.id}`] ?? props.messages[card.id];
   return html`
@@ -421,52 +454,22 @@ function renderAddProvider(props: ModelProvidersViewProps) {
     return nothing;
   }
   const busy = Boolean(props.busy.add);
-  const disabled = configMutationDisabled(props) || busy;
   const provider = props.unconfiguredProviders.find((entry) => entry.id === props.addProviderId);
-  return html`
-    <openclaw-modal-dialog
-      label=${t("modelProviders.add.title")}
-      @modal-cancel=${(event: Event) => {
-        event.preventDefault();
-        if (!busy) {
-          props.onAddProviderToggle();
-        }
-      }}
-    >
-      <div class="model-setup-wizard" data-models-key-dialog>
-        <div class="model-setup-wizard__header">
-          <h2>${provider?.displayName ?? props.addProviderId}</h2>
-        </div>
-        <div class="model-setup-wizard__body">
-          <p>${t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
-          <label class="field">
-            <span>${t("modelProviders.apiKey.label")}</span>
-            <input
-              type="password"
-              autocomplete="off"
-              placeholder=${t("modelProviders.apiKey.placeholder")}
-              .value=${props.addProviderKey}
-              ?disabled=${disabled}
-              @input=${(event: Event) => props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-            />
-          </label>
-          ${renderMutationMessage(props.messages.add)}
-        </div>
-        <div class="model-setup-wizard__footer">
-          <button class="btn" ?disabled=${busy} @click=${props.onAddProviderToggle}>
-            ${t("common.cancel")}
-          </button>
-          <button
-            class="btn primary"
-            ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
-            @click=${props.onAddProvider}
-          >
-            ${busy ? t("modelProviders.saving") : t("modelProviders.add.save")}
-          </button>
-        </div>
-      </div>
-    </openclaw-modal-dialog>
-  `;
+  return renderProviderConnectionDialog({
+    title: provider?.displayName ?? props.addProviderId,
+    description: t("modelProviders.credentials.label", { agent: props.credentialAgentLabel }),
+    busy,
+    disabled: configMutationDisabled(props) || !props.addProviderId || !props.addProviderKey.trim(),
+    key: {
+      value: props.addProviderKey,
+      disabled: configMutationDisabled(props),
+      onChange: props.onAddProviderKeyChange,
+    },
+    content: html`${renderMutationMessage(props.messages.add)}`,
+    actionLabel: t("modelProviders.add.save"),
+    onAction: props.onAddProvider,
+    onCancel: props.onAddProviderToggle,
+  });
 }
 
 function renderModelReadiness(props: ModelProvidersViewProps) {

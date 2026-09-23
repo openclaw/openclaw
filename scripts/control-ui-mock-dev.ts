@@ -61,6 +61,7 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
+import { decisionSetupMockInitScript } from "./control-ui-mock-decision-setup.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
@@ -86,6 +87,7 @@ type CliOptions = {
     | "board"
     | "code-fences"
     | "dashboards"
+    | "decision-setup"
     | "goal"
     | "plugins-dense"
     | "sidebar-roster"
@@ -408,6 +410,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "board" &&
     value !== "code-fences" &&
     value !== "dashboards" &&
+    value !== "decision-setup" &&
     value !== "goal" &&
     value !== "plugins-dense" &&
     value !== "sidebar-roster" &&
@@ -3468,6 +3471,20 @@ async function createMockGatewayPlugin(
   });
   const statefulInitScript = escapeScriptContent(
     createControlUiPreviewInitScript(newAgentWelcome) +
+      (fixture === "decision-setup"
+        ? decisionSetupMockInitScript(
+            (
+              expectDefined(
+                prepared.scenario.methodResponses?.["config.get"],
+                "decision setup config",
+              ) as {
+                config: Record<string, unknown>;
+              }
+            ).config,
+            prepared.scenario.models ?? [],
+            prepared.scenario.methodResponses?.["models.authStatus"] as Record<string, unknown>,
+          )
+        : "") +
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +

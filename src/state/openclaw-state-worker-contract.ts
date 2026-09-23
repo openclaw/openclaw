@@ -66,6 +66,7 @@ import type {
   ProjectRegistryRecord,
 } from "../projects/project-registry.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type { SecretStoreWorkerOperations } from "../secrets/store/secret-store-worker-contract.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
@@ -90,7 +91,8 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = SessionStateWorkerOperations &
+export type OpenClawStateWorkerOperations = SecretStoreWorkerOperations &
+  SessionStateWorkerOperations &
   McpOAuthReadOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &

@@ -14,6 +14,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
+import * as fileLock from "../infra/file-lock.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as packageJson from "../infra/package-json.js";
@@ -73,7 +74,10 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
 }));
 
-// Keep coordinator files inside the isolated workspace on every host.
+// Keep native service locks and SQLite coordinators inside each isolated fixture.
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: () => mocks.coordinatorRuntimeDir,
+}));
 vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
   const withIsolatedRuntimeDir = <T extends { runtimeDirectory?: string }>(params: T): T => ({
@@ -211,6 +215,7 @@ async function runDoctorFinishForStoppedUnit(
 }> {
   const home = tempDirs.make("openclaw-doctor-finish-");
   mocks.coordinatorRuntimeDir = home;
+  const serviceLocks = vi.spyOn(fileLock, "withFileLock");
   return await withEnvAsync(
     {
       HOME: home,
@@ -691,6 +696,11 @@ async function runDoctorFinishForStoppedUnit(
       const unauthorizedRestarts = restart.mock.calls.length - restartsBefore;
       if (custody.startsWith("copied")) {
         await maintenance?.finish({});
+      }
+      for (const [file] of serviceLocks.mock.calls) {
+        if (path.basename(file).startsWith("service-lifecycle-")) {
+          expect(path.dirname(file)).toBe(home);
+        }
       }
       assertCatalogUnchanged();
       const savedRun = runId && !legacyCatalog ? getUpdateRun(runId) : undefined;

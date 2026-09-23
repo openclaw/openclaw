@@ -1,10 +1,64 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 // Control UI tests cover canonical per-agent model config writes.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createAgentModelActions } from "./model-config.ts";
+import { createAgentModelSettings } from "./model-config.ts";
+
+function createAgentModelActions(params: {
+  getRuntimeConfig: () => ReturnType<typeof createRuntimeConfig>;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
+  const host = {
+    addController: vi.fn(),
+    removeController: vi.fn(),
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(true),
+  };
+  let agentId = "main";
+  const settings = createAgentModelSettings(host, {
+    getScope: () => ({
+      agentId,
+      context: {
+        runtimeConfig: params.getRuntimeConfig(),
+        gateway: {
+          snapshot: {
+            client: {},
+            phase: "connected",
+            hello: {
+              features: { methods: ["config.set"] },
+              auth: {
+                role: "operator",
+                scopes: params.canUpdate(agentId) ? ["operator.admin"] : [],
+              },
+            },
+          },
+        },
+      } as unknown as ApplicationContext,
+    }),
+    getModels: () => [
+      { provider: "typesafe", id: "jev-preview", name: "Jev preview", pluginId: "typesafe" },
+    ],
+    onPrimaryChanged: params.onPrimaryChanged,
+  });
+  return {
+    onModelChange: (target: string, value: string | null) => {
+      agentId = target;
+      settings.actions.onModelChange(target, value);
+    },
+    onDecisionModelChange: (target: string, value: string | null) => {
+      agentId = target;
+      settings.actions.onDecisionModelChange(target, value);
+    },
+    onModelFallbacksChange: (target: string, value: string[]) => {
+      agentId = target;
+      settings.actions.onModelFallbacksChange(target, value);
+    },
+  };
+}
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const client = {

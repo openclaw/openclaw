@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
@@ -16,6 +17,7 @@ import type {
   PluginManifestContracts,
   PluginManifestDangerousConfigFlag,
   PluginManifestDecisionModel,
+  PluginManifestDecisionModelSetup,
   PluginManifestMcpServer,
   PluginManifestMediaUnderstandingCapability,
   PluginManifestMediaUnderstandingProviderMetadata,
@@ -27,6 +29,70 @@ import type {
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
 
+function decisionSetupPath(value: unknown): string | undefined {
+  const path = normalizeOptionalString(value);
+  if (!path) {
+    return undefined;
+  }
+  try {
+    const tokens = parseConcreteConfigPathTokens(path);
+    return tokens.length > 0 &&
+      tokens.length <= 28 &&
+      tokens.every((token) => typeof token !== "string" || !isBlockedObjectKey(token))
+      ? path
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeDecisionSetup(value: unknown): PluginManifestDecisionModelSetup[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const setups: PluginManifestDecisionModelSetup[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      (entry.kind !== "api-key" && entry.kind !== "local-server" && entry.kind !== "local-model")
+    ) {
+      continue;
+    }
+    const label = normalizeOptionalString(entry.label);
+    const help = normalizeOptionalString(entry.help);
+    const credentialPath = decisionSetupPath(entry.credentialPath);
+    const whenConfigured = decisionSetupPath(entry.whenConfigured);
+    const configuredPath = decisionSetupPath(entry.configuredPath);
+    if (
+      !label ||
+      label.length > 128 ||
+      !help ||
+      help.length > 2048 ||
+      (entry.kind === "api-key" && !credentialPath) ||
+      (entry.whenConfigured !== undefined && !whenConfigured) ||
+      (entry.configuredPath !== undefined && !configuredPath)
+    ) {
+      continue;
+    }
+    const documentationUrl = normalizeOptionalString(entry.documentationUrl);
+    if (
+      documentationUrl &&
+      (!URL.canParse(documentationUrl) || new URL(documentationUrl).protocol !== "https:")
+    ) {
+      continue;
+    }
+    setups.push({
+      kind: entry.kind,
+      label,
+      help,
+      ...(documentationUrl ? { documentationUrl } : {}),
+      ...(credentialPath ? { credentialPath } : {}),
+      ...(configuredPath ? { configuredPath } : {}),
+      ...(whenConfigured ? { whenConfigured } : {}),
+    });
+  }
+  return setups.length ? setups : undefined;
+}
 // Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
 function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {
   if (
@@ -92,8 +158,15 @@ export function normalizeManifestDecisionModels(
     }
     const ref = `${provider}/${id}`;
     if (!seen.has(ref)) {
+      const setup = normalizeDecisionSetup(entry.setup);
       const capabilities = normalizeDecisionCapabilities(entry.capabilities);
-      models.push({ provider, id, name, ...(capabilities ? { capabilities } : {}) });
+      models.push({
+        provider,
+        id,
+        name,
+        ...(setup ? { setup } : {}),
+        ...(capabilities ? { capabilities } : {}),
+      });
       seen.add(ref);
     }
   }

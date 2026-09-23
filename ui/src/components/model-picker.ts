@@ -7,6 +7,7 @@ export type ModelPickerOption = {
   label: string;
   provider?: string;
   detail?: string;
+  status?: "warning" | "danger";
   disabled?: boolean;
 };
 

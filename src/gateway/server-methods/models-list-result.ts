@@ -369,6 +369,7 @@ export async function prepareModelsListResult(
   const availableDecisionModels = listDecisionModels({
     config: cfg,
     snapshot: metadataSnapshot,
+    registry: preparedPluginRegistry,
   });
   const retainedModel =
     params.includeManualSelection && view === "configured" && scope?.sessionEntry

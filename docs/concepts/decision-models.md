@@ -69,6 +69,31 @@ Both plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 
+### Setup in the Control UI
+
+The Decision picker shows each model's declared setup path: a hosted API key,
+a local server, or local model preparation. API-key setup saves a protected
+credential; local and manual setup show instructions and plugin settings instead
+of requiring an unrelated key. Discovery does not import the provider runtime,
+probe a server, download weights, or run an evaluation.
+
+Readiness is limited evidence, not a successful inference test:
+
+- **Configured** means the host has a prepared credential, or the plugin's
+  declared local configuration field is present. It does not verify a hosted key,
+  server reachability, or downloaded model artifacts.
+- **Setup required** means the hosted credential is not available to the runtime.
+- **Authentication rejected** reflects a rejection observed during an evaluation;
+  changing the selected model does not clear the provider's authentication state.
+- **Unknown** means the host has no readiness evidence, as with ONNX artifact
+  preparation. Follow the instructions and verify locally before use.
+
+Provider credentials and plugin settings apply globally to that plugin, across
+agents. Model selection is separate: saving setup does not change an agent's
+Decision model. When setup was opened from a pending selection, choose **Use**
+explicitly after saving. Connecting only a provider does not select any model.
+Canceling setup leaves the current selection unchanged.
+
 After provider setup, merge the role selection into your configuration:
 
 ```json5

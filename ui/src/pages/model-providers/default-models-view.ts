@@ -265,7 +265,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       })}
       ${renderSettingsRow({
         title: t("chat.modelControls.decisionLabel"),
-        description: t("chat.modelControls.decisionHelp"),
+        description: t("modelProviders.decisionSetup.optional"),
         control: renderDecisionModelPicker({
           id: "model-providers-decision-model",
           models: props.decisionModels,

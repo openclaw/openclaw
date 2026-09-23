@@ -101,6 +101,7 @@ import {
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
+import { executeSecretStoreWorkerCommand } from "../secrets/store/secret-store-worker.runtime.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import {
@@ -502,6 +503,9 @@ export function executeSharedStateCommand(
   };
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
+  }
+  if (command.type === "secrets.store.stage" || command.type === "secrets.store.rollback") {
+    return executeSecretStoreWorkerCommand(command, writeOptions);
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);

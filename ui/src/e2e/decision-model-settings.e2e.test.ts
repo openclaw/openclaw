@@ -155,4 +155,133 @@ suite.define(() => {
       },
     );
   });
+  it("shares provider setup from both entry points without losing the prior decision selection", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 1440, height: 1200 } },
+      async ({ page }) => {
+        let config: unknown = {
+          agents: {
+            defaults: { decisionModel: "onnx/local" },
+            entries: { main: { default: true } },
+          },
+        };
+        let revision = 0;
+        const snapshot = () => ({
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+          hash: `setup-${revision}`,
+          appliedConfigHash: `setup-${revision}`,
+          valid: true,
+          issues: [],
+        });
+        const entries = (ready: boolean) => [
+          {
+            provider: "typesafe",
+            id: "jev-latest",
+            name: "Jev",
+            pluginId: "typesafe",
+            readiness: ready ? "configured" : "setup-required",
+            setup: {
+              kind: "api-key",
+              label: "TypeSafe",
+              help: "Add your TypeSafe API key",
+              credentialPath: ["plugins", "entries", "typesafe", "config", "apiKey"],
+            },
+          },
+          {
+            provider: "onnx",
+            id: "local",
+            name: "Local model",
+            pluginId: "onnx",
+            readiness: "configured",
+            setup: {
+              kind: "local-model",
+              label: "ONNX",
+              help: "Prepare your local model. No API key needed.",
+            },
+          },
+        ];
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": snapshot(),
+            "models.list": { models: [], decisionModels: entries(false) },
+            "models.authStatus": { providers: [], providerCapabilities: [], ts: 1 },
+            "usage.status": { providers: [] },
+            "sessions.usage": { aggregates: { byProvider: [] } },
+            "plugins.credentials.set": {
+              __mockError: {
+                code: "INVALID_REQUEST",
+                message: "Cannot replace this external credential reference.",
+              },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const picker = page.locator("openclaw-select-picker:has(#model-providers-decision-model)");
+        const dialog = page.locator("[data-models-key-dialog]");
+        await expect.poll(() => pickerValue(picker)).toBe("onnx/local");
+        await selectPickerValue(picker, "typesafe/jev-latest");
+        await dialog.getByRole("heading", { name: "Connect TypeSafe", exact: true }).waitFor();
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await pickerValue(picker)).toBe("onnx/local");
+        expect(
+          await dialog.getByRole("button", { name: "Connect TypeSafe", exact: true }).isDisabled(),
+        ).toBe(true);
+        await dialog.locator("input[type=password]").fill("synthetic-input");
+        await dialog.getByRole("button", { name: "Connect TypeSafe", exact: true }).click();
+        await dialog.getByRole("alert").waitFor();
+        expect(await pickerValue(picker)).toBe("onnx/local");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
+        // Provider-only connection enters that same form and never chooses a model.
+        await page.locator("[data-models-connect]").first().click();
+        await page.locator('[data-models-login-provider="typesafe"]').click();
+        await dialog.getByRole("heading", { name: "Connect TypeSafe", exact: true }).waitFor();
+        await gateway.setMethodResponse("plugins.credentials.set", { saved: true });
+        await gateway.setMethodResponse("models.list", {
+          models: [],
+          decisionModels: entries(true),
+        });
+        await dialog.locator("input[type=password]").fill("synthetic-input");
+        await dialog.getByRole("button", { name: "Connect TypeSafe", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
+        expect(await pickerValue(picker)).toBe("onnx/local");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await gateway.setMethodResponse("models.list", {
+          models: [],
+          decisionModels: entries(false),
+        });
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await expect.poll(() => picker.textContent()).toContain("Add API key");
+        await selectPickerValue(picker, "typesafe/jev-latest");
+        await dialog.getByRole("heading", { name: "Connect TypeSafe", exact: true }).waitFor();
+        await gateway.setMethodResponse("models.list", {
+          models: [],
+          decisionModels: entries(true),
+        });
+        await dialog.locator("input[type=password]").fill("synthetic-input");
+        await dialog.getByRole("button", { name: "Connect TypeSafe", exact: true }).click();
+        await dialog.getByRole("button", { name: "Use Jev", exact: true }).waitFor();
+        expect(await pickerValue(picker)).toBe("onnx/local");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await gateway.deferNext("config.patch");
+        await dialog.getByRole("button", { name: "Use Jev", exact: true }).click();
+        const request = await gateway.waitForRequest("config.patch");
+        expect(requestRaw(request)).toMatchObject({
+          agents: { defaults: { decisionModel: "typesafe/jev-latest" } },
+        });
+        config = applyMergePatch(config, requestRaw(request));
+        revision++;
+        await gateway.setMethodResponse("config.get", snapshot());
+        await gateway.resolveDeferred("config.patch", {
+          ok: true,
+          config,
+          hash: `setup-${revision}`,
+        });
+        await expect.poll(() => pickerValue(picker)).toBe("typesafe/jev-latest");
+      },
+    );
+  });
 });

@@ -394,6 +394,18 @@ export type PluginManifestBackupResource = {
   relativePath: string;
 };
 
+/** Ordered setup alternatives; config paths are relative to this plugin. */
+export type PluginManifestDecisionModelSetup = {
+  kind: "api-key" | "local-server" | "local-model";
+  label: string;
+  help: string;
+  documentationUrl?: string;
+  /** Select this alternative only when the named config field is present. */
+  whenConfigured?: string;
+  credentialPath?: string;
+  configuredPath?: string;
+};
+
 /** Provider-authored limits and result semantics available before runtime activation. */
 export type DecisionProviderCapabilities = {
   questionTypes: ("boolean" | "choice" | "score")[];
@@ -412,6 +424,7 @@ export type PluginManifestDecisionModel = {
   provider: string;
   id: string;
   name: string;
+  setup?: PluginManifestDecisionModelSetup[];
   capabilities?: DecisionProviderCapabilities;
 };
 

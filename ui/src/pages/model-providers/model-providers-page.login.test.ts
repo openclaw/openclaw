@@ -876,3 +876,65 @@ it("keeps provider access scoped below global defaults and connects without navi
   expect(context.navigate).not.toHaveBeenCalled();
   expect(defaults.isConnected).toBe(true);
 });
+
+it("keeps mixed chat and decision setup distinct in the ordinary alphabetical inventory", async () => {
+  const { context } = createHarness("writer");
+  const model = {
+    provider: "fixture",
+    id: "decision",
+    name: "Decision",
+    pluginId: "fixture",
+    setup: {
+      kind: "api-key" as const,
+      label: "Fixture",
+      help: "Add a capability key",
+      credentialPath: ["plugins", "entries", "fixture", "config", "key"],
+    },
+  };
+  const onApiKey = vi.fn();
+  const onDecisionSetup = vi.fn();
+  const controller = new ModelProviderLoginController(
+    {
+      addController: vi.fn(),
+      removeController: vi.fn(),
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    },
+    {
+      getScope: () => ({
+        context,
+        agentId: "writer",
+        authStatus: {
+          ts: 1,
+          providers: [],
+          providerCapabilities: [
+            { provider: "fixture", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "alpha", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        },
+        decisionModels: [
+          { ...model, provider: "zulu", setup: { ...model.setup, label: "Zulu" } },
+          model,
+        ],
+      }),
+      canStart: () => true,
+      canContinue: () => true,
+      refresh: async () => undefined,
+      onApiKey,
+      onDecisionSetup,
+    },
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  await controller.open();
+  render(controller.render(), container);
+  expect(providerChoices(container)).toEqual(["alpha", "fixture", "zulu"]);
+  container.querySelector<HTMLButtonElement>('[data-models-login-provider="fixture"]')!.click();
+  render(controller.render(), container);
+  expect(onApiKey).not.toHaveBeenCalled();
+  expect(container.querySelector("[data-models-login-api-key]")).not.toBeNull();
+  container.querySelector<HTMLButtonElement>("[data-models-login-decision]")!.click();
+  expect(onDecisionSetup).toHaveBeenCalledExactlyOnceWith(model);
+  expect(onApiKey).not.toHaveBeenCalled();
+  expect(controller.busy).toBe(false);
+});

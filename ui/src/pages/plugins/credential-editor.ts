@@ -32,8 +32,11 @@ export type PluginCredentialEditorContext = {
   gateway: GatewayPageController;
   canInspect: boolean;
   saveError?: string | null;
-  /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
-  onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
+  /** Adapter awaits the owning config write or protected credential operation. */
+  onCommit: (
+    path: Array<string | number>,
+    value: unknown,
+  ) => Promise<boolean | { saved: true; warning?: string }>;
   onDiscard: () => Promise<boolean>;
 };
 type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled" | "onPatch"> & {
@@ -47,6 +50,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   @state() private inspection: PluginCredentialInspection | null = null;
   @state() private loading = false;
   @state() private error = "";
+  @state() private warning = "";
   @state() private dialogOpen = false;
   @state() private reference: SecretRef = { source: "env", provider: "default", id: "" };
   @state() private literal = "";
@@ -88,6 +92,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     // Other settings can advance the revision before this field's blur commit.
     // Only retiring the field or connection may discard its uncommitted key.
     if (sourceChanged) {
+      this.warning = "";
       this.literal = "";
       this.dialogOpen = false;
       this.saving = false;
@@ -112,6 +117,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     this.literal = "";
     this.reference = { source: "env", provider: "default", id: "" };
     this.referenceSubmitted = false;
+    this.warning = "";
     super.disconnectedCallback();
   }
 
@@ -201,16 +207,20 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     this.saving = true;
     this.referenceSubmitted ||= this.dialogOpen;
     this.error = "";
+    this.warning = "";
     try {
       const acknowledged = await this.context.onCommit(this.field.path, value);
       if (!current()) {
         return;
       }
-      if (acknowledged) {
+      if (typeof acknowledged === "boolean" ? acknowledged : acknowledged.saved) {
         this.referenceSubmitted = false;
         this.dialogOpen = false;
         this.literal = "";
         await this.inspect();
+        if (current() && typeof acknowledged !== "boolean") {
+          this.warning = acknowledged.warning ?? "";
+        }
       } else {
         this.error = this.context.saveError || t("pluginsPage.credentials.saveFailed");
       }
@@ -446,7 +456,8 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       }
       ${this.loading ? html`<span role="status" class="muted">${t("common.loading")}</span>` : nothing}
       ${credential?.kind === "invalid" ? html`<span role="alert">${t("pluginsPage.credentials.invalidStored")}</span>` : nothing}
-      ${!this.dialogOpen && (this.error || this.context.saveError) ? html`<div role="alert">${this.error || this.context.saveError}<button class="btn btn--sm" @click=${() => (this.literal ? this.patch(this.literal) : this.inspect())}>${t("common.retry")}</button></div>` : nothing}
+      ${this.warning ? html`<div class="callout warn" role="status">${this.warning}</div>` : nothing}
+      ${!this.dialogOpen && (this.error || (!this.warning && this.context.saveError)) ? html`<div role="alert">${this.error || this.context.saveError}<button class="btn btn--sm" @click=${() => (this.literal ? this.patch(this.literal) : this.inspect())}>${t("common.retry")}</button></div>` : nothing}
       ${this.renderDialog()}
     </div>`;
   }

@@ -58,6 +58,7 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { readSecretStoreValueInDatabase } from "../secrets/store/secret-store.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -180,6 +181,14 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "secrets.store.read") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readSecretStoreValueInDatabase(db, command.name),
+                  };
+                }
                 if (command.type === "acpSessions.metadata") {
                   return {
                     ok: true,

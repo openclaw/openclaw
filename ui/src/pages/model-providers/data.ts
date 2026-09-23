@@ -15,6 +15,7 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import {
   canonicalModelAuthProviderId,
@@ -52,6 +53,7 @@ export type ModelProviderProfileOrderLock = NonNullable<
 >;
 
 export type ModelProviderCard = {
+  decisionModels?: DecisionModelEntry[];
   /** Canonical provider id used for icon + label lookup. */
   id: string;
   /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
@@ -88,6 +90,7 @@ export type ModelProviderCard = {
 };
 
 type ModelProviderCardsInput = {
+  decisionModels?: readonly DecisionModelEntry[];
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
@@ -396,6 +399,18 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       : addition;
   }
 
+  for (const model of input.decisionModels ?? []) {
+    const draft = ensureDraft(
+      drafts,
+      model.provider,
+      model.setup?.label ?? providerDisplayLabel(model.provider),
+    );
+    (draft.card.decisionModels ??= []).push(model);
+    draft.hasModelAuth = true;
+    if (draft.card.modelCount === 0) {
+      draft.card.apiKeySupported = false;
+    }
+  }
   return drafts
     .filter(
       (draft) =>
@@ -485,6 +500,19 @@ export function buildSelectableDefaultModels(
     });
   }
   return selectable;
+}
+
+/** Configured account identity stays distinct from readiness and capability-only setup. */
+export function buildConfiguredProviderIds(
+  providerIds: readonly string[],
+  auth: ModelAuthStatusResult | null,
+) {
+  return new Set([
+    ...providerIds,
+    ...(auth?.providers
+      .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
+      .map((provider) => provider.provider) ?? []),
+  ]);
 }
 
 export function readModelProviderConfig(config: Record<string, unknown> | null): {
