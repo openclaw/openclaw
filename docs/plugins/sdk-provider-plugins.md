@@ -53,6 +53,28 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Declare physical credential ownership
+
+Normal providers use agent-scoped profiles and configured provider credentials by
+default. A provider whose credentials are protected plugin-global settings can
+declare `authScope: "plugin"` on its canonical `modelCatalog.providers` entry and
+its runtime provider definition. These declarations must agree; unavailable or
+disabled executables must not turn a plugin credential request into an agent-profile
+lookup.
+
+Plugin scope uses the selected live provider's synchronous `resolveSyntheticAuth`
+hook. Read the existing host-prepared plugin secret input there; do not resolve cold
+SecretRefs or copy them into agent auth stores. The common owner rechecks instance,
+hook identity and credential revision around that read. Cached/restored synthetic
+bearer results cannot replace live authority. Explicit or preferred profile pins
+are rejected before the hook, with no environment or `models.providers` fallback.
+
+A declared no-auth marker establishes credential eligibility only—not service
+health, successful inference, or verified local model artifacts. Catalog readiness
+uses this same live source and treats missing prepared evidence as unknown or
+unavailable, never as an implicit profile grant. Existing agent-scoped providers
+retain their normal account precedence.
+
 ## Handle model access after sign-in
 
 Existing consumers of `runModelsAuthLoginFlow` from

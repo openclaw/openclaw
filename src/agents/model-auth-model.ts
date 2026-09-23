@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
@@ -56,6 +58,26 @@ export function resolveModelAuthMode(
     return undefined;
   }
 
+  if (
+    resolveProviderAuthScope({
+      provider: resolved,
+      config: cfg,
+      workspaceDir: options?.workspaceDir,
+    }) === "plugin"
+  ) {
+    try {
+      return (
+        resolveProviderSyntheticAuthWithPlugin({
+          provider: resolved,
+          config: cfg,
+          workspaceDir: options?.workspaceDir,
+          context: { provider: resolved, config: cfg },
+        })?.mode ?? "unknown"
+      );
+    } catch {
+      return "unknown";
+    }
+  }
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, resolved);
   if (authOverride === "aws-sdk") {
     return "aws-sdk";
@@ -112,6 +134,13 @@ export async function hasAvailableAuthForProvider(params: {
   modelApi?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
+  if (resolveProviderAuthScope({ ...params, config: cfg }) === "plugin") {
+    try {
+      return Boolean(await resolveApiKeyForProviderCore(params));
+    } catch {
+      return false;
+    }
+  }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {

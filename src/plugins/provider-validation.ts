@@ -322,6 +322,20 @@ export function normalizeRegisteredProvider(params: {
     return null;
   }
 
+  if (
+    params.provider.authScope !== undefined &&
+    params.provider.authScope !== "agent" &&
+    params.provider.authScope !== "plugin"
+  ) {
+    params.pushDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `provider "${id}" authScope must be agent or plugin`,
+    });
+    return null;
+  }
+
   const auth = normalizeProviderAuthMethods({
     providerId: id,
     pluginId: params.pluginId,

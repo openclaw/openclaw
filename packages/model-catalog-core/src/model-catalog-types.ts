@@ -260,6 +260,8 @@ export type ModelCatalogModel = {
 
 /** Provider manifest catalog entry. */
 export type ModelCatalogProvider = {
+  /** Physical credential owner. Omission preserves agent profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;

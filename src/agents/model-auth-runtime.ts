@@ -6,6 +6,10 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  resolveProviderAuthScope,
+  pluginProviderAuthUnavailable,
+} from "../plugins/provider-auth-scope.js";
+import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
@@ -151,6 +155,9 @@ function resolveRuntimeAvailableProviderAuth<T>(
   resolveSyntheticAuth: (provider: string) => T,
 ): boolean | T {
   const provider = normalizeProviderId(params.provider);
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return params.allowPluginSyntheticAuth === false ? false : resolveSyntheticAuth(provider);
+  }
   const authOverride = authConfig.resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
@@ -302,6 +309,10 @@ function resolveProviderSyntheticRuntimeAuth(
   resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
     resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): SyntheticProviderAuthResolution {
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    const auth = resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, params.cfg));
+    return { auth };
+  }
   const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
   if (runtimeAuth) {
     return { auth: runtimeAuth };
@@ -344,6 +355,10 @@ function resolveProviderSyntheticRuntimeAuth(
 export async function prepareSyntheticLocalProviderAuth(
   params: SyntheticProviderAuthParams & { signal?: AbortSignal },
 ): Promise<ResolvedProviderAuth | null> {
+  params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return resolveSyntheticLocalProviderAuth(params);
+  }
   if (
     params.allowPluginSyntheticAuth === false ||
     authConfig.hasSecretRefProviderApiKey(params.cfg, params.provider)
@@ -375,6 +390,15 @@ function resolveSyntheticLocalProviderAuth(
   params: SyntheticProviderAuthParams,
   resolveFromConfig?: ResolveSyntheticProviderAuth,
 ): ResolvedProviderAuth | null {
+  if (
+    resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin" &&
+    params.allowPluginSyntheticAuth === false
+  ) {
+    throw pluginProviderAuthUnavailable(
+      params.provider,
+      "plugin auth is excluded by the prepared route",
+    );
+  }
   // Prepared direct attempts may use local no-auth config, but must not widen
   // back into an unprepared plugin-owned credential source.
   const syntheticProviderAuth =

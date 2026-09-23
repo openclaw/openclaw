@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { resolveProviderAuthScope, pluginProviderAuthUnavailable } from "./provider-auth-scope.js";
 import {
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
@@ -168,6 +169,13 @@ export function createProviderHookRuntime(
           isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
         })
       : undefined;
+    const authScope = resolveProviderAuthScope(params);
+    if (registration && (registration.provider.authScope ?? "agent") !== authScope) {
+      throw pluginProviderAuthUnavailable(
+        params.provider,
+        "runtime and static authScope declarations do not match",
+      );
+    }
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),

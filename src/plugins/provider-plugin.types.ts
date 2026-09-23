@@ -116,6 +116,8 @@ export type ProviderPlugin = {
    */
   envVars?: string[];
   auth: ProviderAuthMethod[];
+  /** Physical credential owner, matching canonical catalog metadata. Plugin scope requires a live synchronous prepared-secret hook, never cached credentials or implicit agent profiles. */
+  authScope?: "agent" | "plugin";
   /**
    * Legacy text-provider catalog hook.
    *

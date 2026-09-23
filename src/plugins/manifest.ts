@@ -245,6 +245,18 @@ export function loadPluginManifest(
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
+  let modelCatalog: ReturnType<typeof normalizeModelCatalog>;
+  try {
+    modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
+      ownedProviders: new Set([...providers, ...cliBackends]),
+    });
+  } catch {
+    return cacheResult({
+      ok: false,
+      error: "invalid plugin manifest modelCatalog ownership metadata",
+      manifestPath,
+    });
+  }
   const manifestBeforeDashboard = {
     id,
     configSchema,
@@ -270,9 +282,7 @@ export function loadPluginManifest(
         ? undefined
         : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
-    modelCatalog: normalizeModelCatalog(raw.modelCatalog, {
-      ownedProviders: new Set([...providers, ...cliBackends]),
-    }),
+    modelCatalog,
     modelPricing: modelProviderNormalizers.normalizeManifestModelPricing(raw.modelPricing, {
       ownedProviders: new Set(providers),
     }),

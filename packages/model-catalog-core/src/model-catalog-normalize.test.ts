@@ -522,3 +522,22 @@ describe("model catalog normalization", () => {
     expect(row?.contextWindowDefault).toBeUndefined();
   });
 });
+
+describe("provider credential scope metadata", () => {
+  it("retains ownership for providers without static model rows", () => {
+    expect(
+      normalizeModelCatalog(
+        { providers: { fixture: { authScope: "plugin", models: [] } } },
+        { ownedProviders: new Set(["fixture"]) },
+      )?.providers?.fixture,
+    ).toEqual({ authScope: "plugin", models: [] });
+  });
+  it("rejects invalid ownership rather than downgrading to default agent scope", () => {
+    expect(() =>
+      normalizeModelCatalog(
+        { providers: { fixture: { authScope: "global", models: [{ id: "model" }] } } },
+        { ownedProviders: new Set(["fixture"]) },
+      ),
+    ).toThrow("authScope");
+  });
+});

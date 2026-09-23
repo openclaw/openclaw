@@ -506,12 +506,20 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   if (!isRecord(value)) {
     return undefined;
   }
+  // Invalid ownership must not silently normalize to agent credentials.
+  if (
+    value.authScope !== undefined &&
+    value.authScope !== "agent" &&
+    value.authScope !== "plugin"
+  ) {
+    throw new Error("Invalid model catalog provider authScope; expected agent or plugin");
+  }
   const models = Array.isArray(value.models)
     ? value.models
         .map((entry) => normalizeModelCatalogModel(entry))
         .filter((entry): entry is ModelCatalogModel => Boolean(entry))
     : [];
-  if (models.length === 0) {
+  if (models.length === 0 && value.authScope === undefined) {
     return undefined;
   }
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
@@ -525,6 +533,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
     ...(headers ? { headers } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(value.authScope !== undefined ? { authScope: value.authScope } : {}),
     models,
   };
 }

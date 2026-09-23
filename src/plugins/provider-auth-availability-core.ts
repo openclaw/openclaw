@@ -16,6 +16,10 @@ import {
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveProviderAuthScope,
+  resolvePluginOwnedProviderAuthWith,
+} from "./provider-auth-scope.js";
 
 export function createProviderAuthAvailability(
   authStore: Pick<
@@ -25,6 +29,7 @@ export function createProviderAuthAvailability(
     | "loadAuthProfileStoreForSecretsRuntime"
     | "loadAuthProfileStoreWithoutExternalProfiles"
   >,
+  resolveProvider?: Parameters<typeof resolvePluginOwnedProviderAuthWith>[1],
 ) {
   const {
     ensureAuthProfileStore,
@@ -48,6 +53,23 @@ export function createProviderAuthAvailability(
     /** Optional provider-owned acceptance predicate for a known selected credential. */
     acceptsApiKey?: (apiKey: string) => boolean;
   }): boolean {
+    if (resolveProviderAuthScope({ provider: params.provider, config: params.cfg }) === "plugin") {
+      if (!resolveProvider) {
+        return false;
+      }
+      try {
+        const auth = resolvePluginOwnedProviderAuthWith(
+          { provider: params.provider, config: params.cfg },
+          resolveProvider,
+        );
+        const allowed =
+          !params.profileTypes?.length ||
+          params.profileTypes.some((type) => profileTypeToAuthMode(type) === auth.mode);
+        return allowed && (params.acceptsApiKey?.(auth.apiKey) ?? true);
+      } catch {
+        return false;
+      }
+    }
     const agentDir = params.agentDir?.trim();
     if (params.acceptsApiKey) {
       const { acceptsApiKey, ...availability } = params;

@@ -47,7 +47,9 @@ const externalAuth = Object.freeze(
   createExternalAuthRuntime(externalProfiles.resolveExternalAuthProfilesWithPlugins),
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
-const authAvailability = Object.freeze(createProviderAuthAvailability(authStore));
+const authAvailability = Object.freeze(
+  createProviderAuthAvailability(authStore, providerHooks.resolveProviderRuntimePlugin),
+);
 let modelAuth: NativePluginLoadBindings["modelAuth"] | undefined;
 let modelConfig: NativePluginLoadBindings["modelConfig"] | undefined;
 let capabilityCatalogContext: NativePluginLoadBindings["capabilityCatalogContext"] | undefined;

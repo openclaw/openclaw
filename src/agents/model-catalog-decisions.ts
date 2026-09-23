@@ -3,9 +3,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolveProviderAuthScope,
+  resolvePluginOwnedProviderAuthWith,
+} from "../plugins/provider-auth-scope.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../state/user-model-accounts.js";
@@ -59,6 +66,7 @@ function listEnabledSyntheticAuthProviderRefs(
 }
 
 function createModelsListAuthResolver(params: {
+  pluginRegistry?: PluginRegistry;
   cfg: OpenClawConfig;
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
@@ -93,11 +101,48 @@ function createModelsListAuthResolver(params: {
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: params.preparedAuthStore,
     routeResolverFactory: params.routeResolverFactory,
+    evaluatePluginAuth: (provider, ref) => {
+      if (!params.pluginRegistry) {
+        return { availability: undefined, routeResolution: null, availabilityAuthoritative: true };
+      }
+      try {
+        const auth = withPluginRuntimeGenerationScope(
+          { metadataSnapshot: params.metadataSnapshot, pluginRegistry: params.pluginRegistry },
+          () =>
+            resolvePluginOwnedProviderAuthWith(
+              {
+                provider,
+                config: params.cfg,
+                workspaceDir: params.workspaceDir,
+                pluginMetadataSnapshot: params.metadataSnapshot,
+                profileId: ref.requiredProfileId ?? ref.pinnedProfileId,
+                preferredProfile: ref.preferredProfileId,
+              },
+              resolveLoadedProviderRuntimePlugin,
+            ),
+        );
+        return {
+          availability: true,
+          routeResolution: null,
+          availabilityAuthoritative: true,
+          selectedAuthMode: auth.mode,
+          evidence: "runtime",
+        };
+      } catch {
+        return {
+          availability: false,
+          routeResolution: null,
+          availabilityAuthoritative: true,
+          unavailableReason: "missing-auth",
+        };
+      }
+    },
   });
 }
 
 function createModelsListEntryEvaluator(params: {
   authResolver: ModelAuthAvailabilityResolver;
+  isPluginAuthProvider: (provider: string) => boolean;
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   preferredProfileId?: string;
   preferredProfilesByProvider?: ReadonlyMap<string, string>;
@@ -121,8 +166,9 @@ function createModelsListEntryEvaluator(params: {
       entry.baseUrl,
       observedRoutes,
     ]);
+    const livePluginAuth = params.isPluginAuthProvider(entry.provider);
     const cached = pending.get(cacheKey);
-    if (cached) {
+    if (cached && !livePluginAuth) {
       return cached;
     }
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
@@ -171,7 +217,9 @@ function createModelsListEntryEvaluator(params: {
           }
         : resolved;
     });
-    pending.set(cacheKey, next);
+    if (!livePluginAuth) {
+      pending.set(cacheKey, next);
+    }
     return next;
   };
 }
@@ -305,7 +353,20 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ]),
     ].filter((deadline): deadline is number => deadline !== undefined && deadline > preparedAt),
   );
+  const isPluginAuthProvider = (provider: string) =>
+    resolveProviderAuthScope({
+      provider,
+      config: params.cfg,
+      workspaceDir,
+      pluginMetadataSnapshot: metadataSnapshot,
+    }) === "plugin";
+  const pluginCredentialRevision = [
+    ...new Set(snapshot.entries.map((entry) => entry.provider)),
+  ].some(isPluginAuthProvider)
+    ? getActiveSecretsRuntimeSnapshotRevisionState()
+    : undefined;
   const authResolver = createModelsListAuthResolver({
+    pluginRegistry: params.pluginRegistry,
     cfg: params.cfg,
     agentId: params.agentId,
     metadataSnapshot,
@@ -319,6 +380,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   });
   const evaluateStoredEntry = createModelsListEntryEvaluator({
     authResolver,
+    isPluginAuthProvider,
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     runtimeOverride: params.runtimeOverride,
@@ -345,7 +407,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             }
     : evaluateStoredEntry;
   const isCurrent = () =>
-    Date.now() < authValidUntil && (params.isCurrent?.() ?? params.observationConfig === undefined);
+    Date.now() < authValidUntil &&
+    (pluginCredentialRevision === undefined ||
+      pluginCredentialRevision === getActiveSecretsRuntimeSnapshotRevisionState()) &&
+    (params.isCurrent?.() ?? params.observationConfig === undefined);
   return {
     evaluateEntry,
     evaluateNative,

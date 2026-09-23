@@ -5,13 +5,16 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderDeprecatedAuthProfileIds,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
+  resolvePluginOwnedProviderAuth,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -194,6 +197,26 @@ export async function resolveApiKeyForProviderCore(input: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   input.signal?.throwIfAborted();
+  if (resolveProviderAuthScope({ ...input, config: input.cfg }) === "plugin") {
+    // No async preparation: the live owner checks bracket this exact synchronous read.
+    const auth = resolvePluginOwnedProviderAuth({
+      provider: input.provider,
+      config: input.cfg,
+      workspaceDir: input.workspaceDir,
+      profileId: input.profileId,
+      preferredProfile: input.preferredProfile,
+      context: { provider: input.provider, config: input.cfg },
+    });
+    input.signal?.throwIfAborted();
+    return input.secretSentinels &&
+      !isNonSecretApiKeyMarker(auth.apiKey) &&
+      !looksLikeSecretSentinel(auth.apiKey)
+      ? {
+          ...auth,
+          apiKey: mintSecretSentinel(auth.apiKey, { label: `model-auth:${input.provider}` }),
+        }
+      : auth;
+  }
   const modelAuthConfig = resolveModelProviderAuthConfig({
     provider: input.provider,
     config: input.cfg,
