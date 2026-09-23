@@ -8,7 +8,7 @@ import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 /** Ledger step the delegated Doctor records after it stopped the predecessor Gateway. */
-export const CANDIDATE_PREDECESSOR_STOP_STEP = "managed-service:candidate-stop";
+const CANDIDATE_PREDECESSOR_STOP_STEP = "managed-service:candidate-stop";
 
 type StopParams = {
   root: string;
