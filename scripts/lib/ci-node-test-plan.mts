@@ -29,6 +29,7 @@ import {
   isUiBrowserTestFile,
   isUiTestTarget,
   uiTimingTestFiles,
+  uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -1027,7 +1028,7 @@ function applyCompactGroupWorkerPins(
     // New measurements must not be divided again after serial files become parallel.
     return {
       ...group,
-      timing_key: `${group.shard_name}-parallel${gatewayServerSerialSeconds(group.includePatterns, runnerBackend) > 0 ? "-native-serial" : ""}`,
+      timing_key: `${compactGroupTimingKey(group)}-parallel${gatewayServerSerialSeconds(group.includePatterns, runnerBackend) > 0 ? "-native-serial" : ""}`,
       env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV },
     };
   }
@@ -1043,8 +1044,8 @@ function applyCompactGroupWorkerPins(
     return {
       ...group,
       fallbackMaxWorkers: 2,
-      // Refit must not fold parallel spans back into the serial observations.
-      timing_key: `${group.shard_name}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
+      // Preserve the coverage tier while separating parallel and serial samples.
+      timing_key: `${compactGroupTimingKey(group)}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
     };
   }
   const timedGroup =
@@ -1075,9 +1076,17 @@ function readCompactGroupSeconds(
 ): number | undefined {
   const timings = readCompactGroupTimings(profile);
   const key = compactGroupTimingKey(group);
+  const fullOwnerKey = key.startsWith("changed-") ? key.slice("changed-".length) : undefined;
+  // A reduced parallel sample retires the full-owner fallback for both timing shapes.
+  const hasReducedParallelSample =
+    fullOwnerKey !== undefined &&
+    isParallelGatewayServerGroup(group) &&
+    timings[key.endsWith("-stripes") ? key.slice(0, -"-stripes".length) : `${key}-stripes`] !==
+      undefined;
   // Keep the full owner's admission estimate until the reduced tier has samples.
   const measured =
-    timings[key] ?? (key === `changed-${group.shard_name}` ? timings[group.shard_name] : undefined);
+    timings[key] ??
+    (fullOwnerKey !== undefined && !hasReducedParallelSample ? timings[fullOwnerKey] : undefined);
   if (measured !== undefined) {
     return measured;
   }
@@ -1435,9 +1444,21 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
+  "ui/src/e2e/board-fixture.e2e.test.ts",
+  "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
+  "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
+  "ui/src/e2e/github-link-hovercard.e2e.test.ts",
+  "ui/src/e2e/settings-layout.e2e.test.ts",
+  "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
   "ui/src/e2e/native-embed-settings.e2e.test.ts",
   "ui/src/e2e/chat-session-entry.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
 ]);
 
 export function createUiTestShardGroups(
@@ -1459,8 +1480,11 @@ export function createUiTestShardGroups(
   ];
   return {
     ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: group("test/vitest/vitest.ui-e2e.config.ts", (file) =>
-      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
+    e2e: group(
+      "test/vitest/vitest.ui-e2e.config.ts",
+      (file) =>
+        controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
+        uiE2eRealGatewayTestFiles.includes(file),
     ),
   };
 }
@@ -2379,6 +2403,13 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTest
       {
         shardName: "core-runtime-infra-process",
         configs: ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"],
+        includePatterns: ["src/logging", "src/process"].flatMap((root) =>
+          listScopedOwnerTestFiles({
+            root,
+            include: [`${root}/**/*.test.ts`],
+            exclude: [...databaseWorkerCoreTestFiles],
+          }),
+        ),
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
@@ -2729,7 +2760,7 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
           ],
           [
             "channel-registry",
-            "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
+            "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
           ],
           [
             "channel-session",
@@ -3251,9 +3282,11 @@ function splitOversizedCompactGroup(
   ].map((key) => `${key}#selector-`);
   const splitParentSeconds = {
     blacksmith: parallelGateway
-      ? (readCompactGroupTimings("blacksmith")[splitTimingParent] ?? 0)
+      ? (readCompactGroupSeconds({ ...group, timing_key: splitTimingParent }, "blacksmith") ?? 0)
       : 0,
-    github: parallelGateway ? (readCompactGroupTimings("github")[splitTimingParent] ?? 0) : 0,
+    github: parallelGateway
+      ? (readCompactGroupSeconds({ ...group, timing_key: splitTimingParent }, "github") ?? 0)
+      : 0,
   };
   const hasSplitTimingHistory =
     !isTooling &&
@@ -4458,6 +4491,16 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))

@@ -5,11 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import {

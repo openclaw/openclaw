@@ -2686,8 +2686,8 @@ describe("agentCommand", () => {
           sessionId,
           storePath: store,
         });
-        await agentCommand({ message: "again", agentId: "ops", sessionKey }, runtime);
-        expect(getLastEmbeddedCall()?.sessionId).toBe(sessionId);
+        await agentCommand({ message: "again", sessionId }, runtime);
+        expect(getLastEmbeddedCall()).toMatchObject({ agentId: "ops", sessionKey, sessionId });
         expectOwnedCommandSession({
           agentId: "ops",
           excludedAgentId: "main",

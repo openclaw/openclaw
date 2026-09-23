@@ -62,6 +62,7 @@ type SessionCatalogGroupsParams = {
   onSectionDrop: (event: DragEvent, sectionId: string) => void;
   onStartSectionDrag: (sectionId: string) => void;
   onFinishSectionDrag: () => void;
+  onReorderSection: (source: string, target: string, position: "before" | "after") => Promise<void>;
   viewMenuOpenCatalogId: string | null;
   ownerFilterActive: boolean;
   onOpenViewMenu: (
@@ -228,6 +229,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
           disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
+          reorder: {
+            label: catalog.label,
+            onMove: (target, position) => params.onReorderSection(sectionId, target, position),
+          },
           onContextMenu: (event) => {
             event.preventDefault();
             const header = event.currentTarget as HTMLElement;

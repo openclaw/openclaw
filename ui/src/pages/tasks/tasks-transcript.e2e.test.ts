@@ -100,6 +100,7 @@ suite.define(() => {
       await transcript.getByText("Original automation request", { exact: true }).waitFor();
       expect(await oldRow.getByRole("link", { name: "Open session" }).count()).toBe(1);
       await transcript.getByRole("button", { name: "Close", exact: true }).click();
+      expect(await oldButton.evaluate((element) => element === document.activeElement)).toBe(true);
       await gateway.deferNext("tasks.history", { taskId: oldTask.id, limit: 100 });
       await oldButton.click();
       await expect.poll(async () => (await gateway.getRequests("tasks.history")).length).toBe(3);

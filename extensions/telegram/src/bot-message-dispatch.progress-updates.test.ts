@@ -250,7 +250,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         }),
     },
   ])(
-    "keeps a finalized preview authoritative when late media fails in a $label",
+    "preserves a finalized preview and diagnoses incomplete late media in a $label",
     async ({ createMessageContext, sessionKey }) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
       loadSessionStore.mockReturnValue({ [sessionKey]: { sessionId: "s1", updatedAt: 1 } });
@@ -291,10 +291,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         receipt: { primaryPlatformMessageId: "2001" },
         visibleReplySent: true,
       });
-      // onError records a non-silent failure. Avoiding a second delivery proves
-      // the finalized answer was committed before that failure was surfaced.
-      expect(deliverReplies).toHaveBeenCalledTimes(1);
+      // The accepted preview and media receipt remain authoritative; only a
+      // separate diagnostic may follow, never another copy of the answer or media.
+      expect(deliverReplies).toHaveBeenCalledTimes(2);
       expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+      expectDeliveredReply(0, { isError: true }, 1);
       expect(answerDraftStream.stop).toHaveBeenCalled();
       expect(answerDraftStream.clear).not.toHaveBeenCalled();
       expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);

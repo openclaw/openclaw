@@ -11,11 +11,13 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
+import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;

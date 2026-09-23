@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -57,9 +58,13 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 export async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await makeTempWorkspace("openclaw-update-service-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
+  const home = await fs.realpath(await makeTempWorkspace("openclaw-update-service-"));
+  const tempRoot = vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
   try {
+    // Verify the actual resolver and its filesystem alias before any helper opens SQLite.
+    const databasePath = resolveManagedUpdateLeaseDatabasePath();
+    expect(databasePath).toBe(path.join(home, "managed-update-handoffs.sqlite"));
+    expect(await fs.realpath(path.dirname(databasePath))).toBe(home);
     await withEnvAsync(
       {
         HOME: home,
@@ -77,6 +82,7 @@ export async function withServiceHome(run: (home: string) => Promise<void>): Pro
       () => run(home),
     );
   } finally {
+    tempRoot.mockRestore();
     await fs.rm(home, { recursive: true, force: true });
   }
 }

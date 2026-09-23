@@ -9,15 +9,15 @@ import { requireDirectorySync, syncDirectorySync } from "../infra/directory-dura
 import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
   statMigrationPath,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
   filterRestoreManifestTargets,
   hasSymbolicLinkInDirectoryPath,
   isRegularFileWithoutFollowingSymlinks,
@@ -30,7 +30,8 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -383,34 +384,6 @@ function setRestoreCandidateConflicts(
 
 function restoreMovePlanKey(manifestPath: string, move: SessionSqliteMigrationMove): string {
   return `${manifestPath}\u0000${migrationMoveKey(move)}`;
-}
-
-export function collectRecordedConsumedArchives(
-  manifest: SessionSqliteMigrationManifest,
-): Set<string> {
-  const consumed = new Set(manifest.restore?.consumedArchives ?? []);
-  const restoredSources = new Set(manifest.restore?.restoredFiles ?? []);
-  if (restoredSources.size === 0) {
-    return consumed;
-  }
-  const movesBySource = new Map<string, SessionSqliteMigrationMove[]>();
-  for (const target of manifest.targets) {
-    for (const move of uniqueRestoreMoves(target)) {
-      const moves = movesBySource.get(move.sourcePath) ?? [];
-      moves.push(move);
-      movesBySource.set(move.sourcePath, moves);
-    }
-  }
-  // Older shipped manifests only recorded restored source paths. Preserve that evidence when the
-  // source identifies exactly one archive, then persist the explicit archive path on this run.
-  for (const sourcePath of restoredSources) {
-    const moves = movesBySource.get(sourcePath);
-    const move = moves?.length === 1 ? moves[0] : undefined;
-    if (move) {
-      consumed.add(move.archivePath);
-    }
-  }
-  return consumed;
 }
 
 type RestoreArchiveInspection =

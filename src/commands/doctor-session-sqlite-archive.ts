@@ -11,7 +11,7 @@ import {
   canonicalMigrationFilePath,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationMoveKind,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 
 export function planImportedTranscriptArtifactsToArchive(
   target: SessionStoreTarget,

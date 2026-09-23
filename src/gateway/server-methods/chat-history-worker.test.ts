@@ -1,6 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   appendSessionTranscriptReport,
@@ -94,6 +96,22 @@ it.each(["native", "acp"])(
         return expectDefined(asOptionalRecord(response[1]), "history payload");
       };
       const initial = await call();
+      const initialCounter = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        const repeated = await call();
+        // Pending-input reconciliation has not moved to the worker yet.
+        expect(
+          initialCounter.queries.filter(
+            (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
+          ),
+        ).toEqual([]);
+        expect(repeated).toEqual({
+          ...initial,
+          sessionInfo: { ...asOptionalRecord(initial.sessionInfo), snapshotAt: expect.any(Number) },
+        });
+      } finally {
+        initialCounter.restore();
+      }
       if (typeof initial.deltaCursor !== "string") {
         throw new Error("Expected initial delta cursor");
       }
@@ -182,11 +200,18 @@ it.each(["native", "acp"])(
           throw new Error("Transcript SQLite read ran on the request thread");
         });
         const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
+        const counter = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(JSON.stringify(await call(initial.deltaCursor))).toBe(goldenJson);
+          expect(
+            counter.queries.filter(
+              (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
+            ),
+          ).toEqual([]);
           expect(read).not.toHaveBeenCalled();
           expect(projectionRead).not.toHaveBeenCalled();
         } finally {
+          counter.restore();
           projectionRead.mockRestore();
           read.mockRestore();
         }

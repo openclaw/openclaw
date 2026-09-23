@@ -50,6 +50,7 @@ import {
   databaseWorkerExtensionTestRoots,
 } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
@@ -212,8 +213,12 @@ function expectBoundedCodexFallback(
         (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
     ),
   ).toBe(true);
-  expect(targets.toSorted()).toEqual(
-    listExtensionTestFilesForRoots(["extensions/codex"]).toSorted(),
+  expect(targets.toSorted()).toEqual(listExecutableExtensionFiles(["extensions/codex"]).toSorted());
+}
+
+function listExecutableExtensionFiles(roots: string[]) {
+  return listExtensionTestFilesForRoots(roots).filter(
+    (file) => !isSharedVitestExcludedPath(file, "extensions"),
   );
 }
 
@@ -299,9 +304,13 @@ describe("CI changed Node test plan", () => {
     "retains only directly changed runtime proofs with their canonical execution policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
+        "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
+        "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
         "src/node-host/node-worker-supervisor.recovery.test.ts",
+        "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
       ];
@@ -366,6 +375,7 @@ describe("CI changed Node test plan", () => {
     "defers owner-changing automatic PRs to complete tooling coverage (%s)",
     (runnerBackend) => {
       for (const changedPath of [
+        "src/cli/update-cli/update-command-legacy-finalize.test.ts",
         "test/scripts/vitest-report-owner.test.ts",
         "scripts/lib/vitest-report-owner.mts",
         "package.json",
@@ -381,16 +391,20 @@ describe("CI changed Node test plan", () => {
   );
 
   it("keeps product-only precise selections free of maintainer tooling", () => {
-    const shards = createChangedNodeTestShards(["src/infra/retry.test.ts"], {
-      includeReleaseOnlyToolingShards: false,
-    });
+    const shards = createChangedNodeTestShards(
+      [
+        "src/infra/retry.test.ts",
+        "src/cli/update-cli/update-command-legacy-finalize-entrypoint.test-support.ts",
+      ],
+      { includeReleaseOnlyToolingShards: false },
+    );
     expect(shards).not.toBeNull();
-    expect(
-      shards?.flatMap((shard) => [
-        ...(shard.targets ?? shard.includePatterns ?? []),
-        ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
-      ]),
-    ).toContain("src/infra/retry.test.ts");
+    const files = shards?.flatMap((shard) => [
+      ...(shard.targets ?? shard.includePatterns ?? []),
+      ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
+    ]);
+    expect(files).toContain("src/infra/retry.test.ts");
+    expect(files).not.toContain("src/cli/update-cli/update-command-legacy-finalize.test.ts");
     expect(
       shards?.some((shard) =>
         [...shard.configs, ...(shard.groups?.flatMap((group) => group.configs) ?? [])].some(
@@ -1887,7 +1901,7 @@ describe("CI changed Node test plan", () => {
     const workerGroups = groups.filter((group) =>
       group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
     );
-    const expectedFiles = listExtensionTestFilesForRoots([
+    const expectedFiles = listExecutableExtensionFiles([
       ...databaseWorkerExtensionTestRoots,
       ...databaseWorkerExtensionTestFiles,
     ]);
@@ -2006,7 +2020,7 @@ describe("CI changed Node test plan", () => {
         ),
       ).toBe(true);
       expect(targets.toSorted()).toEqual(
-        listExtensionTestFilesForRoots(["extensions/telegram"]).toSorted(),
+        listExecutableExtensionFiles(["extensions/telegram"]).toSorted(),
       );
       const workerCount = targets.filter((file) =>
         databaseWorkerExtensionTestFiles.includes(file),
@@ -2138,7 +2152,7 @@ describe("CI changed Node test plan", () => {
       ),
     ).toBe(true);
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      listExtensionTestFilesForRoots(["extensions/memory-core"]),
+      listExecutableExtensionFiles(["extensions/memory-core"]),
     );
   });
 

@@ -53,7 +53,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     // The occupied dock (bottom by default) has nowhere to move to, so its
     // button drops out of the cluster instead of rendering a pressed state.
-    const switcher = panel.renderRoot.querySelector('[role="group"]');
+    const switcher = panel.renderRoot.querySelector('.tp-actions [role="group"]');
     expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
     expect(
       ["Dock to right", "Fill main content area"].every((label) =>

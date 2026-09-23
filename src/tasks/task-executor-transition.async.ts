@@ -28,6 +28,7 @@ export async function settleTaskRecordTransitionAsync(
     TaskInitialWorkerCommand,
     {
       type:
+        | "tasks.bindRunOwner"
         | "tasks.settleUnstarted"
         | "tasks.finalizeActive"
         | "tasks.acknowledgeStateChange"
@@ -74,7 +75,7 @@ export async function settleTaskRecordTransitionAsync(
         new Map<string, TaskRecord>(committed ? [[committed.task.taskId, committed.task]] : []),
       beforeObservers: async () => {
         flowHookEntered = true;
-        if (committed) {
+        if (committed && (command.type !== "tasks.bindRunOwner" || committed.persisted)) {
           const current = tasks.get(taskId);
           if (
             committed.becomesTerminal &&
@@ -92,7 +93,10 @@ export async function settleTaskRecordTransitionAsync(
       onPublicationError: () => {
         publicationFailed = true;
       },
-      forcePublish: () => committed?.task,
+      forcePublish: () =>
+        command.type === "tasks.bindRunOwner" && !committed?.persisted
+          ? undefined
+          : committed?.task,
     },
     async () => {
       const result = await store.runInitialMutationAsync(context, command, assertCurrent);
@@ -101,7 +105,7 @@ export async function settleTaskRecordTransitionAsync(
     },
     () => store.loadMutationSnapshotAsync(context, scope),
   );
-  if (!flowHookEntered && settled) {
+  if (!flowHookEntered && settled && (command.type !== "tasks.bindRunOwner" || settled.persisted)) {
     retainTaskMutationFlowEffects(context, store, flowStore, settled.task, "update");
   }
   if (settled?.deliver && settled.task.deliveryStatus !== "not_applicable") {

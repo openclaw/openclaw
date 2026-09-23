@@ -69,7 +69,7 @@ overrides:
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
-  "@agentclientprotocol/codex-acp@1.11.0>@openai/codex": 0.154.0
+  "@agentclientprotocol/codex-acp@1.11.0>@openai/codex": 0.155.1
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.11
   "@anthropic-ai/sdk": 0.125.0
   "@anthropic-ai/vertex-sdk@0.19.8>google-auth-library": 11.0.2

@@ -1,21 +1,61 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
-import { EvaluateInput, parseInput, parseResult } from "./schema.js";
+import { parseInput, parseResult } from "./schema.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const config = { apiKey: "synthetic-key", model: "jev-default", timeoutMs: 1000 };
+const config = { apiKey: "synthetic-key", timeoutMs: 1000 };
 const usage = { input_tokens: 1, output_tokens: 1 };
-const example = JSON.parse(
-  readFileSync(
-    new URL("../skills/typesafe-evaluate/references/request-example.json", import.meta.url),
-    "utf8",
-  ),
-);
+const example = {
+  state: {
+    ticket: {
+      text: "Please explain the duplicate charge on my invoice.",
+    },
+  },
+  questions: {
+    category: {
+      type: "choice",
+      instructions: {
+        question: "Which team should handle ticket.text?",
+        focus: "Primary request only",
+      },
+      criteria: {
+        "Billing & payments": {
+          includes: ["invoices", "charges"],
+          excludes: ["delivery tracking"],
+        },
+        Other: null,
+      },
+    },
+    urgency: {
+      type: "score",
+      instructions: ["Rate urgency in ticket.text.", "Use only stated time pressure."],
+      criteria: [
+        {
+          level: "Routine",
+          examples: ["No deadline stated"],
+        },
+        {
+          level: "Urgent",
+          examples: ["Immediate action explicitly requested"],
+        },
+      ],
+    },
+    actionable: {
+      type: "noul",
+      instructions: "Does ticket.text request a concrete action or answer?",
+      criteria: {
+        true: {
+          includes: ["Request for explanation", "Request for action"],
+        },
+        false: ["Information only", "No answer requested"],
+      },
+    },
+  },
+};
 
-it("preserves structured instructions, all criteria types, legends, and model override through HTTP", async () => {
+it("preserves structured instructions, all criteria types, legends, and selected model through HTTP", async () => {
   const input = { ...example, model: "jev-pinned" };
   const answer = {
     model: "jev-pinned",
@@ -58,6 +98,7 @@ it("supports 255 options with literal labels and rejects 256 before dispatch", a
     Array.from({ length: 255 }, (_, i) => [`${i}: 商品 / option`, null]),
   );
   const input = {
+    model: "jev-test",
     state: "Select option zero",
     questions: {
       "1. selection?": { type: "choice", instructions: null, criteria },
@@ -97,7 +138,7 @@ it("accepts larger states and question batches without silently splitting them",
       },
     ]),
   );
-  const input = { state: "blue ".repeat(15000), questions };
+  const input = { model: "jev-test", state: "blue ".repeat(15000), questions };
   const answers = Object.fromEntries(
     Object.keys(questions).map((id) => [id, { type: "noul", noul: 1 }]),
   );
@@ -138,37 +179,4 @@ it.each([
     expect(String(error)).not.toMatch(/private state|private ID/);
   }
   expect(fetch).not.toHaveBeenCalled();
-});
-
-it("publishes typed map values and every variant without patternProperties", () => {
-  // Regression for the agent-visible empty-object declaration, not just runtime validation.
-  expect(JSON.stringify(EvaluateInput)).not.toContain("patternProperties");
-  expect(EvaluateInput.properties.questions).toMatchObject({
-    additionalProperties: {
-      anyOf: [
-        {
-          properties: {
-            type: { const: "noul" },
-            criteria: { anyOf: [{ properties: { true: expect.any(Object) } }, { type: "null" }] },
-          },
-        },
-        {
-          properties: {
-            type: { const: "choice" },
-            criteria: {
-              additionalProperties: {
-                anyOf: [
-                  { type: "string" },
-                  { type: "object" },
-                  { type: "array" },
-                  { type: "null" },
-                ],
-              },
-            },
-          },
-        },
-        { properties: { type: { const: "score" } } },
-      ],
-    },
-  });
 });

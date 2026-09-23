@@ -26,6 +26,21 @@ the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
 
+## ACP agents' model precedence
+
+For an agent with `runtime.type: "acp"`, `agents.entries.*.model` (string form) or
+`agents.entries.*.model.primary` (object form) selects the ACP harness model. This
+also applies to harness selections that look like `provider/model` references.
+OpenClaw resolves a separate native default, using `agents.defaults.model` when
+configured. Explicit native session, utility, and subagent model selections retain
+their precedence.
+
+Doctor reports this separation as information (`core/doctor/acp-agent-model`),
+naming the configured path, harness model, and resolved native default. Matching
+and differing selections are both supported configurations. This notice proposes
+no repair and does not rewrite the config; ACP turns keep their configured harness
+selection.
+
 ## Missing plugins during migration
 
 A configured plugin that is missing or cannot finish installation does not block
