@@ -1,8 +1,7 @@
 // WhatsApp monitor inbox delivery and lifecycle behavior.
-import type { GroupMetadata, WAMessageKey } from "baileys";
+import type { GroupMetadata } from "baileys";
 import { beforeEach, expect, vi } from "vitest";
 import {
-  readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
 } from "./inbound/baileys-cache.js";
@@ -18,6 +17,7 @@ import {
   waitForMessageCalls,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
+import { createWaSocket } from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -112,17 +112,19 @@ export function groupMetadata(params: {
 export function createBaileysCacheSupport() {
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
-  const socketOptions = {
-    getMessage: async (key: WAMessageKey) =>
-      key.id && key.remoteJid
-        ? readWhatsAppBaileysCacheEntry(recentMessageKeys, `${key.remoteJid}:${key.id}`)
-        : undefined,
-    cachedGroupMetadata: async (jid: string) => {
-      const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
-      return meta?.participants?.length ? meta : undefined;
+  const socketCallIndex = vi.mocked(createWaSocket).mock.calls.length;
+  return {
+    recentMessageKeys,
+    baileysGroupMetaCache,
+    get socketOptions() {
+      // Observe this monitor's callbacks, including their cache reads and expiry effects.
+      const options = vi.mocked(createWaSocket).mock.calls[socketCallIndex]?.[2];
+      if (!options?.getMessage || !options.cachedGroupMetadata) {
+        throw new Error("Expected monitorWebInbox to supply Baileys cache callbacks");
+      }
+      return { getMessage: options.getMessage, cachedGroupMetadata: options.cachedGroupMetadata };
     },
   };
-  return { recentMessageKeys, baileysGroupMetaCache, socketOptions };
 }
 
 export async function startInboxMonitorWithBaileysCache(

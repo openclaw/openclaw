@@ -10,7 +10,6 @@ import {
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
   createWebInboundDeliverySpies,
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
@@ -22,8 +21,6 @@ import {
   createTestWebAudioInboundMessage,
   createTestWebInboundMessage,
 } from "./inbound/test-message.test-helper.js";
-
-installWebAutoReplyTestHomeHooks();
 
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
@@ -371,7 +368,6 @@ describe("broadcast groups", () => {
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
-        strategy: "parallel",
         "+1000": ["alfred", "baerbel"],
       },
     } satisfies OpenClawConfig);
@@ -379,24 +375,19 @@ describe("broadcast groups", () => {
     const { sendMedia, reply, sendComposing } = createWebInboundDeliverySpies();
 
     let started = 0;
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const gate = createDeferred<void>();
 
     const resolver = vi.fn(async () => {
       started += 1;
       if (started < 2) {
-        await gate;
-      } else {
-        release?.();
+        await gate.promise;
       }
       return { text: "ok" };
     });
 
     const { onMessage: capturedOnMessage } = await monitorWebChannelWithCapture(resolver);
 
-    await capturedOnMessage(
+    const delivery = capturedOnMessage(
       createTestWebInboundMessage({
         event: {
           id: "m1",
@@ -422,6 +413,13 @@ describe("broadcast groups", () => {
       }),
     );
 
+    try {
+      await vi.waitFor(() => expect(started).toBe(2));
+    } finally {
+      // A sequential-strategy regression must release the first recipient before teardown.
+      gate.resolve();
+      await delivery;
+    }
     expect(resolver).toHaveBeenCalledTimes(2);
     resetLoadConfigMock();
   });

@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DisconnectReason } from "baileys";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as channelRuntimeContext from "openclaw/plugin-sdk/channel-runtime-context";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { getActiveWebListener } from "./active-listener.js";
+import { hasPendingWhatsAppConnectionOwner } from "./connection-controller-runtime-context.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -34,8 +38,7 @@ vi.mock("./session.js", async () => {
 });
 
 const runtimeContextMocks = vi.hoisted(() => ({
-  channelRuntime: { runtimeContexts: {} },
-  register: vi.fn(),
+  channelRuntime: undefined as ReturnType<typeof createPluginRuntimeMock>["channel"] | undefined,
 }));
 
 const connectionOwnerMocks = vi.hoisted(() => ({
@@ -43,15 +46,9 @@ const connectionOwnerMocks = vi.hoisted(() => ({
   release: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
-  return {
-    getChannelRuntimeContext: vi.fn(),
-    registerChannelRuntimeContext: runtimeContextMocks.register,
-  };
-});
-
 vi.mock("./runtime.js", () => ({
   getWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
+  getOptionalWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
 vi.mock("./connection-owner.js", () => ({
@@ -63,7 +60,9 @@ const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
-const registerChannelRuntimeContextMock = runtimeContextMocks.register;
+let registerChannelRuntimeContextMock: MockInstance<
+  typeof channelRuntimeContext.registerChannelRuntimeContext
+>;
 
 function createListenerStub(messageId = "ok") {
   return {
@@ -163,7 +162,11 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
+    runtimeContextMocks.channelRuntime = createPluginRuntimeMock().channel;
+    registerChannelRuntimeContextMock = vi.spyOn(
+      channelRuntimeContext,
+      "registerChannelRuntimeContext",
+    );
     connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
     connectionOwnerMocks.release.mockResolvedValue(undefined);
     logoutWebMock.mockResolvedValue(true);
@@ -191,7 +194,12 @@ describe("WhatsAppConnectionController", () => {
   });
 
   afterEach(async () => {
-    await controller.shutdown();
+    try {
+      await controller.shutdown();
+    } finally {
+      registerChannelRuntimeContextMock.mockRestore();
+      runtimeContextMocks.channelRuntime = undefined;
+    }
   });
 
   it("closes the socket when open fails before listener creation", async () => {
@@ -633,25 +641,7 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("keeps the ready controller published while a different-auth replacement connects", async () => {
-    const disposeRuntimeContext = vi.fn();
-    registerChannelRuntimeContextMock.mockReturnValueOnce({ dispose: disposeRuntimeContext });
-    const liveController = new WhatsAppConnectionController({
-      accountId: "work",
-      authDir: "/tmp/wa-auth",
-      verbose: false,
-      keepAlive: false,
-      heartbeatSeconds: 30,
-      transportTimeoutMs: 60_000,
-      messageTimeoutMs: 60_000,
-      watchdogCheckMs: 5_000,
-      reconnectPolicy: {
-        initialMs: 250,
-        maxMs: 1_000,
-        factor: 2,
-        jitter: 0,
-        maxAttempts: 5,
-      },
-    });
+    const liveController = controller;
     const liveListener = createListenerStub("live");
     createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
@@ -659,6 +649,9 @@ describe("WhatsAppConnectionController", () => {
       connectionId: "live-conn",
       createListener: async () => liveListener,
     });
+
+    expect(getActiveWebListener("work")).toBe(liveListener);
+    expect(getActiveWebListener("other")).toBeNull();
 
     const replacement = new WhatsAppConnectionController({
       accountId: "work",
@@ -703,11 +696,14 @@ describe("WhatsAppConnectionController", () => {
       );
       expect(activeControllerRegistrations).toHaveLength(1);
       expect(activeControllerRegistrations[0]?.[0].context).toBe(liveController);
+      expect(getActiveWebListener("work")).toBe(liveListener);
+      expect(hasPendingWhatsAppConnectionOwner("work")).toBe(false);
     } finally {
       await replacement.shutdown();
       await liveController.shutdown();
     }
-    expect(disposeRuntimeContext).toHaveBeenCalledOnce();
+    expect(getActiveWebListener("work")).toBeNull();
+    expect(hasPendingWhatsAppConnectionOwner("work")).toBe(false);
   });
 
   it("releases connection ownership only after the Baileys socket closes", async () => {
@@ -760,6 +756,8 @@ describe("WhatsAppConnectionController", () => {
     await expect(openPromise).rejects.toThrow("controller is shutting down");
     await expect(shutdownPromise).resolves.toBeUndefined();
     expect(registerChannelRuntimeContextMock).not.toHaveBeenCalled();
+    expect(getActiveWebListener("work")).toBeNull();
+    expect(hasPendingWhatsAppConnectionOwner("work")).toBe(false);
     expect(createWaSocketMock).not.toHaveBeenCalled();
     expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
   });
@@ -778,6 +776,8 @@ describe("WhatsAppConnectionController", () => {
     await expect(openPromise).rejects.toThrow("controller is shutting down");
     expect(sock.end).toHaveBeenCalledOnce();
     expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
+    expect(getActiveWebListener("work")).toBeNull();
+    expect(hasPendingWhatsAppConnectionOwner("work")).toBe(false);
     expect(registerChannelRuntimeContextMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ capability: "connection-owner-pending" }),
     );
@@ -807,6 +807,8 @@ describe("WhatsAppConnectionController", () => {
     expect(controller.getActiveListener()).toBeNull();
     expect(controller.getCurrentSock()).toBeNull();
     expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
+    expect(getActiveWebListener("work")).toBeNull();
+    expect(hasPendingWhatsAppConnectionOwner("work")).toBe(false);
     expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
   });
 

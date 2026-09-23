@@ -10,7 +10,7 @@ import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 import {
   createWhatsAppAllowlistModeInput,
-  expectWhatsAppDefaultAccountAccessNote,
+  expectWhatsAppAccountAccessNote,
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
@@ -35,52 +35,9 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-function splitSetupEntriesForMock(raw: string): string[] {
-  const entries: string[] = [];
-  for (const entry of raw.split(",")) {
-    const normalized = entry.trim();
-    if (normalized.length > 0) {
-      entries.push(normalized);
-    }
-  }
-  return entries;
-}
-
 vi.mock("./login.js", () => ({
   loginWeb: hoisted.loginWeb,
 }));
-
-vi.mock("openclaw/plugin-sdk/setup", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
-    "openclaw/plugin-sdk/setup",
-  );
-  return {
-    ...actual,
-    DEFAULT_ACCOUNT_ID,
-    normalizeAccountId: (value?: string | null) => value?.trim() || DEFAULT_ACCOUNT_ID,
-    normalizeAllowFromEntries: (entries: string[], normalize: (value: string) => string) => {
-      const normalized = new Set<string>();
-      for (const entry of entries) {
-        const value = entry === "*" ? "*" : normalize(entry);
-        if (value) {
-          normalized.add(value);
-        }
-      }
-      return [...normalized];
-    },
-    splitSetupEntries: splitSetupEntriesForMock,
-    setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        [channel]: {
-          ...(cfg.channels?.[channel as keyof NonNullable<OpenClawConfig["channels"]>] as object),
-          enabled,
-        },
-      },
-    }),
-  };
-});
 
 vi.mock("./creds-files.js", async () => {
   const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
@@ -347,7 +304,7 @@ describe("whatsapp setup wizard", () => {
     expect(result.cfg.channels?.whatsapp?.allowFrom).toBeUndefined();
     expect(result.cfg.channels?.whatsapp?.accounts?.default?.dmPolicy).toBe("open");
     expect(result.cfg.channels?.whatsapp?.accounts?.default?.allowFrom).toEqual(["*"]);
-    expectWhatsAppDefaultAccountAccessNote(harness);
+    expectWhatsAppAccountAccessNote(harness, "default");
   });
 
   it("updates an existing mixed-case default-account key during setup", async () => {

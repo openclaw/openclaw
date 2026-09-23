@@ -122,91 +122,38 @@ describe("createWebSendApi", () => {
     });
   }
 
-  it("uses sendOptions fileName for outbound documents", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf", { fileName: "invoice.pdf" });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
+  it.each([
+    {
+      name: "explicit document filename",
+      mime: "application/pdf",
+      options: { fileName: "invoice.pdf" },
       fileName: "invoice.pdf",
-      caption: "doc",
-      mimetype: "application/pdf",
-    });
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
-  });
-
-  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file.pdf",
-      caption: "doc",
-      mimetype: "application/pdf",
-    });
-  });
-
-  it("uses MIME mappings for text document filename fallbacks", async () => {
-    const payload = Buffer.from("a,b\n1,2\n");
-    await api.sendMessage("+1555", "doc", payload, "text/csv");
-
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file.csv",
-      caption: "doc",
-      mimetype: "text/csv",
-    });
-  });
-
-  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
-    const payload = Buffer.from("unknown");
-    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
-
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file",
-      caption: "doc",
-      mimetype: "application/x-custom",
-    });
-  });
-
-  it("sends visual media as document when sendOptions.asDocument is true", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "promo", payload, "image/png", {
-      asDocument: true,
+    },
+    { name: "PDF fallback", mime: "application/pdf", fileName: "file.pdf" },
+    { name: "text MIME fallback", mime: "text/csv", fileName: "file.csv" },
+    { name: "unknown MIME fallback", mime: "application/x-custom", fileName: "file" },
+    {
+      name: "forced visual document",
+      mime: "image/png",
+      options: { asDocument: true, fileName: "promo.png" },
       fileName: "promo.png",
+    },
+    {
+      name: "forced visual document fallback",
+      mime: "image/png",
+      options: { asDocument: true },
+      fileName: "file.png",
+    },
+  ])("sends $name with the document wire shape", async ({ mime, options, fileName }) => {
+    const payload = Buffer.from("document");
+    await api.sendMessage("+1555", "caption", payload, mime, options);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("1555@s.whatsapp.net", {
+      document: payload,
+      fileName,
+      caption: "caption",
+      mimetype: mime,
     });
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "promo.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
-  });
-
-  it("uses MIME-aware filename fallback for forced visual documents", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "promo", payload, "image/png", {
-      asDocument: true,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "file.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
+    expectOutboundActivityOnce();
   });
 
   it("does not force audio media onto the document branch", async () => {
@@ -814,12 +761,6 @@ describe("createWebSendApi", () => {
       document: mediaBuffer,
       mimetype: "application/octet-stream",
     });
-  });
-
-  it("does not set mediaType when mediaBuffer is absent", async () => {
-    await api.sendMessage("123", "hello");
-
-    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 
   it("preserves the quoted remoteJid provided by the outbound adapter", async () => {

@@ -16,9 +16,9 @@ import {
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
-import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -76,7 +76,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
-        normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+        normalize: ({ values }) => normalizeWhatsAppAllowFromEntries(values),
         resolveDmAllowFrom: (account) => account.allowFrom,
         resolveGroupAllowFrom: (account) => account.groupAllowFrom,
         resolveDmPolicy: (account) => account.dmPolicy,

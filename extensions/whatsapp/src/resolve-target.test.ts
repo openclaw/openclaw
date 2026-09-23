@@ -130,8 +130,11 @@ describe("normalizeWhatsAppAllowFromEntries", () => {
         15551234567,
         " ",
         "invalid",
+        " whatsapp:+49123 ",
+        "*",
+        "49124@s.whatsapp.net",
       ]),
-    ).toEqual(["15551234567"]);
+    ).toEqual(["15551234567", "49123", "*", "49124"]);
   });
 });
 

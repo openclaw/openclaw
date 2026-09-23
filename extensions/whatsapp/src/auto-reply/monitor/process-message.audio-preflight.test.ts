@@ -10,122 +10,33 @@ vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
-// Controllable shouldComputeCommandAuthorized for command-sync tests
-let shouldComputeCommandResult = false;
-let shouldComputeCommandBodies: string[] = [];
+import {
+  dispatchReplyFromConfigForTest,
+  installWebAutoReplyUnitTestHooks,
+} from "../../auto-reply.test-harness.js";
 
-// Minimal mocks for process-message dependencies
-vi.mock("../../accounts.js", () => ({
-  resolveWhatsAppAccount: () => ({
-    accountId: "default",
-    dmPolicy: "pairing",
-    groupPolicy: "allowlist",
-    allowFrom: [],
-  }),
-}));
+const shouldComputeCommandAuthorizedMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../identity.js", () => ({
-  getPrimaryIdentityId: () => undefined,
-  getSelfIdentity: () => ({ e164: "+15550000001" }),
-  getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
-}));
-
-vi.mock("../../reconnect.js", () => ({
-  newConnectionId: () => "test-conn-id",
-}));
-
-vi.mock("../../session.js", () => ({
-  formatError: (err: unknown) => String(err),
-}));
-
-vi.mock("../deliver-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../deliver-reply.js")>();
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
   return {
     ...actual,
-    deliverWebReply: vi.fn(async () => {}),
+    shouldComputeCommandAuthorized: (
+      ...args: Parameters<typeof actual.shouldComputeCommandAuthorized>
+    ) => {
+      shouldComputeCommandAuthorizedMock(...args);
+      return actual.shouldComputeCommandAuthorized(...args);
+    },
   };
 });
-
-vi.mock("../loggers.js", () => ({
-  whatsappInboundLog: { info: () => {}, debug: () => {} },
-}));
 
 vi.mock("./ack-reaction.js", () => ({
   maybeSendAckReaction: (...args: unknown[]) => maybeSendAckReactionMock(...args),
 }));
 
-vi.mock("./inbound-context.js", () => ({
-  resolveVisibleWhatsAppGroupHistory: () => [],
-  resolveVisibleWhatsAppReplyContext: () => null,
-}));
-
-vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: () => {},
-  updateLastRouteInBackground: () => {},
-}));
-
-vi.mock("./message-line.js", () => ({
-  buildInboundLine: (params: { msg: WebInboundMsg }) => params.msg.payload.body,
-}));
-
-vi.mock("./runtime-api.js", () => ({
-  buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
-  createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
-  formatInboundEnvelope: (p: { body: string }) => p.body,
-  isControlCommandMessage: () => false,
-  logVerbose: () => {},
-  normalizeE164: (v: string) => v,
-  readStoreAllowFromForDmPolicy: async () => [],
-  recordSessionMetaFromInbound: async () => {},
-  resolveChannelContextVisibilityMode: () => "standard",
-  resolveInboundSessionEnvelopeContext: () => ({
-    storePath: "/tmp/sessions.json",
-    envelopeOptions: {},
-    previousTimestamp: undefined,
-  }),
-  resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  shouldComputeCommandAuthorized: (body: string) => {
-    shouldComputeCommandBodies.push(body);
-    return shouldComputeCommandResult || body.startsWith("/");
-  },
-  shouldLogVerbose: () => false,
-  type: undefined,
-}));
-
 vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
-  return {
-    ...actual,
-    prepareWhatsAppInboundContext: async (
-      params: Parameters<typeof actual.prepareWhatsAppInboundContext>[0],
-    ) => {
-      const prepared = await actual.prepareWhatsAppInboundContext(params);
-      return {
-        ...prepared,
-        ctxPayload: {
-          Body: params.combinedBody,
-          BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
-          CommandAuthorized: params.command?.authorization.kind === "authorized",
-          CommandBody: params.command?.body ?? params.msg.payload.body,
-          MediaPath: params.msg.payload.media?.path,
-          MediaType: params.msg.payload.media?.type,
-          MediaTranscribedIndexes: params.mediaTranscribedIndexes,
-          RawBody: params.rawBody ?? params.msg.payload.body,
-          Transcript: params.transcript,
-        },
-      };
-    },
-    createWhatsAppReplyPlan: vi.fn((params: { replyResolver?: unknown }) => ({
-      dispatcherOptions: {},
-      delivery: { deliver: async () => {} },
-      replyOptions: {},
-      replyResolver: params.replyResolver,
-      finalize: () => true,
-    })),
-    resolveWhatsAppDmRouteTarget: () => "+15550000002",
-    resolveWhatsAppResponsePrefix: () => undefined,
-    updateWhatsAppMainLastRoute: () => {},
-  };
+  return { ...actual, createWhatsAppReplyPlan: vi.fn(actual.createWhatsAppReplyPlan) };
 });
 
 import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
@@ -198,6 +109,7 @@ function makeParams(msgOverrides: AudioMessageOverrides = {}) {
     verbose: false,
     maxMediaBytes: 1024 * 1024,
     replyResolver: vi.fn() as never,
+    dispatchReplyFromConfig: dispatchReplyFromConfigForTest,
     replyLogger: {
       info: () => {},
       warn: () => {},
@@ -225,6 +137,7 @@ function makeRemoveAckAfterReplyParams() {
       commands: { useAccessGroups: false },
     } as never,
     preflightAudioTranscript: "pre-computed transcript from caller",
+    replyResolver: vi.fn(async () => ({ text: "done" })),
   };
 }
 
@@ -249,17 +162,24 @@ function firstDispatchContext(): Record<string, unknown> {
 
 function expectContextFields(context: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
-    expect(context[key]).toEqual(value);
+    if (key === "Body") {
+      // Preserve the literal audio body behind the real sender/timestamp envelope.
+      expect(context.Body).toMatch(/^\[WhatsApp \+15550000002 [^\]]+\] /u);
+      const body = String(context.Body).slice(String(context.Body).indexOf("] ") + 2);
+      expect(body).toBe(`+15550000002: ${String(value)}`);
+    } else {
+      expect(context[key]).toEqual(value);
+    }
   }
 }
 
 describe("processMessage audio preflight transcription", () => {
+  installWebAutoReplyUnitTestHooks();
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockResolvedValue(null);
-    shouldComputeCommandResult = false;
-    shouldComputeCommandBodies = [];
+    shouldComputeCommandAuthorizedMock.mockClear();
     vi.mocked(createWhatsAppReplyPlan).mockClear();
   });
 
@@ -379,7 +299,10 @@ describe("processMessage audio preflight transcription", () => {
 
     await processMessage(makeParams());
 
-    expect(shouldComputeCommandBodies).toEqual([""]);
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledExactlyOnceWith(
+      "",
+      expect.any(Object),
+    );
 
     expectContextFields(firstDispatchContext(), {
       Body: '[Audio transcript (machine-generated, untrusted)]: "/new start a new session"',
@@ -426,10 +349,11 @@ describe("processMessage audio preflight transcription", () => {
   it("keeps caller-provided ack after a successful visible reply", async () => {
     const ackReaction = makeAckReactionHandle();
 
-    await processMessage({
+    const didSend = await processMessage({
       ...makeRemoveAckAfterReplyParams(),
       ackReaction,
     });
+    expect(didSend).toBe(true);
     await flushMicrotasks();
 
     expect(ackReaction.remove).not.toHaveBeenCalled();
@@ -439,7 +363,7 @@ describe("processMessage audio preflight transcription", () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
 
-    await processMessage(makeRemoveAckAfterReplyParams());
+    expect(await processMessage(makeRemoveAckAfterReplyParams())).toBe(true);
     await flushMicrotasks();
 
     expect(maybeSendAckReactionMock).toHaveBeenCalledTimes(1);
@@ -449,15 +373,11 @@ describe("processMessage audio preflight transcription", () => {
   it("keeps ack when no visible reply was delivered", async () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-    vi.mocked(createWhatsAppReplyPlan).mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: async () => {} },
-      replyOptions: {},
+    const didSend = await processMessage({
+      ...makeRemoveAckAfterReplyParams(),
       replyResolver: vi.fn(),
-      finalize: () => false,
-    } as never);
-
-    await processMessage(makeRemoveAckAfterReplyParams());
+    });
+    expect(didSend).toBe(false);
     await flushMicrotasks();
 
     expect(ackReaction.remove).not.toHaveBeenCalled();
@@ -470,7 +390,7 @@ describe("processMessage audio preflight transcription", () => {
     };
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
 
-    await processMessage(makeRemoveAckAfterReplyParams());
+    expect(await processMessage(makeRemoveAckAfterReplyParams())).toBe(true);
     await flushMicrotasks();
 
     expect(ackReaction.remove).not.toHaveBeenCalled();

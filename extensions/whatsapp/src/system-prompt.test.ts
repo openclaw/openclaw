@@ -55,9 +55,14 @@ function createAccountConfig(
 
 describe("resolveWhatsAppSystemPrompt", () => {
   it.each(promptSurfaceCases)("returns undefined when $targetKey is absent", (surface) => {
-    expect(surface.resolve(createParams(surface, undefined, null))).toBeUndefined();
-    expect(surface.resolve(createParams(surface, undefined, undefined))).toBeUndefined();
-    expect(surface.resolve({})).toBeUndefined();
+    const accountConfig = createAccountConfig(surface, {
+      "*": { systemPrompt: "wildcard prompt" },
+    });
+    for (const targetId of [null, undefined]) {
+      // Pass the absent identity directly; createParams defaults undefined to a real target.
+      expect(surface.resolve({ accountConfig, [surface.targetKey]: targetId })).toBeUndefined();
+    }
+    expect(surface.resolve({ accountConfig })).toBeUndefined();
   });
 
   it.each(promptSurfaceCases)("returns undefined when $name accountConfig is absent", (surface) => {

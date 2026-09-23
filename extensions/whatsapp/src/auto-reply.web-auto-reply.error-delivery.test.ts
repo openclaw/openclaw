@@ -1,18 +1,14 @@
 // WhatsApp web auto-reply terminal failure delivery behavior.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
   createWebInboundDeliverySpies,
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
+  monitorWebChannel,
   sendWebDirectInboundMessage,
   sendWebGroupInboundMessage,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundCallbackMessage } from "./inbound.js";
-
-installWebAutoReplyTestHomeHooks();
-
-let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 const TERMINAL_FAILURE_TEXT = "⚠️ The model ended this turn without answering.";
 const PROVIDER_REFUSAL_TEXT =
@@ -22,10 +18,6 @@ const SELF_JID = "123@s.whatsapp.net";
 describe("web auto-reply terminal failure delivery", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
-
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
 
   async function startMonitorWithTerminalFailure(text = TERMINAL_FAILURE_TEXT): Promise<{
     spies: ReturnType<typeof createWebInboundDeliverySpies>;

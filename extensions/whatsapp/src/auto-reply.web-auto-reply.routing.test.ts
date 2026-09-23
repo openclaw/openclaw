@@ -1,34 +1,30 @@
 // WhatsApp web auto-reply routing behavior.
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { describe, expect, it, vi } from "vitest";
+import {
+  dispatchReplyFromConfigForTest,
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+} from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
-const runChannelInboundEventMock = vi.hoisted(() =>
-  vi.fn(async () => ({ dispatched: false }) as never),
-);
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
-  return {
-    ...actual,
-    runChannelInboundEvent: runChannelInboundEventMock,
-  };
-});
-
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
     "./auto-reply/monitor/last-route.js",
   );
   return {
     ...actual,
-    updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
+    updateLastRouteInBackground: (
+      params: Parameters<typeof actual.updateLastRouteInBackground>[0],
+    ) => {
+      updateLastRouteInBackgroundMock(params);
+      return actual.updateLastRouteInBackground(params);
+    },
   };
 });
 
@@ -66,6 +62,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
     replyLogger,
     baseMentionConfig: buildMentionConfig(opts.cfg),
     account: {},
+    dispatchReplyFromConfig: dispatchReplyFromConfigForTest,
   });
 
   return { handler, backgroundTasks };
@@ -115,11 +112,6 @@ function buildInboundMessage(params: {
 
 describe("web auto-reply routing", () => {
   installWebAutoReplyUnitTestHooks();
-
-  beforeEach(() => {
-    updateLastRouteInBackgroundMock.mockClear();
-    runChannelInboundEventMock.mockClear();
-  });
 
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
@@ -191,7 +183,15 @@ describe("web auto-reply routing", () => {
       Timestamp: now,
     });
 
-    await store.cleanup();
+    expect(
+      getSessionEntry({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionKey: mainSessionKey,
+      }),
+    ).toMatchObject({
+      deliveryContext: { channel: "whatsapp", to: "+1000", accountId: "default" },
+    });
   });
 
   it("updates last-route for group chats with account id", async () => {
@@ -264,6 +264,21 @@ describe("web auto-reply routing", () => {
       OriginatingTo: "123@g.us",
     });
 
-    await store.cleanup();
+    expect(
+      getSessionEntry({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
+      }),
+    ).toMatchObject({
+      deliveryContext: { channel: "whatsapp", to: "123@g.us", accountId: "work" },
+    });
+    expect(
+      getSessionEntry({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionKey: groupSessionKey,
+      })?.deliveryContext,
+    ).toBeUndefined();
   });
 });

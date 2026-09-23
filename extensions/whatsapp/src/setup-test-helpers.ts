@@ -199,19 +199,13 @@ export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void 
   );
 }
 
-export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness): void {
+export function expectWhatsAppAccountAccessNote(
+  harness: WizardPromptHarness,
+  accountId: "default" | "work",
+): void {
   expect(harness.note).toHaveBeenCalledWith(
     expect.stringContaining(
-      "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
-    ),
-    WHATSAPP_ACCESS_NOTE_TITLE,
-  );
-}
-
-export function expectWhatsAppDefaultAccountAccessNote(harness: WizardPromptHarness): void {
-  expect(harness.note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "`channels.whatsapp.accounts.default.dmPolicy` + `channels.whatsapp.accounts.default.allowFrom`",
+      `\`channels.whatsapp.accounts.${accountId}.dmPolicy\` + \`channels.whatsapp.accounts.${accountId}.allowFrom\``,
     ),
     WHATSAPP_ACCESS_NOTE_TITLE,
   );

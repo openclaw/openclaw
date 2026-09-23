@@ -4,6 +4,19 @@ import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { createWhatsAppPollFixture } from "./outbound-test-support.js";
 import { cacheInboundMessageMeta } from "./quoted-message.js";
 
+type OutboundOptions = Parameters<typeof createWhatsAppOutboundBase>[0];
+
+function createOutbound(
+  overrides: Pick<OutboundOptions, "sendMessageWhatsApp"> & Partial<OutboundOptions>,
+) {
+  return createWhatsAppOutboundBase({
+    sendPollWhatsApp: vi.fn(),
+    shouldLogVerbose: () => false,
+    resolveTarget: ({ to }) => ({ ok: true, to: to ?? "" }),
+    ...overrides,
+  });
+}
+
 type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
@@ -35,11 +48,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
     const mediaLocalRoots = ["/tmp/workspace"];
 
@@ -73,11 +83,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-voice",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendMedia!({
@@ -108,11 +115,8 @@ describe("createWhatsAppOutboundBase", () => {
         toJid: "15551234567@s.whatsapp.net",
       };
     });
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
     const onDeliveryResult = vi.fn();
 
@@ -140,11 +144,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -192,7 +193,7 @@ describe("createWhatsAppOutboundBase", () => {
         messageId: "dependency-message",
         toJid: "15551234567@s.whatsapp.net",
       }));
-      const outbound = createWhatsAppOutboundBase({
+      const outbound = createOutbound({
         sendMessageWhatsApp: liveSender,
         sendPollWhatsApp: vi.fn(),
         shouldLogVerbose: () => false,
@@ -241,11 +242,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-auth-dir",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -284,11 +282,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-case",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -328,11 +323,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-2",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -372,11 +364,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-lid",
       toJid: "5511976136970@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -421,11 +410,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-explicit",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -467,11 +453,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-group-miss",
       toJid: "5511976136970@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendText!({
@@ -522,11 +505,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: `sent-${to}`,
       toJid: to,
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await Promise.all([
@@ -583,11 +563,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-error-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     const result = await outbound.sendPayload!({
@@ -607,11 +584,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendPayload!({
@@ -641,11 +615,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendPayload!({
@@ -681,11 +652,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await outbound.sendPayload!({
@@ -715,11 +683,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
       normalizeText: (text) => (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, ""),
     });
 
@@ -747,11 +712,8 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "msg-1",
       toJid: "15551234567@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp,
-      sendPollWhatsApp: vi.fn(),
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
 
     await expect(
@@ -775,11 +737,9 @@ describe("createWhatsAppOutboundBase", () => {
       messageId: "wa-poll-1",
       toJid: "1555@s.whatsapp.net",
     }));
-    const outbound = createWhatsAppOutboundBase({
+    const outbound = createOutbound({
       sendMessageWhatsApp: vi.fn(),
       sendPollWhatsApp,
-      shouldLogVerbose: () => false,
-      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
     });
     const { cfg, poll, to, accountId } = createWhatsAppPollFixture();
 

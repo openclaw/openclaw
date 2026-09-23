@@ -1,11 +1,13 @@
 // Whatsapp tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js";
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
-const sendReactionWhatsApp = vi.fn(async () => undefined);
+const sendReactionWhatsApp = vi.fn<typeof whatsAppActionRuntime.sendReactionWhatsApp>(
+  async () => undefined,
+);
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -26,24 +28,17 @@ describe("handleWhatsAppAction", () => {
     fromMe?: boolean;
     participant?: string;
   }) {
-    const calls = sendReactionWhatsApp.mock.calls as unknown[][];
-    const call = calls.at(-1);
-    if (!call) {
-      throw new Error("expected WhatsApp reaction send");
-    }
-    expect(call[0]).toBe(expected.chat);
-    expect(call[1]).toBe(expected.messageId);
-    expect(call[2]).toBe(expected.emoji);
-    const options = call[3] as {
-      verbose?: unknown;
-      fromMe?: unknown;
-      participant?: unknown;
-      accountId?: unknown;
-    };
-    expect(options.verbose).toBe(false);
-    expect(options.fromMe).toBe(expected.fromMe);
-    expect(options.participant).toBe(expected.participant);
-    expect(options.accountId).toBe(expected.accountId);
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      expected.chat,
+      expected.messageId,
+      expected.emoji,
+      expect.objectContaining({
+        verbose: false,
+        fromMe: expected.fromMe,
+        participant: expected.participant,
+        accountId: expected.accountId,
+      }),
+    );
   }
 
   beforeEach(() => {
@@ -51,6 +46,10 @@ describe("handleWhatsAppAction", () => {
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
     });
+  });
+
+  afterEach(() => {
+    Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime);
   });
 
   it("adds reactions", async () => {

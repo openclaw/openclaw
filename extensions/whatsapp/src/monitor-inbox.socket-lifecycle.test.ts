@@ -457,6 +457,12 @@ describe("web monitor inbox socket lifecycle", () => {
         remoteJid: "999@s.whatsapp.net",
       }),
     ).resolves.toBe(message);
+    await expect(
+      baileysCache.socketOptions.getMessage({
+        id: "outbound-cached",
+        remoteJid: "other@s.whatsapp.net",
+      }),
+    ).resolves.toBeUndefined();
     expect(
       lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", "outbound-cached"),
     ).toMatchObject({ fromMe: true, body: "pong" });

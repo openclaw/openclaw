@@ -5,25 +5,30 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelTurnTestMocks } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+  resolveStorePath,
+  upsertSessionEntry,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { monitorWebChannel as monitorWebChannelOwner } from "./auto-reply/monitor.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
-import { setWhatsAppRuntime } from "./runtime.js";
+import { waitForCredsSaveQueue } from "./session.js";
 // Whatsapp plugin module implements auto reply harness behavior.
 
 export { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
@@ -126,136 +131,140 @@ function resetWebAutoReplySessionSockets() {
   getSessionSockets().length = 0;
 }
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
-  appendCronStyleCurrentTimeLine: (text: string) => text,
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  resolveAgentIdentity: (
-    cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
-    agentId: string,
-  ) =>
-    cfg.agents?.list?.find(
-      (entry) => entry.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
-    )?.identity,
-  resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
-    cfg.messages?.responsePrefix,
-  runEmbeddedAgent: vi.fn(),
+const runtimeOwner = vi.hoisted(() => ({
+  current: undefined as ReturnType<typeof createPluginRuntimeMock> | undefined,
 }));
 
-async function rmDirWithRetries(
-  dir: string,
-  opts?: { attempts?: number; delayMs?: number },
-): Promise<void> {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  const attempts = opts?.attempts ?? 10;
-  const delayMs = opts?.delayMs ?? 5;
-  // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
-  // Let Node handle retries (faster than re-walking the tree in JS on each retry).
-  try {
-    await fs.rm(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: attempts,
-      retryDelay: delayMs,
-    });
-  } catch {
-    // Fall back for older Node implementations (or unexpected retry behavior).
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-        return;
-      } catch (retryErr) {
-        const code =
-          retryErr && typeof retryErr === "object" && "code" in retryErr
-            ? String((retryErr as { code?: unknown }).code)
-            : null;
-        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => {
-            setTimeout(resolve, delayMs);
-          });
-          continue;
-        }
-        throw retryErr;
-      }
-    }
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getWhatsAppRuntime: () => {
+    if (!runtimeOwner.current) throw new Error("Missing WhatsApp test runtime");
+    return runtimeOwner.current;
+  },
+  getOptionalWhatsAppRuntime: () => runtimeOwner.current,
+  getWhatsAppChannelRuntime: () => {
+    if (!runtimeOwner.current) throw new Error("Missing WhatsApp test channel runtime");
+    return runtimeOwner.current.channel;
+  },
+  getOptionalWhatsAppChannelRuntime: () => runtimeOwner.current?.channel,
+}));
 
-    await fs.rm(dir, { recursive: true, force: true });
+// Substitute only agent output. The real dispatcher owns admission, delivery,
+// typing cleanup and receipts; this port makes no core reply-policy claim.
+export const dispatchReplyFromConfigForTest: NonNullable<
+  ChannelInboundTurnPlan["dispatchReplyFromConfig"]
+> = async ({ ctx, cfg, dispatcher, replyOptions, replyResolver }) => {
+  if (!replyResolver) throw new Error("Missing test reply resolver");
+  const reply = await replyResolver(ctx, replyOptions, cfg);
+  let queuedFinal = false;
+  for (const payload of Array.isArray(reply) ? reply : reply ? [reply] : []) {
+    queuedFinal = dispatcher.sendFinalReply(payload) || queuedFinal;
   }
-}
+  return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+};
 
-let previousHome: string | undefined;
-let tempHome: string | undefined;
-let tempHomeRoot: string | undefined;
-let tempHomeId = 0;
+let testState: OpenClawTestState;
+let channelTurnMocks: Awaited<ReturnType<typeof createChannelTurnTestMocks>>;
+const monitors = new Map<Promise<unknown>, AbortController>();
+const messages = new Set<Promise<unknown>>();
 
-export function installWebAutoReplyTestHomeHooks() {
-  beforeAll(async () => {
-    tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-suite-"));
-  });
-
-  beforeEach(async () => {
-    resetInboundDedupe();
-    previousHome = process.env.HOME;
-    tempHome = path.join(tempHomeRoot ?? os.tmpdir(), `case-${++tempHomeId}`);
-    await fs.mkdir(tempHome, { recursive: true });
-    process.env.HOME = tempHome;
-  });
-
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    process.env.HOME = previousHome;
-    tempHome = undefined;
-  });
-
-  afterAll(async () => {
-    if (tempHomeRoot) {
-      await rmDirWithRetries(tempHomeRoot);
-      tempHomeRoot = undefined;
-    }
-    tempHomeId = 0;
-  });
-}
+export const monitorWebChannel: typeof monitorWebChannelOwner = (
+  verbose,
+  listenerFactory,
+  keepAlive,
+  replyResolver,
+  runtime,
+  abortSignal,
+  tuning,
+) => {
+  const owner = runtimeOwner.current?.channel;
+  if (!owner) throw new Error("Missing WhatsApp test channel runtime");
+  const controller = new AbortController();
+  const wrappedListener: typeof listenerFactory = listenerFactory
+    ? async (options) =>
+        listenerFactory({
+          ...options,
+          onMessage: (message) => {
+            const task = options.onMessage(message);
+            messages.add(task);
+            void task.then(
+              () => messages.delete(task),
+              () => messages.delete(task),
+            );
+            return task;
+          },
+        })
+    : undefined;
+  const run = monitorWebChannelOwner(
+    verbose,
+    wrappedListener,
+    keepAlive,
+    replyResolver,
+    runtime,
+    abortSignal ? AbortSignal.any([abortSignal, controller.signal]) : controller.signal,
+    {
+      ...tuning,
+      channelRuntime: {
+        ...owner,
+        inbound: { ...owner.inbound, buildContext: buildChannelInboundEventContext },
+        reply: { ...owner.reply, dispatchReplyFromConfig: dispatchReplyFromConfigForTest },
+      },
+    },
+  );
+  monitors.set(run, controller);
+  void run.then(
+    () => monitors.delete(run),
+    () => monitors.delete(run),
+  );
+  return run;
+};
 
 export async function makeSessionStore(
-  entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
-  const cleanup = async () => {
-    await rmDirWithRetries(dir);
-  };
-  return {
-    storePath,
-    cleanup,
-  };
+  entries: Record<string, SessionEntry> = {},
+): Promise<{ storePath: string }> {
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await upsertSessionEntry({ agentId: "main", storePath, sessionKey, entry });
+  }
+  return { storePath };
 }
 
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
-
   beforeEach(async () => {
+    testState = await createOpenClawTestState({ label: "whatsapp-auto-reply" });
     vi.clearAllMocks();
+    resetInboundDedupe();
     resetWebAutoReplySessionSockets();
     _resetBaileysMocks();
     _resetLoadConfigMock();
-    // Scoped test files must seed the plugin slot instead of inheriting another file's runtime.
-    setWhatsAppRuntime(createPluginRuntimeMock());
+    runtimeOwner.current = createPluginRuntimeMock();
+    channelTurnMocks = await createChannelTurnTestMocks();
+    // Exercise the native adapter fallback while retaining real core selection
+    // and receipts. Supported durable delivery has its own inbound-dispatch cases.
+    channelTurnMocks.deliverInboundReplyWithMessageSendContextMock.mockResolvedValue({
+      status: "unsupported",
+      reason: "missing_outbound_handler",
+    });
     if (opts?.pinDns) {
       resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Stop every producer before restoring owner spies or removing its SQLite state.
+    for (const controller of monitors.values()) controller.abort();
+    await Promise.allSettled(monitors.keys());
+    await Promise.allSettled(messages);
+    await waitForCredsSaveQueue();
+    channelTurnMocks.restore();
+    runtimeOwner.current = undefined;
     resolvePinnedHostnameSpy?.mockRestore();
     resolvePinnedHostnameSpy = undefined;
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
+    await testState.cleanup();
   });
 }
 

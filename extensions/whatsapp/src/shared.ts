@@ -25,7 +25,6 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { readWhatsAppAccountLinkState } from "./channel-runtime-loader.js";
-import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
 import { resolveWhatsAppConfigPath } from "./group-config-path.js";
@@ -34,6 +33,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
@@ -64,7 +64,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   clearBaseFields: [],
   allowTopLevel: false,
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+  formatAllowFrom: normalizeWhatsAppAllowFromEntries,
   resolveDefaultTo: (account) => account.defaultTo,
 });
 

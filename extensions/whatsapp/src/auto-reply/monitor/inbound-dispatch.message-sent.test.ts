@@ -395,21 +395,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
     });
   });
 
-  it("keeps durable text on the core-owned path without native fallback", async () => {
-    const deliverReply = vi.fn();
-    const { plan } = createPlan(deliverReply);
-    const delivery = plan.delivery as ChannelInboundTurnPlan["delivery"];
-
-    expect(delivery.observeMessageSent).toBe(true);
-    expect(
-      typeof delivery.durable === "function"
-        ? await delivery.durable({ text: "durable text" }, { kind: "final" })
-        : delivery.durable,
-    ).toMatchObject({ to: "+1000" });
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-
-  it("preserves accepted voice receipts through real dispatch after caption rejection", async () => {
+  it("preserves accepted voice receipts through the reply adapter after caption rejection", async () => {
     recordChannelActivity.mockClear();
     vi.mocked(loadWebMedia).mockResolvedValueOnce({
       buffer: Buffer.from("voice"),

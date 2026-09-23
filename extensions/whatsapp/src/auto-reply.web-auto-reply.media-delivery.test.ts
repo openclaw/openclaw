@@ -1,21 +1,17 @@
 // WhatsApp web auto-reply media delivery behavior.
 import fs from "node:fs/promises";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
   createWebInboundDeliverySpies,
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
+  monitorWebChannel,
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundCallbackMessage } from "./inbound.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
-
-installWebAutoReplyTestHomeHooks();
-
-let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 describe("web auto-reply media delivery", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
@@ -26,10 +22,6 @@ describe("web auto-reply media delivery", () => {
   type SendComposingMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendComposing"]>>;
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
-
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
@@ -228,7 +220,8 @@ describe("web auto-reply media delivery", () => {
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
           const payload = imagePayloadAt(sendMedia, beforeCalls);
-          expect(payload.image.length).toBeGreaterThan(0);
+          expect(payload.image).toEqual(fmt.image);
+          expect(payload.caption).toBe("hi");
           expect(payload.image.length).toBeLessThanOrEqual(1024 * 1024);
           expect(payload.mimetype).toBe(fmt.mime);
         }
@@ -350,28 +343,6 @@ describe("web auto-reply media delivery", () => {
     expect(fallback).toContain("caption");
     expect(fallback).toContain("Media failed");
     expect(fallback).not.toContain("404");
-
-    fetchMock.mockRestore();
-  });
-  it("sends media with a caption when delivery succeeds", async () => {
-    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "hi",
-        mediaUrl: "https://example.com/img.png",
-      },
-    });
-
-    const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
-
-    const fetchMock = mockFetchMediaBuffer(png, "image/png");
-
-    await dispatch("msg1");
-
-    const payload = getSingleImagePayload(sendMedia);
-    expect(payload.caption).toBe("hi");
-    expect(payload.image.length).toBeGreaterThan(0);
-    // Should not fall back to separate text reply because caption is used.
-    expect(reply).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
   });

@@ -194,6 +194,9 @@ describe("web monitor inbox metadata cache", () => {
         expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.value.participants).toEqual([]);
       });
 
+      await expect(
+        baileysCache.socketOptions.cachedGroupMetadata("123@g.us"),
+      ).resolves.toBeUndefined();
       await listener.sendMessage("123@g.us", "recovered @15551234567");
 
       expect(sock.groupMetadata).toHaveBeenCalledOnce();
@@ -558,16 +561,16 @@ describe("web monitor inbox metadata cache", () => {
     });
     const messageId = nextMessageId("baileys-expiry");
     try {
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: messageId,
-          remoteJid: "999@s.whatsapp.net",
-          text: "retry me",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
+      const upsert = buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "retry me",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      });
+      const message = upsert.messages[0]?.message;
+      expect(message).toEqual({ conversation: "retry me" });
+      sock.ev.emit("messages.upsert", upsert);
       sock.ev.emit("groups.update", [
         groupMetadata({
           subject: "Expiring Group",
@@ -580,7 +583,7 @@ describe("web monitor inbox metadata cache", () => {
           id: messageId,
           remoteJid: "999@s.whatsapp.net",
         }),
-      ).resolves.toEqual({ conversation: "retry me" });
+      ).resolves.toBe(message);
       await expectCachedGroupMetadata(baileysCache, {
         id: "123@g.us",
         subject: "Expiring Group",

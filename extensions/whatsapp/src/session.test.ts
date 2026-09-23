@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import {
   afterEach,
   beforeAll,
@@ -78,10 +79,10 @@ async function emitCredsUpdate(authDir?: string) {
   }
 }
 
+let testState: OpenClawTestState;
+
 function createTempAuthDir(prefix: string) {
-  return path.resolve(
-    fsSync.mkdtempSync(path.join((process.env.TMPDIR ?? "/tmp").replace(/\/+$/, ""), `${prefix}-`)),
-  );
+  return fsSync.mkdtempSync(testState.path(`${prefix}-`));
 }
 
 function createTempCaFile(contents: string): string {
@@ -230,7 +231,8 @@ describe("web session", () => {
     ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({ label: "whatsapp-session" });
     vi.clearAllMocks();
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
@@ -246,6 +248,7 @@ describe("web session", () => {
     setLoggerOverride(null);
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    await testState.cleanup();
   });
 
   it("creates WA socket with QR handler", async () => {
@@ -636,12 +639,19 @@ describe("web session", () => {
   });
 
   it("keeps one-argument callers on the old no-timeout wait policy", async () => {
+    vi.useFakeTimers();
     const ev = new EventEmitter();
+    const settled = vi.fn();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
       typeof baileys.makeWASocket
     >);
+    void promise.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(ev.listenerCount("connection.update")).toBe(1);
     ev.emit("connection.update", { connection: "open" });
     await expect(promise).resolves.toBeUndefined();
+    expect(ev.listenerCount("connection.update")).toBe(0);
   });
 
   it("rejects when connection closes", async () => {
@@ -990,7 +1000,10 @@ describe("web session", () => {
     const rmSpy = vi.spyOn(fs, "rm");
 
     try {
-      await writeCredsJsonAtomically(authDir, { me: { id: "123@s.whatsapp.net" } });
+      await writeCredsJsonAtomically(authDir, {
+        me: { id: "123@s.whatsapp.net" },
+        noiseKey: { public: Buffer.from([0, 127, 255]) },
+      });
 
       const write = requireValue(openMock.writes[0], "WhatsApp credential write");
       const tempHandle = requireValue(openMock.tempHandles[0], "WhatsApp credential handle");
@@ -1007,9 +1020,14 @@ describe("web session", () => {
       expect(openMock.dirHandles).toHaveLength(1);
       expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
       expect(openMock.dirHandles[0]?.close).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(fsSync.readFileSync(credsPath, "utf8"))).toEqual({
+      const serialized = fsSync.readFileSync(credsPath, "utf8");
+      expect(JSON.parse(serialized)).toEqual({
         me: { id: "123@s.whatsapp.net" },
+        noiseKey: { public: { type: "Buffer", data: "AH//" } },
       });
+      expect(JSON.parse(serialized, baileys.BufferJSON.reviver).noiseKey.public).toEqual(
+        Buffer.from([0, 127, 255]),
+      );
       expect(fsSync.statSync(credsPath).mode & 0o777).toBe(0o600);
       if (process.platform !== "win32") {
         const parentHandle = requireValue(
