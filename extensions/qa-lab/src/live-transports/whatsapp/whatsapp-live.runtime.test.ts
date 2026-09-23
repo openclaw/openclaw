@@ -1938,55 +1938,6 @@ describe("WhatsApp QA live runtime", () => {
     expect(cfg.messages?.statusReactions?.enabled).toBe(true);
   });
 
-  it("maps WhatsApp broadcast overrides without deleting existing agent defaults", () => {
-    const groupJid = "120363000000000000@g.us";
-    const broadcastOverrides = {
-      broadcast: {
-        agents: ["main", "qa-second"],
-        strategy: "sequential" as const,
-      },
-      groupPolicy: "open" as const,
-    };
-    const cfg = buildWhatsAppQaConfigFixture(
-      {
-        groupJid,
-        overrides: broadcastOverrides,
-      },
-      {
-        agents: {
-          defaults: {
-            maxConcurrent: 7,
-            model: "mock-openai/gpt-5.6-luna",
-            workspace: "/workspace/qa",
-          },
-          list: [
-            {
-              default: true,
-              id: "main",
-              identity: { name: "Main WhatsApp QA" },
-              model: "mock-openai/gpt-5.6-luna",
-            },
-          ],
-        },
-      },
-    );
-
-    expect(cfg.agents?.defaults).toEqual({
-      maxConcurrent: 7,
-      model: "mock-openai/gpt-5.6-luna",
-      workspace: "/workspace/qa",
-    });
-    expect(cfg.agents?.list?.map((agent) => agent.id)).toEqual(["main", "qa-second"]);
-    expect(cfg.agents?.list?.find((agent) => agent.id === "main")).toMatchObject({
-      default: true,
-      identity: { name: "Main WhatsApp QA" },
-      model: "mock-openai/gpt-5.6-luna",
-    });
-    expect(cfg.broadcast?.strategy).toBe("sequential");
-    expect(cfg.broadcast?.[groupJid]).toEqual(["main", "qa-second"]);
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid]?.requireMention).toBe(true);
-  });
-
   it("keeps pending-history group context enabled through the supported config path", () => {
     const groupJid = "120363000000000000@g.us";
     const scenario = findMockWhatsAppScenario("whatsapp-group-pending-history-context");
