@@ -2,6 +2,16 @@ import { channel } from "node:diagnostics_channel";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
+vi.mock("node:diagnostics_channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
+  const pressure = actual.channel(Symbol("code-mode-node-lifecycle"));
+  return {
+    ...actual,
+    channel: (name: string | symbol) =>
+      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
+  };
+});
+
 const fixture = vi.hoisted(() => ({
   workerUrl: "file:///runtime/code-mode-node.worker.js",
   executions: [] as Array<{ input: unknown; options: { timeoutMs: number } }>,

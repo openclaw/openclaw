@@ -380,11 +380,13 @@ it.each([
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
+        // Durable task settlement precedes disposal; assert resource ordering, not its latency.
+        await Promise.race([
           disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+          closed.promise.then(() => {
+            throw new Error("Registration resources closed before engine disposal started");
+          }),
+        ]);
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,
