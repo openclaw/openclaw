@@ -4545,6 +4545,42 @@ describe("operator lane waiver", () => {
       status: "completed",
     });
 
+  it.each([
+    ["success", "passed", "passed", "passed"],
+    ["failure", "blocked_complete", "passed", "passed"],
+    ["skipped", "blocked_complete", "blocked_complete", "blocked_complete"],
+    ["neutral", "blocked_complete", "blocked_complete", "blocked_complete"],
+    ["cancelled", "blocked_complete", "blocked_complete", "blocked_complete"],
+    ["timed_out", "blocked_complete", "blocked_complete", "blocked_complete"],
+  ])(
+    "requires a finished aggregator result for failed workflows: %s",
+    (conclusion, releaseState, waivedReleaseState, ciState) => {
+      for (const laneWaiver of ["", "ship"]) {
+        for (const [key, gate, lane, expectedState] of [
+          [
+            "releaseChecksCandidate",
+            "Verify release checks",
+            "cross_os_release_checks / macOS / packaged fresh",
+            laneWaiver ? waivedReleaseState : releaseState,
+          ],
+          ["normalCi", "openclaw/ci-gate", "checks-windows-node-test-5", ciState],
+        ] as const) {
+          const snapshot = child(key, {
+            conclusion: "failure",
+            jobs: [job(lane), job(gate, conclusion)],
+            status: "completed",
+          });
+          expect(
+            terminalPolicyPass(snapshot, policy.releaseProfile, policy.workflowRef, laneWaiver),
+          ).toBe(expectedState === "passed");
+          expect(
+            classifyReleaseSnapshot({ children: [snapshot], laneWaiver, ...policy }).state,
+          ).toBe(expectedState);
+        }
+      }
+    },
+  );
+
   it("keeps native app and UI lane failures advisory without a waiver", () => {
     const ci = child("normalCi", {
       conclusion: "failure",

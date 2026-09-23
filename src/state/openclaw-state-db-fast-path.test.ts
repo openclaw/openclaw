@@ -153,18 +153,19 @@ describe("state schema fast-path failure settlement", () => {
       }
       const selected = new Set<DatabaseSync>();
       let foreignKeysAtClose: unknown;
-      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(
-        function (this: DatabaseSync, sql) {
-          if (sql === "BEGIN IMMEDIATE" && this.location() === pathname) {
-            selected.add(this);
-            expect(this.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
-            if (fails) {
-              throw new Error("synthetic Doctor BEGIN failure");
-            }
+      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        if (sql === "BEGIN IMMEDIATE" && this.location() === pathname) {
+          selected.add(this);
+          expect(this.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+          if (fails) {
+            throw new Error("synthetic Doctor BEGIN failure");
           }
-          originalExec.call(this, sql);
-        },
-      );
+        }
+        originalExec.call(this, sql);
+      });
       vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (this: DatabaseSync) {
         if (selected.has(this)) {
           foreignKeysAtClose = this.prepare("PRAGMA foreign_keys").get()?.foreign_keys;

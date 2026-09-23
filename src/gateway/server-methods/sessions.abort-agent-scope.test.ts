@@ -238,7 +238,6 @@ describe("sessions.abort agent scope", () => {
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = createBetaRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
     const respond = await callSessions(
       "sessions.abort",
       { runId: "run-beta", agentId: "main" },
@@ -365,7 +364,6 @@ describe("sessions.abort agent scope", () => {
   it("preserves runId-only aborts for active non-default agent runs", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = createBetaRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions("sessions.abort", { runId: "run-beta" }, { context, reqId: "req-2" });
 
@@ -484,7 +482,6 @@ describe("sessions.abort agent scope", () => {
   it("uses the active run agent for key and runId global aborts without agentId", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const context = createGlobalWorkRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions(
       "sessions.abort",
@@ -513,7 +510,6 @@ describe("sessions.abort agent scope", () => {
         dedupe: new Map(),
       },
     });
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions(
       "sessions.abort",
@@ -978,7 +974,6 @@ describe("sessions.abort agent scope", () => {
       activeRuns: [["run-work", activeRun]],
       agents: [{ id: "work", default: true }],
     });
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
 

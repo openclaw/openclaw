@@ -724,7 +724,7 @@ AFTER_CD
         realBehaviorProof.jobs["real-behavior-proof"].if,
       ),
     }).toEqual({
-      autoResponse: [],
+      autoResponse: ["title", "body", "base"],
       clawsweeperDispatch: [],
       labeler: ["title", "base"],
       realBehaviorProof: ["body", "base"],
@@ -797,8 +797,106 @@ AFTER_CD
     expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
+  it("admits ClawSweeper content changes, commands, and stale-bug verification before allocation", () => {
+    const condition = String(
+      readWorkflow(".github/workflows/clawsweeper-dispatch.yml").jobs.dispatch.if,
+    )
+      .replace(/^\$\{\{|\}\}$/gu, "")
+      .replace("github.event.issue.labels.*.name", "issueLabels");
+    const cases: {
+      eventName: string;
+      action: string;
+      changes?: Record<string, unknown>;
+      allowed: boolean;
+      actor?: string;
+      actorId?: string;
+      label?: string;
+      issueLabels?: string[];
+    }[] = [
+      { eventName: "pull_request_target", action: "edited", changes: {}, allowed: false },
+      { eventName: "issues", action: "edited", changes: {}, allowed: false },
+      { eventName: "pull_request_target", action: "edited", allowed: true },
+      ...["title", "body", "base", "maintainer_can_modify", "unknown"].map((field) => ({
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { [field]: { from: "" } },
+        allowed: true,
+      })),
+      { eventName: "issues", action: "edited", changes: { body: { from: "" } }, allowed: true },
+      { eventName: "pull_request_target", action: "synchronize", allowed: true },
+      { eventName: "pull_request_target", action: "labeled", allowed: true },
+      { eventName: "pull_request_target", action: "unlabeled", allowed: true },
+      { eventName: "issue_comment", action: "created", allowed: true },
+      { eventName: "issue_comment", action: "edited", allowed: true },
+      { eventName: "pull_request_review", action: "edited", allowed: true },
+      { eventName: "pull_request_review_comment", action: "edited", allowed: true },
+      { eventName: "issues", action: "labeled", actor: "github-actions[bot]", allowed: false },
+      {
+        eventName: "issues",
+        action: "labeled",
+        actor: "github-actions[bot]",
+        actorId: "257215752",
+        label: "stale",
+        issueLabels: ["bug", "stale"],
+        allowed: true,
+      },
+    ];
+    for (const event of cases) {
+      expect(
+        Boolean(
+          runInNewContext(condition, {
+            github: {
+              actor: event.actor ?? "maintainer",
+              actor_id: event.actorId ?? "",
+              event_name: event.eventName,
+              event: {
+                action: event.action,
+                changes: event.changes,
+                label: { name: event.label ?? "enhancement" },
+              },
+            },
+            issueLabels: event.issueLabels ?? [],
+            contains: (values: string[], value: string) => values.includes(value),
+            endsWith: (value: string, suffix: string) => value.endsWith(suffix),
+            toJSON: (value: unknown) => JSON.stringify(value),
+          }),
+        ),
+        JSON.stringify(event),
+      ).toBe(event.allowed);
+    }
+  });
+
+  it("keeps existing ClawSweeper per-item coalescing after admission", () => {
+    const workflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    expect(workflow.concurrency).toBeUndefined();
+    const concurrency = workflow.jobs.dispatch.concurrency;
+    const evaluate = (
+      expression: string,
+      eventName: "issues" | "pull_request_target" | "issue_comment",
+      action: string,
+      runId: number,
+    ) =>
+      evaluateWorkflowExpression(expression, {
+        repository: "openclaw/openclaw",
+        eventName,
+        runAttempt: 1,
+        runId,
+        githubEvent: { action, issue: { number: 123 }, pull_request: { number: 123 } },
+      });
+    const opened = evaluate(concurrency.group, "pull_request_target", "opened", 1);
+    expect(evaluate(concurrency.group, "pull_request_target", "edited", 2)).toBe(opened);
+    expect(evaluate(concurrency["cancel-in-progress"], "pull_request_target", "edited", 2)).toBe(
+      true,
+    );
+    expect(evaluate(concurrency.group, "issue_comment", "created", 3)).toBe(opened);
+    expect(evaluate(concurrency.group, "issue_comment", "edited", 4)).toBe(opened);
+    expect(evaluate(concurrency["cancel-in-progress"], "issue_comment", "created", 3)).toBe(false);
+    expect(evaluate(concurrency["cancel-in-progress"], "issue_comment", "edited", 4)).toBe(true);
+  });
+
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
     const workflow = readRealBehaviorProofWorkflow();
+    const job = workflow.jobs["real-behavior-proof"];
 
     expect(workflow.name).toBe("PR context and evidence");
     expect(workflow.jobs["real-behavior-proof"].name).toBe("PR context and evidence");
@@ -809,12 +907,11 @@ AFTER_CD
       "reopened",
       "ready_for_review",
     ]);
-    expect(workflow.concurrency.group).toBe(
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency.group).toBe(
       "${{ github.workflow }}-${{ github.event.pull_request.number }}",
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event.action == 'synchronize' }}",
-    );
+    expect(job.concurrency["cancel-in-progress"]).toBe(true);
   });
 
   it.each([
@@ -934,6 +1031,8 @@ AFTER_CD
           actor,
           githubEvent: {
             action,
+            issue: { author_association: "NONE" },
+            pull_request: { author_association: "NONE" },
             comment: { body: "testflight @openclaw/maintainer", user: { type } },
           },
         }),
@@ -943,7 +1042,8 @@ AFTER_CD
 
   it("isolates auto-response per item and ignores ClawSweeper PR label feedback", () => {
     const workflow = readWorkflow(".github/workflows/auto-response.yml");
-    const guard = workflow.jobs["auto-response"].if;
+    const job = workflow.jobs["auto-response"];
+    const guard = job.if;
 
     expect(workflow.on.issues.types).toEqual(["opened", "edited", "labeled"]);
     expect(workflow.on.issue_comment.types).toEqual(["created"]);
@@ -955,10 +1055,11 @@ AFTER_CD
       "labeled",
       "unlabeled",
     ]);
-    expect(workflow.concurrency.group).toBe(
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency.group).toBe(
       "${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}",
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+    expect(job.concurrency["cancel-in-progress"]).toBe(
       "${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}",
     );
     expect(guard).toContain("github.event_name != 'pull_request_target'");

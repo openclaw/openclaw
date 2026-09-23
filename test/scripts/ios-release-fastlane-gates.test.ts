@@ -150,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.239.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.240.1"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.239.0)");
+    expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -164,7 +164,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
     expect(shardJob).toContain('bundler: "2.6.9"');
     expect(shardJob).toContain("bundler-cache: false");
