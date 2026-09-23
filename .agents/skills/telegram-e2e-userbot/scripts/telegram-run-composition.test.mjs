@@ -64,8 +64,9 @@ async function composition(mode, acquisitionReady = Promise.resolve()) {
     path.join(root, "dist/entry.js"),
     `
     const http=require('node:http');
-    const port=Number(process.argv[process.argv.indexOf('--port')+1]);
-    http.createServer((req,res)=>{res.end('{}')}).listen(port,'127.0.0.1');
+    process.once('message', (_message, listener)=>{
+      http.createServer((req,res)=>{res.end('{}')}).listen(listener, ()=>process.send('listening'));
+    });
     if(${JSON.stringify(mode)}==='late') process.once('SIGTERM',()=>{
       const fs=require('node:fs'); const root=${JSON.stringify(root)};
       const exitWhenReleased=()=>{if(fs.existsSync(root+'/release-stop')) process.exit(0)};
@@ -142,11 +143,33 @@ sys.exit(record.main())
   listener.listen(0, "127.0.0.1");
   await once(listener, "listening");
   const gatewayPort = listener.address().port;
-  await new Promise((resolve) => listener.close(resolve));
+  const gatewayHandoff = Promise.withResolvers();
+  void gatewayHandoff.promise.catch(() => {});
   childProcess.spawn = (command, argv, options) => {
-    const child = originalSpawn(command, argv, options);
+    const isGateway = argv.includes("dist/entry.js");
+    const child = originalSpawn(
+      command,
+      argv,
+      isGateway ? { ...options, stdio: [...options.stdio, "ipc"] } : options,
+    );
     children.push({ child, command, argv, options });
-    if (argv.includes("dist/entry.js")) {
+    if (isGateway) {
+      // Transfer the bound socket without exposing a free-port gap to other tests.
+      child.once("message", () => {
+        listener.close((error) => {
+          if (error) gatewayHandoff.reject(error);
+          else gatewayHandoff.resolve();
+        });
+      });
+      child.once("error", gatewayHandoff.reject);
+      child.once("exit", (code, signal) =>
+        gatewayHandoff.reject(
+          new Error(`Gateway fixture exited before socket handoff: ${signal ?? code}`),
+        ),
+      );
+      child.send("listen", listener, (error) => {
+        if (error) gatewayHandoff.reject(error);
+      });
       observe("gateway-spawn", child);
       const command = options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
       if (command)
@@ -173,6 +196,8 @@ sys.exit(record.main())
   let getMeCount = 0;
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(url);
+    if (parsed.hostname === "127.0.0.1" && Number(parsed.port) === gatewayPort)
+      await gatewayHandoff.promise;
     if (parsed.hostname !== "api.telegram.org") return await originalFetch(url, init);
     const method = parsed.pathname.split("/").at(-1);
     if (method === "getMe" && ++getMeCount === 2 && mode === "body") {
@@ -311,6 +336,10 @@ sys.exit(record.main())
         }
       }
       await outcome;
+      if (listener.listening)
+        await new Promise((resolve, reject) =>
+          listener.close((error) => (error ? reject(error) : resolve())),
+        );
       for (const watcher of watchers) watcher.close();
       childProcess.spawn = originalSpawn;
       syncBuiltinESMExports();
