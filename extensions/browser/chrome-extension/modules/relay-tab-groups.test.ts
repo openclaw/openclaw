@@ -81,6 +81,7 @@ describe("addTabToOpenClawGroup", () => {
       grouping: true,
       initialGroup: false,
       expectedGroupId: 7,
+      groupOperationGroupId: 7,
       assertCurrent: vi.fn(),
     };
 
@@ -107,7 +108,9 @@ describe("addTabToOpenClawGroup", () => {
       groupFallback: false,
       grouping: true,
       initialGroup: true,
-      expectedGroupId: undefined,
+      // Simulate a membership event observed while tabs.group was pending.
+      expectedGroupId: 8,
+      groupOperationGroupId: undefined,
       assertCurrent: vi.fn(),
     };
 

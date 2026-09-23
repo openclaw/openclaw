@@ -442,6 +442,24 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     },
   );
 
+  it("rejects an unrelated membership event while group creation is pending", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    const failure = new Error("group identity unavailable");
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      // A membership event racing with tabs.group must not prove ownership.
+      harness.updateTab(101, { groupId: 8 });
+      throw failure;
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "error",
+    });
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps current title authorization for fallback into an existing group", async () => {
     if (mode !== "selected") {
       return;

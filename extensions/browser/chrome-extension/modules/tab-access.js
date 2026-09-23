@@ -280,8 +280,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (!created.handedOff && typeof change.groupId === "number") {
       if (
         created.grouping &&
+        Number.isInteger(created.groupOperationGroupId) &&
         change.groupId >= 0 &&
-        (created.expectedGroupId === undefined || created.expectedGroupId === change.groupId) &&
+        created.groupOperationGroupId === change.groupId &&
         epochIsCurrent(tabId, created.epoch) &&
         tab?.id === tabId
       ) {
@@ -328,6 +329,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       groupFallback: false,
       groupFallbackRequiresOpenClawTitle: false,
       expectedGroupId: undefined,
+      groupOperationGroupId: undefined,
       namingGroup: undefined,
       initialGroup: false,
       assertCurrent: () => {

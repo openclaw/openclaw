@@ -31,8 +31,8 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     assertCurrent();
     const fallbackGroupId = currentTab.groupId;
     const expectedGroupId =
-      Number.isInteger(created.expectedGroupId) && created.expectedGroupId >= 0
-        ? created.expectedGroupId
+      Number.isInteger(created.groupOperationGroupId) && created.groupOperationGroupId >= 0
+        ? created.groupOperationGroupId
         : undefined;
     // Existing groups remain subject to current title authorization. Only a
     // newly created group with observed membership gets the private naming
@@ -136,6 +136,7 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     }
     created.groupId = groupId;
     created.expectedGroupId = groupId;
+    created.groupOperationGroupId = groupId;
   }
   if (!group) {
     if (created) {
