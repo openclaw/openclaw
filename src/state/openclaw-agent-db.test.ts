@@ -24,8 +24,6 @@ import {
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
-import * as agentDeletionJournal from "./agent-deletion-journal.js";
-import { AGENT_MEDIA_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -2257,16 +2255,16 @@ describe("openclaw agent database", () => {
       throw new Error("Missing original SQLite close implementation");
     }
     let failedClose = false;
-    const close = vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (
-      this: DatabaseSync,
-    ) {
-      // Fail the agent handle's cleanup, not a shared-state coordinator close.
-      if (!failedClose && this.location() === database.path) {
-        failedClose = true;
-        throw new Error("initialization close failed");
-      }
-      return Reflect.apply(closeDatabase, this, []);
-    });
+    const close = vi
+      .spyOn(DatabaseSync.prototype, "close")
+      .mockImplementation(function (this: DatabaseSync) {
+        // Fail the agent handle's cleanup, not a shared-state coordinator close.
+        if (!failedClose && this.location() === database.path) {
+          failedClose = true;
+          throw new Error("initialization close failed");
+        }
+        return Reflect.apply(closeDatabase, this, []);
+      });
 
     expect(() =>
       openOpenClawAgentDatabase({ agentId: "worker-2", env, path: database.path }),
