@@ -1,8 +1,20 @@
+import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import { runVectorKnnInSubprocess } from "../manager-search-knn-subprocess.ts";
+import { runVectorKnnInSubprocess } from "../manager-search-knn-subprocess.js";
+import type { VectorKnnRequest } from "../manager-search-knn.js";
 
-const { databasePaths, request, expireIdle } = JSON.parse(process.argv[2]);
+const input = process.argv[2];
+assert.ok(input);
+const {
+  databasePaths,
+  request,
+  expireIdle,
+}: {
+  databasePaths: [string, string, string];
+  request: VectorKnnRequest;
+  expireIdle: boolean;
+} = JSON.parse(input);
 if (expireIdle) {
   mock.timers.enable({ apis: ["setTimeout"] });
 }

@@ -953,7 +953,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.config.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.message-observations.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
-extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts	1
 extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	1
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
@@ -2451,7 +2450,6 @@ src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
@@ -2912,7 +2910,6 @@ src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	7
-src/infra/sqlite-user-version.ts	1
 src/infra/sqlite-wal.ts	4
 src/infra/startup-migration-checkpoint.ts	1
 src/infra/state-migrations.acp-replay.ts	1
@@ -3303,7 +3300,6 @@ src/security/safe-regex.ts	1
 src/sessions/input-provenance.ts	3
 src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
-src/sessions/session-state-events.ts	2
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
@@ -3609,7 +3605,6 @@ ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	3
 ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	1
-ui/src/pages/agents/panels-tools-skills.ts	1
 ui/src/pages/channels/view.config.ts	1
 ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
@@ -3694,7 +3689,7 @@ ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/view.ts	3
 ui/src/pages/cron/view-runs.ts	3
-ui/src/pages/cron/view.ts	9
+ui/src/pages/cron/view.ts	6
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
@@ -3718,13 +3713,13 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
-ui/src/pages/sessions/view.ts	12
+ui/src/pages/sessions/view.ts	8
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/heatmap.ts	1
-ui/src/pages/usage/view-details.ts	6
+ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
 ui/src/pages/worktrees/worktrees-page.ts	3

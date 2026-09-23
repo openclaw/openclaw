@@ -33,10 +33,9 @@ import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
-import {
-  createUiE2eVitestConfig,
-  uiE2eRealGatewayTestFiles,
-} from "../vitest/vitest.ui-e2e.config.ts";
+import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
+import { createUiE2eVitestConfig } from "../vitest/vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import { runDependencyFreePreflight } from "./ci-preflight-dependencies.test-support.js";
 import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
@@ -3775,6 +3774,7 @@ setImmediate(() => {
     } as const;
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
     expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(jobs["check-lint-hosted-extension-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
     // check-docs stays hosted in every mode: its ClawHub clone is unauthenticated by design.
     expect(jobs["check-docs"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
@@ -8529,6 +8529,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const checkShardRun = checkShardStep.run;
     const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    const hostedExtensionLint = workflow.jobs["check-lint-hosted-extension-shard"];
     const hostedCoreTypes = workflow.jobs["check-test-types-hosted-core-shard"];
     expect(manifestStep.env.OPENCLAW_CI_RUNNER_PROFILE).toBe(
       "${{ steps.runner_profile.outputs.runner_profile }}",
@@ -8599,6 +8600,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const coreLintStep = hostedCoreLint.steps.find(
       (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
     );
+    const extensionLintStep = hostedExtensionLint.steps.find(
+      (step: WorkflowStep) => step.name === "Run hosted extension lint stripe",
+    );
     expect(coreLintStep.env.CORE_STRIPE).toBe("${{ matrix.stripe }}");
     type GoEnv = Partial<Pick<NodeJS.ProcessEnv, "GOMAXPROCS" | "GOGC" | "GOMEMLIMIT">>;
     const goEnvKeys = ["GOMAXPROCS", "GOGC", "GOMEMLIMIT"] as const;
@@ -8624,7 +8628,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget?: boolean;
       goEnv?: GoEnv;
       expectedGoEnv?: GoEnv;
-      lane: "check" | "core";
+      lane: "check" | "core" | "extensions";
       nodeRunnerBackend?: "runson";
       profile: "blacksmith" | "github" | "hybrid";
       releaseGate?: boolean;
@@ -8649,7 +8653,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           'printf \'%s\\t%s\\t%s\\n\' "${GOMAXPROCS-}" "${GOGC-}" "${GOMEMLIMIT-}" >> "$LINT_GO_ENV"',
           ...(failStripe === undefined
             ? []
-            : [`if [[ " $* " == *" --core-stripe=${failStripe}/5 "* ]]; then exit 23; fi`]),
+            : [
+                `if [[ " $* " == *" --core-stripe=${failStripe}/5 "* || " $* " == *" --extension-stripe=${failStripe}/6 "* ]]; then exit 23; fi`,
+              ]),
         ]);
       }
       writeExecutable(path.join(binDir, "nproc"), [
@@ -8666,11 +8672,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         runAttempt,
         preflightOutputs: { node_runner_backend: nodeRunnerBackend ?? "" },
       };
-      const coreRun = coreLintStep.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+      const step = { check: checkShardStep, core: coreLintStep, extensions: extensionLintStep }[
+        lane
+      ];
+      const command = step.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
         String(evaluateWorkflowExpression(expression, expressionContext)),
       );
-      const stepEnv = lane === "check" ? checkShardStep.env : coreLintStep.env;
-      const result = spawnSync("bash", ["-c", lane === "check" ? checkShardRun : coreRun], {
+      const stepEnv = step.env;
+      const result = spawnSync("bash", ["-c", command], {
         cwd: root,
         encoding: "utf8",
         env: {
@@ -8684,6 +8693,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           ),
           FORMAT_CHECK: "false",
           CORE_STRIPE: String(stripe),
+          EXTENSION_STRIPE: String(stripe),
           FROZEN_TARGET: frozenTarget ? "true" : "false",
           HISTORICAL_TARGET: capability ? "false" : "true",
           HOSTED_RUNNER_STRIPES: profile === "blacksmith" ? "false" : "true",
@@ -8691,7 +8701,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           LINT_GO_ENV: goEnvPath,
           OPENCLAW_LOCAL_CHECK: "0",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          RELEASE_GATE: String(evaluateWorkflowExpression(stepEnv.RELEASE_GATE, expressionContext)),
+          RELEASE_GATE: String(
+            stepEnv.RELEASE_GATE
+              ? evaluateWorkflowExpression(stepEnv.RELEASE_GATE, expressionContext)
+              : false,
+          ),
           RUN_CONTROL_UI_I18N: "false",
           RUNNER_PROFILE: profile,
           RUN_UI_TESTS: "false",
@@ -8789,9 +8803,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           releaseGate: true,
           runAttempt,
         }),
-      ).toEqual([
-        "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --only=scripts --threads=1",
-      ]);
+      ).toEqual(["node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1"]);
     }
     expect(
       runLintOwner({
@@ -8833,19 +8845,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
       "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=1/6 --threads=1",
     ]);
-    for (const scenario of [
-      {
+    expect(
+      runLintOwner({
         capability: false,
-        lane: "check" as const,
-        profile: "github" as const,
+        lane: "check",
+        profile: "github",
         expectedGoEnv: { GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" },
-      },
-      { capability: true, lane: "check" as const, profile: "hybrid" as const },
-    ]) {
-      expect(runLintOwner(scenario)).toEqual([
-        "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --only=scripts --threads=1",
+      }),
+    ).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --only=scripts --threads=1",
+    ]);
+    expect(runLintOwner({ capability: true, lane: "check", profile: "hybrid" })).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1",
+    ]);
+    expect(hostedExtensionLint.strategy.matrix.stripe).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(hostedExtensionLint.strategy["fail-fast"]).toBe(false);
+    expect(hostedExtensionLint.strategy["max-parallel"]).toBe(6);
+    for (const stripe of hostedExtensionLint.strategy.matrix.stripe) {
+      expect(
+        runLintOwner({ capability: true, lane: "extensions", profile: "hybrid", stripe }),
+      ).toEqual([
+        `node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=${stripe}/6 --threads=1`,
       ]);
     }
+    runLintOwner({
+      capability: true,
+      failStripe: 2,
+      lane: "extensions",
+      profile: "hybrid",
+      stripe: 2,
+    });
     expect(runLintOwner({ capability: true, lane: "check", profile: "blacksmith" })).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --threads=8",
     ]);
@@ -9280,14 +9309,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.each([
-    { frozen: false, prebuilt: true, childExit: 0 },
+    { frozen: false, prebuilt: true, childExit: 0, releaseTier: false },
+    { frozen: false, prebuilt: true, childExit: 0, releaseTier: true },
     { frozen: true, prebuilt: true, childExit: 0 },
     { frozen: true, prebuilt: false, childExit: 0 },
     { frozen: false, prebuilt: false, childExit: 0 },
     { frozen: true, prebuilt: true, childExit: 42 },
   ])(
-    "selects the complete real-Gateway command without retrying failures (frozen: $frozen, prebuilt: $prebuilt, exit: $childExit)",
-    ({ frozen, prebuilt, childExit }) => {
+    "selects the real-Gateway tier without retrying failures: %j",
+    ({ frozen, prebuilt, childExit, releaseTier }) => {
       const step = expectDefined(
         readCiWorkflow().jobs["checks-ui-e2e-real-gateway"].steps.find(
           (candidate: WorkflowStep) =>
@@ -9307,17 +9337,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       if (prebuilt) {
         writeFileSync(path.join(directory, prebuiltConfig), "export default {};\n");
       }
-      writeFileSync(
-        path.join(bin, "node"),
-        '#!/bin/sh\nprintf "%s\\n" "$@" > "$REAL_GATEWAY_COMMAND_ARGS"\nprintf "called\\n" >> "$REAL_GATEWAY_COMMAND_CALLS"\nexit "$REAL_GATEWAY_COMMAND_EXIT"\n',
-        { mode: 0o755 },
+      mkdirSync(path.join(directory, "scripts/lib"), { recursive: true });
+      copyFileSync(
+        "scripts/lib/ci-node-test-groups-codec.mts",
+        path.join(directory, "scripts/lib/ci-node-test-groups-codec.mts"),
       );
+      const includePath = path.join(directory, "include-path");
+      writeExecutable(path.join(bin, "node"), [
+        "#!/bin/sh",
+        'if [ "$1" = "--import" ]; then shift; shift; exec "$REAL_GATEWAY_NODE" "$@"; fi',
+        'printf "%s\\n" "$@" > "$REAL_GATEWAY_COMMAND_ARGS"',
+        'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$REAL_GATEWAY_INCLUDE_PATH"',
+        'printf "called\\n" >> "$REAL_GATEWAY_COMMAND_CALLS"',
+        'exit "$REAL_GATEWAY_COMMAND_EXIT"',
+      ]);
       const result = runWorkflowShellScript(expectDefined(step.run, "real-Gateway script"), {
         linuxWorkflow: true,
         cwd: directory,
         env: {
           ...process.env,
           FROZEN_TARGET: String(frozen),
+          RUNNER_TEMP: directory,
+          REAL_GATEWAY_NODE: testNodeExecPath,
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
+          REAL_GATEWAY_INCLUDE_PATH: includePath,
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
+            releaseTier === undefined
+              ? ""
+              : encodeNodeTestGroups(
+                  createUiTestShardGroups({ includeReleaseOnlyTests: releaseTier }).e2e,
+                ),
           REAL_GATEWAY_COMMAND_ARGS: argsPath,
           REAL_GATEWAY_COMMAND_CALLS: callsPath,
           REAL_GATEWAY_COMMAND_EXIT: String(childExit),
@@ -9357,10 +9406,37 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           ];
       expect(args.slice(6, 6 + reporterArgs.length)).toEqual(reporterArgs);
       expect(args.slice(6 + reporterArgs.length).toSorted()).toEqual(
-        uiE2eRealGatewayTestFiles
-          .filter((file) => file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts")
-          .toSorted(),
+        prebuilt
+          ? ["--exclude", "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts"]
+          : uiE2eRealGatewayTestFiles
+              .filter((file) => file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts")
+              .toSorted(),
       );
+      const selectedConfig = createPrebuiltUiE2eVitestConfig(
+        { OPENCLAW_VITEST_INCLUDE_FILE: readFileSync(includePath, "utf8") },
+        [testNodeExecPath, ...args],
+      );
+      const selectedFiles = selectedConfig.test?.include ?? [];
+      if (releaseTier === false) {
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 6);
+        expect(selectedFiles).not.toContain(
+          "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+        );
+        expect(selectedFiles).not.toContain(
+          "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+        );
+        expect(selectedFiles).toContain(
+          "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+        );
+      } else {
+        expect(selectedFiles.toSorted()).toEqual(
+          uiE2eRealGatewayTestFiles
+            .filter(
+              (file) => prebuilt || file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+            )
+            .toSorted(),
+        );
+      }
       expect(
         resolveRunVitestSpawnEnv(
           { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },

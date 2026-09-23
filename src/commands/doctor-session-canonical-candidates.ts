@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -12,7 +14,12 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../gateway/session-store-key.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
 import {
   projectExistingAgentDatabaseTargets,
@@ -63,18 +70,31 @@ function collectCanonicalSessionCandidateFacts(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
   stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionCandidateFact[] {
+  const defaultAgentRemoved = !listAgentIds(params.cfg).includes(DEFAULT_AGENT_ID);
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const resolveStoredKey = (agentId: string, sessionKey: string) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    const rest = normalizeLowercaseStringOrEmpty(parsed?.rest);
+    const repairLegacyMainHead =
+      defaultAgentRemoved &&
+      parsed?.agentId === DEFAULT_AGENT_ID &&
+      normalizeAgentId(agentId) !== DEFAULT_AGENT_ID &&
+      (rest === "main" || rest === mainKey);
+    return resolveStoredSessionKeyForAgentStore({
+      cfg: params.cfg,
+      agentId,
+      sessionKey,
+      // Only Doctor moves a removed default-agent head into its recorded store owner.
+      preserveQualifiedAddress: !repairLegacyMainHead,
+    });
+  };
   const inventory = stores.flatMap((target) =>
     listCanonicalSessionRepairFacts({
       agentId: target.agentId,
       storePath: target.storePath,
     }).map((inventoryFact) => {
       const { canonicalOwnerSessionKey, sessionKey } = inventoryFact;
-      const storedKey = resolveStoredSessionKeyForAgentStore({
-        cfg: params.cfg,
-        agentId: target.agentId,
-        sessionKey,
-        preserveQualifiedAddress: true,
-      });
+      const storedKey = resolveStoredKey(target.agentId, sessionKey);
       return {
         canonicalKey: storedKey
           ? resolveDeliveryProvenCanonicalSessionKey(storedKey, inventoryFact)
@@ -98,12 +118,7 @@ function collectCanonicalSessionCandidateFacts(
         if (!value) {
           return undefined;
         }
-        const storedKey = resolveStoredSessionKeyForAgentStore({
-          cfg: params.cfg,
-          agentId: canonicalAgentId,
-          sessionKey: value,
-          preserveQualifiedAddress: true,
-        });
+        const storedKey = resolveStoredKey(canonicalAgentId, value);
         const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
         for (const key of [value, storedKey]) {
           const sameStore = canonicalKeysByStoredKey.get(

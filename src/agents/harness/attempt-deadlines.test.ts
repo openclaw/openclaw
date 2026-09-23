@@ -1,9 +1,10 @@
-import { createAgentHarnessAttemptDeadlineController } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
+import { createAgentHarnessAttemptDeadlineController } from "./attempt-deadlines.js";
 
-describe("Codex attempt deadlines", () => {
+const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
+
+describe("agent harness attempt deadlines", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -21,7 +22,7 @@ describe("Codex attempt deadlines", () => {
     const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs,
       timeoutMs,
-      settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
       onTimeout,
       onDeadlineChanged,
@@ -46,7 +47,7 @@ describe("Codex attempt deadlines", () => {
     });
     expect(controller.ownsExecutionWait()).toBe(false);
     controller.beginSettlement(Date.now());
-    vi.advanceTimersByTime(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
     expect(onTimeout).toHaveBeenCalledOnce();
   });
 
@@ -65,19 +66,19 @@ describe("Codex attempt deadlines", () => {
     expect(controller.ownsExecutionWait()).toBe(false);
     expect(onDeadlineChanged).toHaveBeenLastCalledWith({
       kind: "bounded",
-      deadlineAtMs: 59_000 + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      deadlineAtMs: 59_000 + SETTLEMENT_TIMEOUT_MS,
     });
 
     vi.advanceTimersByTime(60_000);
     controller.beginSettlement(Date.now());
-    vi.advanceTimersByTime(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - 60_000 - 1);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS - 60_000 - 1);
     expect(onTimeout).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
 
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
       kind: "settlement",
-      elapsedMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-      timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      elapsedMs: SETTLEMENT_TIMEOUT_MS,
+      timeoutMs: SETTLEMENT_TIMEOUT_MS,
     });
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
   });
@@ -91,8 +92,8 @@ describe("Codex attempt deadlines", () => {
     vi.advanceTimersByTime(1);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
       kind: "settlement",
-      elapsedMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-      timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      elapsedMs: SETTLEMENT_TIMEOUT_MS,
+      timeoutMs: SETTLEMENT_TIMEOUT_MS,
     });
   });
 
@@ -105,11 +106,11 @@ describe("Codex attempt deadlines", () => {
 
     controller.beginSettlement(Date.now());
     expect(controller.ownsExecutionWait()).toBe(false);
-    vi.advanceTimersByTime(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
       kind: "settlement",
-      elapsedMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-      timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      elapsedMs: SETTLEMENT_TIMEOUT_MS,
+      timeoutMs: SETTLEMENT_TIMEOUT_MS,
     });
   });
 
@@ -122,7 +123,7 @@ describe("Codex attempt deadlines", () => {
       controller.dispose();
     }
     controller.beginSettlement(Date.now());
-    vi.advanceTimersByTime(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS + 60_000);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS + 60_000);
     expect(controller.ownsExecutionWait()).toBe(false);
     expect(onTimeout).not.toHaveBeenCalled();
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
@@ -136,13 +137,13 @@ describe("Codex attempt deadlines", () => {
     const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs: 0,
       timeoutMs: 60_000,
-      settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
       onTimeout,
       onDeadlineChanged,
     });
     controller.beginSettlement(0);
-    vi.advanceTimersByTime(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
     expect(controller.ownsExecutionWait()).toBe(false);
     expect(onTimeout).not.toHaveBeenCalled();
     expect(onDeadlineChanged).not.toHaveBeenCalled();

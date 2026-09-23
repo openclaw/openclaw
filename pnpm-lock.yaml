@@ -654,6 +654,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/agentsapi:
+    dependencies:
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/alibaba:
     devDependencies:
       '@openclaw/plugin-sdk':

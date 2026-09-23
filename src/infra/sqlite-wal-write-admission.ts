@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertTransactionUsable } from "./sqlite-transaction.js";
 
@@ -26,23 +27,41 @@ export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void {
 
 export function createSqliteWalMaintenanceScheduler(
   database: DatabaseSync,
-  operation: () => void,
+  operation: (maxPages: number) => number,
   onError: (error: unknown) => void,
-): () => void {
-  let pending = false;
+  pageBudget: number,
+): () => Promise<void> {
+  let pending: Promise<void> | undefined;
   return () => {
-    const admission = admissions.get(database);
-    if (!admission) {
-      operation();
-    } else if (!pending) {
-      pending = true;
-      void admission
-        .admit(operation)
+    if (!pending) {
+      const run = async () => {
+        let remaining = pageBudget;
+        while (remaining > 0) {
+          let reclaimed = 0;
+          const admitted = () => {
+            reclaimed = operation(remaining);
+          };
+          const admission = admissions.get(database);
+          if (admission) {
+            await admission.admit(admitted);
+          } else {
+            admitted();
+          }
+          remaining -= reclaimed;
+          if (reclaimed <= 0 || remaining <= 0) {
+            return;
+          }
+          // Return both the native lock and FIFO custody before another page unit.
+          await setImmediate();
+        }
+      };
+      pending = run()
         .catch(onError)
         .finally(() => {
-          pending = false;
+          pending = undefined;
         });
     }
+    return pending;
   };
 }
 

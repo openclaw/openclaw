@@ -38,12 +38,17 @@ import {
   prepareVitestRuntime,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -1044,14 +1049,16 @@ fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
 fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
 await new Promise(()=>{});export default {};`,
       );
+      const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
       writeFileSync(
         entry,
-        `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+        `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
       );
-      const runner = spawn(process.execPath, ["--import", "tsx", entry], {
-        cwd: process.cwd(),
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
+        { cwd: process.cwd(), stdio: "ignore" },
+      );
       let childPid = 0;
       let descendantPid = 0;
 

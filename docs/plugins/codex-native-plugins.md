@@ -551,7 +551,10 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
   that plugin.
-- `false`: OpenClaw returns a deterministic decline.
+- `false`: OpenClaw excludes destructive hosted app tools before execution.
+  Native approval requests for permitted tools still go through OpenClaw consent,
+  including during a `/btw` side question. Plugin-provided MCP server approval
+  requests receive a deterministic decline.
 - `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
   response, such as a boolean approve field.
 - `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then

@@ -91,7 +91,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                   : html`
                       ${
                         props.state.validationError
-                          ? html`<div class="callout danger" role="alert">
+                          ? html`<div
+                              id="model-setup-wizard-validation-error"
+                              class="callout danger"
+                              role="alert"
+                            >
                               ${props.state.validationError}
                             </div>`
                           : nothing
@@ -102,6 +106,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         value: props.value,
                         busy: props.state.busy,
                         inputId: WIZARD_TEXT_INPUT_ID,
+                        validationErrorId: props.state.validationError
+                          ? "model-setup-wizard-validation-error"
+                          : undefined,
                         confirmAffirmativeLabel:
                           props.mode === "prepare" && props.state.step.type === "confirm"
                             ? t("modelSetup.wizard.continue")

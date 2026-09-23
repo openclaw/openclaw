@@ -43,7 +43,6 @@ import {
   findSessionRowById,
   readResidentSessionRow,
 } from "./session-row-projection-materialize.js";
-import type { PreparedSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowRefresh } from "./session-row-projection-refresh.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
@@ -94,7 +93,8 @@ export async function createSessionRowProjection(params: {
   );
   let epoch = 0;
   let databaseRevision = 0;
-  // Releasing the token also releases weakly held list selections from the previous revision.
+  // Stored-entry and row-identity changes release weakly held list selections.
+  // Live presentation facts do not change the resident roster or its entry tuples.
   let revisionToken: object | undefined;
   let materializedCount = 0;
   let scope: ReturnType<typeof prepareSessionRowScopes>;
@@ -134,12 +134,9 @@ export async function createSessionRowProjection(params: {
     current: (row) => !topologyDirty && archive.isCurrentMaterialization(row) && isCurrent(row),
     publish(row, fields) {
       const current = rows.get(records.identity(row));
-      if (
-        records.ready(current) &&
-        records.publishTranscriptFields(current, fields, cfg, metadata.current)
-      ) {
-        // Optional presentation leaves independently pending stored facts dirty.
-        revisionToken = undefined;
+      if (records.ready(current)) {
+        // Preview publication changes this live row in place, without replacing selection inputs.
+        records.publishTranscriptFields(current, fields, cfg, metadata.current);
       }
     },
   });
@@ -291,9 +288,9 @@ export async function createSessionRowProjection(params: {
   }
   function mark(change: SessionRowChange) {
     epoch++;
-    revisionToken = undefined;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {
+      revisionToken = undefined;
       databaseRevision++;
     }
     if ("all" in change) {
@@ -308,6 +305,10 @@ export async function createSessionRowProjection(params: {
           change,
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
+      } else if (!presentationOnly) {
+        for (const row of rows.values()) {
+          row.pendingDatabaseFacts = undefined;
+        }
       }
     } else if (change.scope === "automation") {
       records.markAutomation(
@@ -320,6 +321,7 @@ export async function createSessionRowProjection(params: {
       const exact = matching(query);
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
+        previous.pendingDatabaseFacts = undefined;
         if (previous.entry) {
           placementFacts.invalidate(previous.entry.sessionId);
         }
@@ -388,7 +390,7 @@ export async function createSessionRowProjection(params: {
     row: records.Row,
     configuredAgentIds = new Set(listAgentIds(cfg)),
     readRow = readResidentSessionRow,
-    databaseFacts?: PreparedSessionRowDatabaseFacts,
+    databaseFacts?: records.PreparedSessionRowDatabaseFacts,
   ) {
     if (!row.entry) {
       return false;
@@ -477,12 +479,13 @@ export async function createSessionRowProjection(params: {
     read: (id) => rows.get(id),
     refresh(id) {
       const row = rows.get(id);
-      if (!row || isCold(row)) {
+      if (!row || (isCold(row) && !row.pendingDatabaseFacts)) {
         return;
       }
       epoch++;
       databaseRevision++;
       revisionToken = undefined;
+      row.pendingDatabaseFacts = undefined;
       dirty.add(id);
       backfill.enqueue(id);
       void ensureMaterialized().catch(() => {});
@@ -542,7 +545,7 @@ export async function createSessionRowProjection(params: {
         if (row && dirty.has(records.identity(row))) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
           const id = records.identity(row);
-          withAgentRosterFactsBatch(cfg, () => refresh([id]));
+          refresh([id]);
           row = lookup(query);
         }
         row = archive.describe(row);

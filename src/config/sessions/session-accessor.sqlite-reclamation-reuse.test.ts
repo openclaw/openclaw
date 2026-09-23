@@ -207,7 +207,7 @@ test.each([
   );
   let peerLease: string | undefined;
   try {
-    await generation.runExisting(source, async () => "opened");
+    await generation.run(source, async () => "opened");
     if (proof.startsWith("two-leases")) {
       const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
       peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });

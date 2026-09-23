@@ -77,11 +77,21 @@ suite.define(() => {
         `.sidebar-recent-session[data-session-key="${imessage.key}"]`,
       );
       await expect
-        .poll(() => groupRow.locator(".sidebar-recent-session__channel").textContent())
-        .toBe("WhatsApp");
-      expect(await imessageRow.locator(".sidebar-recent-session__channel").textContent()).toBe(
-        "iMessage",
-      );
+        .poll(() =>
+          groupRow
+            .locator(".sidebar-recent-session__channel")
+            .getByText("WhatsApp", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
+      expect(await groupRow.getByRole("link", { name: /Linked to WhatsApp/ }).count()).toBe(1);
+      expect(
+        await imessageRow
+          .locator(".sidebar-recent-session__channel")
+          .getByText("iMessage", { exact: true })
+          .isVisible(),
+      ).toBe(true);
+      expect(await imessageRow.getByRole("link", { name: /Linked to iMessage/ }).count()).toBe(1);
 
       await groupRow.hover();
       const card = page.locator(".session-progress-hovercard");

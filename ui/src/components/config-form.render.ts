@@ -1,8 +1,8 @@
 // Control UI view renders config form.render screen content.
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import "./web-awesome-popover.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
@@ -20,6 +20,7 @@ import {
   renderSettingsHelpTrigger,
   renderSettingsPage,
 } from "./settings-ui.ts";
+import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
 type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -268,6 +269,7 @@ export function renderConfigForm(props: ConfigFormProps) {
                               popoverId: `settings-section-help-popover-${params.id}`,
                             })}
                             <wa-popover
+                              ${ref(syncPopoverLabel)}
                               id=${`settings-section-help-popover-${params.id}`}
                               class="settings-section__help-popover"
                               for=${docsTriggerId}

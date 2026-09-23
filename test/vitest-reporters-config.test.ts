@@ -129,9 +129,11 @@ describe("Vitest reporter contracts", () => {
         const names =
           config === "test/vitest/vitest.ui-browser.config.ts"
             ? ["minimal", ...expected.slice(1)]
-            : ["test/vitest/vitest.ui-e2e.config.ts", "test/vitest/vitest.e2e.config.ts"].includes(
-                  config,
-                )
+            : [
+                  "test/vitest/vitest.tooling.config.ts",
+                  "test/vitest/vitest.ui-e2e.config.ts",
+                  "test/vitest/vitest.e2e.config.ts",
+                ].includes(config)
               ? [...expected, "default"]
               : expected;
         expect(reporters, config).toEqual(wrappedReporters(names.map((name) => [name, {}])));

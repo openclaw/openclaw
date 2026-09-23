@@ -404,10 +404,9 @@ describe("gateway agent handler", () => {
   )(
     "handles $sourceTool followups (resume=$resume, inputFailure=$inputFailure) to a yielded orchestrator for its $parent parent",
     async ({ requesterSessionKey, sourceTool, continuesRun, resume, inputFailure }) => {
-      await withTestDir({ prefix: "openclaw-gateway-yield-completion-" }, async (root) => {
-        useTestStateDir(root);
+      await withPluginSubagentTestState("openclaw-gateway-yield-completion-", async (state) => {
+        const root = state.stateDir;
         resetAgentTaskRegistryForTests();
-        resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:subagent:orchestrator";
         const workerSessionKey = "agent:main:subagent:worker";
         const previousRunId = "orchestrator-before-yield";
@@ -634,12 +633,10 @@ describe("gateway agent handler", () => {
   });
 
   it("registers normally when a follow-up to a paused session names its own requester", async () => {
-    await withTestDir(
-      { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
-      async (root) => {
-        useTestStateDir(root);
+    await withPluginSubagentTestState(
+      "openclaw-gateway-plugin-subagent-own-requester-",
+      async ({ stateDir: root }) => {
         resetAgentTaskRegistryForTests();
-        resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:work:subagent:plugin-yield-own-requester";
         const originalRequester = "agent:main:telegram:direct:777";
         const previousRunId = "plugin-subagent-paused";
