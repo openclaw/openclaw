@@ -1,3 +1,5 @@
+import type { AgentSessionEvent, AgentSessionItem } from "openai/resources/beta/agents/agents";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import {
   normalizeUsage,
   type AgentHarnessAttemptParamsV2,
@@ -5,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { AgentsApiEvent, AgentsApiItem, AgentsApiTurn } from "./agentsapi-client.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 type AgentsApiReply = {
@@ -42,7 +43,7 @@ export function createAgentsApiMessageProjection(
   };
   return {
     reply,
-    recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: AgentsApiTurn[]): void {
+    recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: Turn[]): void {
       const usage = emptyUsage();
       let observed = false;
       let reasoningTokens: number | undefined;
@@ -73,7 +74,7 @@ export function createAgentsApiMessageProjection(
       }
       reply.assistantUsage = usage;
     },
-    observe(event: AgentsApiEvent): void {
+    observe(event: AgentSessionEvent): void {
       if (
         (event.type === "agent.session.turn.item.added" ||
           event.type === "agent.session.turn.item.done") &&
@@ -130,8 +131,8 @@ export function createAgentsApiMessageProjection(
     complete,
     commit(
       params: AgentHarnessAttemptParamsV2,
-      turn: AgentsApiTurn,
-      items: AgentsApiItem[],
+      turn: Turn,
+      items: AgentSessionItem[],
       assertCurrent: () => void,
     ): Promise<void> {
       return commitAgentsApiReply(
@@ -150,8 +151,8 @@ export function createAgentsApiMessageProjection(
 async function commitAgentsApiReply(
   params: AgentHarnessAttemptParamsV2,
   remoteSessionId: string,
-  turn: AgentsApiTurn,
-  items: AgentsApiItem[],
+  turn: Turn,
+  items: AgentSessionItem[],
   assertCurrent: () => void,
   reply: AgentsApiReply,
   emitFinalReply: (turnId: string, text: string) => void | Promise<void>,

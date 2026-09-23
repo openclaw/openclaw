@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { AgentSessionEvent } from "openai/resources/beta/agents/agents";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { AgentsApiClient, type AgentsApiEvent, type AgentsApiTurn } from "./agentsapi-client.js";
+import { AgentsApiClient } from "./agentsapi-client.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
 export function createAgentsApiSession(options: {
@@ -9,7 +11,7 @@ export function createAgentsApiSession(options: {
   sessionId: string;
   signal: AbortSignal;
   assertCurrent: () => void;
-  onEvent: (event: AgentsApiEvent) => void;
+  onEvent: (event: AgentSessionEvent) => void;
   onSettled?: () => void;
   onUsageError?: (error: unknown) => void;
 }) {
@@ -18,7 +20,7 @@ export function createAgentsApiSession(options: {
   let submitted = false;
   let stopped = false;
   let settled = false;
-  let rootTurn: AgentsApiTurn | undefined;
+  let rootTurn: Turn | undefined;
   let turnFailure: string | undefined;
   let cancelled = false;
   let submission: Promise<void> = Promise.resolve();
@@ -29,7 +31,7 @@ export function createAgentsApiSession(options: {
   const coordinatorTurnIds = new Set<string>();
   let latestInputTurnId: string | undefined;
   let baselineTurnId: string | undefined;
-  let usageTurns: Promise<AgentsApiTurn[]> | undefined;
+  let usageTurns: Promise<Turn[]> | undefined;
 
   const isAvailable = () => submitted && !stopped && !settled && !rootTurn && !signal.aborted;
   const submit = (text: string) => {
@@ -110,7 +112,7 @@ export function createAgentsApiSession(options: {
       }
       return (usageTurns ??= (async () => {
         const usageSignal = AbortSignal.timeout(5_000);
-        let turns: AgentsApiTurn[] = [];
+        let turns: Turn[] = [];
         // Idle can precede the REST records and their usage. Give accounting
         // a bounded settlement window, without treating unknown usage as zero.
         try {

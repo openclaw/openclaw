@@ -6,12 +6,6 @@ import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type {
-  AgentSessionEvent as AgentsApiEvent,
-  AgentSessionItem as AgentsApiItem,
-  Turn as AgentsApiTurn,
-};
-
 /** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
