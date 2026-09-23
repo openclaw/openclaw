@@ -6,7 +6,6 @@ import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { needsCandidateManagedServiceStop } from "../cli/update-cli/update-command-legacy-service-stop.js";
 import type {
   UpdateDoctorInput,
   MigratedUpdateFinalizationInput,
@@ -17,10 +16,7 @@ import {
   formatUpdateFinalizationError,
   UpdateCommandFailure,
 } from "../cli/update-cli/update-command-result.js";
-import {
-  createWindowsTaskAutoStartGuard,
-  maybeStopManagedServiceBeforeMutableUpdate,
-} from "../cli/update-cli/update-command-service-maintenance.js";
+import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -29,6 +25,10 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import {
+  adoptCandidateManagedServiceStop,
+  stopSupervisedPredecessorGateway,
+} from "./update-candidate-predecessor-stop.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -252,6 +252,12 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      await stopSupervisedPredecessorGateway(input, {
+        root: input.root,
+        assertCurrent,
+        warn: (message) => process.stderr.write(`${message}\n`),
+      });
+      assertCurrent();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -320,7 +326,23 @@ async function finalizeInput(
     executorFence?.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const stopped = await stopUninspectedManagedService(input, run);
+  const stopped = await adoptCandidateManagedServiceStop({
+    transferred: input.params.preManagedServiceStop,
+    shouldRestart: input.params.shouldRestart,
+    mode: input.params.result.mode,
+    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
+    runId: run.runId,
+    ledger: { env: run.env },
+    root: input.params.result.root ?? input.params.root,
+    timeoutMs: input.params.updateStepTimeoutMs,
+    assertCurrent: () => {
+      executorFence.assertCurrent();
+      if (run.requesterAuthority?.isCurrent() === false) {
+        throw new UpdateRequesterRevokedError();
+      }
+    },
+    onStep: (step) => input.params.result.steps.push(step),
+  });
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }
@@ -371,57 +393,6 @@ async function finalizeInput(
   }
   executorFence.assertCurrent();
   return { run, result, exitCode, automaticTriage };
-}
-
-/**
- * A legacy parent whose service inspection was unavailable left the predecessor
- * Gateway running. Inspect it with this candidate's adapter and stop it before
- * Doctor; the existing restart path then starts the updated service.
- */
-async function stopUninspectedManagedService(
-  input: MigratedUpdateFinalizationInput,
-  run: NonNullable<UpdateCommandOptions["run"]>,
-): Promise<MigratedUpdateFinalizationInput["params"]["preManagedServiceStop"]> {
-  const transferred = input.params.preManagedServiceStop;
-  if (
-    !needsCandidateManagedServiceStop({
-      preManagedServiceStop: transferred,
-      shouldRestart: input.params.shouldRestart,
-      mode: input.params.result.mode,
-      windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
-    })
-  ) {
-    return transferred;
-  }
-  const root = input.params.result.root ?? input.params.root;
-  const startedAt = Date.now();
-  let stopped = transferred;
-  const state = await maybeStopManagedServiceBeforeMutableUpdate({
-    updateInstallKind: input.params.result.mode === "git" ? "git" : "package",
-    root,
-    shouldRestart: true,
-    jsonMode: Boolean(input.params.opts.json),
-    timeoutMs: input.params.updateStepTimeoutMs,
-    phase: "prepare",
-    updateRun: run,
-    onStopped: (current) => {
-      stopped = current;
-    },
-    assertCurrent: () => run.executorFence?.assertCurrent(),
-  });
-  if (state.inspected || state.stopped) {
-    stopped = state;
-  }
-  if (stopped?.stopped) {
-    input.params.result.steps.push({
-      name: "managed-service",
-      command: "stop managed gateway service before Doctor (candidate inspection)",
-      cwd: root,
-      durationMs: Date.now() - startedAt,
-      exitCode: 0,
-    });
-  }
-  return stopped;
 }
 
 void (async () => {
