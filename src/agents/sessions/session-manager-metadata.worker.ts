@@ -48,6 +48,7 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
+import type { CustomMessage } from "./messages.js";
 import type {
   ModelChangeEntry,
   SessionHeader,
@@ -62,6 +63,13 @@ import type {
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
 
 export type SessionMetadataOperations = {
+  "session.transcript.appendMessage": {
+    input: { scope: MetadataTarget; message: CustomMessage; cwd: string };
+    output: {
+      snapshot: ReturnType<typeof appendTranscriptMessageSnapshotSync<CustomMessage>>;
+      projectionNeedsReconcile: boolean;
+    };
+  };
   "session.metadata.initialize": {
     input: {
       scope: MetadataTarget;
@@ -209,6 +217,31 @@ export function bindSqliteWorkerBackend(
       return { ok: true, value: readTranscriptMutationAtSync(scope) };
     }
     assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
+    if (command.type === "session.transcript.appendMessage") {
+      return runOpenClawAgentWriteTransaction<
+        SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
+      >((database) => {
+        if (database.db !== context.database) {
+          throw new Error("Session message lost its borrowed canonical connection");
+        }
+        context.admit("transaction");
+        let projectionNeedsReconcile = false;
+        const snapshot = appendTranscriptMessageSnapshotSync(
+          scope,
+          { message: command.input.message, cwd: command.input.cwd },
+          undefined,
+          {
+            messageAlreadyRedacted: true,
+            scheduleProjectionReconcile: false,
+            onProjectionReconcileNeeded: () => {
+              projectionNeedsReconcile = true;
+            },
+          },
+        );
+        context.admit("commit");
+        return { ok: true, value: { snapshot, projectionNeedsReconcile } };
+      }, options);
+    }
     if (command.type === "session.metadata.append" && command.input.event.type === "message") {
       const { event, message } = command.input;
       if (!message) {

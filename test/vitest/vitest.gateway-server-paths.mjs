@@ -229,7 +229,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-owner-revocation.test.ts",
   "src/gateway/worker-environments/provider-project-preparation.test.ts",
   "src/gateway/worker-environments/provider-project-retention.test.ts",
-  "src/gateway/worker-environments/provider-provisioning-node-admission.test.ts",
   "src/gateway/worker-environments/provider-provisioning-node.owner.test.ts",
   "src/gateway/worker-environments/provider-provisioning-node.test.ts",
   "src/gateway/worker-environments/provider-provisioning.cancellation.test.ts",

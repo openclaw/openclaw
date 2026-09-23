@@ -13,6 +13,7 @@ import {
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
@@ -21,7 +22,6 @@ import {
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
-  type StoredChatQueueReplacement,
   type StoredChatOutboxScope as Scope,
 } from "./composer-persistence.ts";
 import {

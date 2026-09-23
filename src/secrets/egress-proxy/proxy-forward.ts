@@ -169,6 +169,7 @@ function sendSecretEgressRequest(
   );
   const bodyTransform = forward.ownResource(
     createSecretEgressBodyTransform({
+      isActive: forward.isActive,
       onSubstitution: () => {
         substituted = true;
       },
@@ -413,6 +414,11 @@ export function forwardSecretEgressRequest(
                 substituted = true;
               },
             });
+      // Revocation can arrive from the Gateway while this Worker scans a body.
+      if (!forward.isActive()) {
+        release();
+        return;
+      }
       upstream = sendSecretEgressRequest(
         { ...forward, ...prepared, substituted, isActive: () => !refused && forward.isActive() },
         output,

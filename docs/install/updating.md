@@ -17,6 +17,48 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Upgrading very old versions
+
+For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+Doctor migrations, and then upgrade to `latest`. The bridge release still
+imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
+`plugin-state/state.sqlite` databases and includes the old runtime aliases.
+Current releases leave those retired database files untouched.
+
+Back up the state first and use a [supported Node version](/install/node):
+Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
+installation prefix, profile, and state/configuration paths throughout.
+
+For an npm installation with an OpenClaw-managed Gateway service, run this
+first stage from a terminal:
+
+```bash
+openclaw gateway stop &&
+  npm install -g openclaw@2026.9.5 --allow-scripts=openclaw &&
+  openclaw --version &&
+  openclaw doctor --fix
+```
+
+Confirm that the version output is `2026.9.5` and that Doctor imported the old
+task, flow, and plugin stores you need. Resolve any failed or conflicting
+imports before continuing. Then install the current release and restart:
+
+```bash
+npm install -g openclaw@latest --allow-scripts=openclaw &&
+  openclaw doctor --fix &&
+  openclaw gateway start &&
+  openclaw gateway status --deep
+```
+
+These npm commands are for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For a pnpm-owned installation, replace each install
+command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`, then
+`pnpm add -g --allow-build=openclaw openclaw@latest`. For Bun, use
+`bun add -g --trust openclaw@2026.9.5`, then `bun add -g --trust openclaw@latest`.
+Keep any normal `--profile` selector on every `openclaw` command. For a custom
+service or foreground Gateway, stop and start it through its actual owner
+instead of the managed-service commands above.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while

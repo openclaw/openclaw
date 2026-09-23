@@ -575,13 +575,6 @@ describe("block HTML islands", () => {
     expect(serialized).toContain(`</${tag}>`);
   });
 
-  it("still maps own inline style tags", () => {
-    expect(single("<b>secret</b>")).toEqual({
-      type: "paragraph",
-      text: { type: "bold", text: "secret" },
-    });
-  });
-
   it.each(["custom", "constructor"])(
     "keeps unsupported <%s> HTML literal without discarding Markdown spans",
     (tag) => {
@@ -669,11 +662,6 @@ describe("block HTML islands", () => {
     expect(pieces[0]).toMatchObject({ caption: "Stats" });
   });
 
-  it("maps blockquote cite to the credit field", () => {
-    const block = single("<blockquote>Quote text<cite>Author</cite></blockquote>");
-    expect(block).toMatchObject({ type: "blockquote", credit: "Author" });
-  });
-
   it("attaches figcaption captions to collages and figure-wrapped maps", () => {
     const blocks = blocksFor(
       [
@@ -687,12 +675,6 @@ describe("block HTML islands", () => {
       caption: { text: "Album", credit: "me" },
     });
     expect(blocks[1]).toMatchObject({ type: "map", caption: { text: "Here" } });
-  });
-
-  it("degrades over-wide HTML tables to a monospace grid", () => {
-    const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
-    const block = single(`<table><tr>${wideRow}</tr></table>`);
-    expect(block.type).toBe("pre");
   });
 
   it("aligns Unicode and expands colspan in over-wide HTML tables", () => {

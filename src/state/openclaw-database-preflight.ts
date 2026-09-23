@@ -7,7 +7,6 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/ses
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -38,6 +37,7 @@ import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-regis
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
+import { cleanupOpenClawStatePreflight } from "./openclaw-database-preflight-cleanup.js";
 import {
   describeDeferredStateSchemaPublication,
   formatIndeterminateDatabaseReadiness,
@@ -336,6 +336,7 @@ export async function preflightOpenClawDatabaseSchemas(
   let stateDatabase: DatabaseSync | undefined;
   let closeStateSchemaReadAdmission: (() => void) | undefined;
   let stateSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+  const stateInspectionErrors: unknown[] = [];
   const inspectCandidatePresence = (
     databasePath: string,
   ): { status: "present" | "absent" } | { status: "indeterminate"; reason: string } => {
@@ -433,6 +434,7 @@ export async function preflightOpenClawDatabaseSchemas(
         try {
           assertOpenClawStateDatabaseForMaintenance(stateDatabase, { pathname: statePath });
         } catch (error) {
+          stateInspectionErrors.push(error);
           result.indeterminate.push({
             kind: "state",
             path: statePath,
@@ -448,6 +450,7 @@ export async function preflightOpenClawDatabaseSchemas(
         registeredDatabases = readAgentDatabasePreflightTargets(stateDatabase, statePath);
         retainedDeletions = readRetainedAgentDeletionsFromDatabase(stateDatabase);
       } catch (error) {
+        stateInspectionErrors.push(error);
         result.indeterminate.push({
           kind: "state",
           path: statePath,
@@ -460,6 +463,7 @@ export async function preflightOpenClawDatabaseSchemas(
     // Accepted stop must not turn cancellation or failed cleanup into a
     // warn-and-continue result that launches the remaining startup runtime.
     const failure = normalizeOpenClawStateSchemaReadError(error, statePath);
+    stateInspectionErrors.push(failure);
     if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
       throw failure;
     }
@@ -470,18 +474,12 @@ export async function preflightOpenClawDatabaseSchemas(
     });
     return result;
   } finally {
-    try {
-      if (stateDatabase) {
-        try {
-          closeStateSchemaReadAdmission?.();
-        } finally {
-          clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
-          stateDatabase.close();
-        }
-      }
-    } finally {
-      await stateSnapshot?.cleanupAsync();
-    }
+    await cleanupOpenClawStatePreflight({
+      database: stateDatabase,
+      closeAdmission: closeStateSchemaReadAdmission,
+      snapshot: stateSnapshot,
+      inspectionErrors: stateInspectionErrors,
+    });
   }
   if (options.scope === "state") {
     return result;

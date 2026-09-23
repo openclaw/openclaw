@@ -127,7 +127,6 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-state-sqlite-compact.ts",
     // Disposable import planning only; canonical session tables still use Kysely.
     "src/config/sessions/session-accessor.sqlite-import-stage.ts",
-    "src/infra/state-migrations.task-sidecar-rows.ts",
     "src/infra/state-migrations.storage.ts",
     "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",

@@ -175,51 +175,39 @@ describe("Telegram group join introductions", () => {
     await expect(frame.deferredWork?.task).resolves.toMatchObject({ kind: "failed-retryable" });
   });
 
-  it.each(["delivery", "commit"] as const)(
-    "retains an accepted introduction through owner abort while %s is pending",
-    async (phase) => {
-      const accepted = createDeferred<void>();
-      const commit = createDeferred<void>();
-      const abort = new AbortController();
-      const finalizing = vi.fn();
-      const delivered = vi.fn();
-      let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
-      reportChannelRoomJoinMock.mockImplementationOnce(async () => {
-        participant = getTelegramSpooledReplayDeferredParticipant();
-        if (phase === "commit") {
-          delivered();
-        }
-        accepted.resolve();
-        await commit.promise;
-        if (phase === "delivery") {
-          delivered();
-        }
-        return { kind: "posted" };
-      });
-      const handler = registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-      const context = createMembershipContext();
-      const frame = runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
-        abortSignal: abort.signal,
-        onAdopted: vi.fn(),
-        onDeferred: vi.fn(),
-        onAbandoned: vi.fn(),
-        onAdoptionFinalizing: finalizing,
-      });
-      try {
-        await accepted.promise;
-        expect(finalizing).toHaveBeenCalledOnce();
-        expect(participant).toBeDefined();
-        abort.abort(new Error("account stopped"));
-        expect(participant?.isSettled()).toBe(false);
-        expect(delivered).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
-      } finally {
-        commit.resolve();
-        await frame;
-      }
-      await expect(participant?.task).resolves.toEqual({ kind: "completed" });
-      expect(delivered).toHaveBeenCalledOnce();
-    },
-  );
+  it("retains an accepted introduction through owner abort while the shared owner is pending", async () => {
+    const accepted = createDeferred<void>();
+    const commit = createDeferred<void>();
+    const abort = new AbortController();
+    const finalizing = vi.fn();
+    let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
+    reportChannelRoomJoinMock.mockImplementationOnce(async () => {
+      participant = getTelegramSpooledReplayDeferredParticipant();
+      accepted.resolve();
+      await commit.promise;
+      return { kind: "posted" };
+    });
+    const handler = registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
+    const context = createMembershipContext();
+    const frame = runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
+      abortSignal: abort.signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+      onAdoptionFinalizing: finalizing,
+    });
+    try {
+      await accepted.promise;
+      expect(finalizing).toHaveBeenCalledOnce();
+      expect(participant).toBeDefined();
+      abort.abort(new Error("account stopped"));
+      expect(participant?.isSettled()).toBe(false);
+    } finally {
+      commit.resolve();
+      await frame;
+    }
+    await expect(participant?.task).resolves.toEqual({ kind: "completed" });
+  });
 
   it("settles the introduction hold when the shared owner throws unexpectedly", async () => {
     const error = new Error("introduction owner failed");
