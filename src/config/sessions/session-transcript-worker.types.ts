@@ -482,6 +482,7 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
   readExactEntries: (
     input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: (
     input: Omit<SessionRowFactsWorkerInput, "kind" | "database">,

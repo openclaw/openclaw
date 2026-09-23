@@ -29,7 +29,13 @@ pnpm frv status --run <parent-run-id> --json
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
+pnpm frv prioritize --run <parent-run-id> [--out <record>] [--dry-run]
+pnpm frv prioritize --restore <record> [--dry-run]
 ```
+
+`prioritize` gives an active parent hosted-runner priority (see
+[Release priority](/reference/RELEASING#release-priority)); `continue --failed`
+and `verify` release it once the parent seals.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by
 `status --json` (for example, `normalCi`, `pluginPrerelease`, or

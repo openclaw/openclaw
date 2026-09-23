@@ -181,7 +181,7 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
 function expression(source: string, context: Record<string, unknown>): unknown {
   return runInNewContext(
     source.replace(
-      /\b(?:github|needs|steps)(?:\.[A-Za-z_][\w-]*)+/gu,
+      /\b(?:github|needs|steps|vars)(?:\.[A-Za-z_][\w-]*)+/gu,
       (reference) => `lookup(${JSON.stringify(reference)})`,
     ),
     {

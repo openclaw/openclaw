@@ -114,6 +114,9 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
+    if (payload.state === "error" && payload.errorKind === "state_contention") {
+      return errorText;
+    }
     const summary =
       errorText.startsWith("⚠️") || errorText.startsWith("Error:")
         ? errorText
@@ -280,9 +283,11 @@ function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
           state,
           resolveGatewayErrorText(payload, null),
           payload.runId,
-          payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-            ? "auth_refresh"
-            : undefined,
+          payload.state === "error" && payload.errorKind === "state_contention"
+            ? "state_contention"
+            : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+              ? "auth_refresh"
+              : undefined,
         );
       }
       if (payload.state === "error") {
@@ -525,9 +530,11 @@ function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
       payload.runId,
-      payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-        ? "auth_refresh"
-        : undefined,
+      payload.state === "error" && payload.errorKind === "state_contention"
+        ? "state_contention"
+        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : undefined,
     );
   }
   if (payload.state !== "delta") {

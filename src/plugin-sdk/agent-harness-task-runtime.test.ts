@@ -10,7 +10,16 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
+import { withPluginRegistrationContext } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
@@ -130,6 +139,90 @@ describe("agent-harness-task-runtime", () => {
         if (owner !== "core") {
           resetDetachedTaskLifecycleRuntimeForTests();
         }
+      }
+    },
+  );
+
+  it.each(["core", "custom", "legacy"] as const)(
+    "admits a scoped local registry with the %s task runtime before root activation",
+    (owner) => {
+      const registry = createEmptyPluginRegistry();
+      try {
+        withPluginRuntimeRegistryScope(registry, () => {
+          if (owner !== "core") {
+            setDetachedTaskLifecycleRuntime({
+              ...getDetachedTaskLifecycleRuntime(),
+              ...(owner === "custom" ? { transitionTaskAssignment: vi.fn(() => []) } : {}),
+            });
+          }
+          const runtime = createAgentHarnessTaskRuntime({
+            runtime: "subagent",
+            taskKind: "example-harness",
+            scope: createScope(),
+          });
+          if (owner === "legacy") {
+            expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+              "Upgrade the custom task runtime adapter",
+            );
+          } else {
+            expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+          }
+          markPluginRegistryRetired(registry);
+          expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+            AgentHarnessTaskAssignmentOwnerRetiredError,
+          );
+        });
+      } finally {
+        markPluginRegistryRetired(registry);
+      }
+    },
+  );
+
+  it("does not admit an unpublished registration-only registry as a local runtime", () => {
+    const registry = createEmptyPluginRegistry();
+    try {
+      withPluginRegistrationContext(registry, "fixture", () => {
+        const runtime = createAgentHarnessTaskRuntime({
+          runtime: "subagent",
+          taskKind: "example-harness",
+          scope: createScope(),
+        });
+        expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+          AgentHarnessTaskAssignmentOwnerRetiredError,
+        );
+      });
+    } finally {
+      markPluginRegistryRetired(registry);
+    }
+  });
+
+  it.each(["activation", "context replacement"] as const)(
+    "does not transfer a scoped core task owner through %s",
+    (change) => {
+      const registry = createEmptyPluginRegistry();
+      const replacement = createEmptyPluginRegistry();
+      try {
+        withPluginRuntimeRegistryScope(registry, () => {
+          const runtime = createAgentHarnessTaskRuntime({
+            runtime: "subagent",
+            taskKind: "example-harness",
+            scope: createScope(),
+          });
+          expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+          const assertRetired = () =>
+            expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+              AgentHarnessTaskAssignmentOwnerRetiredError,
+            );
+          if (change === "activation") {
+            markPluginRegistryActive(registry);
+            assertRetired();
+          } else {
+            withPluginRuntimeRegistryScope(replacement, assertRetired);
+          }
+        });
+      } finally {
+        markPluginRegistryRetired(registry);
+        markPluginRegistryRetired(replacement);
       }
     },
   );
