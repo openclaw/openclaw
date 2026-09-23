@@ -236,8 +236,11 @@ describe("update run view", () => {
       scrollHeight: { configurable: true, value: 1000 },
       clientHeight: { value: 160 },
     });
+    const opened = new Promise<void>((resolve) => {
+      disclosure.addEventListener("toggle", () => resolve(), { once: true });
+    });
     disclosure.open = true;
-    disclosure.dispatchEvent(new Event("toggle"));
+    await opened;
     await vi.runOnlyPendingTimersAsync();
     expect(list.scrollTop).toBe(1000);
 
