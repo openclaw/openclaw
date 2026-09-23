@@ -251,6 +251,9 @@ function openAgentDatabaseBackend(
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
+  let lifecycle:
+    | typeof import("../config/sessions/session-accessor.sqlite-lifecycle-commit.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -280,6 +283,15 @@ function openAgentDatabaseBackend(
             archivePruning = module;
           },
         );
+      }
+      if (command.type === "session.entries.lifecycle") {
+        return Promise.all([
+          import("../config/sessions/session-accessor.sqlite-lifecycle-commit.js"),
+          import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+        ]).then(([commit, publication]) => {
+          lifecycle = commit;
+          replacements = publication;
+        });
       }
       if (command.type === "session.entries.replace") {
         return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
@@ -346,6 +358,28 @@ function openAgentDatabaseBackend(
           },
           options,
           { operationLabel: "session.entry-replacements" },
+        );
+      }
+      if (command.type === "session.entries.lifecycle" && lifecycle && replacements) {
+        const opened = openWriter();
+        const commit = lifecycle.commitSessionEntryLifecycleInDatabase;
+        const assertRowsBounded = lifecycle.assertSessionEntryLifecycleWorkerRowsBounded;
+        const preparePublication = replacements.prepareSessionEntryReplacementPublication;
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Session lifecycle mutation lost its canonical database owner");
+            }
+            admit("transaction");
+            assertRowsBounded(current, command.input);
+            const result = commit(current, command.input);
+            const publication = preparePublication(result);
+            deferSqliteWorkerCommitReceipt(current.db, publication);
+            admit("commit", publication);
+            return result;
+          },
+          options,
+          { operationLabel: "session.lifecycle.mutate" },
         );
       }
       if (command.type === "session.providerReview.compare" && providerReview) {

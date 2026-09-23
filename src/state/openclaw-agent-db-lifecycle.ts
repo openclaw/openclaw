@@ -64,7 +64,7 @@ type AgentDatabaseLifecycle = {
   databases: Map<string, OpenClawAgentDatabase>;
   borrowers: WeakMap<DatabaseSync, Set<object>>;
   idleTimers: WeakMap<DatabaseSync, NodeJS.Timeout>;
-  incognito: WeakSet<OpenClawAgentDatabase>;
+  incognito: WeakSet<Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">>;
   generation: number;
   failures: Map<string, unknown>;
   leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
@@ -583,7 +583,9 @@ export function readOpenIncognitoAgentDatabaseGeneration(): number {
 }
 
 /** Returns whether this exact process-held database is incognito/in-memory. */
-export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
+export function isIncognitoOpenClawAgentDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+): boolean {
   return cache.incognito.has(database);
 }
 

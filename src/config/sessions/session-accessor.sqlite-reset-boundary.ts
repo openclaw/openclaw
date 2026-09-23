@@ -19,7 +19,7 @@ export function appendSessionResetBoundary(
   scope: ResolvedTranscriptScope,
   previousEntry: InternalSessionEntry,
   boundary: SessionResetBoundaryWrite,
-): void {
+): boolean {
   // Reset may be the first append; a headerless window cannot be read on the next turn.
   ensureTranscriptHeader(
     database,
@@ -35,13 +35,13 @@ export function appendSessionResetBoundary(
   if (appendTranscriptEventsInTransaction(database, scope, [event]) !== 1) {
     throw new Error("Failed to append reset boundary for " + scope.sessionKey);
   }
-  if (
-    boundary.context === "clear" &&
-    clearSessionProgressCardForReset(database.db, scope.sessionKey)
-  ) {
+  const progressCleared =
+    boundary.context === "clear" && clearSessionProgressCardForReset(database.db, scope.sessionKey);
+  if (progressCleared) {
     const { agentId, sessionKey } = scope;
     deferOpenClawAgentPostCommitPublication(database, () => {
       emitSessionLifecycleEvent({ agentId, sessionKey, reason: "progress-card-reset" });
     });
   }
+  return progressCleared;
 }

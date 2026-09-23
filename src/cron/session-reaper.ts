@@ -176,23 +176,27 @@ export async function sweepCronRunSessions(params: {
       // transcript files are conversation history owned by the archive
       // retention policy (null = keep until the disk budget evicts).
       const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
+      const continuationRemovals = removals.filter(
+        (removal) => removal.expectedEntry?.cronRunContinuation,
+      );
       const result = await applySessionEntryLifecycleMutation({
         agentId: params.agentId,
         storePath,
         removals,
-        beforeCommitInTransaction: () => {
-          // Descendants can acquire the continuation while deletion preparation awaits.
-          for (const removal of removals) {
-            if (
-              removal.expectedEntry?.cronRunContinuation &&
-              hasDescendantRunAwaitingSettle(removal.sessionKey)
-            ) {
-              throw new Error(
-                `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
-              );
+        ...(continuationRemovals.length > 0
+          ? {
+              beforeCommitInTransaction: () => {
+                // Descendants can acquire the continuation while deletion preparation awaits.
+                for (const removal of continuationRemovals) {
+                  if (hasDescendantRunAwaitingSettle(removal.sessionKey)) {
+                    throw new Error(
+                      `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
+                    );
+                  }
+                }
+              },
             }
-          }
-        },
+          : {}),
         ...(archiveRetentionMs == null
           ? {}
           : {

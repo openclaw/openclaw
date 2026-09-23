@@ -424,18 +424,41 @@ describe("sweepCronRunSessions", () => {
       }),
     ).toEqual({ swept: true, pruned: 0 });
     const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
+    const entriesBeforeRegistration = readSessionEntries(exactStorePath);
+    // Cold discovery is proven above; the overlap below requires a settled registry generation.
+    expect(
+      await sessionAccessor.applySessionEntryLifecycleMutation({
+        agentId: "main",
+        storePath: exactStorePath,
+        skipMaintenance: true,
+      }),
+    ).toMatchObject({ beforeCount: 2, afterCount: 2, removedEntries: 0 });
+    expect(readSessionEntries(exactStorePath)).toEqual(entriesBeforeRegistration);
     let foregroundRead:
-      | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
+      | Promise<
+          | {
+              ok: true;
+              result: Awaited<
+                ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
+              >;
+            }
+          | { ok: false; error: unknown }
+        >
       | undefined;
     if (!process.versions.bun) {
       const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
       vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
         const closing = closeResources(key);
-        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
-          agentId: "main",
-          storePath: exactStorePath,
-          sessionKeys: [mainKey],
-        });
+        foregroundRead = sessionEntryReader
+          .readSessionEntriesFromStoreInWorker({
+            agentId: "main",
+            storePath: exactStorePath,
+            sessionKeys: [mainKey],
+          })
+          .then(
+            (result) => ({ ok: true as const, result }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
         return closing;
       });
     }
@@ -450,15 +473,18 @@ describe("sweepCronRunSessions", () => {
     if (!process.versions.bun) {
       expect(foregroundRead).toBeDefined();
       expect(await foregroundRead).toMatchObject({
-        entries: [
-          {
-            sessionKey: mainKey,
-            entry: {
-              sessionId: "main-run",
-              skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+        ok: true,
+        result: {
+          entries: [
+            {
+              sessionKey: mainKey,
+              entry: {
+                sessionId: "main-run",
+                skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+              },
             },
-          },
-        ],
+          ],
+        },
       });
       expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
     }

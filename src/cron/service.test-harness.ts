@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
@@ -44,6 +48,8 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
       return;
     }
     await saveCronStore(storePath, { version: 1, jobs: [] });
+    await closeOpenClawAgentDatabasesAsync(dir);
+    closeOpenClawAgentDatabasesForTest(dir);
     await fs.rm(dir, { recursive: true, force: true });
     stores.delete(storePath);
   }
@@ -111,6 +117,7 @@ export function installCronTestHooks(options: {
 export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
   const logger = createNoopLogger();
   const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
+  // afterEach runs in reverse: restore real timers before store cleanup drains workers.
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,

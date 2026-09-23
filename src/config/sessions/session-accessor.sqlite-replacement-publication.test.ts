@@ -1,7 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../../session-cards/progress-card-store.js";
+import {
   onSessionIdentityMutation,
+  onSessionLifecycleEvent,
   type SessionIdentityMutation,
 } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -23,6 +28,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
@@ -43,6 +49,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
     ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
       const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
+      let entryMutationExecuted = false;
       return {
         ...owned,
         runExisting: (source, operation, options) =>
@@ -52,7 +59,11 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
               operation({
                 execute: async (command, commandOptions) => {
                   const result = await scope.execute(command, commandOptions);
-                  if (command.type === "session.entries.replace") {
+                  if (
+                    command.type === "session.entries.replace" ||
+                    command.type === "session.entries.lifecycle"
+                  ) {
+                    entryMutationExecuted = true;
                     await delivery.afterResult?.();
                   }
                   return result;
@@ -62,7 +73,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
           ),
         release: async () => {
           await owned.release();
-          if (delivery.releaseFailure) {
+          if (entryMutationExecuted && delivery.releaseFailure) {
             throw delivery.releaseFailure;
           }
         },
@@ -70,6 +81,68 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
     },
   };
 });
+
+it.each([
+  { boundary: "lost result", card: true },
+  { boundary: "release failure", card: true },
+  { boundary: "lost result", card: false },
+])(
+  "publishes actual progress resets through $boundary (card: $card)",
+  async ({ boundary, card }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:progress-settlement";
+      const entry = { sessionId: "progress-settlement", lifecycleRevision: "before", updatedAt: 1 };
+      writeSessionEntry(database, sessionKey, entry);
+      if (card) {
+        writeSessionProgressCard(database.db, sessionKey, { markdown: "Previous task" });
+      }
+      const events: Array<{ agentId?: string; sessionKey: string; inTransaction: boolean }> = [];
+      const stop = onSessionLifecycleEvent((event) => {
+        if (event.reason === "progress-card-reset") {
+          events.push({
+            agentId: event.agentId,
+            sessionKey: event.sessionKey,
+            inTransaction: database.db.isTransaction,
+          });
+        }
+      });
+      const failure = new Error(`synthetic reset ${boundary}`);
+      if (boundary === "lost result") {
+        delivery.afterResult = () => {
+          throw failure;
+        };
+      } else {
+        delivery.releaseFailure = failure;
+      }
+      try {
+        await expect(
+          applySessionEntryLifecycleMutation({
+            agentId: "main",
+            storePath: database.path,
+            skipMaintenance: true,
+            upserts: [
+              {
+                sessionKey,
+                entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+                resetBoundary: { context: "clear", reason: "reset", cwd: state.workspaceDir },
+              },
+            ],
+          }),
+        ).rejects.toBe(failure);
+        expect(readSessionProgressCard(database.db, sessionKey)).toBeNull();
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry.lifecycleRevision).toBe(
+          "after",
+        );
+        expect(events).toEqual(card ? [{ agentId: "main", sessionKey, inTransaction: false }] : []);
+      } finally {
+        delivery.afterResult = undefined;
+        delivery.releaseFailure = undefined;
+        stop();
+      }
+    });
+  },
+);
 
 afterEach(() => {
   delivery.afterResult = undefined;

@@ -18,6 +18,7 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { refuseSessionEntryWorkerCommit } from "./session-accessor.worker-rollback.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 it.each(
@@ -99,8 +100,26 @@ it.each(
           });
         }
       };
-      if (rollback) {
-        // Fail the entry write after the boundary/card mutation, not its admission guard.
+      const fault =
+        rollback && writer === "batched"
+          ? refuseSessionEntryWorkerCommit({
+              sessionKey,
+              message: "injected reset entry failure",
+              inspect(publication) {
+                expect(publication.current).toEqual(
+                  new Map([
+                    [
+                      sessionKey,
+                      expect.objectContaining({ sessionId, lifecycleRevision: "after" }),
+                    ],
+                  ]),
+                );
+                expect(publication.progressResetKeys).toEqual([sessionKey]);
+              },
+            })
+          : undefined;
+      if (rollback && writer === "single") {
+        // The single-target owner retains this native connection-bound transaction.
         database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
           BEFORE UPDATE OF entry_json ON session_nodes
           BEGIN SELECT RAISE(ABORT, 'injected reset entry failure'); END;`);
@@ -108,6 +127,9 @@ it.each(
       try {
         if (rollback) {
           await expect(reset()).rejects.toThrow("injected reset entry failure");
+          if (fault) {
+            expect(fault.refused).toHaveBeenCalledTimes(1);
+          }
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
@@ -115,7 +137,8 @@ it.each(
         }
       } finally {
         unsubscribe();
-        if (rollback) {
+        fault?.restore();
+        if (rollback && writer === "single") {
           database.db.exec("DROP TRIGGER reject_reset_entry");
         }
       }

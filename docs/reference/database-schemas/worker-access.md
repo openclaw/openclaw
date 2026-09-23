@@ -228,6 +228,23 @@ releasing its captured alias ownership, allowing successful Node reads to keep
 the existing worker warm. Failed reads, uncertain native cleanup, and Bun retain
 worker retirement; idle retirement remains unchanged.
 
+Bulk lifecycle mutations also prepare selected rows and transcript-reference plans
+in that maintenance reader. Entry builders consume detached rows on the host;
+reference selection includes every generation owned by removed keys and preserves
+references introduced by same-call upserts. The existing agent database executor
+rereads expected entries and references inside the committing transaction. It
+shares replacement writes' authority, settlement, and publication owner, including
+typed conflicts used by reset recovery. Native harness rollback closures,
+connection-bound commit guards, Doctor transfer and fresh-owner assignment callbacks,
+and process-held databases retain the same synchronous kernels. Cron sweeps containing
+continuations retain their native commit guard, including persisted descendant checks.
+Oversized selected snapshots and builder results retain the native kernel too:
+the reader checks stored byte size inside its snapshot before decoding, and the
+host sizes expanded command values before dispatch without serializing another
+copy. Fallback stays bound to the prepared physical database and never retries an
+uncertain write. These oversized batches retain their existing main-thread cost.
+Stored bytes, schemas, retention, and update behavior are unchanged.
+
 Shared GitHub publication prepares canonical profile identity and alias-binding
 lifetimes through the existing profile catalogue and read worker. Alias writers
 publish their committed binding facts before observers; worker creation and

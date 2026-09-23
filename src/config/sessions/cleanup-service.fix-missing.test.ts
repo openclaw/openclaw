@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -20,6 +21,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { prunePublishedSessionArchivesByRetention } from "./session-accessor.sqlite-archive-store.js";
+import { refuseSessionEntryWorkerCommit } from "./session-accessor.worker-rollback.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,7 +44,8 @@ describe("sessions cleanup --fix-missing", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -281,33 +284,40 @@ describe("sessions cleanup --fix-missing", () => {
       throw new Error("expected SQLite session store");
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db.exec(`
-      CREATE TEMP TRIGGER fail_session_window_delete
-      BEFORE DELETE ON main.session_windows
-      WHEN OLD.session_id = '${sessionId}'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected lifecycle delete failure');
-      END;
-    `);
+    const fault = refuseSessionEntryWorkerCommit({
+      sessionKey,
+      message: "injected lifecycle delete failure",
+      inspect(publication) {
+        expect(publication.previous).toEqual(
+          new Map([[sessionKey, expect.objectContaining({ sessionId })]]),
+        );
+        expect(publication.current).toEqual(new Map());
+      },
+    });
 
-    await expect(
-      runSessionsCleanup({
-        cfg: {},
-        opts: { enforce: true, fixMissing: true },
-        targets: [{ agentId: "main", storePath }],
-      }),
-    ).rejects.toThrow("injected lifecycle delete failure");
+    try {
+      await expect(
+        runSessionsCleanup({
+          cfg: {},
+          opts: { enforce: true, fixMissing: true },
+          targets: [{ agentId: "main", storePath }],
+        }),
+      ).rejects.toThrow("injected lifecycle delete failure");
+      expect(fault.refused).toHaveBeenCalledTimes(1);
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-    expect(
-      database.db.prepare("SELECT 1 FROM transcript_events WHERE session_id = ?").get(sessionId),
-    ).toEqual({ 1: 1 });
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
-        .get(sessionId),
-    ).toBeUndefined();
-    expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
+      expect(
+        database.db.prepare("SELECT 1 FROM transcript_events WHERE session_id = ?").get(sessionId),
+      ).toEqual({ 1: 1 });
+      expect(
+        database.db
+          .prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
+          .get(sessionId),
+      ).toBeUndefined();
+      expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
+    } finally {
+      fault.restore();
+    }
   });
 
   it("omits a cleanup removal whose transcript classification became stale", async () => {

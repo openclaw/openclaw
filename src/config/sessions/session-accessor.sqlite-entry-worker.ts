@@ -4,6 +4,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import {
@@ -16,16 +17,17 @@ import {
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import type { SessionEntryLifecycleCommit } from "./session-accessor.sqlite-lifecycle-commit.js";
 import {
   prepareSessionEntryReplacementPublication,
   type SessionEntryReplacementCommit,
   type SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-state.js";
 
-type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
+type SessionEntryWorkerDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-async function withReplacementWorker<T>(
-  options: ReplacementDatabaseOptions,
+async function withSessionEntryWorker<T>(
+  options: SessionEntryWorkerDatabaseOptions,
   databaseIdentity: string | undefined,
   assertCurrent: () => void,
   run: (
@@ -79,39 +81,42 @@ async function withReplacementWorker<T>(
   }
 }
 
-export function prepareSessionEntryReplacementDatabase(
-  options: ReplacementDatabaseOptions,
+export function prepareSessionEntryMutationDatabase(
+  options: SessionEntryWorkerDatabaseOptions,
   assertCurrent: () => void,
 ): Promise<void> {
-  return withReplacementWorker(options, undefined, assertCurrent, (execution, source) =>
+  return withSessionEntryWorker(options, undefined, assertCurrent, (execution, source) =>
     execution.prepare(source),
   );
 }
 
-export async function commitSessionEntryReplacementsInWorker(
-  options: ReplacementDatabaseOptions,
+async function commitSessionEntryMutationInWorker<TResult extends SessionEntryReplacementCommitted>(
+  options: SessionEntryWorkerDatabaseOptions,
+  publicationAgentId: string,
   databaseIdentity: string,
-  input: SessionEntryReplacementCommit,
   assertCurrent: () => void,
+  run: (
+    execution: OpenClawAgentDatabaseExecution,
+    source: AgentDatabaseRequestExecutionSource,
+  ) => Promise<TResult | undefined>,
+  onCommitted?: () => void,
 ) {
   const publication = retainSessionEntryWorkerPublication({
-    agentId: options.agentId,
+    agentId: publicationAgentId,
     storePath: options.path,
     databaseIdentity,
   });
-  let committed: SessionEntryReplacementCommitted | undefined;
+  let committed: TResult | undefined;
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
   try {
-    return await withReplacementWorker(
+    return await withSessionEntryWorker(
       options,
       databaseIdentity,
       assertCurrent,
       async (execution, source) => {
-        const result = await execution.runExisting(source, (worker) =>
-          worker.execute({ type: "session.entries.replace", input }),
-        );
+        const result = await run(execution, source);
         if (!result) {
           throw new Error("Session database disappeared before replacement");
         }
@@ -150,10 +155,66 @@ export async function commitSessionEntryReplacementsInWorker(
       } else if (committed) {
         receipt = prepareSessionEntryReplacementPublication(committed);
       }
-      const published = publication.settle(receipt, settlement.kind === "unknown");
-      if (published) {
-        publishCommittedSessionIdentity(options.agentId, published.previous, published.current);
+      try {
+        if (receipt) {
+          onCommitted?.();
+        }
+      } finally {
+        const published = publication.settle(receipt, settlement.kind === "unknown");
+        if (published) {
+          for (const sessionKey of published.progressResetKeys ?? []) {
+            emitSessionLifecycleEvent({
+              agentId: publicationAgentId,
+              sessionKey,
+              reason: "progress-card-reset",
+            });
+          }
+          publishCommittedSessionIdentity(
+            publicationAgentId,
+            published.previous,
+            published.current,
+          );
+        }
       }
     }
   }
+}
+
+export function commitSessionEntryReplacementsInWorker(
+  options: SessionEntryWorkerDatabaseOptions,
+  publicationAgentId: string,
+  databaseIdentity: string,
+  input: SessionEntryReplacementCommit,
+  assertCurrent: () => void,
+) {
+  return commitSessionEntryMutationInWorker(
+    options,
+    publicationAgentId,
+    databaseIdentity,
+    assertCurrent,
+    (execution, source) =>
+      execution.runExisting(source, (worker) =>
+        worker.execute({ type: "session.entries.replace", input }),
+      ),
+  );
+}
+
+export function commitSessionEntryLifecycleInWorker(
+  options: SessionEntryWorkerDatabaseOptions,
+  databaseIdentity: string,
+  input: SessionEntryLifecycleCommit,
+  assertCurrent: () => void,
+  onCommitted?: () => void,
+) {
+  return commitSessionEntryMutationInWorker(
+    options,
+    input.scope.agentId,
+    databaseIdentity,
+    assertCurrent,
+    (execution, source) =>
+      execution.runExisting(source, (worker) =>
+        worker.execute({ type: "session.entries.lifecycle", input }),
+      ),
+    onCommitted,
+  );
 }

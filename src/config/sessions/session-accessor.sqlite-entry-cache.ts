@@ -75,6 +75,7 @@ export type SessionEntryReplacementPublication = {
   current: Map<string, SessionSharingEntry>;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
+  progressResetKeys?: string[];
 };
 
 type PreparedSessionSharingRead = {
@@ -712,6 +713,7 @@ export function retainSessionEntryWorkerPublication(params: {
           ? {
               previous: new Map([...receipt.previous].filter(([key]) => currentIdentity(key))),
               current: new Map([...receipt.current].filter(([key]) => currentIdentity(key))),
+              progressResetKeys: receipt.progressResetKeys?.filter(currentIdentity),
             }
           : undefined;
       } finally {

@@ -26,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
@@ -350,6 +351,55 @@ function observeWorkerAdmission(databasePath: string, hold: boolean) {
   };
 }
 
+function observeEntryWorkerAdmission(databasePath: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  releases.push(() => release.resolve());
+  let admissions = 0;
+  let settled = 0;
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
+    (...args) => {
+      const owner = capture(...args);
+      if (owner.path !== databasePath) {
+        return owner;
+      }
+      const retained: agentExecution.OpenClawAgentDatabaseExecution = {
+        ...owner,
+        async runExisting(source, operation, options) {
+          admissions++;
+          entered.resolve();
+          await release.promise;
+          try {
+            return await owner.runExisting(source, operation, options);
+          } finally {
+            settled++;
+          }
+        },
+      };
+      return retained;
+    },
+  );
+  return {
+    release,
+    async expectPending(operation: Promise<unknown>) {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "worker"),
+          operation.then(
+            () => "completed",
+            () => "failed",
+          ),
+        ]),
+      ).toBe("worker");
+    },
+    expectHealthy(count: number) {
+      expect(admissions).toBe(count);
+      expect(settled).toBe(count);
+    },
+  };
+}
+
 const cases = (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
   (["warm", "cold-preparation", "cold-commit"] as const).map((mode) => ({ owner, mode })),
 );
@@ -373,7 +423,7 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        if (owner === "replacement") {
+        if (owner !== "whole-store") {
           await closeWorkerForIntegrityAdmission(f);
         } else {
           closeForIntegrityAdmission(f);
@@ -424,7 +474,7 @@ it.each(cases)(
               ],
             }),
     );
-    expect(callbacks).toBe(owner === "replacement" || mode === "cold-preparation" ? 0 : 1);
+    expect(callbacks).toBe(owner !== "whole-store" || mode === "cold-preparation" ? 0 : 1);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -447,7 +497,7 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
+    probe.expectHealthy(owner !== "whole-store" || mode === "warm" ? 0 : 1);
   },
 );
 
@@ -606,8 +656,8 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   replaceSessionEntrySync(survivor, { sessionId: "survivor", updatedAt: Date.now() });
   const probe = observeAdmission(f.databasePath);
   const builder = vi.fn(
-    ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      closeForIntegrityAdmission(f);
+    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
+      await closeWorkerForIntegrityAdmission(f);
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -622,7 +672,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
     ),
   ).resolves.toMatchObject({ removedEntries: 1, archivedTranscriptDirectories: [] });
   expect(builder).toHaveBeenCalledOnce();
-  probe.expectHealthy(1);
+  probe.expectHealthy(0);
   expect(loadSessionEntryReadOnly(f.input)).toBeUndefined();
   expect(loadSessionEntryReadOnly(survivor)?.usageFamilySessionIds).toEqual(["original"]);
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual(transcript.events);
@@ -631,7 +681,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
 it("reacquires the split lifecycle commit after real archive materialization", async () => {
   const f = fixture();
   const transcript = seedTranscript(f);
-  const probe = observeAdmission(f.databasePath, true);
+  const probe = observeEntryWorkerAdmission(f.databasePath);
   let materializations = 0;
   let preparationWriterRan = false;
   hooks.afterMaterialize = async () => {
@@ -643,7 +693,7 @@ it("reacquires the split lifecycle commit after real archive materialization", a
       },
       "session.transcript.batch",
     );
-    closeForIntegrityAdmission(f);
+    await closeWorkerForIntegrityAdmission(f);
   };
   const work = own(
     applySessionEntryLifecycleMutation({
@@ -823,7 +873,7 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        if (owner === "replacement") {
+        if (owner !== "whole-store") {
           await closeWorkerForIntegrityAdmission(f);
         } else {
           closeForIntegrityAdmission(f);

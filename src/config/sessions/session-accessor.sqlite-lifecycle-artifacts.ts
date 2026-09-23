@@ -409,7 +409,7 @@ function planSessionLifecycleArtifactCleanup(
     const referencedSessionIds = collectProjectedReferencedSessionIds({
       database,
       excludedSessionKeys: entries.map((entry) => entry.sessionKey),
-      projectedStore,
+      projectedSessionIds: Object.values(projectedStore).flatMap(collectSessionStateIdsForEntry),
     });
     if (diagnostics) {
       diagnostics.referenceIds = referencedSessionIds.size;

@@ -17,6 +17,10 @@ import {
   runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
+import {
+  commitSessionEntryReplacementsInWorker,
+  prepareSessionEntryMutationDatabase,
+} from "./session-accessor.sqlite-entry-worker.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
@@ -25,10 +29,6 @@ import {
   type SqliteSessionEntryReplacement,
   type SessionEntryReplacementCommit,
 } from "./session-accessor.sqlite-replacement-state.js";
-import {
-  commitSessionEntryReplacementsInWorker,
-  prepareSessionEntryReplacementDatabase,
-} from "./session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -105,7 +105,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               });
             let result = await read();
             if (!result.replacement) {
-              await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
+              await prepareSessionEntryMutationDatabase(databaseOptions, () => {
                 owner.assertCurrent();
                 params.assertCommitAllowed?.();
               });
@@ -265,6 +265,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           }
           const committed = await commitSessionEntryReplacementsInWorker(
             databaseOptions,
+            resolved.agentId,
             snapshot.databaseIdentity,
             input,
             assertCurrent,

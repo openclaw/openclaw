@@ -695,13 +695,6 @@ describe("SQLite lifecycle cleanup races", () => {
     const sessionKey = "agent:main:subagent:maintenance-compare-failed";
     const entry = { sessionId: "maintenance-compare-failed", updatedAt: 1 };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
-    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: "main",
-    }).path;
-    if (!databasePath) {
-      throw new Error("expected maintenance race database path");
-    }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     let materializations = 0;
     archiveMaterializationHook.afterMaterialize = () => {
       materializations += 1;
@@ -709,9 +702,7 @@ describe("SQLite lifecycle cleanup races", () => {
         return;
       }
       const changedEntry = { ...entry, label: "changed", updatedAt: 2 };
-      database.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-        .run(JSON.stringify(changedEntry), changedEntry.updatedAt, sessionKey);
+      replaceSessionEntrySync({ sessionKey, storePath }, changedEntry);
     };
 
     const result = await applySessionEntryLifecycleMutation({

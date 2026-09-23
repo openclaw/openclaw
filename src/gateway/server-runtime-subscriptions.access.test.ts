@@ -10,6 +10,7 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { refuseSessionEntryWorkerCommit } from "../config/sessions/session-accessor.worker-rollback.test-support.js";
 import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -135,14 +136,27 @@ it.each([false, true])(
       await upsertSessionEntryCore(scope, entry);
       start();
       const revision = readGatewayAccessRevision();
-      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const kinds: string[] = [];
       const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
-      if (rollback) {
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-        BEFORE UPDATE OF entry_json ON session_nodes
-        BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
-      }
+      const fault = rollback
+        ? refuseSessionEntryWorkerCommit({
+            sessionKey: scope.sessionKey,
+            message: "injected reset failure",
+            inspect(publication) {
+              expect(publication.current).toEqual(
+                new Map([
+                  [
+                    scope.sessionKey,
+                    expect.objectContaining({
+                      sessionId: entry.sessionId,
+                      lifecycleRevision: "after",
+                    }),
+                  ],
+                ]),
+              );
+            },
+          })
+        : undefined;
       try {
         const reset = persistSessionResetLifecycle({
           ...scope,
@@ -153,6 +167,7 @@ it.each([false, true])(
         });
         if (rollback) {
           await expect(reset).rejects.toThrow("injected reset failure");
+          expect(fault?.refused).toHaveBeenCalledTimes(1);
           expect(kinds).toEqual([]);
           expect(readGatewayAccessRevision()).toBe(revision);
         } else {
@@ -163,9 +178,7 @@ it.each([false, true])(
         expect(loadSessionEntry(scope)?.lifecycleRevision).toBe(rollback ? "before" : "after");
       } finally {
         observe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
+        fault?.restore();
       }
     });
   },

@@ -241,23 +241,16 @@ describe("session deletion and native owner state", () => {
             );
         }
       }
-      if (sparse) {
-        database.db.exec("DROP TABLE session_members; DROP TABLE session_suggestions;");
-      }
       const artifactRows = () => ({
         participants: database.db
           .prepare("SELECT session_key, actor_id FROM session_participants ORDER BY session_key")
           .all(),
-        members: sparse
-          ? []
-          : database.db
-              .prepare("SELECT session_key, identity_id FROM session_members ORDER BY session_key")
-              .all(),
-        suggestions: sparse
-          ? []
-          : database.db
-              .prepare("SELECT session_key, text FROM session_suggestions ORDER BY session_key")
-              .all(),
+        members: database.db
+          .prepare("SELECT session_key, identity_id FROM session_members ORDER BY session_key")
+          .all(),
+        suggestions: database.db
+          .prepare("SELECT session_key, text FROM session_suggestions ORDER BY session_key")
+          .all(),
       });
       const before = artifactRows();
       const entryBefore = read();
@@ -339,15 +332,6 @@ describe("session deletion and native owner state", () => {
             .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
             .get(sessionKey),
         ).toEqual(deleteWindows ? undefined : { entry_valid: -1 });
-        if (sparse) {
-          expect(
-            database.db
-              .prepare(
-                "SELECT name FROM sqlite_schema WHERE name IN ('session_members', 'session_suggestions')",
-              )
-              .all(),
-          ).toEqual([]);
-        }
       }
     },
   );

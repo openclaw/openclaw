@@ -9,7 +9,6 @@ import {
 import {
   isIncognitoOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store.js";
 import type {
@@ -18,7 +17,6 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
 import {
@@ -32,10 +30,7 @@ import {
   readExactSessionEntryRow,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
-import type {
-  ProjectedLifecycleMutation,
-  SessionEntryRemovalPlan,
-} from "./session-accessor.sqlite-lifecycle-types.js";
+import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   sessionReferenceAtomPath,
   sessionReferenceAtoms,
@@ -46,11 +41,7 @@ import {
   addRetainedWindowSessionReferences,
   collectSessionStateIdsForEntry,
 } from "./session-accessor.sqlite-references.js";
-import {
-  cloneSessionEntry,
-  getSessionKysely,
-  withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
@@ -235,7 +226,7 @@ export function readReferencedSessionIdsAfterTargetMutation(
 export function planSessionStateDeleteIfUnreferenced(params: {
   archiveTranscript?: boolean;
   archiveDirectory: string;
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
   reason?: "deleted" | "reset";
   referencedSessionIds: ReadonlySet<string>;
   sessionId: string;
@@ -309,7 +300,7 @@ export function deleteMaterializedSessionStatePlans(
 export function planSessionStateAfterEntryRemoval(params: {
   archiveDirectory: string;
   archiveTranscript?: boolean;
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
   entry: SessionEntry;
   reason: "deleted" | "reset";
   referencedSessionIds?: ReadonlySet<string>;
@@ -332,7 +323,7 @@ export function planSessionStateAfterEntryRemoval(params: {
 
 /** Ids of every persisted generation owned by the given logical session keys. */
 export function readSessionGenerationIdsForKeys(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   keys: Iterable<string>,
   options: { exactStoredKeys?: boolean } = {},
 ): string[] {
@@ -347,184 +338,146 @@ export function readSessionGenerationIdsForKeys(
   ).rows.map((row) => row.session_id);
 }
 
-// Projects removals and upserts before archive materialization so same-call
-// upserts can keep a transcript live without producing a spurious archive.
-export async function projectSessionEntryLifecycleMutation(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+export type SessionEntryLifecycleSnapshot = {
+  store: Record<string, SessionEntry>;
+  rawEntryJson: Map<string, string | undefined>;
+  transcriptSnapshots: Map<string, ReturnType<typeof readSessionStateDeleteSnapshot>>;
+};
+
+/** Read only selected complete rows; caller expectations never travel to the reader. */
+export function readSessionEntryLifecycleSnapshot(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   params: {
     allowCanonicalRepair?: boolean;
-    archiveDirectory: string;
-    removals: readonly SessionEntryLifecycleRemoval[];
-    upserts: readonly SessionEntryLifecycleUpsert[];
+    removals: readonly {
+      sessionKey: string;
+      exactStoredKey?: boolean;
+      readRawEntryJson: boolean;
+      readTranscriptSnapshot: boolean;
+      transcriptSessionId?: string;
+    }[];
+    upsertKeys: readonly string[];
   },
-): Promise<ProjectedLifecycleMutation> {
-  return withSqliteSessionDatabase(databaseOptions, async (removalDatabase) => {
-    const store = readSessionEntryStore(removalDatabase, {
-      allowCanonicalRepair: params.allowCanonicalRepair === true,
-      sessionKeys: [
-        ...params.removals.map((removal) =>
-          removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
-        ),
-        ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
-      ],
-    });
-    const removedKeysToArchive = new Set<string>();
-    const changedSessionKeys = new Set<string>();
-    const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
-    for (const removal of params.removals) {
-      const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
-      let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
-      if (removal.expectedRawEntryJson !== undefined) {
-        const currentRawEntryJson = readExactSessionEntryJson(removalDatabase, sessionKey);
-        if (currentRawEntryJson !== removal.expectedRawEntryJson) {
-          throw new Error(
-            `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
-          );
-        }
-        entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
-      }
-      if (!shouldRemoveSessionEntry(entry, removal)) {
-        continue;
-      }
-      if (removal.expectedTranscriptSnapshot) {
-        const sessionId = entry.sessionId;
-        if (
-          !sessionId ||
-          !sqliteSessionStateDeleteSnapshotsEqual(
-            readSessionStateDeleteSnapshot(removalDatabase.db, sessionId),
-            removal.expectedTranscriptSnapshot,
-          )
-        ) {
-          // Classification happens before the lifecycle writer lane. A stale fact
-          // must become a no-op so newly live state is never archived and deleted.
-          continue;
-        }
-      }
-      projectedRemovals.push({
-        // Capture each archive decision before an async builder can change its input.
-        archiveTranscript: removal.archiveRemovedTranscript === true,
-        expectedEntry: cloneSessionEntry(entry),
-        removal,
-        sessionKey,
-      });
-      if (removal.archiveRemovedTranscript === true) {
-        removedKeysToArchive.add(sessionKey);
-      }
-      changedSessionKeys.add(sessionKey);
-      delete store[sessionKey];
-    }
-    const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
-    for (const upsert of params.upserts) {
-      const sessionKey = upsert.sessionKey.trim();
-      if (!sessionKey) {
-        continue;
-      }
-      if (
-        upsert.requiresRemovalSessionKey &&
-        !projectedRemovals.some(
-          (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
-        )
-      ) {
-        continue;
-      }
-      const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
-      if (upsert.resetBoundary && !expectedEntry) {
-        throw new Error(
-          `Cannot append reset boundary without an existing session row: ${sessionKey}`,
-        );
-      }
-      const entry =
-        upsert.buildEntry === undefined
-          ? upsert.entry
-          : await upsert.buildEntry({
-              currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
-              sessionKey,
-            });
-      if (!entry) {
-        continue;
-      }
-      const cloned = cloneSessionEntry(entry);
-      store[sessionKey] = cloned;
-      changedSessionKeys.add(sessionKey);
-      upsertedEntries.push({
-        expectedEntry,
-        sessionKey,
-        entry: cloned,
-        ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
-        ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
-      });
-    }
-    if (projectedRemovals.length === 0) {
-      return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
-    }
-    // Builders can close the original handle; admit the reference snapshot again.
-    return withSqliteSessionDatabase(databaseOptions, (database) => {
-      const referencedSessionIds = collectProjectedReferencedSessionIds({
-        database,
-        excludedSessionKeys: changedSessionKeys,
-        projectedStore: store,
-      });
-      const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
-        planSessionStateAfterEntryRemoval({
-          archiveDirectory: params.archiveDirectory,
-          archiveTranscript,
-          database,
-          entry,
-          reason: "deleted",
-          referencedSessionIds,
-        }),
-      );
-      const observedSnapshotsBySessionId = new Map(
-        projectedRemovals.flatMap(({ expectedEntry, removal }) =>
-          expectedEntry.sessionId && removal.expectedTranscriptSnapshot
-            ? [[expectedEntry.sessionId, removal.expectedTranscriptSnapshot] as const]
-            : [],
-        ),
-      );
-      for (const plan of deletePlans) {
-        const observedSnapshot = observedSnapshotsBySessionId.get(plan.sessionId);
-        if (observedSnapshot) {
-          // Keep the delete plan bound to classification, even if another process
-          // changes the transcript after the initial projection comparison.
-          plan.snapshot = observedSnapshot;
-        }
-      }
-      const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
-      for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeysToArchive)) {
-        if (plannedIds.has(sessionId)) {
-          continue;
-        }
-        const plan = planSessionStateDeleteIfUnreferenced({
-          archiveDirectory: params.archiveDirectory,
-          archiveTranscript: true,
-          database,
-          reason: "deleted",
-          referencedSessionIds,
-          sessionId,
-        });
-        if (plan) {
-          deletePlans.push(plan);
-          plannedIds.add(sessionId);
-        }
-      }
-      return { deletePlans, removals: projectedRemovals, upsertedEntries };
-    });
+): SessionEntryLifecycleSnapshot {
+  const store = readSessionEntryStore(database, {
+    allowCanonicalRepair: params.allowCanonicalRepair === true,
+    sessionKeys: [
+      ...params.removals.map((removal) =>
+        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+      ),
+      ...params.upsertKeys,
+    ],
   });
+  const rawEntryJson = new Map<string, string | undefined>();
+  const transcriptSnapshots = new Map<string, ReturnType<typeof readSessionStateDeleteSnapshot>>();
+  for (const removal of params.removals) {
+    const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
+    if (removal.readRawEntryJson) {
+      rawEntryJson.set(sessionKey, readExactSessionEntryJson(database, sessionKey));
+    }
+    const sessionId = removal.transcriptSessionId ?? store[sessionKey]?.sessionId;
+    if (removal.readTranscriptSnapshot && sessionId) {
+      transcriptSnapshots.set(sessionKey, readSessionStateDeleteSnapshot(database.db, sessionId));
+    }
+  }
+  return { store, rawEntryJson, transcriptSnapshots };
+}
+
+/** Reacquire compact reference facts after builders, including every removed historical generation. */
+export function readSessionEntryLifecyclePlans(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  params: {
+    archiveDirectory: string;
+    excludedSessionKeys: string[];
+    projectedSessionIds: string[];
+    removals: Array<{
+      sessionKey: string;
+      sessionIds: string[];
+      archiveTranscript: boolean;
+      observedSnapshot?: {
+        sessionId: string;
+        snapshot: ReturnType<typeof readSessionStateDeleteSnapshot>;
+      };
+    }>;
+  },
+): SessionStateDeletePlan[] {
+  const historicalSessionIds = readSessionGenerationIdsForKeys(
+    database,
+    params.removals
+      .filter((removal) => removal.archiveTranscript)
+      .map((removal) => removal.sessionKey),
+  );
+  const candidateSessionIds = uniqueStrings([
+    ...params.removals.flatMap((removal) => removal.sessionIds),
+    ...historicalSessionIds,
+  ]);
+  const referencedSessionIds = collectProjectedReferencedSessionIds({
+    database,
+    excludedSessionKeys: params.excludedSessionKeys,
+    projectedSessionIds: params.projectedSessionIds,
+    candidateSessionIds: candidateSessionIds.length > 0 ? candidateSessionIds : undefined,
+  });
+  const deletePlans = params.removals.flatMap(({ archiveTranscript, sessionIds }) =>
+    sessionIds.flatMap((sessionId) => {
+      const plan = planSessionStateDeleteIfUnreferenced({
+        archiveDirectory: params.archiveDirectory,
+        archiveTranscript,
+        database,
+        reason: "deleted",
+        referencedSessionIds,
+        sessionId,
+      });
+      return plan ? [plan] : [];
+    }),
+  );
+  const observedSnapshots = new Map(
+    params.removals.flatMap(({ observedSnapshot }) =>
+      observedSnapshot ? [[observedSnapshot.sessionId, observedSnapshot.snapshot] as const] : [],
+    ),
+  );
+  for (const plan of deletePlans) {
+    const observed = observedSnapshots.get(plan.sessionId);
+    if (observed) {
+      plan.snapshot = observed;
+    }
+  }
+  const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
+  for (const sessionId of historicalSessionIds) {
+    if (plannedIds.has(sessionId)) {
+      continue;
+    }
+    const plan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: params.archiveDirectory,
+      archiveTranscript: true,
+      database,
+      reason: "deleted",
+      referencedSessionIds,
+      sessionId,
+    });
+    if (plan) {
+      deletePlans.push(plan);
+      plannedIds.add(sessionId);
+    }
+  }
+  return deletePlans;
 }
 
 // Projected deletes must preserve raw session_nodes.current_session_id references for
 // remaining rows whose entry_json cannot be parsed into a SessionEntry.
 export function collectProjectedReferencedSessionIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   excludedSessionKeys: Iterable<string>;
-  projectedStore: Record<string, SessionEntry>;
+  projectedSessionIds: Iterable<string>;
+  candidateSessionIds?: readonly string[];
 }): Set<string> {
   const excludedSessionKeys = new Set(params.excludedSessionKeys);
-  const sessionIds = readReferencedSessionIds(params.database, excludedSessionKeys);
-  for (const entry of Object.values(params.projectedStore)) {
-    for (const sessionId of collectSessionStateIdsForEntry(entry)) {
-      sessionIds.add(sessionId);
-    }
+  const sessionIds = readReferencedSessionIds(
+    params.database,
+    excludedSessionKeys,
+    params.candidateSessionIds,
+  );
+  for (const sessionId of params.projectedSessionIds) {
+    sessionIds.add(sessionId);
   }
   return sessionIds;
 }

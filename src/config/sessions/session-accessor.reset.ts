@@ -13,10 +13,10 @@ import {
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
 import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-accessor.entry.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionEntryLifecycleUpsert,
-  type SessionResetBoundaryWrite,
+import { SessionEntryLifecycleUpsertConflictError } from "./session-accessor.lifecycle-error.js";
+import type {
+  SessionEntryLifecycleUpsert,
+  SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";

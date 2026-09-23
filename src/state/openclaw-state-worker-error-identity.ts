@@ -1,5 +1,6 @@
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
+import { SessionEntryLifecycleUpsertConflictError } from "../config/sessions/session-accessor.lifecycle-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
@@ -28,6 +29,7 @@ type StateMigrationKind = ConstructorParameters<
 type CoordinatorFamily = ConstructorParameters<typeof StateDatabaseCoordinatorContentionError>[0];
 
 export type ErrorIdentity =
+  | { type: "session-lifecycle-upsert-conflict"; sessionKey: string }
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
       type: "workspace-alias-repointed";
@@ -68,6 +70,9 @@ export type ErrorIdentity =
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof SessionEntryLifecycleUpsertConflictError) {
+    return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
+  }
   if (error instanceof WorkerSessionAlreadyAttachedError) {
     return {
       type: "worker-session-already-attached",
@@ -192,6 +197,10 @@ function isBlobOperation(value: unknown): value is PluginBlobStoreError["operati
 
 export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
   switch (node.type) {
+    case "session-lifecycle-upsert-conflict":
+      return typeof node.sessionKey === "string"
+        ? { type: node.type, sessionKey: node.sessionKey }
+        : undefined;
     case "worker-session-already-attached":
       return typeof node.sessionId === "string" && typeof node.environmentId === "string"
         ? { type: node.type, sessionId: node.sessionId, environmentId: node.environmentId }
@@ -282,6 +291,8 @@ function unreachableErrorNode(node: never): never {
 
 export function createError(node: ErrorIdentity & { message: string }): Error {
   switch (node.type) {
+    case "session-lifecycle-upsert-conflict":
+      return new SessionEntryLifecycleUpsertConflictError(node.sessionKey);
     case "worker-session-already-attached":
       return new WorkerSessionAlreadyAttachedError(node.sessionId, node.environmentId);
     case "workspace-alias-repointed":

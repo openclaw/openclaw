@@ -42,6 +42,7 @@ export type SessionEntryReplacementCommitted = {
   current: Map<string, SessionEntry>;
   maintenancePlans: SessionEntryMaintenancePlan[];
   membershipInvalidatedKeys: string[];
+  progressResetKeys?: string[];
 };
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
@@ -51,6 +52,7 @@ export function prepareSessionEntryReplacementPublication(
   return {
     kind: "session-entry-replacements",
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
+    ...(result.progressResetKeys?.length ? { progressResetKeys: result.progressResetKeys } : {}),
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
         key,

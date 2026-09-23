@@ -33,6 +33,10 @@ import type {
   SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
 import type {
+  SessionEntryLifecycleReadRequest,
+  SessionEntryLifecycleReadValue,
+} from "./session-accessor.sqlite-lifecycle-read.js";
+import type {
   readSessionTranscriptModelContext,
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
@@ -360,6 +364,12 @@ export type SessionArchivePruningWorkerInput = {
 export type SessionHistoryWorkerInput =
   | SessionArchivePruningWorkerInput
   | SessionColdMetadataWorkerInput
+  | {
+      kind: "session-lifecycle";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      request: SessionEntryLifecycleReadRequest;
+    }
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
@@ -396,6 +406,10 @@ export type SessionTranscriptWorkerValues = {
   "session-archive-pruning": {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
+  };
+  "session-lifecycle": {
+    kind: "session-lifecycle";
+    value: SessionEntryLifecycleReadValue | undefined;
   };
   "transcript-search": SessionTranscriptSearchWorkerResult;
   "cold-metadata": SessionColdMetadataWorkerResult;
@@ -447,6 +461,10 @@ export type SessionHistoryWorkerDatabase = {
   readColdMetadata: (
     input: Omit<SessionColdMetadataWorkerInput, "kind" | "database">,
   ) => Promise<SessionColdMetadataWorkerResult>;
+  readLifecycle: (input: {
+    request: SessionEntryLifecycleReadRequest;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<SessionEntryLifecycleReadValue | undefined>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;

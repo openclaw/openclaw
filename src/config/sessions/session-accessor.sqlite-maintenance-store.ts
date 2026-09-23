@@ -228,7 +228,7 @@ export function applySessionEntryMaintenanceInDatabase(
   const referencedSessionIds = collectProjectedReferencedSessionIds({
     database,
     excludedSessionKeys: removals.map((removal) => removal.sessionKey),
-    projectedStore: {},
+    projectedSessionIds: [],
   });
   const deletePlans: SessionStateDeletePlan[] = [];
   for (const sessionId of removedSessionIds) {

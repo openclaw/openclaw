@@ -274,23 +274,23 @@ test("automatic list and search projection reuse conventional state-directory pr
           metadata,
           async () => {
             const observations = [];
-            for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
-              const request = { configuredAgentsOnly: true, includeGlobal: false, search };
-              const counts = [];
-              for (const agentRuntimeOverride of ["openclaw", undefined]) {
-                for (const agentId of agentIds) {
-                  await writeSessionStore({
-                    agentId,
-                    entries: {
-                      [`agent:${agentId}:main`]: {
-                        sessionId: `session-${agentId}`,
-                        updatedAt: 10,
-                        agentRuntimeOverride,
-                      },
+            for (const agentRuntimeOverride of ["openclaw", undefined]) {
+              for (const agentId of agentIds) {
+                await writeSessionStore({
+                  agentId,
+                  entries: {
+                    [`agent:${agentId}:main`]: {
+                      sessionId: `session-${agentId}`,
+                      updatedAt: 10,
+                      agentRuntimeOverride,
                     },
-                    storePath: storeTemplate.replace("{agentId}", agentId),
-                  });
-                }
+                  },
+                  storePath: storeTemplate.replace("{agentId}", agentId),
+                });
+              }
+              const counts = [];
+              for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
+                const request = { configuredAgentsOnly: true, includeGlobal: false, search };
                 const warm = await directSessionReq("sessions.list", request);
                 expect(warm.ok).toBe(true);
                 const exists = vi.spyOn(fsSync, "existsSync");
@@ -311,6 +311,7 @@ test("automatic list and search projection reuse conventional state-directory pr
                   );
                   expect.soft(environments.mock.calls.length, search ?? "list").toBe(0);
                   counts.push({
+                    surface: search ? "search" : "list",
                     exists: exists.mock.calls.length,
                     stateDirectoryExists: exists.mock.calls.filter(
                       ([pathname]) => pathname === stateDir || pathname === legacyStateDir,
@@ -327,15 +328,9 @@ test("automatic list and search projection reuse conventional state-directory pr
                   syncBuiltinESMExports();
                 }
               }
-              observations.push({
-                surface: search ? "search" : "list",
-                pinned: counts[0],
-                auto: counts[1],
-              });
+              observations.push(counts);
             }
-            expect(observations).toEqual(
-              observations.map(({ surface, pinned }) => ({ surface, pinned, auto: pinned })),
-            );
+            expect(observations[1]).toEqual(observations[0]);
           },
           { config, trustConfigIdentity: true },
         );

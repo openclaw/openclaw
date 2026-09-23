@@ -42,7 +42,7 @@ import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-help
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
-import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import * as internalSessionEffects from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -511,7 +511,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         defaultSessionId: sessionId,
       });
       const visible = { agentId: "main", storePath, sessionKey: childSessionKey, sessionId };
-      const retired = await prepareInternalSessionEffectsSession({
+      const retired = await internalSessionEffects.prepareInternalSessionEffectsSession({
         agentId: "main",
         runId,
         source: visible,
@@ -524,7 +524,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
           timestamp: Date.now(),
         },
       });
-      const successor = await prepareInternalSessionEffectsSession({
+      const successor = await internalSessionEffects.prepareInternalSessionEffectsSession({
         agentId: "main",
         runId: nextRunId,
         source: retired,
@@ -540,6 +540,25 @@ describe("subagent orphan recovery — faithful restart path", () => {
         }),
       );
       await fixture.settle();
+      const cleanupSettled = createDeferred<{ ok: true } | { ok: false; error: unknown }>();
+      let cleanupObserved = false;
+      const remove = internalSessionEffects.removeInternalSessionEffectsSession;
+      const removal = vi
+        .spyOn(internalSessionEffects, "removeInternalSessionEffectsSession")
+        .mockImplementation((...args) => {
+          const operation = remove(...args);
+          if (
+            args[0]?.sessionKey === retired.sessionKey &&
+            args[0].storePath === retired.storePath
+          ) {
+            cleanupObserved = true;
+            void operation.then(
+              () => cleanupSettled.resolve({ ok: true }),
+              (error: unknown) => cleanupSettled.resolve({ ok: false, error }),
+            );
+          }
+          return operation;
+        });
       const parent = tryBeginGatewayRootWorkAdmission("test:replacement");
       if (!parent) {
         throw new Error("expected an admitted replacement parent");
@@ -578,12 +597,18 @@ describe("subagent orphan recovery — faithful restart path", () => {
         released.resolve();
         try {
           await blocker;
-          // Settle the original untracked deletion too when the ownership assertion fails.
-          await vi.waitFor(() => expect(loadExactSessionEntry(retired)).toBeUndefined());
-          await fixture.settle();
+          // Join the real deletion even when the held-admission assertion fails.
+          expect(cleanupObserved).toBe(true);
+          expect(await cleanupSettled.promise).toEqual({ ok: true });
+          expect(loadExactSessionEntry(retired)).toBeUndefined();
         } finally {
-          if (getActiveGatewayRootWorkCount() === 0) {
-            resetGatewayWorkAdmission();
+          removal.mockRestore();
+          try {
+            await fixture.settle();
+          } finally {
+            if (getActiveGatewayRootWorkCount() === 0) {
+              resetGatewayWorkAdmission();
+            }
           }
         }
       }

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -47,15 +47,16 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { refuseSessionEntryWorkerCommit } from "./session-accessor.worker-rollback.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions cleanup applied summary", () => {
-  afterEach(() => {
+  afterEach(async () => {
     cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -121,6 +122,7 @@ describe("sessions cleanup applied summary", () => {
         expect(result.previewResults[0]?.summary).toMatchObject(expected);
         expect(result.appliedSummaries[0]).toMatchObject(expected);
         expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         expect(loadSessionEntry(scope("conversation"))).toMatchObject({
           sessionId: "conversation",
@@ -388,27 +390,33 @@ describe("sessions cleanup applied summary", () => {
         });
         appendTranscriptEventSync(store, { type: "proof", content: store.agentId });
       }
-      const failingSqlitePath = resolveSqliteTargetFromSessionStorePath(failing.storePath, {
-        agentId: failing.agentId,
-      }).path;
       if (lifecycleCommitted) {
         cleanupRace.postCommitFailureStorePath = failing.storePath;
-      } else {
-        openOpenClawAgentDatabase({ agentId: failing.agentId, path: failingSqlitePath }).db.exec(`
-          CREATE TEMP TRIGGER fail_second_store_delete
-          BEFORE DELETE ON main.session_windows
-          WHEN OLD.session_id = '${failing.sessionId}'
-          BEGIN
-            SELECT RAISE(ABORT, 'injected second-store lifecycle failure');
-          END;
-        `);
       }
-
+      const fault = lifecycleCommitted
+        ? undefined
+        : refuseSessionEntryWorkerCommit({
+            sessionKey: failing.sessionKey,
+            message: "injected second-store lifecycle failure",
+            inspect(publication) {
+              expect(publication.previous).toEqual(
+                new Map([
+                  [failing.sessionKey, expect.objectContaining({ sessionId: failing.sessionId })],
+                ]),
+              );
+              expect(publication.current).toEqual(new Map());
+            },
+          });
       const outcome = await runSessionsCleanup({
         cfg: {},
         opts: { enforce: true, fixMissing: true },
         targets: stores,
+      }).finally(() => {
+        fault?.restore();
       });
+      if (fault) {
+        expect(fault.refused).toHaveBeenCalledTimes(1);
+      }
 
       expect(loadSessionEntry(main)).toBeUndefined();
       if (lifecycleCommitted) {

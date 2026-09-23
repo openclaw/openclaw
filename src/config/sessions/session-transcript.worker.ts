@@ -175,6 +175,20 @@ serveOwnedWorkerTasks(
         const { readSessionStoreTarget } = await import("./session-store-target-inventory.js");
         return { ok: true, value: readSessionStoreTarget(request.request) };
       }
+      if (request.kind === "session-lifecycle") {
+        const { readSessionEntryLifecycleReadOnly } =
+          await import("./session-accessor.sqlite-lifecycle-read.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, request.kind, () => ({
+            kind: "session-lifecycle" as const,
+            value: readSessionEntryLifecycleReadOnly(
+              { ...request.database, env: request.env },
+              request.request,
+            ),
+          }))),
+        };
+      }
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");

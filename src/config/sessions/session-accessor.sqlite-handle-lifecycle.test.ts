@@ -297,7 +297,7 @@ describe("SQLite session handle lifecycle", () => {
           {
             sessionKey: scope.sessionKey,
             buildEntry: async ({ currentEntry }) => {
-              expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+              expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
               return { ...currentEntry!, label: "built after close" };
             },
           },

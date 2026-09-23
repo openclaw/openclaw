@@ -1,5 +1,9 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
+  SessionEntryLifecycleCommit,
+  SessionEntryLifecycleCommitted,
+} from "../config/sessions/session-accessor.sqlite-lifecycle-commit.js";
+import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
 } from "../config/sessions/session-accessor.sqlite-replacement-state.js";
@@ -42,6 +46,10 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;
     output: SessionEntryReplacementCommitted;
+  };
+  "session.entries.lifecycle": {
+    input: SessionEntryLifecycleCommit;
+    output: SessionEntryLifecycleCommitted;
   };
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;

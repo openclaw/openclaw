@@ -55,6 +55,23 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readLifecycle: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-lifecycle", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-lifecycle"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of lifecycle facts",
+            );
+          }
+          return value.value;
+        },
+      ),
     searchTranscripts: async (params) =>
       await runRequest(
         () => ({ kind: "transcript-search", params }),

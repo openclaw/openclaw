@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  applySessionEntryLifecycleMutation,
+  deleteSessionEntryLifecycle,
   loadExactSessionEntry,
   replaceSessionEntry as replaceSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -12,7 +12,6 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
@@ -52,21 +51,18 @@ gatewayTestState.callGateway.mockImplementation(
     ) {
       return { deleted: false };
     }
-    const result = await applySessionEntryLifecycleMutation({
+    const result = await deleteSessionEntryLifecycle({
       agentId: target.agentId,
+      archiveTranscript: true,
+      deleteDeliveryArtifacts: true,
+      expectedEntry: existing,
+      expectedSessionId,
+      expectedLifecycleRevision,
+      expectedUpdatedAt: expectedSessionUpdatedAt,
       storePath: target.storePath,
-      removals: [
-        {
-          sessionKey: key,
-          expectedEntry: existing,
-          expectedSessionId,
-          expectedLifecycleRevision,
-          expectedUpdatedAt: expectedSessionUpdatedAt,
-          archiveRemovedTranscript: true,
-        },
-      ],
+      target: { canonicalKey: key, storeKeys: [key] },
     });
-    return { deleted: result.removedEntries > 0 };
+    return { deleted: result.deleted };
   },
 );
 
@@ -88,7 +84,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 afterEach(() => {
   gatewayTestState.targetBySessionKey.clear();
-  closeOpenClawAgentDatabasesForTest();
 });
 
 describe("CronService.remove session cleanup", () => {

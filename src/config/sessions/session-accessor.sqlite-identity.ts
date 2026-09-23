@@ -146,18 +146,29 @@ export function prepareLifecycleIdentityPublication(params: {
   projected: ProjectedLifecycleMutation;
   removedSessionKeys: readonly string[];
 }): () => void {
-  const removedKeys = new Set(params.removedSessionKeys);
+  const { previous, current } = prepareLifecycleIdentityEntries(
+    params.projected,
+    params.removedSessionKeys,
+  );
+  return prepareSessionIdentityPublication(params.database, params.agentId, previous, current);
+}
+
+export function prepareLifecycleIdentityEntries(
+  projected: ProjectedLifecycleMutation,
+  removedSessionKeys: readonly string[],
+) {
+  const removedKeys = new Set(removedSessionKeys);
   const previous = new Map(
-    params.projected.removals
+    projected.removals
       .filter((removal) => removedKeys.has(removal.sessionKey))
       .map((removal) => [removal.sessionKey, removal.expectedEntry]),
   );
   const current = new Map<string, SessionEntry>();
-  for (const upsert of params.projected.upsertedEntries) {
+  for (const upsert of projected.upsertedEntries) {
     if (!current.has(upsert.sessionKey) && upsert.expectedEntry) {
       previous.set(upsert.sessionKey, upsert.expectedEntry);
     }
     current.set(upsert.sessionKey, upsert.entry);
   }
-  return prepareSessionIdentityPublication(params.database, params.agentId, previous, current);
+  return { previous, current };
 }

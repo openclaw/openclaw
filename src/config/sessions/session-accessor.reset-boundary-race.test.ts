@@ -46,8 +46,9 @@ describe("reset boundary concurrency", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     transactionInjection.run = null;
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
   });
@@ -92,10 +93,16 @@ describe("reset boundary concurrency", () => {
     },
     {
       name: "bulk lifecycle reset",
-      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
-        applySessionEntryLifecycleMutation({
+      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) => {
+        const inject = transactionInjection.run;
+        transactionInjection.run = null;
+        return applySessionEntryLifecycleMutation({
           skipMaintenance: true,
           storePath: scope.storePath,
+          withCommit: (run) => {
+            inject?.();
+            return run(() => {});
+          },
           upserts: [
             {
               entry: { sessionId: "next-bulk", updatedAt: 20 },
@@ -103,84 +110,89 @@ describe("reset boundary concurrency", () => {
               sessionKey: scope.sessionKey,
             },
           ],
-        }),
+        });
+      },
     },
-  ])("parents the $name boundary without hydrating prior message bodies", async ({ reset }) => {
-    const scope = {
-      sessionId: "current-session",
-      sessionKey: "agent:main:reset-race",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const body = "retained reset message body ".repeat(8_192);
-    appendTranscriptMessageSync(scope, {
-      eventId: "initial",
-      message: { role: "user", content: body },
-      parentId: null,
-    });
-    transactionInjection.run = () => {
+  ])(
+    "parents the $name boundary without hydrating prior message bodies on the caller",
+    async ({ reset }) => {
+      const scope = {
+        sessionId: "current-session",
+        sessionKey: "agent:main:reset-race",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+      const body = "retained reset message body ".repeat(8_192);
       appendTranscriptMessageSync(scope, {
-        eventId: "concurrent",
-        message: { role: "user", content: "accepted concurrently" },
-        parentId: "initial",
+        eventId: "initial",
+        message: { role: "user", content: body },
+        parentId: null,
       });
-    };
+      transactionInjection.run = () => {
+        appendTranscriptMessageSync(scope, {
+          eventId: "concurrent",
+          message: { role: "user", content: "accepted concurrently" },
+          parentId: "initial",
+        });
+      };
 
-    const iterate = sqliteQueries.iterateSqliteQuerySync;
-    let hydratedBodyRows = 0;
-    const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-      Row,
-    >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-      for (const row of iterate<Row>(...args)) {
-        if (
-          row !== null &&
-          typeof row === "object" &&
-          "event_json" in row &&
-          typeof row.event_json === "string" &&
-          row.event_json.includes(body)
-        ) {
-          hydratedBodyRows += 1;
+      const iterate = sqliteQueries.iterateSqliteQuerySync;
+      let hydratedBodyRows = 0;
+      const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
+        Row,
+      >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
+        for (const row of iterate<Row>(...args)) {
+          if (
+            row !== null &&
+            typeof row === "object" &&
+            "event_json" in row &&
+            typeof row.event_json === "string" &&
+            row.event_json.includes(body)
+          ) {
+            hydratedBodyRows += 1;
+          }
+          yield row;
         }
-        yield row;
+      });
+      try {
+        await reset(scope);
+      } finally {
+        reads.mockRestore();
       }
-    });
-    try {
-      await reset(scope);
-    } finally {
-      reads.mockRestore();
-    }
 
-    const raw = await loadTranscriptEvents(scope);
-    expect(raw).toContainEqual(
-      expect.objectContaining({
-        id: "initial",
-        message: expect.objectContaining({ role: "user", content: body }),
-      }),
-    );
-    expect(hydratedBodyRows).toBe(0);
-    const boundary = raw.find(
-      (event) =>
-        event !== null &&
-        typeof event === "object" &&
-        !Array.isArray(event) &&
-        (event as { type?: unknown }).type === "reset",
-    );
-    expect(boundary).toMatchObject({ parentId: "concurrent" });
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
+      const raw = await loadTranscriptEvents(scope);
+      expect(raw).toContainEqual(
+        expect.objectContaining({
+          id: "initial",
+          message: expect.objectContaining({ role: "user", content: body }),
+        }),
+      );
+      expect(hydratedBodyRows).toBe(0);
+      const boundary = raw.find(
+        (event) =>
+          event !== null &&
+          typeof event === "object" &&
+          !Array.isArray(event) &&
+          (event as { type?: unknown }).type === "reset",
+      );
+      expect(boundary).toMatchObject({ parentId: "concurrent" });
+      await waitForSessionTranscriptProjection(scope);
+      expect(
+        readRecentSessionTranscriptActiveEvents(scope, 10).map(
+          (event) => (event as { id?: unknown }).id,
+        ),
+      ).toContain("concurrent");
 
-    agentDatabase.closeOpenClawAgentDatabasesForTest();
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
-  });
+      await agentDatabase.closeOpenClawAgentDatabasesAsync();
+      agentDatabase.closeOpenClawAgentDatabasesForTest();
+      await waitForSessionTranscriptProjection(scope);
+      expect(
+        readRecentSessionTranscriptActiveEvents(scope, 10).map(
+          (event) => (event as { id?: unknown }).id,
+        ),
+      ).toContain("concurrent");
+    },
+  );
 
   it("preserves navigation nulls and raw parser semantics in reset reads", async () => {
     const sessionId = "reset-projection";
