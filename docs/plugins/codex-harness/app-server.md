@@ -251,6 +251,10 @@ Codex may discover shared `$HOME/.agents/skills` and
 `$HOME/.agents/plugins/marketplace.json` entries. With
 `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
 home and its existing account without injecting an OpenClaw auth profile.
+Canonical `openai/*` chats on a user-home stdio or Unix connection also retain
+the native configured model provider; select the model with the canonical
+OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
+route compatibility and subscription/API-key account checks still apply.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

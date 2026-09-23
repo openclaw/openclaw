@@ -669,7 +669,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         ? null
         : (this.catalogDiscovery.error ?? data.catalogError),
       configBusy: modelProviderConfigBusy(this.context),
-      quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.authStatus?.providerCapabilities,
         configuredProviderIds,
@@ -714,7 +713,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.addProviderKey = "";
         this.setMessage("add", null);
       },
-      onAddProviderIdChange: (provider) => (this.addProviderId = provider),
       onAddProviderKeyChange: (value) => (this.addProviderKey = value),
       onAddProvider: () => void this.addProvider(),
       ...modelDefaultsActions(() => this.defaultsDraft ?? configuredDefaults, stageDefaults),

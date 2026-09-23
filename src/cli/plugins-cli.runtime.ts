@@ -18,6 +18,7 @@ import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -39,12 +40,7 @@ type PluginInstallActionOptions = {
   marketplace?: string;
 };
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginsStatus = createLazyRuntimeModule(() => import("../plugins/status.js"));
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
