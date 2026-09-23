@@ -57,7 +57,11 @@ type ControlUiE2eScenario<T> = {
   release?: () => Promise<void>;
   retainedState?: () => string | undefined;
 };
-type ControlUiE2eScenarioContext = Pick<TestContext, "signal" | "onTestFinished" | "task">;
+type ControlUiE2eScenarioContext = Pick<TestContext, "signal" | "onTestFinished"> & {
+  task: {
+    result?: { errors?: readonly unknown[] };
+  };
+};
 type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
