@@ -87,6 +87,7 @@ export function readNewSessionSubmissionAccess(options: {
     const createAccess = readSessionMethodAccess(gateway, {
       method: "sessions.create",
       params: createParams,
+      sessionScope: true,
     });
     if (!createAccess.allowed || !target) {
       return createAccess;

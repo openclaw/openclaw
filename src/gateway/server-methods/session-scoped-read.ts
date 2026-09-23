@@ -24,7 +24,7 @@ export function retainSessionScopedRead(
   // Canonical solo owner, admin and system exemptions keep their existing workspace access.
   const initialVisibility = createSessionListEntryFilter({
     client: options.client,
-    cfg: options.context.getRuntimeConfig(),
+    cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
   });
   if (!narrow && !initialVisibility) {
     return undefined;
@@ -35,7 +35,7 @@ export function retainSessionScopedRead(
     const currentActor = resolveGatewayOperatorRoleActor(options.client);
     const visible = createSessionListEntryFilter({
       client: options.client,
-      cfg: options.context.getRuntimeConfig(),
+      cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
     });
     if (
       (narrow &&

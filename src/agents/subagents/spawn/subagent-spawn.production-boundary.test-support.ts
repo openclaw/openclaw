@@ -189,7 +189,7 @@ export function createBoundWorker(bound: Awaited<ReturnType<typeof createSpawnBo
     claim,
     bound.admitted.executionIdentityToken,
     bound.admission.operationalRunInstance,
-    session,
+    { ...session, storePath: bound.storePath },
     () => {
       if (!getAdmittedRunDelegatedAuthority(bound.admitted)) {
         throw new Error("worker parent no longer active");

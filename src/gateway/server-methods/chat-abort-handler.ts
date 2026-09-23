@@ -17,6 +17,7 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { resolveWorkerInferenceTarget } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   canRequesterAbortPreRegisteredRun,
@@ -34,6 +35,7 @@ import {
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
+  deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
 import {
@@ -249,11 +251,12 @@ export async function handleChatAbortRequestWithLifecycle(
   };
 
   const active = context.chatAbortControllers.get(runId);
+  const workerTarget = resolveWorkerInferenceTarget(context.workerEnvironmentService, runId);
   // Broad same-device Stop can name an active run on another session. Capture
   // that original producer's SID before descendant or transcript work yields.
   const workerCancellation = captureWorkerInferenceForSession({
     context,
-    sessionId: active?.sessionId ?? abortSessionEntry?.sessionId,
+    sessionId: active?.sessionId ?? workerTarget?.sessionId ?? abortSessionEntry?.sessionId,
     runId,
   });
   const respondWithWorkerRuns = (localRunIds: string[], warning?: string): void => {
@@ -405,6 +408,7 @@ export async function handleChatAbortRequestWithLifecycle(
           agentId: agentId ?? abortAgentId,
           text: partialText,
           abortOrigin: "rpc",
+          resolveTerminalProducer: active.resolveTerminalProducer,
           ...(sessionKey === rawSessionKey || sessionKey === canonicalAbortSessionKey
             ? { session: abortSession }
             : {}),
@@ -431,7 +435,15 @@ export async function handleChatAbortRequestWithLifecycle(
         ) {
           throw new Error("Run changed before cancellation; retry Stop.");
         }
-        return (aborted = abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" }).aborted);
+        return abortChatRunById(ops, {
+          runId,
+          sessionKey,
+          stopReason: "rpc",
+          onAbortCommitted: () => {
+            aborted = true;
+            deferAbortedPartialPersistence(snapshot, context);
+          },
+        }).aborted;
       },
     });
   } catch (error) {

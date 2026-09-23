@@ -1,6 +1,5 @@
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-import { SESSION_READ_METHOD_SCOPES } from "../../shared/session-method-scopes-base.js";
-import type { GatewayMethodScope } from "./descriptor.js";
+import type { GatewayMethodScope, GatewayMethodSessionAccess } from "./descriptor.js";
 
 export type CoreGatewayMethodSpec = {
   name: string;
@@ -12,11 +11,17 @@ export type CoreGatewayMethodSpec = {
   controlPlaneWrite?: true;
   compatibilityRestored?: true;
   description?: string;
+  sessionAccess?: GatewayMethodSessionAccess;
 };
 
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
+  | "advertise"
+  | "startup"
+  | "controlPlaneWrite"
+  | "compatibilityRestored"
+  | "description"
+  | "sessionAccess"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -116,13 +121,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
-  [
-    "models.list",
-    "models",
-    SESSION_READ_METHOD_SCOPES["models.list"],
-    "<=2026.7",
-    { startup: true },
-  ],
+  ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
   ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
@@ -348,20 +347,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["agent.identity.get", "agent-identity", "operator.read", "<=2026.7"],
   ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
-  [
-    "chat.startup",
-    "chat",
-    SESSION_READ_METHOD_SCOPES["chat.startup"],
-    "<=2026.7",
-    { startup: true },
-  ],
-  [
-    "chat.metadata",
-    "chat",
-    SESSION_READ_METHOD_SCOPES["chat.metadata"],
-    "<=2026.7",
-    { startup: true },
-  ],
+  ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
+  ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
   ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
@@ -735,4 +722,25 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Self-service personal instructions never authorize shared workspace writes.
   ["users.personalFile.get", "users", "operator.read", "2026.9"],
   ["users.personalFile.set", "users", "operator.read", "2026.9"],
+  [
+    "portal.session.list",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
+  [
+    "portal.session.open",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
+  [
+    "portal.session.close",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

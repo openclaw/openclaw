@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
@@ -23,6 +24,7 @@ import {
 } from "./bot-native-command-menu-state.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
@@ -43,11 +45,20 @@ type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["r
 const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
 const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
+const pendingUpdates = new Set<Promise<void>>();
+
+async function settleUpdates(): Promise<void> {
+  while (pendingUpdates.size > 0) {
+    await Promise.allSettled(pendingUpdates);
+  }
+}
+
 export const harness = {
   get state() {
     return state;
   },
   replySpy,
+  settleUpdates,
   listSkillCommandsForAgents,
   telegramBotDepsForTest: {
     ...defaultTelegramBotDeps,
@@ -121,6 +132,14 @@ export function createBot(
   publishTelegramTestConfig(cfg);
   const abort = new AbortController();
   const token = resolveTelegramAccount({ cfg, accountId }).token;
+  // Routing and delivery assertions retain real scheduling without wall-clock pacing.
+  getOrCreateAccountThrottler(token, () =>
+    apiThrottler({
+      global: {},
+      group: { maxConcurrent: 1 },
+      out: { maxConcurrent: 1 },
+    }),
+  );
   const botInfo = {
     ...telegramBotInfoForTest,
     id: resolveTelegramBotUserIdFromToken(token) ?? telegramBotInfoForTest.id,
@@ -137,6 +156,16 @@ export function createBot(
     dispatchReplyFromConfig: (params) =>
       dispatchInboundMessage({ ...params, replyResolver: replySpy }),
   });
+  const handleUpdate = bot.handleUpdate.bind(bot);
+  bot.handleUpdate = (...args) => {
+    const pending = handleUpdate(...args);
+    pendingUpdates.add(pending);
+    void pending.then(
+      () => pendingUpdates.delete(pending),
+      () => pendingUpdates.delete(pending),
+    );
+    return pending;
+  };
   menuOwnerIds.add(botInfo.id);
   bots.push({ bot, abort });
   return bot;
@@ -218,6 +247,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // grammY's webhook deadline does not cancel the underlying update handler.
+  await settleUpdates();
   for (const botId of menuOwnerIds) {
     await new Promise<void>((resolve, reject) => {
       enqueueTelegramMenuSync({

@@ -42,7 +42,16 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const requesterTurnRunId = "parent-turn";
   const expectCompletedRun = (runId: string, resultText: string) => {
     const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
-    expect(entry).toMatchObject({
+    expect(
+      entry,
+      JSON.stringify({
+        runId,
+        cleanupHandled: entry.cleanupHandled,
+        delivery: entry.delivery,
+        requesterSettleWake: entry.requesterSettleWake,
+        requesterTurnRunId: entry.requesterTurnRunId,
+      }),
+    ).toMatchObject({
       execution: { status: "terminal", outcome: { status: "ok" } },
       completion: { resultText },
       cleanupCompletedAt: expect.any(Number),
@@ -118,7 +127,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     }),
   ).toBe(true);
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  const complete = (runId: string, sessionKey: string, text: string) =>
+  const complete = async (runId: string, sessionKey: string, text: string) => {
     emitAgentEvent({
       runId,
       sessionKey,
@@ -129,16 +138,13 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         terminalReply: { disposition: "visible", text },
       },
     });
-  complete(siblingRunId, siblingSessionKey, "Sibling result is ready.");
-  await vi.dynamicImportSettled();
-  await vi.waitFor(
-    () => {
-      expectCompletedRun(siblingRunId, "Sibling result is ready.");
-      expectSharedRequesterWake([previousRunId, siblingRunId], [previousRunId, siblingRunId]);
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-    { interval: 0 },
-  );
+    await vi.advanceTimersByTimeAsync(0);
+    await fixture.settle();
+  };
+  await complete(siblingRunId, siblingSessionKey, "Sibling result is ready.");
+  expectCompletedRun(siblingRunId, "Sibling result is ready.");
+  expectSharedRequesterWake([previousRunId, siblingRunId], [previousRunId, siblingRunId]);
+  expect(dispatch).not.toHaveBeenCalled();
 
   const followup = "Read the completed tool outputs and finish the existing task.";
   chatSend.mockImplementation(async ({ respond }) => {
@@ -189,41 +195,29 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   await send();
   expect(subagentRuns.get(nextRunId)).toBe(resumed);
 
-  complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
-  let nextAttemptAt = Date.now();
-  await vi.dynamicImportSettled();
-  await vi.waitFor(
-    () => {
-      expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
-      nextAttemptAt = expectSharedRequesterWake(
-        [nextRunId, siblingRunId],
-        [nextRunId, siblingRunId],
-      );
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-    { interval: 0 },
+  await complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
+  expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
+  const nextAttemptAt = expectSharedRequesterWake(
+    [nextRunId, siblingRunId],
+    [nextRunId, siblingRunId],
   );
+  expect(dispatch).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(Math.max(0, nextAttemptAt - Date.now()) + 1);
   await registryTesting.sweepOnceForTests();
-  await vi.dynamicImportSettled();
-  await vi.waitFor(
-    () => {
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
-        sessionKey: requesterSessionKey,
-        inputProvenance: { sourceTool: "subagent_settle" },
-        message: expect.stringContaining("Recovered child consumed its tool results."),
-      });
-      expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
-      expect(getTaskById(originalTask.taskId)).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-      });
-      for (const runId of [nextRunId, siblingRunId]) {
-        expect(subagentRuns.get(runId)?.requesterSettleWake).toBeUndefined();
-      }
-    },
-    { interval: 0 },
-  );
+  await fixture.settle();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+    sessionKey: requesterSessionKey,
+    inputProvenance: { sourceTool: "subagent_settle" },
+    message: expect.stringContaining("Recovered child consumed its tool results."),
+  });
+  expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
+  expect(getTaskById(originalTask.taskId)).toMatchObject({
+    status: "succeeded",
+    deliveryStatus: "delivered",
+  });
+  for (const runId of [nextRunId, siblingRunId]) {
+    expect(subagentRuns.get(runId)?.requesterSettleWake).toBeUndefined();
+  }
   expect(archiveRead).not.toHaveBeenCalled();
 });

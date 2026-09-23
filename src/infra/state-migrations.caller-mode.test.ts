@@ -757,22 +757,23 @@ describe("legacy state migration caller mode", () => {
       // oxlint-disable-next-line typescript/unbound-method
       const originalPrepare = DatabaseSync.prototype.prepare;
       const externalQueries: string[] = [];
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-        function (this: DatabaseSync, sql) {
-          const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-            file?: unknown;
-          }>;
-          if (
-            databases.some(
-              (entry) =>
-                typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
-            )
-          ) {
-            externalQueries.push(sql);
-          }
-          return originalPrepare.call(this, sql);
-        },
-      );
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
+          file?: unknown;
+        }>;
+        if (
+          databases.some(
+            (entry) =>
+              typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
+          )
+        ) {
+          externalQueries.push(sql);
+        }
+        return originalPrepare.call(this, sql);
+      });
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: candidateAt(fixture.root),

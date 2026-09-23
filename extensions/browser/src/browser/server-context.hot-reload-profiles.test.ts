@@ -13,6 +13,8 @@ import {
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
 type TestProfileConfig = {
+  engine?: "chromium" | "lightpanda";
+  attachOnly?: boolean;
   cdpPort?: number;
   cdpUrl?: string;
   color?: string;
@@ -432,6 +434,31 @@ describe("server-context hot-reload profiles", () => {
       cdpUrl: oldCdpUrl,
     });
   });
+
+  it.each(["chromium", "lightpanda"] as const)(
+    "retires the adapter and stale selection when only engine changes from %s",
+    async (engine) => {
+      const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/engine-fixture";
+      const { state, runtime } = createProfileFixture({
+        name: "switchable",
+        config: { engine, cdpUrl, attachOnly: true },
+        lastTargetId: "old-target",
+      });
+      const nextEngine = engine === "chromium" ? "lightpanda" : "chromium";
+      updateProfile(state, "switchable", { engine: nextEngine, cdpUrl, attachOnly: true }, true);
+
+      expect(runtime.profile.engine).toBe(nextEngine);
+      expect(runtime.profile.cdpUrl).toBe(cdpUrl);
+      expect(runtime.lastTargetId).toBeNull();
+      expect(getProfileLifecycle(runtime).transitionReason).toBe(
+        "profile invariants changed: engine",
+      );
+      expect(lifecycleMocks.retirePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
+      await getProfileLifecycle(runtime).tail;
+      expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
+      expect(lifecycleMocks.stopOpenClawChrome).not.toHaveBeenCalled();
+    },
+  );
 
   it("marks local managed runtime state for reconcile when profile headless changes", () => {
     const { state, profile, runtime } = createProfileFixture({

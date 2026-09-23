@@ -29,7 +29,6 @@ import {
   type UsageCostJsonlCheckpoint,
   type UsageCostSqliteCheckpoint,
   type UsageCostRollupEntry,
-  type UsageCostStoredRollup,
 } from "./session-cost-usage-rollup-codec.js";
 import {
   appendSessionUsageRollupContribution,
@@ -180,7 +179,7 @@ function appendParsedEntryToRollup(
 
 type RollupScanInput = {
   file: UsageCostTranscriptFile;
-  previous?: UsageCostStoredRollup;
+  previous?: UsageCostRollupEntry;
   pricingFingerprint: string;
   resolveCosts: (
     pairs: Array<{ provider?: string; model?: string }>,
@@ -194,7 +193,7 @@ type RollupScanInput = {
 };
 
 function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
-  const previous = params.appendOnly ? params.previous?.entry : undefined;
+  const previous = params.appendOnly ? params.previous : undefined;
   // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
@@ -246,9 +245,7 @@ function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }
 
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
-    params.previous?.entry.checkpoint.kind === "jsonl"
-      ? params.previous.entry.checkpoint
-      : undefined;
+    params.previous?.checkpoint.kind === "jsonl" ? params.previous.checkpoint : undefined;
   const identityMatches =
     previousCheckpoint &&
     previousCheckpoint.device === params.file.device &&
@@ -351,9 +348,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
     : hashUsageCostCheckpoint("");
   const previousCheckpoint =
-    params.previous?.entry.checkpoint.kind === "sqlite"
-      ? params.previous.entry.checkpoint
-      : undefined;
+    params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
   const previousAnchor = previousCheckpoint?.maxSeq
     ? await readAtSeq(previousCheckpoint.maxSeq)
     : undefined;

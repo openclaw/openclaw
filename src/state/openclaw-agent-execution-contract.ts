@@ -1,5 +1,9 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+} from "../config/sessions/session-accessor.sqlite-archive-types.js";
+import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
 } from "../config/sessions/session-accessor.sqlite-replacement-state.js";
@@ -38,6 +42,21 @@ export type AgentDatabaseExecutionOpen = {
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "session.archives.preparePublication": {
+    input: {
+      archiveDirectory: string;
+      requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
+    };
+    output: TranscriptArchivePublishPlan[];
+  };
+  "session.archives.recordPublication": {
+    input: { results: readonly TranscriptArchivePublishResult[]; nowMs: number };
+    output: void;
+  };
+  "session.transcript.initialize": {
+    input: { sessionKey: string; sessionId: string; cwd?: string };
+    output: void;
+  };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;

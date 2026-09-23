@@ -26,6 +26,38 @@ vi.mock("../session-utils.js", async () => {
 });
 
 describe("chat.abort authorization", () => {
+  it("cancels the admitted worker session after the selected store changes", async () => {
+    const cancel = vi.fn(() => ["worker-run"]);
+    const context = createChatAbortContext({
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "original-worker-session",
+        ["worker-run"],
+        cancel,
+        {
+          agentId: "main",
+          sessionId: "original-worker-session",
+          sessionKey: "agent:main:main",
+          storePath: "/original-worker-store/sessions.json",
+        },
+      ),
+    });
+    const respond = await invokeAbort({
+      context,
+      runId: "worker-run",
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["worker-run"],
+    });
+    expect(cancel).toHaveBeenCalledWith({
+      sessionId: "original-worker-session",
+      runId: "worker-run",
+    });
+  });
+
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({

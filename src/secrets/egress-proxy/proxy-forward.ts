@@ -189,6 +189,13 @@ function sendSecretEgressRequest(
       },
     ),
   );
+  upstream.once("socket", () => {
+    // An agent can queue prepared credentials; recheck before Node flushes them.
+    if (!forward.isActive()) {
+      upstream.destroy();
+      forward.response.destroy();
+    }
+  });
   const bodyTransform = forward.ownResource(
     createSecretEgressBodyTransform({
       isActive: forward.isActive,

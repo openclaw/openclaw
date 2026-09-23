@@ -10,7 +10,13 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { markPageRefBlocked, markTargetBlocked, pageTargetInfo } from "./pw-session-connection.js";
+import {
+  closeConnectionScopedPageBrowser,
+  markPageRefBlocked,
+  markTargetBlocked,
+  pageTargetInfo,
+} from "./pw-session-connection.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
@@ -86,7 +92,14 @@ export async function closeBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   await quarantineBlockedNavigationTarget(opts);
-  await opts.page.close().catch(() => {});
+  if (isConnectionScopedPage(opts.page)) {
+    const browser = opts.page.context().browser();
+    if (browser) {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    }
+  } else {
+    await opts.page.close().catch(() => {});
+  }
 }
 
 // On policy denial: quarantines and rethrows (never closes).
@@ -462,7 +475,11 @@ export async function gotoPageWithNavigationGuard(
   let navigationFailed = false;
   let navigationError: unknown;
   try {
-    await opts.assertPageCurrent?.();
+    // Synchronous authority must not yield between its final fence and navigation.
+    const assertion = opts.assertPageCurrent?.();
+    if (assertion) {
+      await assertion;
+    }
     response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
   } catch (err) {
     navigationFailed = true;

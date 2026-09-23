@@ -17,15 +17,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     if: >-
       ${{
+        (github.event.action != 'edited' ||
+          (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
+          !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
@@ -40,6 +39,11 @@ jobs:
           )
         )
       }}
+    # Admission runs before job concurrency, so an empty metadata edit cannot
+    # cancel a useful dispatch. Other changes retain the receiver's policy.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093

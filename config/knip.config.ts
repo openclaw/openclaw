@@ -885,6 +885,8 @@ const config = {
       "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
       "scripts/copy-chrome-extension.mjs!",
+      // The opt-in browser benchmark is documented and invoked directly by path.
+      "scripts/bench-lightweight.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.

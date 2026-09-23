@@ -163,6 +163,7 @@
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s en attente"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nom de l’appareil"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Envoyer"</string>
+    <string name="native_157dca92e4250458" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"save"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Localisation"</string>
     <string name="native_160db55194b1967c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk natif : le relais Gateway n’est pas disponible pour cette configuration ; utilisation de la reconnaissance vocale de l’appareil et de la voix Talk configurée."</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"p. ex. America/New_York"</string>
@@ -1821,6 +1822,7 @@
     <string name="native_fc374cd61c135a9e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Entrée du journal"</string>
     <string name="native_fc4153c54951d609" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Échec : impossible de joindre le point de terminaison sécurisé de la passerelle pour cet hôte."</string>
     <string name="native_fc5af920bc4a256d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Le Gateway est hors ligne. Corrigez la connexion ci-dessous ou copiez les diagnostics."</string>
+    <string name="native_fc927c5a3d26ae2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Personal Instructions"</string>
     <string name="native_fcdeb9947bc94101" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Test test 1 2 3"</string>
     <string name="native_fcea13c79c2f85a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossible de rechercher des compétences sur ClawHub."</string>
     <string name="native_fd175ecd65f7353d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aucune invite"</string>

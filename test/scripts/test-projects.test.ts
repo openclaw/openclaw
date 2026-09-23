@@ -106,9 +106,19 @@ describe("test runtime prerequisites", () => {
       ["extensions/telegram/src/sticker-cache.selection.test.ts"],
       "runtime",
     ],
+    [
+      "Telegram native sticker pipeline",
+      ["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts"],
+      "runtime",
+    ],
     ["Telegram polling runtime", ["extensions/telegram/src/polling-session.test.ts"], "runtime"],
     ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
     ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
+    [
+      "ordinary Telegram worker test",
+      ["extensions/telegram/src/message-dispatch-dedupe.test.ts"],
+      undefined,
+    ],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
@@ -944,7 +954,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
     expectChangedTargets(
-      ["patches/vitest@5.0.0.patch"],
+      ["patches/vitest@5.0.1.patch"],
       [
         "test/scripts/run-vitest-profile.test.ts",
         "test/scripts/run-vitest-state-cleanup.test.ts",

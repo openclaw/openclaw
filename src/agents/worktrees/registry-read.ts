@@ -1,5 +1,14 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
+
+export async function readRegistryWorktree(
+  context: OpenClawStateWorkerContext,
+  id: string,
+): Promise<ManagedWorktreeRecord | undefined> {
+  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, { type: "worktrees.get", input: { id } });
+}
 
 export async function readRegistryWorktrees(
   env: NodeJS.ProcessEnv,

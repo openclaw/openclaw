@@ -200,6 +200,22 @@ export function registerWorktreesCli(program: Command): void {
     );
 
   worktrees
+    .command("recover-removal")
+    .description("Resume interrupted removal from its original clean snapshot")
+    .argument("<id>", "Managed worktree id")
+    .requiredOption("--snapshot <oid>", "Expected pending snapshot commit")
+    .option("--json", "Output JSON", false)
+    .action(async (id: string, opts: JsonOption & { snapshot: string }) => {
+      const { managedWorktrees } = await import("../agents/worktrees/service.js");
+      const result = await managedWorktrees.recoverRemoval({ id, snapshot: opts.snapshot });
+      if (opts.json) {
+        printJson(result);
+      } else {
+        defaultRuntime.log(`Completed removal of ${id}; original snapshot retained.`);
+      }
+    });
+
+  worktrees
     .command("restore")
     .description("Restore a managed worktree from its snapshot")
     .option(

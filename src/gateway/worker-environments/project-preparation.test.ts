@@ -431,9 +431,19 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["add", "generated"]);
     await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
     const b = await snapshot();
+    const retainedChecks: string[] = [];
+    f.runScript.mockImplementation((script) =>
+      runProjectScriptWithGitProbe(script, f.home, (args) => {
+        if (args[1] === preparedA.workspaceDir && args[2] === "fsck") {
+          retainedChecks.push(args.at(-1)!);
+        }
+        return undefined;
+      }),
+    );
     const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
     const preparedB = (await second.project.prepare(f)).preparedWorkspace!;
     second.close();
+    expect(retainedChecks).toEqual([a.baseCommit]);
     expect(preparedB).toMatchObject({
       workspaceDir: preparedA.workspaceDir,
       homeDir: preparedA.homeDir,
@@ -472,6 +482,7 @@ cat input.txt >> "$HOME/count"
     const third = await f.preparedOperation(undefined, { project: a });
     expect((await third.project.prepare(f)).preparedWorkspace).toEqual(preparedA);
     third.close();
+    expect(retainedChecks).toEqual([a.baseCommit, b.baseCommit]);
     expect(f.uploadBytes).toHaveLength(2);
     expect(await fs.readFile(path.join(preparedA.homeDir, "count"), "utf8")).toBe(
       "prepared base\nchanged B\nprepared base\n",

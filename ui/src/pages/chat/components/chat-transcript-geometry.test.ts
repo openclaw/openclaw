@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
@@ -130,6 +130,124 @@ describe("chat transcript geometry", () => {
       }
     },
   );
+
+  it("updates rail geometry for size changes without measuring streamed content or retired transcripts", () => {
+    const flushFrames = stubAnimationFrames();
+    const transcript = createTestTranscript();
+    const region = document.body.appendChild(document.createElement("div"));
+    region.className = "chat-main__conversation";
+    let regionHeight = 600;
+    let gutter = 100;
+    let innerWidth = 768;
+    const readInnerBounds = vi.fn(() => new DOMRect(gutter, 0, innerWidth, 1200));
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      return this.classList.contains("chat-thread-inner")
+        ? readInnerBounds()
+        : new DOMRect(0, 0, 1200, 600);
+    });
+    Object.defineProperty(region, "clientHeight", { get: () => regionHeight });
+    const props = {
+      ...threadProps("rail-geometry"),
+      runActive: true,
+      stream: "Live start",
+      streamStartedAt: 1000,
+    };
+    const renderTranscript = () => {
+      render(renderChatThread(props, transcript), region);
+      transcript.hostUpdated();
+    };
+    const emitResize = (element: Element, width: number, height: number) => {
+      for (const observer of resizeObservers) {
+        observer.emitTarget(element, width, height);
+      }
+    };
+    try {
+      renderTranscript();
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      const viewport = expectDefined(transcript.scrollElement, "rail viewport");
+      const inner = expectDefined(viewport.querySelector(".chat-thread-inner"), "rail column");
+      emitResize(inner, innerWidth, 1200);
+      emitResize(region, 1200, regionHeight);
+      flushFrames();
+      expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("600px");
+      readInnerBounds.mockClear();
+
+      for (const [index, text] of ["one", "two", "three"].entries()) {
+        props.stream = `Live ${text}`;
+        renderTranscript();
+        emitResize(inner, innerWidth, 1300 + index * 100);
+        flushFrames();
+        expect(viewport.textContent).toContain(`Live ${text}`);
+      }
+      expect(readInnerBounds).not.toHaveBeenCalled();
+
+      // Saved message width changes the column without resizing its viewport.
+      gutter = 20;
+      innerWidth = 1160;
+      emitResize(inner, innerWidth, 1500);
+      flushFrames();
+      expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(false);
+      expect(readInnerBounds).toHaveBeenCalledOnce();
+      readInnerBounds.mockClear();
+
+      regionHeight = 720;
+      emitResize(region, 1200, regionHeight);
+      flushFrames();
+      expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
+      expect(readInnerBounds).toHaveBeenCalledOnce();
+
+      // A restamped shell retires its old column observation and binds the new one.
+      props.loading = true;
+      props.messages = [];
+      props.stream = "";
+      props.runActive = false;
+      render(nothing, region);
+      transcript.hostUpdated();
+      renderTranscript();
+      const replacementViewport = expectDefined(
+        transcript.scrollElement,
+        "replacement rail viewport",
+      );
+      const replacement = expectDefined(
+        replacementViewport.querySelector(".chat-thread-inner"),
+        "replacement rail column",
+      );
+      expect(replacement).not.toBe(inner);
+      gutter = 100;
+      innerWidth = 768;
+      emitResize(replacement, innerWidth, 400);
+      flushFrames();
+      expect(replacementViewport.hasAttribute("data-position-rail-gutter")).toBe(true);
+      readInnerBounds.mockClear();
+      emitResize(inner, 400, 400);
+      flushFrames();
+      expect(readInnerBounds).not.toHaveBeenCalled();
+
+      emitResize(replacement, 700, 400);
+      transcript.hostDisconnected();
+      render(nothing, region);
+      flushFrames();
+      expect(readInnerBounds).not.toHaveBeenCalled();
+      vi.mocked(requestAnimationFrame).mockClear();
+      emitResize(replacement, 600, 400);
+      emitResize(region, 1200, 800);
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
+
+      transcript.hostConnected();
+      renderTranscript();
+      flushFrames();
+      const restored = expectDefined(transcript.scrollElement, "restored rail viewport");
+      expect(restored.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(restored.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
+    } finally {
+      transcript.hostDisconnected();
+      render(nothing, region);
+    }
+  });
 
   it("updates transcript extent from freshly wrapped heights while scrolling", async () => {
     const transcript = createTestTranscript();

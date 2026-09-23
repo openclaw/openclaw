@@ -30,7 +30,7 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
-export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
+const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",

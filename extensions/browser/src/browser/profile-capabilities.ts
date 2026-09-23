@@ -10,6 +10,7 @@ type BrowserProfileMode =
   | "local-managed"
   | "local-existing-session"
   | "local-extension"
+  | "lightweight-cdp"
   | "remote-cdp";
 
 export type BrowserProfileCapabilities = {
@@ -31,6 +32,16 @@ export type BrowserProfileCapabilities = {
   supportsErrors: boolean;
   supportsPageText: boolean;
   supportsEmulation: boolean;
+  supportsScreenshots: boolean;
+  supportsVisualActions: boolean;
+  supportsUploads: boolean;
+  supportsDialogs: boolean;
+  supportsStorage: boolean;
+  supportsScreencast: boolean;
+  supportsConsole: boolean;
+  supportsMultipleTabs: boolean;
+  /** Supports native CDP accessibility/role snapshot formats and scoped snapshots. */
+  supportsNativeSnapshots: boolean;
   requiresCompleteTargetEnumeration: boolean;
 };
 
@@ -38,6 +49,38 @@ export type BrowserProfileCapabilities = {
 export function getBrowserProfileCapabilities(
   profile: ResolvedBrowserProfile,
 ): BrowserProfileCapabilities {
+  if (profile.engine === "lightpanda") {
+    // Lightpanda owns one target per live connection, including loopback and
+    // Docker endpoints. A successful CDP handshake is not Chromium parity.
+    return {
+      mode: "lightweight-cdp",
+      isRemote: !profile.cdpIsLoopback,
+      browserFilesystemLocal: false,
+      usesChromeMcp: false,
+      usesPersistentPlaywright: true,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: false,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+      supportsBatchActions: false,
+      supportsDownloads: false,
+      supportsPdf: false,
+      supportsRequests: false,
+      supportsErrors: false,
+      supportsPageText: true,
+      supportsEmulation: false,
+      supportsScreenshots: false,
+      supportsVisualActions: false,
+      supportsUploads: false,
+      supportsDialogs: false,
+      supportsStorage: false,
+      supportsScreencast: false,
+      supportsConsole: false,
+      supportsMultipleTabs: false,
+      supportsNativeSnapshots: false,
+      requiresCompleteTargetEnumeration: false,
+    };
+  }
   const driverCapabilities = {
     supportsBatchActions: profile.driver !== "existing-session",
     supportsDownloads: profile.driver !== "existing-session",
@@ -46,6 +89,15 @@ export function getBrowserProfileCapabilities(
     supportsErrors: profile.driver !== "existing-session",
     supportsPageText: profile.driver !== "existing-session",
     supportsEmulation: profile.driver !== "existing-session",
+    supportsScreenshots: true,
+    supportsVisualActions: true,
+    supportsUploads: true,
+    supportsDialogs: true,
+    supportsStorage: true,
+    supportsScreencast: profile.driver !== "existing-session",
+    supportsConsole: true,
+    supportsMultipleTabs: true,
+    supportsNativeSnapshots: true,
     requiresCompleteTargetEnumeration: profile.driver === "extension",
   };
   if (profile.driver === "existing-session") {

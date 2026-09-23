@@ -5,6 +5,7 @@
  * contract, so keep them as literal exports instead of duplicated strings.
  */
 export const BROWSER_REQUEST_GATEWAY_METHOD = "browser.request" as const;
+export const SESSION_BROWSER_REQUEST_GATEWAY_METHOD = "browser.dashboard.request" as const;
 /** Admin scope required to proxy browser-control requests through Gateway. */
 export const BROWSER_REQUEST_GATEWAY_SCOPE = "operator.admin" as const;
 /** Scope tuple shape consumed by Gateway tool registration. */

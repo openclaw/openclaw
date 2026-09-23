@@ -12,6 +12,8 @@ import {
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
+import { workerService } from "./environments.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -35,13 +37,6 @@ vi.mock("./chat.js", () => ({
 
 vi.mock("./chat-abort-handler.js", () => ({
   handleChatAbortRequestWithLifecycle: (...args: unknown[]) => chatAbortMock(...args),
-}));
-
-vi.mock("../worker-environments/session-target.js", () => ({
-  resolveWorkerSessionTarget: () => ({
-    agentId: "work",
-    sessionKey: "agent:work:dashboard:worker",
-  }),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -243,7 +238,6 @@ describe("sessions.abort agent scope", () => {
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = createBetaRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
     const respond = await callSessions(
       "sessions.abort",
       { runId: "run-beta", agentId: "main" },
@@ -370,7 +364,6 @@ describe("sessions.abort agent scope", () => {
   it("preserves runId-only aborts for active non-default agent runs", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = createBetaRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions("sessions.abort", { runId: "run-beta" }, { context, reqId: "req-2" });
 
@@ -438,11 +431,24 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("resolves runId-only worker aborts to the owning session", async () => {
-    const resolveInferenceSessionForRunId = vi.fn(() => "session-worker");
     mockChatSuccess(chatAbortMock, { ok: true, aborted: true, runIds: ["run-worker"] });
     const context = createContext({
       extra: {
-        workerEnvironmentService: { resolveInferenceSessionForRunId } as never,
+        workerEnvironmentService: Object.assign(
+          createWorkerInferenceCancellationService("session-worker", ["run-worker"], () => [], {
+            agentId: "work",
+            sessionId: "session-worker",
+            sessionKey: "agent:work:dashboard:worker",
+            storePath: "/original-worker-store/sessions.json",
+          }),
+          workerService(),
+          {
+            startTunnel: async () => {
+              throw new Error("unexpected tunnel in cancellation fixture");
+            },
+            stopTunnel: async () => {},
+          },
+        ),
         dedupe: new Map(),
         getSessionEventSubscriberConnIds: () => new Set(),
       },
@@ -476,7 +482,6 @@ describe("sessions.abort agent scope", () => {
   it("uses the active run agent for key and runId global aborts without agentId", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const context = createGlobalWorkRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions(
       "sessions.abort",
@@ -505,7 +510,6 @@ describe("sessions.abort agent scope", () => {
         dedupe: new Map(),
       },
     });
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions(
       "sessions.abort",
@@ -908,7 +912,9 @@ describe("sessions.abort agent scope", () => {
       },
     );
 
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-work", "agent:work:global");
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-work", "agent:work:global", {
+      provisional: true,
+    });
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true, key: "global" }, undefined);
   });
 
@@ -929,7 +935,11 @@ describe("sessions.abort agent scope", () => {
       },
     );
 
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-default", "agent:work:global");
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
+      "conn-default",
+      "agent:work:global",
+      { provisional: true },
+    );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true, key: "global" }, undefined);
   });
 
@@ -953,6 +963,7 @@ describe("sessions.abort agent scope", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-work-alias",
       "agent:work:global",
+      { provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true, key: "global" }, undefined);
   });
@@ -963,7 +974,6 @@ describe("sessions.abort agent scope", () => {
       activeRuns: [["run-work", activeRun]],
       agents: [{ id: "work", default: true }],
     });
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
 
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
 

@@ -23,6 +23,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
+  "browser.profiles.*.engine":
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":

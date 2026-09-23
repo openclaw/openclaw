@@ -197,6 +197,25 @@ attempts, recheck their source and Tooling SHAs, and reuse the successful builds
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
 
+For a diagnosed intermittent failure, declare an exact child key and GitHub job
+name before dispatch with `known_flaky_jobs_json`, for example:
+
+```bash
+-f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'
+```
+
+The helper carries this semantic input in the `laneInputs` field of the existing
+`trusted_workflow_json` envelope. Direct dispatch supplies the JSON string value
+as `laneInputs.known_flaky_jobs_json`. The default is `[]`. The immutable execution
+plan binds the declaration; adding or changing an allowance after dispatch is not
+supported. The frozen Tooling SHA must support declared flake retries; the helper
+rejects older tooling with only exclusion support before creating refs or a run.
+Each selected child
+gets at most one automatic retry wave from its original attempt, with no more
+than two executions of a declared job. A repeated failure remains a blocker.
+See [Automatic retries for declared flakes](/reference/full-release-validation/continuation#automatic-retries-for-declared-flakes)
+for mutation, recovery, and evidence rules.
+
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
 an exact run-ID Actions cache. It records selected and

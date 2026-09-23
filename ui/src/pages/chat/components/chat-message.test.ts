@@ -440,17 +440,17 @@ function stubConfirmedActionGeometry(params: {
     offsetTop: params.viewport.top ?? 0,
     width: params.viewport.width,
   });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
-      if (this.classList.contains("chat-group-rewind")) {
-        return domRect(params.trigger);
-      }
-      if (this.classList.contains("chat-confirm-popover")) {
-        return domRect(params.popover);
-      }
-      return domRect({});
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (this.classList.contains("chat-group-rewind")) {
+      return domRect(params.trigger);
+    }
+    if (this.classList.contains("chat-confirm-popover")) {
+      return domRect(params.popover);
+    }
+    return domRect({});
+  });
 }
 
 function clickConfirmedActionIconPath(actionButton: HTMLButtonElement) {
@@ -927,7 +927,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
+    expect(order).toEqual(["Reply to message", "Rewind", "Copy as markdown", "name", "time"]);
   });
 
   it.each([
@@ -1011,7 +1011,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["name", "time", "Reply to message", "Rewind"]);
+    expect(order).toEqual(["name", "time", "Reply to message", "Rewind", "Copy as markdown"]);
   });
 
   it("keeps hidden assistant thinking out of inline reply context", () => {
@@ -5353,11 +5353,11 @@ describe("grouped chat rendering", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const clickedDownloads: string[] = [];
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        clickedDownloads.push(this.download);
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clickedDownloads.push(this.download);
+    });
     const container = document.body.appendChild(document.createElement("div"));
     renderAssistantMessage(
       container,

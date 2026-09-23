@@ -14,7 +14,10 @@ Release SHA, one Tooling SHA frozen at dispatch, and one validation parent.
 Record the cut time; stable should be on npm within 6 hours of it. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
 additions and bundled-runtime bumps qualify); after dispatch admit only a fix
-for a required-lane defect.
+for a required-lane defect. A second cut (re-basing the candidate on newer
+`main`) needs Peter's explicit request in that release; otherwise cherry-pick
+merged `main` commits only for a confirmed release blocker and name each one in
+the handoff record.
 
 Run deterministic source preflight, then validate the exact Code SHA:
 
