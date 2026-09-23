@@ -245,6 +245,9 @@ function openAgentDatabaseBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let archives:
+    | typeof import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js")
+    | undefined;
   let archivePruning:
     | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
     | undefined;
@@ -276,6 +279,16 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (
+        command.type === "session.archives.preparePublication" ||
+        command.type === "session.archives.recordPublication"
+      ) {
+        return import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js").then(
+          (module) => {
+            archives = module;
+          },
+        );
+      }
       if (
         command.type === "session.archivePruning.deletePublished" ||
         command.type === "session.archivePruning.removeLegacy" ||
@@ -344,6 +357,34 @@ function openAgentDatabaseBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (
+        (command.type === "session.archives.preparePublication" ||
+          command.type === "session.archives.recordPublication") &&
+        archives
+      ) {
+        const opened = openWriter();
+        const kernel = archives;
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Session archive publication lost its canonical database owner");
+            }
+            admit("transaction");
+            const result =
+              command.type === "session.archives.preparePublication"
+                ? kernel.prepareSessionTranscriptArchivePublishPlans(current, command.input)
+                : kernel.recordSessionTranscriptArchivePublishResults(
+                    current,
+                    command.input.results,
+                    command.input.nowMs,
+                  );
+            admit("commit");
+            return result;
+          },
+          options,
+          { operationLabel: "session.archive.publish" },
+        );
       }
       if (command.type === "session.transcript.initialize" && transcript) {
         const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =

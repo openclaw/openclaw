@@ -5,9 +5,12 @@ import { performance } from "node:perf_hooks";
 import { Worker } from "node:worker_threads";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import * as stateCache from "../../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -18,10 +21,30 @@ import {
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 
-test("reuses the reclamation connection until thirty minutes after its last operation", async () => {
+test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
-    const databaseOptions = { ...options, path: openOpenClawAgentDatabase(options).path };
+    const databaseOptions = {
+      ...options,
+      path: openOpenClawAgentDatabase(options).path,
+      env: { ...state.env, OPENCLAW_STATE_DIR: state.statePath("reclamation-owner") },
+    };
+    const sharedAdmission = stateCache.captureOpenClawStateDatabaseReadAdmission(
+      resolveOpenClawStateSqlitePath(databaseOptions.env),
+    );
+    expect(sharedAdmission.identity.key).toMatch(/^path:/);
+    const publishAdmission = stateCache.publishOpenClawStateDatabaseWorkerAdmission;
+    vi.spyOn(stateCache, "publishOpenClawStateDatabaseWorkerAdmission").mockImplementation(
+      (admission) => {
+        const sql = observeHostDataSql(databaseOptions.env);
+        try {
+          publishAdmission(admission);
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      },
+    );
     const plans = Array.from({ length: 4 }, (_, index) => {
       const scope = {
         ...options,
@@ -69,6 +92,8 @@ test("reuses the reclamation connection until thirty minutes after its last oper
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const firstThread = await reclaim(0);
+      expect(sharedAdmission.identity.key).toMatch(/^file:/);
+      sharedAdmission.assertCurrent();
       await vi.advanceTimersByTimeAsync(61_000);
       expect(await reclaim(1)).toBe(firstThread);
       await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);

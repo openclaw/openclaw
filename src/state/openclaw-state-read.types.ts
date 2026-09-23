@@ -75,7 +75,7 @@ import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-d
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
-import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import type {
   UserChannelIdentity,
   UserChannelIdentityLink,

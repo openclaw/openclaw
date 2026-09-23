@@ -25,7 +25,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-async function withReplacementWorker<T>(
+export async function withSessionEntryWorker<T>(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string | undefined,
   assertCurrent: () => void,
@@ -94,7 +94,7 @@ export function prepareSessionEntryReplacementDatabase(
   options: ReplacementDatabaseOptions,
   assertCurrent: () => void,
 ): Promise<void> {
-  return withReplacementWorker(options, undefined, assertCurrent, (execution, source) =>
+  return withSessionEntryWorker(options, undefined, assertCurrent, (execution, source) =>
     execution.prepare(source),
   );
 }
@@ -105,7 +105,7 @@ export async function initializeSessionTranscriptInWorker(
   input: { sessionKey: string; sessionId: string; cwd?: string },
   assertCurrent: () => void,
 ): Promise<void> {
-  await withReplacementWorker(
+  await withSessionEntryWorker(
     options,
     databaseIdentity,
     assertCurrent,
@@ -166,7 +166,7 @@ export async function commitSessionEntryReplacementsInWorker(
       );
     }
   };
-  return await withReplacementWorker(
+  return await withSessionEntryWorker(
     options,
     databaseIdentity,
     assertCurrent,

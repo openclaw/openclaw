@@ -18,7 +18,7 @@ import {
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
@@ -99,7 +99,10 @@ describe("session creation snapshot", () => {
     });
     recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
     const parse = vi.spyOn(JSON, "parse");
-    const prepared = readSessionCreationSnapshot(scope);
+    const prepared = readSessionCreationSnapshotInDatabase(
+      openOpenClawAgentDatabase(scope),
+      scope.sessionKey,
+    );
     const siblingPayloadReads = parse.mock.calls.filter(([json]) =>
       json.includes("unrelated-saved-prompt"),
     ).length;
@@ -192,10 +195,13 @@ describe("session creation snapshot", () => {
       const expected = listSessionEntriesCore(scope).find(
         (row) => row.sessionKey === scope.sessionKey,
       )?.entry;
-      const context = readSessionCreationSnapshot(scope);
+      const { labels, ...context } = readSessionCreationSnapshotInDatabase(
+        openOpenClawAgentDatabase(scope),
+        scope.sessionKey,
+      );
       expect(context.existingEntry).toEqual(expected);
       expect(context.targetEntry).toEqual(expected);
-      expect(context.isLabelInUse("taken")).toBe(true);
+      expect(labels.has("taken")).toBe(true);
       await expect(
         createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -240,12 +246,15 @@ describe("session creation snapshot", () => {
       return result;
     });
     try {
-      const context = readSessionCreationSnapshot(scope);
+      const { labels, ...context } = readSessionCreationSnapshotInDatabase(
+        openOpenClawAgentDatabase(scope),
+        scope.sessionKey,
+      );
       await Promise.resolve();
       expect(changed).toBe(true);
       expect(context.targetEntry).toMatchObject(entry);
-      expect(context.isLabelInUse("old label")).toBe(true);
-      expect(context.isLabelInUse("new label")).toBe(false);
+      expect(labels.has("old label")).toBe(true);
+      expect(labels.has("new label")).toBe(false);
     } finally {
       external.close();
     }

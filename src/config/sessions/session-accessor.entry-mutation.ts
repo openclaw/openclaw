@@ -2,7 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   resolveAccessStorePath,
@@ -10,7 +13,7 @@ import {
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
@@ -90,11 +93,14 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
   // Process-held, already executing, maintenance, and native rollback scopes keep their kernels.
   const storeScope = { agentId, env: resolved.env, storePath: resolved.path };
-  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshot({
-    ...storeScope,
-    sessionKey: scope.sessionKey,
-  });
-  const created = await createEntry(context);
+  // The resolved path is a physical locator, not the original logical store selector.
+  // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
+  const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+    creationDatabase,
+    scope.sessionKey,
+  );
+  const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }

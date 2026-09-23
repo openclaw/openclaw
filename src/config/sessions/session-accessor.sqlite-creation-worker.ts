@@ -1,14 +1,17 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   commitSessionEntryReplacementsInWorker,
   initializeSessionTranscriptInWorker,
   prepareSessionEntryReplacementDatabase,
+  withSessionEntryWorker,
 } from "./session-accessor.sqlite-replacement-worker.js";
 import type { ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   runExclusiveSqliteSessionWrite,
+  resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -89,6 +92,48 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
     if (transcriptError !== undefined) {
       return { ok: false, error: transcriptError, phase: "transcript" };
     }
+    const publishArchives = async () => {
+      // Match lifecycle adoption recovery, after registration and writer release.
+      // The archive owner retains batching, byte validation, events and failure semantics.
+      const run = <T>(
+        operation: (
+          worker: import("../../state/openclaw-agent-execution-native.js").AgentDatabaseExecutionScope,
+        ) => Promise<T>,
+      ) =>
+        withSessionEntryWorker(
+          databaseOptions,
+          databaseIdentity,
+          assertCurrent,
+          async (execution, source) => {
+            const result = await execution.runExisting(source, async (worker) => ({
+              value: await operation(worker),
+            }));
+            if (!result) {
+              throw new Error("Session database disappeared before archive publication");
+            }
+            return result.value;
+          },
+        );
+      await publishSessionStateArchives({ ...scope, agentId: databaseOptions.agentId }, [], {
+        prepare: (requested) =>
+          run((worker) =>
+            worker.execute({
+              type: "session.archives.preparePublication",
+              input: {
+                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
+                requested,
+              },
+            }),
+          ),
+        record: (results) =>
+          run((worker) =>
+            worker.execute({
+              type: "session.archives.recordPublication",
+              input: { results, nowMs: Date.now() },
+            }),
+          ),
+      });
+    };
     if (legacyKeys.length > 0) {
       // Admitted folded aliases still belong to canonical replacement: it owns
       // their row CAS, native deletion preparation, and atomic artifact rehoming.
@@ -113,8 +158,10 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           ],
         }),
       });
+      await publishArchives();
       return { ok: true, entry: created.entry, sessionFile: normalizedKey };
     }
+    let adopted = false;
     const commit = (assertSourceCurrent?: () => void) =>
       runExclusiveSqliteSessionWrite(
         scope,
@@ -136,6 +183,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           if (!replacement || replacement.databaseIdentity !== databaseIdentity) {
             throw new Error("Session creation database changed before entry commit");
           }
+          adopted = replacement.expectedRows.has(normalizedKey);
           // Creation owns its canonical target, including hidden run-owned nodes. The
           // canonical-replacement projection deliberately does not admit those nodes.
           await commitSessionEntryReplacementsInWorker(
@@ -166,6 +214,9 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
       await options.withCommit(commit);
     } else {
       await commit();
+    }
+    if (adopted) {
+      await publishArchives();
     }
     return { ok: true, entry: created.entry, sessionFile: normalizedKey };
   } finally {

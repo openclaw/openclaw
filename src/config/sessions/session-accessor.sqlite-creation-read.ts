@@ -1,17 +1,10 @@
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { iterateSessionEntriesForListing } from "./session-accessor.sqlite-entry-list.read.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type {
-  SessionAccessScope,
-  SessionEntryCreateWithTranscriptContext,
-} from "./session-accessor.types.js";
+import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
 import {
   collectSessionEntryLookupKeys,
   normalizeStoreSessionKey,
@@ -36,18 +29,6 @@ function* collectCreationCandidates(
     }
     yield candidate;
   }
-}
-
-/** Owns the complete target payload and sibling-label facts before asynchronous preparation. */
-export function readSessionCreationSnapshot(
-  scope: SessionAccessScope,
-): SessionEntryCreateWithTranscriptContext & {
-  normalizedKey: string;
-  legacyKeys: string[];
-} {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-  const { labels, ...snapshot } = readSessionCreationSnapshotInDatabase(database, scope.sessionKey);
-  return { ...snapshot, isLabelInUse: (label) => labels.has(label) };
 }
 
 export type SessionCreationSnapshot = Omit<

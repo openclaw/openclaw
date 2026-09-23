@@ -15,23 +15,7 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-export type SessionRepositoryWorkspaceRecord = {
-  workspaceId: string;
-  agentId: string;
-  sessionKey: string;
-  url: string;
-  requestedRef: string | null;
-  runSetupScript: boolean;
-  baseCommit: string | null;
-  baseManifestHash: string | null;
-  branch: string;
-  checkpointRef: string | null;
-  manifestHash: string | null;
-  revision: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
+import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 
 type WorkspaceOwner = { agentId: string; sessionKey: string };
 type WorkspaceMutation = {
