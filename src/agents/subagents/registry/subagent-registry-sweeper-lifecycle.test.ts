@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -15,7 +18,6 @@ import {
   resetSubagentRegistryForTests,
   scheduleSubagentRegistrySweep,
 } from "./subagent-registry.test-helpers.js";
-import { useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 
 const recoverRow = vi.hoisted(() => vi.fn());
 const warn = vi.hoisted(() => vi.fn());

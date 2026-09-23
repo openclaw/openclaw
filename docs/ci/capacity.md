@@ -75,6 +75,16 @@ fails instead of dropping work or increasing either cap.
 
 The approved row-cap increase raises compact plans from 80 to 90 rows and final Node matrices from 64/120 to 70/130 push/PR rows. It reserves room for the measured isolated Gateway-server family and measured plugin-envelope packing. At the limits, each run can admit six more Node registrations on push or ten more on PR; compact rows are already included in that total. Across the retained four-main/21-PR arrival envelope, the increase is `4 × 6 + 21 × 10 = 234`, taking the conservative ceiling from 4,776 to 5,010. Runner classes, workers, matrix concurrency and timeouts retain their existing policies. The cap increase alone does not establish a runtime improvement.
 
+Full manual Node plans split the Gateway isolated/database-worker cohort with
+the existing 64-file envelope limit and deterministic file weights. Run
+35727279415 exhausted its 60-minute job after completing the 18 isolated files
+and passing cases from only 137 of 235 database-worker files. The current 257-file
+inventory now occupies five complete, disjoint stripes, adding four manual jobs
+while preserving both configs, two workers and the job deadline. Dispatches
+route these rows to GitHub-hosted runners, so the split adds no Blacksmith
+registrations. Compact main/PR planning and the 90/70/130 row caps are unchanged;
+neither the file limit nor advisory weights guarantee a wall time.
+
 The shared plugin catch-all, QA and provider suites use native Vitest sharding, sized from the existing 90-file envelope budget. Their complete configs still own discovery and exclusions; the counting inventory never narrows execution to the directly changed plugin. At `2f7fb353`, the catch-all has 486 counting entries and 474 effective files across six jobs, QA has 238/232 across three, and providers have 275/256 across four. Counting entries include files excluded by Vitest, so the budget is conservative. Each job retains its existing worker limits, isolation policy and per-file module cleanup.
 
 Process-bounded plugin fallback uses each test file's effective config owner,
@@ -102,7 +112,9 @@ job durations.
 
 Ordinary Codex tests use isolated thread workers and inherit file parallelism from the shared worker budget. Each file retires its mocked module graph and globals; an ordinary process contains at most 24 files. Database-worker-routed Codex tests already use isolated forks and retain an independent 12-file bound. The 300-second no-output watchdog, test deadlines, and assertions remain unchanged. These scheduling bounds are independent of the timing-weight calibration; a larger process bound does not by itself establish a wall-time or matrix-row improvement.
 
-Precise and fallback plugin envelopes share the same packing owner and a 240-second aggregate estimated budget per job, including multiple envelopes of the same config. This budget belongs only to changed-extension jobs; compact core budgets are unchanged. Members retain compatible runner/dist requirements and run one at a time. Packing retains each produced envelope's child process, environment, native shard arguments and include scope, including process-bounded Codex, Matrix and Telegram work. Runtime-preparing envelopes remain separate, and an envelope above the budget stays alone. Worker limits, runner classes, timeouts, coverage and serial stop-on-failure behavior are unchanged.
+Precise and fallback plugin envelopes share the same packing owner and a 300-second aggregate estimated budget per job, including multiple envelopes of the same config. This budget belongs only to changed-extension jobs; compact core budgets are unchanged. Members retain compatible runner/dist requirements and run one at a time. Packing retains each produced envelope's child process, environment, native shard arguments and include scope, including process-bounded Codex, Matrix and Telegram work. Runtime-preparing envelopes remain separate, and an envelope above the budget stays alone. Worker limits, runner classes, timeouts, coverage and serial stop-on-failure behavior are unchanged.
+
+On the September 22 counting inventory, increasing this admission budget from 240 to 300 seconds packs the same 119 envelopes into 40 instead of 47 jobs. Their aggregate estimated work remains 10,140 seconds. Seven fewer checkouts/setups save an estimated 315–420 machine-seconds at 45–60 seconds per job. This is a packing projection, not measured elapsed-time proof; see [routing costs and the 15-minute qualification](/ci/routing-costs). All four row caps remain unchanged.
 
 For explicitly bounded plugin configs, the prerequisite owner identifies files that need a built runtime. When those files span multiple envelopes, the producer groups them before applying the existing file limits, so unrelated tests do not cause repeated runtime builds. Each resulting envelope retains its actual prerequisite charge and measured file costs. Whole-config native Vitest shards retain their complete discovery and preparation contract.
 
@@ -112,7 +124,7 @@ The Codex rates were refreshed after the app-server fixture began reusing databa
 
 This calibration preserves execution policy: ordinary Codex files remain serial and non-isolated, database-worker-routed Codex files retain isolated forks, and both keep their 12-file process bound. The 300-second no-output watchdog and test deadlines remain unchanged. Weight changes affect packing and predictions, not per-file scheduling.
 
-The landed caps are 90 compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. These caps admit the 240-second budget without another policy increase. Replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emits 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
+The landed caps are 90 compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. At the earlier 240-second budget, replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emitted 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
 
 | Profile    | Compact PR rows | Final PR Node rows before → after | Final push Node rows |
 | ---------- | --------------: | --------------------------------: | -------------------: |
@@ -525,8 +537,19 @@ for the entire file; stale keys cannot change the discovered test inventory.
 
 With an authenticated `gh` CLI, run `pnpm ci:timings:refit` to regenerate the file.
 Each invocation freezes one UTC upper bound and a lower bound seven days earlier.
-Every run-list page uses both bounds. Returned run timestamps and successful job
-timestamps outside that window fail validation.
+Every run-list page uses both bounds. Returned run creation timestamps outside
+that window fail validation. Before downloading logs for a run, the collector
+validates all captured attempts' job metadata. Successful jobs with missing
+completion, invalid provenance, stale starts, reversed chronology, or completion
+after the metadata observation time still fail validation.
+
+A run created inside the window can finish after its frozen upper bound while
+earlier cohorts are being collected. When otherwise valid successful jobs end
+after that cutoff, scheduled sampling skips the entire run, reports its ID and
+cutoff, and seeks a replacement without consuming the sample quota. It never
+downloads that cohort's logs or drops only the late jobs into an apparently
+complete inventory. Explicit `--tooling-run` requests instead fail with the run
+ID and cutoff; neither path moves the window.
 
 The refit seeks up to five completed `ci.yml` push runs on `main` with a success
 or failure conclusion and parsed compact measurements from successful jobs.

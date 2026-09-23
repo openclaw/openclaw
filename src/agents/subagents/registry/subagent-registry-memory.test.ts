@@ -33,12 +33,16 @@ describe("subagent run memory indexes", () => {
       subagentRuns.set(entry.runId, entry);
       expect(changed).not.toHaveBeenCalled();
       subagentRuns.commitOwnership(entry);
-      expect(changed.mock.calls).toEqual([[{ sessionKey: entry.childSessionKey }]]);
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: entry.childSessionKey, scope: "runtime" }],
+      ]);
       changed.mockClear();
       subagentRuns.delete(entry.runId);
       expect(changed).not.toHaveBeenCalled();
       subagentRuns.confirmRetirement(entry);
-      expect(changed.mock.calls).toEqual([[{ sessionKey: entry.childSessionKey }]]);
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: entry.childSessionKey, scope: "runtime" }],
+      ]);
       changed.mockClear();
       subagentRuns.clear();
       expect(changed.mock.calls).toEqual([[{ all: true, scope: "subagent-runs" }]]);

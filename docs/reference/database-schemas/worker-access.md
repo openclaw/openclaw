@@ -67,6 +67,9 @@ Session-reclamation retirement honors settled cleanup reported by its worker,
 including after a failed request. After an unsettled native exit, the shared-state
 cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup
 store close, keeping those writes off the host connection used by live snapshots.
+Automatic process-exit cleanup makes one attempt. A failed attempt retains worker
+and lease custody for an explicit lifecycle retry instead of repeatedly scheduling
+cleanup whenever the event loop drains.
 
 ## Migrate a caller
 
@@ -90,10 +93,14 @@ store close, keeping those writes off the host connection used by live snapshots
 For an example, ordinary durable pages in
 `src/gateway/server-methods/chat-history-pages.ts` already await
 `readSessionHistoryPageInWorker`. Raw cursor delta reads now use that same worker
-for SQLite and JSON parsing. The main thread retains display/profile projection,
-byte budgets, and fresh sharing checks. Selected/current entries, pending inputs
-and receipts, retained transcript-session keys, and lazy subagent source/visibility
-reads remain migration debt. Process-held incognito databases and the existing
+for SQLite, JSON parsing, and the subagent source/run visibility facts needed by
+the bounded delta. The main thread retains display/profile projection, byte
+budgets, and fresh sharing checks against the originally admitted sources. A
+failed visibility lookup joins worker retirement before its partial facts return;
+the host observes that failure only if projection reaches the lookup before a
+history reset. Selected/current entries, pending inputs and receipts, retained
+transcript-session keys, and SSE inline subagent visibility reads remain migration
+debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 
@@ -112,14 +119,35 @@ prepare up to 64 dirty persistent rows in the history worker: entry metadata,
 board presence, and activity-summary watermarks share one read snapshot per
 physical store. Membership comes from the worker-maintained compact projection,
 which also retains participant display facts for per-viewer reads. The projection
-retains each store through consumption
-and rejects replies after projection or registry invalidation. Rows replaced or
+retains each store through consumption and rejects replies after stored-fact or
+registry invalidation. Runtime owners classify their exact run, capacity, and
+Swarm notifications separately, so current display and activity changes do not
+discard an unchanged database read. The same projection prepares current runtime
+facts before consumption; explicit stored facts, membership changes, and unknown
+notifications retain their invalidation checks. Rows replaced or
 refreshed by direct reads while a reply is pending keep their newer facts; a dirty
 replacement retries under its own generation. Related rows use resident facts and
 existing invalidations to converge across batches.
 
-Startup/topology hydration, direct keyed and archived reads, process-held incognito
-stores, and optional transcript backfill remain migration debt. Preserve the
+Dirty resident row refreshes also prepare ACP metadata in the shared-state read
+worker. Explicit absence travels with the row facts, so presentation does not
+repeat ACP lookups or their schema admission checks. ACP publications invalidate
+the existing row revision, and entry lifecycle matching still rejects stale
+runtime metadata. Optional preview and terminal-message facts use the retained
+history worker, with foreground priority and row-generation checks before
+publication. The host evaluates fallback notices using its current runtime plugin
+aliases; configuration and model policy do not travel to the read worker.
+
+Durable keyed RPCs prepare only their selected dirty or archived rows through the
+worker before synchronous presentation; placement waits recheck that preparation.
+`sessions.get` selects session metadata from the row projection and reads raw
+recent messages in the history worker. They recheck the current config,
+sharing policy, and session identity before responding. Hot transcript reads use
+the atomic reader's cold marker; restoration runs only after a cold rejection and
+retains the bounded retry for a concurrent rearchive.
+
+Startup/topology hydration, internal synchronous keyed and archived reads, and
+process-held incognito stores remain migration debt. Preserve the
 projection and its identity/revision invalidation instead of replacing it with
 another per-request store scan. See the
 [inventory baseline](/reference/database-schemas/worker-access-inventory#profile-priority-and-current-cutover-status)
@@ -134,6 +162,18 @@ prepared facts, so uncertain backing state keeps the task alive for a later pass
 Synchronous operator inspection uses the same selected-row reader. An unavailable
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
+
+Cron retention discovery also uses the session reader worker. It validates the
+complete physical store's metadata and participants in one read snapshot. Its
+existing full-row decoder streams JSON once and retains prompt snapshots only
+for expired cron runs belonging to the logical agent. The
+host retains pending-media, descendant-settlement, and busy-session checks; the
+lifecycle mutation still compares each complete expected entry and rechecks its
+commit guard. Shared-store ownership, retention, schemas, and update behavior
+are unchanged. Discovery closes every matching retained SQLite reader before
+releasing its captured alias ownership, allowing successful Node reads to keep
+the existing worker warm. Failed reads, uncertain native cleanup, and Bun retain
+worker retirement; idle retirement remains unchanged.
 
 Shared GitHub publication prepares canonical profile identity and alias-binding
 lifetimes through the existing profile catalogue and read worker. Alias writers

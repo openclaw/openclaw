@@ -4,14 +4,29 @@ import {
   runWithGatewayDetachedWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { ensureTaskRegistryReady, tasks, withTaskRegistryMutation } from "./task-registry-state.js";
+import {
+  assertTaskRegistryRestoreNotFailed,
+  taskRegistryLog,
+  tasks,
+} from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-export async function runTaskDeliveryWithDetachedAdmission(
+export function runTaskDeliveryWithDetachedAdmission(
   taskId: string,
   deliver: (assertCurrent: () => void) => Promise<TaskRecord | null>,
 ): Promise<TaskRecord | null> {
-  ensureTaskRegistryReady({ refreshProjection: false });
+  const pending = runAdmittedTaskDelivery(taskId, deliver);
+  // Entry points return this exact promise: background failures are reported; awaited calls reject.
+  void pending.catch((error: unknown) => {
+    taskRegistryLog.warn("Background task notification failed", { taskId, error });
+  });
+  return pending;
+}
+
+async function runAdmittedTaskDelivery(
+  taskId: string,
+  deliver: (assertCurrent: () => void) => Promise<TaskRecord | null>,
+): Promise<TaskRecord | null> {
   let admitted = false;
   try {
     return await runWithGatewayDetachedWorkContinuation(async () => {
@@ -33,17 +48,9 @@ export async function runTaskDeliveryWithDetachedAdmission(
     // restart closes admission. An already-admitted delivery still reports its
     // own failures instead of hiding them behind a concurrent restart.
     if (!admitted && isGatewayRestartDraining()) {
-      return withTaskRegistryMutation(
-        () => {
-          ensureTaskRegistryReady();
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-        () => {
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-      );
+      assertTaskRegistryRestoreNotFailed();
+      const current = tasks.get(taskId);
+      return current ? cloneTaskRecord(current) : null;
     }
     throw error;
   }

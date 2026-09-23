@@ -190,6 +190,7 @@ describe("anthropic cli migration", () => {
               agentRuntime: { id: "claude-cli" },
             },
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
@@ -281,6 +282,7 @@ describe("anthropic cli migration", () => {
         defaults: {
           models: {
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
@@ -329,6 +331,7 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },

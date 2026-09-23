@@ -50,6 +50,14 @@ mixed group retains its product tests and uses separate subset timing identities
 The five `test/scripts/*.e2e.test.ts` product integration gates remain outside
 this maintainer tier.
 
+The shipped-updater composition in
+`src/cli/update-cli/update-command-legacy-finalize.test.ts` uses the existing
+`tooling-isolated` project in this tier. Its real finalizer, native restart,
+lease-authority and cancellation-cleanup cases stay intact. Ordinary product
+PRs and main pushes omit it; tooling-owner PRs and manual/full-release validation
+retain it. Direct file runs and broad `pnpm test src/cli` runs still select its
+isolated owner.
+
 Every CI manual dispatch includes the full tooling family. Full Release
 Validation's `normal_ci` child dispatches CI on the frozen candidate, where
 `Run Node test shard` executes those unchanged tests before the regular release
@@ -131,7 +139,9 @@ without the runtime-selection capability keep their original Node behavior.
 The UI job probes its actual config and arguments through the target's runtime
 owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
 and legacy compatibility targets retain Node.
-Its three native shards and three workers per row remain unchanged.
+Current-runner targets use three native shards and three workers per row,
+including exact-target Full Release Validation dispatches. Historical
+compatibility targets retain their unsharded package command.
 The UI runtime partition is applied after Vitest selects each native shard, so
 files keep their original shard ownership. A shard with no Node-only files
 finishes that partition without running other UI files. Dual validation runs
@@ -397,11 +407,16 @@ within the original 30-second request timeout. These retries exclude writes,
 caller cancellation, certificate errors, and unrecognized errors. HTTP and
 connection errors identify the request method and endpoint.
 
-If GitHub's changed-file count and file list disagree, the guards retry the complete
-file-list read after one, two, and four seconds. Each retry rereads PR metadata;
-changes to the head, target branch, or author still invalidate the evaluation.
-Both guards share the validated result and retry budget. A persistent mismatch
-fails the review and reports the expected, returned, and current file counts.
+If GitHub's changed-file count and file list disagree, or the count changes after
+validation, the script restarts the complete evaluation after one, two, and four
+minutes. These retries share the three-restart limit and job deadline with API
+recovery. Each attempt rereads the full file list, PR metadata, approvals, roles,
+and CI state; target, author, and other approval-relevant metadata must still
+match the original evaluation. A newer head supersedes the obsolete run.
+Both guards share each attempt's validated file list. Recovery also runs within
+the detection step, so a recovered mismatch does not leave an earlier step red.
+A persistent mismatch fails the review and reports the expected, returned, and
+current file counts.
 
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway

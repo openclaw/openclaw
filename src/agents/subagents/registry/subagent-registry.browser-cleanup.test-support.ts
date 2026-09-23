@@ -1,12 +1,13 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function observeRootWork(): () => Promise<void> {
+export function observeRootWork(): () => Promise<void> {
   const observations = [
     vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkContinuation"),
     // Detached completion resolves its result before this scope drains and releases its root.
@@ -58,14 +59,12 @@ export function registerBrowserCleanupBoundaryTests({
     "rechecks the %s after browser activation in registered run completion",
     async (owner) => {
       const mod = getRegistry();
-      const deps = await import("./subagent-registry-deps.js");
-      const fixtureDeps = deps.subagentRegistryDeps;
-      mod.testing.setDepsForTest();
-      mod.testing.setDepsForTest({
-        ...fixtureDeps,
-        cleanupBrowserSessionsForLifecycleEnd:
-          deps.subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd,
-      });
+      const browser = await vi.importActual<typeof import("../../../browser-lifecycle-cleanup.js")>(
+        "../../../browser-lifecycle-cleanup.js",
+      );
+      vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockImplementation(
+        browser.cleanupBrowserSessionsForLifecycleEnd,
+      );
       const closeTrackedBrowserTabsForSessions = vi
         .fn<
           typeof import("../../../plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions

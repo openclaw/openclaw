@@ -460,12 +460,3 @@ export function authorizeSessionSharingTarget(
         },
       });
 }
-
-export function authorizeSessionSharing(
-  params: Parameters<typeof resolveSessionSharingTarget>[0] & { client: GatewayClient | null },
-): ErrorShape | null {
-  const target = resolveSessionSharingTarget(params);
-  return (
-    target && authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target })
-  );
-}

@@ -38,6 +38,67 @@ function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
 }
 
 describe("resolveCronAgentConfig model policy preservation", () => {
+  it.each(
+    ["string", "object"].flatMap((shape) =>
+      [undefined, [], ["native/agent-backup"]].map((fallbacks) => ({ shape, fallbacks })),
+    ),
+  )(
+    "keeps ACP harness models out of $shape cron defaults with fallbacks $fallbacks",
+    async ({ shape, fallbacks }) => {
+      const primary = "native/primary@native:test-profile";
+      const defaultModel =
+        shape === "string" ? primary : { primary, fallbacks: ["native/default-backup"] };
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: { model: defaultModel },
+          entries: {
+            worker: {
+              runtime: { type: "acp" },
+              model: {
+                primary: "harness-only[reasoning=medium]",
+                ...(fallbacks ? { fallbacks } : {}),
+              },
+            },
+          },
+        },
+      };
+      const owner = {
+        config: cfg,
+        agentId: "worker",
+        agentDir: "/tmp/cron-acp-agent",
+        workspaceDir: "/tmp/cron-acp-workspace",
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+        modelCatalog: { entries: [], routeVariants: [] },
+      };
+      const result = await resolveCronModelSelection({
+        cfg,
+        owner,
+        agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        payload: { kind: "agentTurn", message: "scheduled work" },
+        sessionEntry: {},
+        isGmailHook: false,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        provider: "native",
+        model: "primary",
+        modelSource: "default",
+        configuredProfileId: "native:test-profile",
+        cfgWithAgentDefaults: {
+          agents: {
+            defaults: {
+              model: fallbacks === undefined ? defaultModel : { primary, fallbacks },
+            },
+          },
+        },
+      });
+    },
+  );
+
   it("keeps an agent utility alias out of the implicit cron primary without flattening its model map", async () => {
     const cfg: OpenClawConfig = {
       meta: { migrations: { utilityModelSeparation: true } },

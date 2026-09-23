@@ -7,6 +7,7 @@ import {
   getTaskFlowById,
   reloadTaskFlowRegistryFromStoreAsync,
 } from "../../tasks/task-flow-registry.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import {
@@ -34,6 +35,7 @@ afterEach(async () => {
 describe("deferred context-engine maintenance lifecycle", () => {
   it("retains live work across restart and loses it after the owning process closes", async () => {
     await withStateDirEnv("openclaw-context-maintenance-lifecycle-", async () => {
+      using deliveries = captureTaskDeliveryWork();
       vi.useFakeTimers();
       resetCommandQueueStateForTest();
       resetTaskRegistryForTests({ persist: false });
@@ -82,6 +84,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
       expect(getTaskFlowById(flowId)?.status).toBe("running");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      await deliveries.settle();
       resetAllLanes();
       await drainGlobalSingletonLifecycleState("restart");
       expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
@@ -124,6 +127,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
 
       releaseMaintenance?.();
       await deferredMaintenance;
+      await deliveries.settle();
     });
   });
 });

@@ -53,7 +53,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -149,13 +149,6 @@ async function makeStorePath(prefix: string): Promise<string> {
 const createStorePath = makeStorePath;
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
   label: string,
@@ -207,7 +200,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     );
 
     expect(
-      resolveReplySessionPreprocessingState({
+      await resolveReplySessionPreprocessingState({
         cfg: {
           agents: { list: [{ id: "ops", default: true }] },
           session: { store: storePath, mainKey: "work" },
@@ -239,7 +232,7 @@ describe("resolveReplySessionPreprocessingState", () => {
       },
     });
 
-    expect(resolvePreprocessingState(storePath)).toMatchObject({
+    expect(await resolvePreprocessingState(storePath)).toMatchObject({
       sessionKey,
       storePath,
       sessionEntry: {
@@ -268,7 +261,7 @@ describe("resolveReplySessionPreprocessingState", () => {
     const storePath = await createStorePath(`openclaw-media-preflight-invalid-${_label}-`);
     await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
 
-    expect(() => resolvePreprocessingState(storePath)).toThrow();
+    await expect(resolvePreprocessingState(storePath)).rejects.toThrow();
   });
 });
 
@@ -450,9 +443,10 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
   it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {
@@ -2701,7 +2695,7 @@ describe("initSessionState RawBody", () => {
     }
     expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
     expect(
-      resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
+      await resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
     ).toMatchObject({
       sessionKey: sourceSessionKey,
       sessionEntry: { sessionId: result.sessionId },
@@ -5201,7 +5195,7 @@ describe("drainFormattedSystemEvents", () => {
         isNewSession: false,
       });
 
-      const expectedTimestampText = requireString(expectedTimestamp, "formatted timestamp");
+      const expectedTimestampText = expectDefined(expectedTimestamp, "formatted timestamp");
       expect(result).toContain(`System: [${expectedTimestampText}] Model switched.`);
     } finally {
       resetSystemEventsForTest();

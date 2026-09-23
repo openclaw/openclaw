@@ -32,7 +32,7 @@ import {
   createMockCommandInteraction as createInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const visibleFinalReceipt = {
   counts: {

@@ -666,6 +666,21 @@ describe("worker workspace reconciliation recovery", () => {
     await fs.mkdir(path.join(local, "__pycache__"));
     await fs.writeFile(path.join(local, "__pycache__/file.pyc"), "local cache");
 
+    await expect(
+      recoverWorkerWorkspaceReconciliation({
+        root: local,
+        journal: {
+          ...legacyJournal,
+          baseEntries: legacyJournal.baseEntries.map((entry) =>
+            entry.path === ":literal.ts" && entry.type === "file"
+              ? { ...entry, sha256: "0".repeat(64) }
+              : entry,
+          ),
+        },
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("remote literal");
+
     await recoverWorkerWorkspaceReconciliation({ root: local, journal: legacyJournal });
 
     expect(await fs.readFile(path.join(local, "file.txt"), "utf8")).toBe("remote");

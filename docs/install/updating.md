@@ -107,6 +107,8 @@ include the FreeBSD fixes; changes on `main` are not a published release.
 Stop and start the Gateway through its actual supervisor or foreground process
 owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
+
+After an upgrade, check the [FreeBSD model-runtime limitation](/install/installer#install-clish) before starting agent turns.
 </Note>
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.

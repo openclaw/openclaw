@@ -10,6 +10,27 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
 const globMatchers = new Map<string, Minimatch>();
 
+export const sharedVitestExcludePatterns: readonly string[] = Object.freeze([
+  "dist/**",
+  "test/fixtures/**",
+  "apps/macos/**",
+  "apps/macos/.build/**",
+  "**/node_modules/**",
+  "**/vendor/**",
+  "dist/OpenClaw.app/**",
+  "**/._*",
+  "**/*.live.test.ts",
+  "**/*.e2e.test.ts",
+]);
+
+export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolean {
+  const normalized = file.replaceAll("\\", "/");
+  const scopedFile = scopedDir ? path.posix.relative(scopedDir, normalized) : normalized;
+  return relativizeScopedPatterns(sharedVitestExcludePatterns, scopedDir).some((pattern) =>
+    matchesVitestGlob(scopedFile, pattern),
+  );
+}
+
 export function matchesVitestGlob(value: string, pattern: string): boolean {
   // CI plans tests before installing dependencies; keep Node's matcher dependency-free.
   if (!process.versions.bun) {

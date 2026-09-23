@@ -33,7 +33,7 @@ job. Open the page that matches your task.
 | Page                                                                   | Read it when                                                                                                                           |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | [OpenAI setup](/providers/openai/setup)                                | You are connecting an account: the API-key and Codex subscription paths, route summaries, OAuth recovery, and the long-context opt-in. |
-| [OpenAI models](/providers/openai/models)                              | You are choosing a model ref: the quick-choice table, GPT-6 Astra, and the GPT-5.6 tiers.                                              |
+| [OpenAI models](/providers/openai/models)                              | You are choosing a model ref: the quick-choice table, GPT-6 Astra, Sol, Luna, and the GPT-5.6 tiers.                                   |
 | [OpenAI runtimes and Codex auth](/providers/openai/runtimes)           | You need to know which runtime runs an `openai/*` turn, and how native Codex resolves its account.                                     |
 | [OpenAI coverage and cost](/providers/openai/coverage-and-cost)        | You want the capability matrix, memory embeddings, or how subscription quota and Platform billing are reported.                        |
 | [OpenAI image and video generation](/providers/openai/image-and-video) | You are generating or editing images and video through the bundled `openai` plugin.                                                    |

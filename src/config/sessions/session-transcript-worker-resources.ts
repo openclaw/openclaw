@@ -9,11 +9,16 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  createOwnedWorkerTaskPool,
+  WorkerTaskError,
+  WorkerTaskPool,
+} from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
+  matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
@@ -38,7 +43,7 @@ import type {
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-export const historyPages = new WorkerTaskPool<
+export const historyPages = createOwnedWorkerTaskPool<
   SessionHistoryWorkerInput,
   SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
 >({
@@ -275,20 +280,31 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   operation: (scope: {
     assertCurrent: () => void;
     readStoreTarget: (
-      request: SessionStoreTargetReadRequest,
+      request: Omit<SessionStoreTargetReadRequest, "candidates">,
     ) => Promise<SessionStoreTargetReadResult>;
     readTargetInventory: (
-      request: SessionStoreTargetInventoryRequest,
+      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
     ) => Promise<SessionStoreTargetInventoryResult>;
   }) => Promise<T>,
 ): Promise<T> {
+  const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
+    path,
+    physicalPath,
+    scope,
+  }));
+  const selected = capturedCandidates.map(({ physicalPath, scope }) => ({
+    path: physicalPath,
+    ...(scope ? { scope } : {}),
+  }));
   historyClearTimeout(historyLane.idleTimer);
   historyLane.pending++;
   try {
     let revoked = false;
     let closing: Promise<void> | undefined;
     let nativeCleanupPending = false;
+    let candidateCleanupPending = false;
     let dispatched = false;
+    let discoveryFailed = false;
     let outcome: { value: T } | { error: unknown };
     const assertCurrent = () => {
       if (revoked) {
@@ -319,7 +335,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const retained = new Set<string>();
     try {
-      for (const candidate of candidates) {
+      for (const candidate of capturedCandidates) {
         for (const pathname of [candidate.path, candidate.physicalPath]) {
           const key = JSON.stringify([pathname, candidate.scope]);
           if (retained.has(key)) {
@@ -342,14 +358,15 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       const value = await operation({
         assertCurrent,
         readStoreTarget: async (request) => {
+          const preparedRequest = { ...request, candidates: capturedCandidates };
           const reply = await historyPages.run(
             () => {
               assertCurrent();
               dispatched = true;
               historyLane.nativeSequence++;
-              return { kind: "session-store-target", request };
+              return { kind: "session-store-target", request: preparedRequest };
             },
-            { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
+            { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
           );
           const result =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
@@ -367,15 +384,16 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           return result;
         },
         readTargetInventory: async (request) => {
+          const preparedRequest = { ...request, candidates: capturedCandidates };
           const reply = await historyPages.run(
             () => {
               assertCurrent();
               dispatched = true;
               historyLane.nativeSequence++;
-              return { kind: "session-target-inventory", request };
+              return { kind: "session-target-inventory", request: preparedRequest };
             },
             {
-              inputBytes: measureSessionStoreTargetInventoryInputBytes(request),
+              inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
               timeoutMs: 60_000,
             },
           );
@@ -389,6 +407,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           ) {
             throw new Error(
               "Session history worker returned another result instead of target inventory",
+            );
+          }
+          if (result.kind === "session-target-inventory") {
+            // Best-effort inventory can encode a failed read instead of throwing it.
+            discoveryFailed ||= result.agents.some(
+              ({ result: inventory }) =>
+                !inventory.available && inventory.reason !== "database-missing",
             );
           }
           if (result.kind === "session-target-registry-required") {
@@ -409,7 +434,38 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     // settle; a later close through an alias must never miss a retained handle.
     if (dispatched) {
       try {
-        await retire();
+        // Bun retains native statements after close; failed reads may leave unowned handles.
+        if ("error" in outcome || discoveryFailed || process.versions.bun) {
+          await retire();
+        } else {
+          const through = historyLane.nativeSequence;
+          candidateCleanupPending = true;
+          try {
+            await historyPages.closeResources(JSON.stringify(selected));
+            candidateCleanupPending = false;
+            for (const resource of historyDatabases.values()) {
+              const sequence = resource.nativeSequences.get(historyLane);
+              if (
+                sequence !== undefined &&
+                sequence <= through &&
+                selected.some((candidate) =>
+                  matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+                )
+              ) {
+                resource.nativeSequences.delete(historyLane);
+              }
+            }
+            pruneHistoryDatabases();
+          } catch (error) {
+            try {
+              await retire();
+              candidateCleanupPending = false;
+            } catch (retirementError) {
+              throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+            }
+            throw error;
+          }
+        }
       } catch (cleanupError) {
         outcome = {
           error:
@@ -419,7 +475,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         };
       }
     }
-    if (!nativeCleanupPending) {
+    if (!nativeCleanupPending && !candidateCleanupPending) {
       release();
     }
     if ("error" in outcome) {

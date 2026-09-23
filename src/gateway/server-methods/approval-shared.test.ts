@@ -15,11 +15,11 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   bindApprovalReviewerDeviceIds,
-  handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
+import { handleApprovalResolve } from "./approval.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
