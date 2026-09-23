@@ -37,7 +37,6 @@ class NativeSkillsAncestorWatcher extends EventEmitter {
     super();
     try {
       const before = readRootState(watchRoot);
-      let registeredRoot: fs.BigIntStats | undefined;
       this.watcher = fs.watch(watchRoot, (event, filename) => {
         if (this.closed || this.failed) {
           return;
@@ -72,7 +71,7 @@ class NativeSkillsAncestorWatcher extends EventEmitter {
       // A post-registration snapshot alone could describe a replacement rather
       // than the watched directory. Never adopt changed or unknown facts later.
       const after = readRootState(watchRoot);
-      registeredRoot = sameRootState(before, after) ? after : undefined;
+      const registeredRoot = sameRootState(before, after) ? after : undefined;
     } catch (error) {
       // Let the shared owner install listeners before reporting synchronous failures.
       this.failed = true;
