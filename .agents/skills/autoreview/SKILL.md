@@ -115,8 +115,8 @@ Codex defaults to `gpt-6-sol`, high reasoning, with a `gpt-6-luna` retry
 only for an account-access failure. Explicit `gpt-6-sol` selections use the same
 retry; other explicit models, including Luna and Astra, have no model fallback.
 Explicit `gpt-5.6-sol` selections retain their access-only `gpt-5.6-terra` retry.
-Unsupported `minimal` effort settings fail before review preparation instead of
-selecting an older model.
+GPT-6 Sol and Luna reject unsupported `minimal` effort before review preparation;
+an effort-only override no longer selects an older model.
 Honor explicit user engine/model choices.
 The helper does not automatically fall back between engines.
 
@@ -124,7 +124,8 @@ Use `--engine`, `--model`, and `--thinking` to override the defaults.
 `--codex-speed fast` selects priority service when supported. Only Claude accepts
 `--fallback-model`. Per-engine environment overrides use `AUTOREVIEW_<ENGINE>_*`.
 
-To require GPT-6 Astra without a model fallback, select it explicitly:
+If your account cannot access Sol or Luna, pin an available model. To require
+GPT-6 Astra without a model fallback, select it explicitly:
 
 ```bash
 "$AUTOREVIEW" --mode local --model gpt-6-astra --thinking high
