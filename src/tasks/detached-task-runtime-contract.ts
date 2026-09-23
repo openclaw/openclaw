@@ -1,6 +1,5 @@
 // Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TaskRunOwner } from "./task-registry.process-state.js";
 import type {
   JsonValue,
   TaskDeliveryState,
@@ -12,7 +11,7 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
-import type { TaskRunOwnerBinding } from "./task-run-owner.js";
+import type { TaskRunOwner, TaskRunOwnerBinding } from "./task-run-owner.types.js";
 
 // A killed subagent can still report a completion that raced the kill marker.
 // Task cancellation replaces this marker once the operator request is accepted.

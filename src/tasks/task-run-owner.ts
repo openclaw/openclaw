@@ -7,8 +7,9 @@ import {
   sameTaskRunScope,
 } from "./task-registry-records.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
-import { getTaskRegistryProcessState, type TaskRunOwner } from "./task-registry.process-state.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.js";
+import type { TaskRunOwner, TaskRunOwnerBinding } from "./task-run-owner.types.js";
 
 export function getTaskRunOwner(task: TaskRunOwner["task"]): TaskRunOwner | undefined {
   const owner = getTaskRegistryProcessState().runOwners.get(task.taskId);
@@ -19,8 +20,6 @@ export function getTaskRunOwner(task: TaskRunOwner["task"]): TaskRunOwner | unde
 export function bindTaskRunOwner(task: TaskRecord, cancel: TaskRunOwner["cancel"]): () => void {
   return withTaskRegistryMutation(() => bindCurrentTaskRunOwner(task, cancel));
 }
-
-export type TaskRunOwnerBinding = { owner: TaskRunOwner; release: () => void };
 
 export function captureTaskRunOwnerBinding(
   task: TaskPersistenceReceipt,
