@@ -87,7 +87,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readEmptyTask(); return task?.status === 'completed' ? task : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - assert:

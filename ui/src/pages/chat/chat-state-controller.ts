@@ -17,11 +17,8 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  markChatComposerEdit,
-} from "./composer-persistence.ts";
+import type { ChatComposerPersistResult } from "./composer-persistence-state.ts";
+import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, lockChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";

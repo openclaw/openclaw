@@ -185,6 +185,7 @@ flow:
                             async: true
                             expr: |
                               (async () => {
+                                await env.mock?.terminalRequesters?.settle(env.gateway);
                                 const task = await readSettledTerminalTask(terminalCase.name);
                                 if (!task) return undefined;
                                 if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(task)).length === 0) return undefined;
@@ -332,7 +333,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const tasks = (await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks ?? []; const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((title) => tasks.find((task) => task.title === title)); return selected.every((task) => task?.status === 'completed' && task?.deliveryStatus === 'delivered') ? selected : undefined; })()"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const tasks = (await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks ?? []; const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((title) => tasks.find((task) => task.title === title)); return selected.every((task) => task?.status === 'completed' && task?.deliveryStatus === 'delivered') ? selected : undefined; })()"
                   - 90000
                   - 250
               - set: privateRequests
@@ -506,7 +507,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
                   - 60000
                   - 250
               - set: restartMatches

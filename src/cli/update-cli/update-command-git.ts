@@ -523,7 +523,11 @@ export async function updateGitInstall(params: {
     ? await readPackageUpdateIdentity(installTarget.packageRoot ?? params.root)
     : undefined;
   let exposure: Awaited<ReturnType<typeof prepareGitPackageExposure>> | undefined;
-  const runUpdate = async (gitRoot: string, publishGitCheckout?: () => Promise<string>) =>
+  const runUpdate = async (
+    gitRoot: string,
+    publishGitCheckout?: () => Promise<string>,
+    gitArtifactStorageRoot?: string,
+  ) =>
     updateGitCheckout({
       ...(await buildUpdateCommandRunner()),
       gitRoot,
@@ -552,6 +556,7 @@ export async function updateGitInstall(params: {
               failureReason: "snapshot-capacity-insufficient",
             }),
         publishGitCheckout,
+        gitArtifactStorageRoot,
         validateCandidate: params.validateCandidate,
         ...(installTarget
           ? {
@@ -605,12 +610,12 @@ export async function updateGitInstall(params: {
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
-          useStagedCheckout: async (stagingRoot, publish, targetRoot) => {
+          useStagedCheckout: async (stagingRoot, publish, targetRoot, storageRoot) => {
             // Exposure must use the clone owner's pinned destination, not a
             // caller alias that transport may have retargeted meanwhile.
             updateRoot = targetRoot;
             await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
-            stagedUpdateResult = await runUpdate(stagingRoot, publish);
+            stagedUpdateResult = await runUpdate(stagingRoot, publish, storageRoot);
             if (stagedUpdateResult.root === stagingRoot) {
               stagedUpdateResult = {
                 ...stagedUpdateResult,

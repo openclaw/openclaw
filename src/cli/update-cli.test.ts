@@ -10303,7 +10303,7 @@ describe("update-cli", () => {
       const sha = "a".repeat(40);
       vi.mocked(updateGitCheckout).mockImplementationOnce(
         async ({ gitRoot: stagingRoot, opts: options }) => {
-          expect(stagingRoot).not.toBe(publishedRoot);
+          expect(options.gitArtifactStorageRoot).toBe(path.dirname(stagingRoot));
           await options.inspectGitTarget({});
           await writeOpenClawPackageFixture(stagingRoot, "2026.8.17", {
             git: true,

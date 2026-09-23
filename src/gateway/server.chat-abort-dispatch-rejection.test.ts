@@ -381,37 +381,31 @@ describe("gateway WebSocket chat abort ownership", () => {
         scope: storePath,
         identities: ["main", "agent:main:main", "sess-main"],
       });
-      expect(admissionRelease).toBeDefined();
-      // Error publication follows durable lifecycle work and precedes admission release.
-      // Join that owner so the late abort cannot race storage against a timer.
+      if (!admissionRelease) {
+        throw new Error("Held dispatch must retain its session admission");
+      }
       dispatchRelease.resolve();
       await admissionRelease;
+      // Admission releases after error publication; this response also joins its wire delivery.
+      const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
+      expect(barrier.ok).toBe(true);
+      expect(terminalStates).toEqual(["error"]);
 
-      // This response follows the published terminal on the same socket.
       const lateAbort = await rpcReq(socket, "chat.abort", {
         sessionKey: "main",
         runId,
       });
       expect(lateAbort.ok).toBe(true);
       expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
-      expect(terminalStates).toEqual(["error"]);
 
       const replay = await rpcReq(socket, "chat.send", sendParameters);
       expect(replay.ok).toBe(false);
       expect(replay.payload).toMatchObject({ runId, status: "error" });
       expect(terminalStates).toEqual(["error"]);
     } finally {
-      admissionRelease ??= getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: ["main", "agent:main:main", "sess-main"],
-      });
       dispatchRelease.resolve();
-      await runQaGatewayFixture(
-        async () => {
-          await admissionRelease;
-        },
-        () => socket.close(),
-      );
+      await admissionRelease;
+      socket.close();
     }
   });
 
