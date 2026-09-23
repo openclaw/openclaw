@@ -711,6 +711,10 @@ extension SettingsProTab {
         case .diagnostics: String(localized: "Diagnostics")
         case .licenses: String(localized: "Licenses")
         case .about: String(localized: "About")
+        case .watchMessageDelivery: String(localized: "Message Delivery")
+        case let .licenseDocument(id): LicenseDocumentLoader.title(from: id)
+        case .gatewayCustomHeaders: String(localized: "Custom Headers")
+        case .gatewayDiscoveryLogs: String(localized: "Discovery Logs")
         }
     }
 

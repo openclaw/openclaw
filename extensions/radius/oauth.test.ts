@@ -1,6 +1,9 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import radiusPlugin from "./index.js";
 import { loginRadiusOAuth, refreshRadiusOAuthCredential } from "./oauth.js";
 
 const { guardedFetch, release } = vi.hoisted(() => ({
@@ -95,6 +98,63 @@ afterEach(() => {
 });
 
 describe("Radius OAuth", () => {
+  it.each([false, true])(
+    "presents the registered device grant and cancels before token or catalog requests (remote=%s)",
+    async (isRemote) => {
+      device({ expires_in: 300, interval: 5 });
+      const provider = await registerSingleProviderPlugin(radiusPlugin);
+      const method = provider.auth.find((entry) => entry.id === "oauth");
+      if (!method) {
+        throw new Error("Radius did not register its OAuth method");
+      }
+      const abort = new AbortController();
+      const { ctx, progress } = context({ isRemote, signal: abort.signal });
+      const effects: string[] = [];
+      const waiting = createDeferred<void>();
+      ctx.openUrl = vi.fn(async () => {
+        effects.push("open-url");
+      });
+      ctx.prompter.deviceCode = vi.fn(async () => {
+        effects.push("device-code");
+      });
+      ctx.prompter.progress = vi.fn(() => {
+        effects.push("wait");
+        waiting.resolve();
+        return progress;
+      });
+      const result = method.run(ctx).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          waiting.promise,
+          result.then(() => {
+            throw new Error("Radius sign-in settled before the approval wait");
+          }),
+        ]);
+        expect(effects).toEqual(["open-url", "device-code", "wait"]);
+        expect(ctx.openUrl).toHaveBeenCalledExactlyOnceWith("https://radius.earendil.com/device");
+        expect(ctx.prompter.deviceCode).toHaveBeenCalledExactlyOnceWith({
+          title: "Radius sign-in",
+          code: "ABCD-EFGH",
+          expiresInMinutes: 5,
+          message: "Enter this one-time code to sign in to Radius.",
+        });
+        abort.abort();
+        await expect(result).resolves.toMatchObject({ error: { name: "AbortError" } });
+        expect(progress.stop).toHaveBeenCalledExactlyOnceWith("Radius sign-in stopped");
+        expect(vi.getTimerCount()).toBe(0);
+        expect(guardedFetch).toHaveBeenCalledOnce();
+        expect(requestAt(0).url).toBe("https://radius.pi.dev/v1/oauth/device");
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        abort.abort();
+        await result;
+      }
+    },
+  );
+
   it("accepts the fractional polling interval returned by the live Radius service", async () => {
     device({ interval: 0.1 });
     token();

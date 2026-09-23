@@ -292,11 +292,11 @@ describe("custodian page session lifecycle", () => {
         ...page.querySelectorAll<HTMLButtonElement>(
           ".custodian__wizard-step button:not([disabled])",
         ),
-      ].find((option) => option.textContent?.trim() === "Twitch");
+      ].find((candidate) => candidate.textContent?.trim() === "Twitch");
       expect(button).toBeDefined();
+      expect(button?.disabled).toBe(false);
       return button!;
     });
-
     twitch.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));

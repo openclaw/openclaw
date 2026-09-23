@@ -73,6 +73,7 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 export async function handleChatHistoryRequest({
+  req,
   params,
   respond,
   client,
@@ -198,8 +199,7 @@ export async function handleChatHistoryRequest({
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
       allowPluginNormalization: false,
     });
-    const requested = typeof limit === "number" ? limit : 200;
-    const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
+    const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, typeof limit === "number" ? limit : 200);
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
@@ -254,10 +254,15 @@ export async function handleChatHistoryRequest({
             {
               config: cfg,
               phase: method,
+              workerTasks: true,
               attributes: {
                 limit: max,
                 hasMessageId: Boolean(messageId),
                 hasOffset: offset !== undefined,
+                // Private timeline correlation only; public proof exposes proxy ordinals.
+                ...(typeof req?.id === "string" && req.id.length > 0 && req.id.length <= 128
+                  ? { requestId: req.id }
+                  : {}),
               },
             },
           );

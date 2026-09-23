@@ -16,6 +16,8 @@ public enum OpenClawChatTransportEvent: Sendable {
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
+    /// Terminal for this transport, without aborting accepted Gateway runs.
+    case routeUnavailable(reason: String)
     case seqGap
 }
 
@@ -835,6 +837,8 @@ public struct OpenClawChatSwarmRouteLease: Sendable {
 public protocol OpenClawChatTransport: Sendable {
     /// A fixed agent fallback sharing the same Gateway connection and route guards.
     func scoped(toAgentID agentID: String) -> (any OpenClawChatTransport)?
+    /// A logical-target copy retaining the same captured connection lifetime.
+    func scoped(toSessionTarget target: OpenClawChatSessionTarget) -> (any OpenClawChatTransport)?
     func createSession(
         key: String,
         label: String?,
@@ -991,6 +995,13 @@ extension OpenClawChatTransport {
 
     public func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
         nil
+    }
+
+    public func scoped(toSessionTarget target: OpenClawChatSessionTarget) -> (any OpenClawChatTransport)? {
+        if OpenClawChatSessionKey.agentID(from: target.sessionKey) == nil, let agentID = target.agentID {
+            return self.scoped(toAgentID: agentID)
+        }
+        return self
     }
 
     public var supportsComposerCapabilities: Bool {

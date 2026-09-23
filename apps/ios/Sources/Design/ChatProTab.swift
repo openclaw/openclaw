@@ -15,26 +15,28 @@ private struct ChatScrollEdgeTreatment: ViewModifier {
     }
 }
 
+enum IOSChatModalRequest {
+    case backgroundTasks(agentID: String)
+    case newSessionOptions(OpenClawChatViewModel)
+    case transcriptShare(URL)
+    case transcriptExportError
+}
+
+@MainActor
+struct IOSChatModalPublication {
+    let isCurrent: () -> Bool
+    let present: (IOSChatModalRequest) -> Void
+}
+
 struct ChatProTab: View {
-    enum GatewayStatusTone: Equatable {
-        case success
-        case warning
-        case error
-    }
-
-    private struct TranscriptShareItem: Identifiable {
-        let id = UUID()
-        let fileURL: URL
-    }
-
-    private enum PendingChatAction {
-        case backgroundTasks
-        case exportTranscript
-        case gatewaySettings
-        case newSessionOptions
+    private struct VisibleChatIdentity: Equatable {
+        let model: ObjectIdentifier?
+        let binding: ObjectIdentifier?
+        let presentationID: UUID?
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(NativeActionRouter.self) private var nativeActions: NativeActionRouter?
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -42,42 +44,129 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
-    @State private var transcriptShareItem: TranscriptShareItem?
-    @State private var showsTranscriptExportError = false
-    @State private var showsBackgroundTasks = false
-    @State private var showsNewSessionOptions = false
+    @State private var chatRegistrationID: UUID?
+    @State private var registeredChatIdentity: VisibleChatIdentity?
+    @State private var lifetime = IOSNativePresentationLifetime()
     @State private var showsChatActions = false
-    @State private var pendingChatAction: PendingChatAction?
+    @State private var pendingChatAction: (@MainActor () -> Void)?
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
-    let openSettings: (() -> Void)?
+    let nativeBinding: IOSNativeActionBinding?
+    let nativePresentationID: UUID?
+    let openSettings: (@MainActor () -> Void)?
+    let prepareModal: ((OpenClawChatViewModel) -> IOSChatModalPublication?)?
+    let retainModalPresentation: @MainActor () -> Bool
 
     init(
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String? = nil,
         showsAgentBadge: Bool = true,
-        openSettings: (() -> Void)? = nil)
+        nativeBinding: IOSNativeActionBinding? = nil,
+        nativePresentationID: UUID? = nil,
+        openSettings: (@MainActor () -> Void)? = nil,
+        prepareModal: ((OpenClawChatViewModel) -> IOSChatModalPublication?)? = nil,
+        retainModalPresentation: @escaping @MainActor () -> Bool = { false })
     {
         self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.showsAgentBadge = showsAgentBadge
+        self.nativeBinding = nativeBinding
+        self.nativePresentationID = nativePresentationID
         self.openSettings = openSettings
+        self.prepareModal = prepareModal
+        self.retainModalPresentation = retainModalPresentation
     }
 
     var body: some View {
-        self.content
-            .disabled(self.isGatewayTransitionPending)
-            .task {
-                if self.speech == nil {
-                    let gateway = self.appModel.operatorSession
-                    self.speech = OpenClawChatSpeechController { text in
-                        try await ChatMessageSpeechClient.synthesize(text: text, gateway: gateway)
-                    }
+        // Content identity changes must not dismantle the ChatProTab lifetime anchor.
+        ZStack {
+            self.content
+        }
+        .disabled(self.isGatewayTransitionPending)
+        .task(id: self.visibleChatIdentity) {
+            guard !Task.isCancelled else { return }
+            await self.registerVisibleChat()
+        }
+        .background(IOSNativePresentationAnchor(lifetime: self.lifetime).frame(width: 0, height: 0))
+        .onDisappear {
+            #if DEBUG
+            self.nativeActions?.testLifetimeObservation?("chat-on-disappear")
+            #endif
+            if self.retainModalPresentation() {
+                _ = self.nativeActions?.userNavigationDidChange(
+                    presentationID: self.nativePresentationID,
+                    disposition: .chatModal)
+            } else {
+                self.lifetime.release()
+            }
+        }
+    }
+
+    private var visibleChatIdentity: VisibleChatIdentity {
+        VisibleChatIdentity(
+            model: self.viewModel.map(ObjectIdentifier.init),
+            binding: self.nativeBinding.map(ObjectIdentifier.init),
+            presentationID: self.nativePresentationID)
+    }
+
+    private func registerVisibleChat() async {
+        let owner = self.appModel.chatPresentation
+        guard let context = await owner.visiblePresentation(
+            appModel: self.appModel,
+            nativeBinding: self.nativeBinding,
+            nativeActions: self.nativeActions,
+            presentationID: self.nativePresentationID), !Task.isCancelled
+        else { return }
+        let viewModel = context.viewModel
+        // A covering modal retains the exact registration. Returning visibility
+        // does not issue new custody for an unchanged model, binding and root.
+        if let id = self.chatRegistrationID, self.nativeActions?.chatRegistrationID == id,
+           self.registeredChatIdentity == self.visibleChatIdentity
+        {
+            return
+        }
+        // RootTabs owns the model; registration only attests this visible chat.
+        self.chatRegistrationID = self.nativeActions?.registerChat(
+            viewModel,
+            ownerID: context.ownerID,
+            agentID: context.agentID,
+            transport: context.transport,
+            presentationID: self.nativePresentationID)
+        if let id = self.chatRegistrationID {
+            self.registeredChatIdentity = self.visibleChatIdentity
+            let router = self.nativeActions
+            #if DEBUG
+            self.lifetime.testLifetimeObservation = { [weak router] event in
+                router?.testLifetimeObservation?("chat-\(event)")
+            }
+            #endif
+            self.lifetime.own(id) {
+                #if DEBUG
+                router?.testLifetimeObservation?(
+                    "chat-cleanup current=\(router?.chatRegistrationID == id) " +
+                        "registered=\(router?.chatRegistrationID != nil)")
+                #endif
+                router?.unregisterChat(id)
+                if self.chatRegistrationID == id {
+                    self.chatRegistrationID = nil
+                    self.registeredChatIdentity = nil
                 }
             }
+        }
+        self.speech?.stop()
+        let binding = context.transport?.nativeBinding
+        let gateway = self.appModel.operatorSession
+        self.speech = OpenClawChatSpeechController { text in
+            if let binding {
+                return try await ChatMessageSpeechClient.synthesize(text: text) { method, params, timeout in
+                    try await binding.request(method: method, paramsJSON: params, timeoutSeconds: timeout)
+                }
+            }
+            return try await ChatMessageSpeechClient.synthesize(text: text, gateway: gateway)
+        }
     }
 
     private var isGatewayTransitionPending: Bool {
@@ -132,33 +221,6 @@ struct ChatProTab: View {
                         self.chatActionsMenu
                     }
                 }
-            }
-            .sheet(item: self.$transcriptShareItem) { item in
-                OpenClawChatFileShareSheet(fileURL: item.fileURL)
-            }
-            .sheet(isPresented: self.$showsBackgroundTasks) {
-                BackgroundTasksScreen(agentID: self.currentAgentID)
-            }
-            .sheet(isPresented: self.$showsNewSessionOptions) {
-                if let viewModel {
-                    ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                        self.showsNewSessionOptions = false
-                    }
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-                }
-            }
-            .alert(
-                String(localized: "Unable to Export Transcript"),
-                isPresented: self.$showsTranscriptExportError)
-            {
-                Button(role: .cancel) {} label: {
-                    Text("OK")
-                        .font(OpenClawType.body)
-                }
-            } message: {
-                Text("OpenClaw could not prepare the Markdown file.")
-                    .font(OpenClawType.body)
             }
     }
 
@@ -520,7 +582,11 @@ struct ChatProTab: View {
                     systemImage: "slider.horizontal.3",
                     disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
                 {
-                    self.pendingChatAction = .newSessionOptions
+                    guard let viewModel, let publication = self.prepareModal?(viewModel) else { return }
+                    self.pendingChatAction = {
+                        guard publication.isCurrent() else { return }
+                        publication.present(.newSessionOptions(viewModel))
+                    }
                 }
                 if let viewModel {
                     ChatModelControlsMenuItems(
@@ -548,19 +614,28 @@ struct ChatProTab: View {
                     systemImage: "clock.arrow.circlepath",
                     disabled: !self.appModel.isOperatorGatewayConnected)
                 {
-                    self.pendingChatAction = .backgroundTasks
+                    guard let viewModel, let publication = self.prepareModal?(viewModel) else { return }
+                    let agentID = self.currentAgentID
+                    self.pendingChatAction = {
+                        guard publication.isCurrent() else { return }
+                        publication.present(.backgroundTasks(agentID: agentID))
+                    }
                 }
                 self.chatActionButton(
                     title: "Export transcript",
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
                 {
-                    self.pendingChatAction = .exportTranscript
+                    guard let viewModel, let publication = self.prepareModal?(viewModel) else { return }
+                    self.pendingChatAction = {
+                        guard publication.isCurrent() else { return }
+                        self.exportTranscript(viewModel: viewModel, publication: publication)
+                    }
                 }
 
                 if self.openSettings != nil {
                     self.chatActionButton(title: "Gateway settings", systemImage: "network") {
-                        self.pendingChatAction = .gatewaySettings
+                        self.pendingChatAction = self.openSettings
                     }
                     .accessibilityIdentifier("chat-gateway-settings")
                 }
@@ -588,22 +663,15 @@ struct ChatProTab: View {
     }
 
     private func performPendingChatAction() {
-        guard let pendingChatAction = self.pendingChatAction else { return }
+        let action = self.pendingChatAction
         self.pendingChatAction = nil
-        switch pendingChatAction {
-        case .backgroundTasks:
-            self.showsBackgroundTasks = true
-        case .exportTranscript:
-            self.exportTranscript()
-        case .gatewaySettings:
-            self.openSettings?()
-        case .newSessionOptions:
-            self.showsNewSessionOptions = true
-        }
+        action?()
     }
 
-    private func exportTranscript() {
-        guard let viewModel else { return }
+    private func exportTranscript(
+        viewModel: OpenClawChatViewModel,
+        publication: IOSChatModalPublication)
+    {
         let title = viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName
         let filename = ChatTranscriptExporter.filename(
             sessionTitle: title,
@@ -615,9 +683,9 @@ struct ChatProTab: View {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try viewModel.exportTranscriptMarkdown().write(to: fileURL, atomically: true, encoding: .utf8)
-            self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
+            publication.present(.transcriptShare(fileURL))
         } catch {
-            self.showsTranscriptExportError = true
+            publication.present(.transcriptExportError)
         }
     }
 
@@ -636,26 +704,6 @@ struct ChatProTab: View {
             currentOwnerID: self.appModel.chatViewModelOwnerID)
     }
 
-    nonisolated static func presentationGatewayState(
-        current: GatewayDisplayState,
-        isAttachmentOwnerPinned: Bool,
-        capturedOwnerID: String,
-        currentOwnerID: String) -> GatewayDisplayState
-    {
-        if isAttachmentOwnerPinned, capturedOwnerID != currentOwnerID {
-            return .disconnected
-        }
-        return current
-    }
-
-    /// Attachment pinning blocks new capture, but starting or active capture must keep its stop control.
-    nonisolated static func shouldExposeCaptureControl(
-        isAttachmentOwnerPinned: Bool,
-        isCaptureInFlight: Bool) -> Bool
-    {
-        !isAttachmentOwnerPinned || isCaptureInFlight
-    }
-
     private var gatewayAccessibilityLabel: String {
         "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
     }
@@ -671,43 +719,6 @@ struct ChatProTab: View {
             OpenClawBrand.statusWarning
         case .error:
             OpenClawBrand.statusError
-        }
-    }
-
-    nonisolated static func gatewayStatusTone(
-        state: GatewayDisplayState,
-        isGatewayUsable: Bool) -> GatewayStatusTone
-    {
-        switch state {
-        case .connected:
-            isGatewayUsable ? .success : .warning
-        case .connecting, .error:
-            .warning
-        case .disconnected:
-            .error
-        }
-    }
-
-    nonisolated static func gatewayStatusShouldExpand(
-        state: GatewayDisplayState,
-        isGatewayUsable: Bool,
-        isManuallyExpanded: Bool) -> Bool
-    {
-        isManuallyExpanded || self.gatewayStatusTone(
-            state: state,
-            isGatewayUsable: isGatewayUsable) != .success
-    }
-
-    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
-        switch state {
-        case .connected:
-            isGatewayUsable ? "Connected" : "Unavailable"
-        case .connecting:
-            "Connecting"
-        case .error:
-            "Attention"
-        case .disconnected:
-            "Offline"
         }
     }
 
@@ -749,8 +760,13 @@ struct ChatProTab: View {
         self.viewModel?.isAttachmentOwnerPinned == true
     }
 
+    private var hasProtectedComposer: Bool {
+        self.appModel.chatPresentation.hasProtectedComposer(appModel: self.appModel)
+    }
+
     private var currentAgentID: String {
-        self.normalized(self.appModel.chatAgentId) ?? "main"
+        self.appModel.chatPresentation.transport?.nativeBinding?.session.agentID ??
+            self.nativeBinding?.session.agentID ?? self.normalized(self.appModel.chatAgentId) ?? "main"
     }
 
     private var currentActiveAgent: AgentSummary? {
@@ -758,7 +774,7 @@ struct ChatProTab: View {
     }
 
     private var activeAgentID: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentID : self.currentAgentID
+        self.hasProtectedComposer ? self.appModel.chatPresentation.presentationAgentID : self.currentAgentID
     }
 
     private var activeAgent: AgentSummary? {
@@ -777,8 +793,7 @@ struct ChatProTab: View {
     }
 
     private var agentDisplayName: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentName : self
-            .currentAgentDisplayName
+        self.hasProtectedComposer ? self.appModel.chatPresentation.presentationAgentName : self.currentAgentDisplayName
     }
 
     private var currentAgentBadge: String {
@@ -792,7 +807,7 @@ struct ChatProTab: View {
     }
 
     private var agentBadge: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
+        self.hasProtectedComposer ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
     }
 
     nonisolated static func initialsBadge(for displayName: String) -> String {
@@ -822,5 +837,70 @@ struct ChatProTab: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension ChatProTab {
+    enum GatewayStatusTone: Equatable {
+        case success
+        case warning
+        case error
+    }
+
+    nonisolated static func presentationGatewayState(
+        current: GatewayDisplayState,
+        isAttachmentOwnerPinned: Bool,
+        capturedOwnerID: String,
+        currentOwnerID: String) -> GatewayDisplayState
+    {
+        if isAttachmentOwnerPinned, capturedOwnerID != currentOwnerID {
+            return .disconnected
+        }
+        return current
+    }
+
+    /// Attachment pinning blocks new capture, but starting or active capture must keep its stop control.
+    nonisolated static func shouldExposeCaptureControl(
+        isAttachmentOwnerPinned: Bool,
+        isCaptureInFlight: Bool) -> Bool
+    {
+        !isAttachmentOwnerPinned || isCaptureInFlight
+    }
+
+    nonisolated static func gatewayStatusTone(
+        state: GatewayDisplayState,
+        isGatewayUsable: Bool) -> GatewayStatusTone
+    {
+        switch state {
+        case .connected:
+            isGatewayUsable ? .success : .warning
+        case .connecting, .error:
+            .warning
+        case .disconnected:
+            .error
+        }
+    }
+
+    nonisolated static func gatewayStatusShouldExpand(
+        state: GatewayDisplayState,
+        isGatewayUsable: Bool,
+        isManuallyExpanded: Bool) -> Bool
+    {
+        isManuallyExpanded || self.gatewayStatusTone(
+            state: state,
+            isGatewayUsable: isGatewayUsable) != .success
+    }
+
+    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
+        switch state {
+        case .connected:
+            isGatewayUsable ? "Connected" : "Unavailable"
+        case .connecting:
+            "Connecting"
+        case .error:
+            "Attention"
+        case .disconnected:
+            "Offline"
+        }
     }
 }

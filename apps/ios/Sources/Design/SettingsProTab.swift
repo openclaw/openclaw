@@ -90,9 +90,15 @@ struct SettingsProTab: View {
     }
 
     var body: some View {
-        self.settingsModalPresentation(
-            self.settingsLifecycle(
-                self.settingsContent))
+        // Detail routes used to be direct NavigationLink destinations. Keep their
+        // own lifecycle; entering a document must not run Gateway panel setup.
+        if let directRoute, directRoute.isDetail {
+            destination(for: directRoute)
+        } else {
+            self.settingsModalPresentation(
+                self.settingsLifecycle(
+                    self.settingsContent))
+        }
     }
 
     @ViewBuilder private var settingsContent: some View {

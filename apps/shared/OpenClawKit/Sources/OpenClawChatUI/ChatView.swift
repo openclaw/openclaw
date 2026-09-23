@@ -144,10 +144,7 @@ public struct OpenClawChatView: View {
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
-    @State private var fullMessageRequest: ChatFullMessageReaderRequest?
-    #if os(iOS)
-    @State private var selectTextMessage: OpenClawChatMessage?
-    #endif
+    @ChatModalState private var modals
     @State private var turnRecapResolver = ChatTurnRecapResolver()
     @State private var turnRecap: ChatTurnRecap?
     @State private var turnRecapSessionKey: String?
@@ -289,16 +286,7 @@ public struct OpenClawChatView: View {
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
-        .sheet(item: self.$fullMessageRequest) { request in
-            ChatFullMessageReader(
-                request: request,
-                markdownVariant: self.markdownVariant)
-        }
-        #if os(iOS)
-        .sheet(item: self.$selectTextMessage) {
-            ChatSelectableTextSheet(text: ChatMessageVisibleText.copyText(in: $0))
-        }
-        #endif
+        .modifier(self.$modals.originating(in: self.viewModel))
     }
 
     private var content: some View {
@@ -847,7 +835,9 @@ public struct OpenClawChatView: View {
             case let .completedWork(work):
                 let visible = work.messages.filter(self.shouldDisplayMessage)
                 return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
+                    anchorID: work.anchorID,
+                    messages: visible,
+                    durationMilliseconds: work.durationMilliseconds))
             default:
                 return row
             }
@@ -1367,7 +1357,7 @@ extension OpenClawChatView {
     private func selectTextButton(for message: OpenClawChatMessage) -> some View {
         if !ChatMessageVisibleText.copyText(in: message).isEmpty {
             Button {
-                self.selectTextMessage = message
+                self.modals.owner.present(message, at: \.selectText, capture: self.modals.capture())
             } label: {
                 Label {
                     Text("Select Text").font(OpenClawChatTypography.body)
@@ -1388,9 +1378,12 @@ extension OpenClawChatView {
            !messageID.isEmpty
         {
             Button {
-                self.fullMessageRequest = ChatFullMessageReaderRequest(
-                    viewModel: self.viewModel,
-                    messageID: messageID)
+                self.modals.owner.present(
+                    .init(
+                        request: ChatFullMessageReaderRequest(viewModel: self.viewModel, messageID: messageID),
+                        markdownVariant: self.markdownVariant),
+                    at: \.fullMessage,
+                    capture: self.modals.capture())
             } label: {
                 Label {
                     Text("Open Full Message")

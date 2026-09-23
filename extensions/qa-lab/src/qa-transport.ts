@@ -147,13 +147,23 @@ type QaTransportFailureAssertionOptions = {
 };
 
 type QaTransportOutboundMatch = {
-  conversation?: QaBusInboundMessageInput["conversation"];
-  senderId?: string;
-  sinceIndex?: number;
-  textIncludes?: string;
-  threadId?: string;
   timeoutMs?: number;
-};
+} & (
+  | {
+      expectedFailure?: never;
+      conversation?: QaBusInboundMessageInput["conversation"];
+      senderId?: string;
+      sinceIndex?: number;
+      textIncludes?: string;
+      threadId?: string;
+    }
+  | {
+      sinceIndex: number;
+      expectedFailure: Pick<QaBusMessage, "conversation" | "senderId" | "text"> & {
+        threadId: string | null;
+      };
+    }
+);
 
 type QaTransportWaitForNoOutboundInput = {
   quietMs?: number;
@@ -420,6 +430,28 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     return await waitForQaTransportCondition(
       () => {
         this.assertTransportHealthy();
+        if (input.expectedFailure) {
+          const expected = input.expectedFailure;
+          const observed = this.outboundSince(input.sinceIndex);
+          const candidate = observed.find(
+            (message) =>
+              !message.deleted &&
+              message.conversation.id === expected.conversation.id &&
+              message.conversation.kind === expected.conversation.kind &&
+              message.senderId === expected.senderId &&
+              message.threadId === (expected.threadId ?? undefined) &&
+              message.text === expected.text &&
+              Boolean(extractQaFailureReplyText(message)),
+          );
+          // A negative-path proof may consume one exact reply; every other account failure aborts.
+          for (const message of observed) {
+            const failure = extractQaFailureReplyText(message);
+            if (failure && message !== candidate) {
+              throw new Error(failure);
+            }
+          }
+          return candidate;
+        }
         assertNoFailureReplies(this.state, {
           accountId: this.accountId,
           sinceIndex: input.sinceIndex,

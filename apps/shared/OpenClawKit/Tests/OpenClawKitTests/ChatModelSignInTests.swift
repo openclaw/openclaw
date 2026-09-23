@@ -25,13 +25,14 @@ struct ChatModelSignInTests {
                 case "wizard.next":
                     current = false
                     throw CancellationError()
-                case "wizard.cancel":
-                    cleanupAttempts += 1
-                    throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
                 default:
                     Issue.record("Unexpected sign-in request: \(method)")
                     throw CancellationError()
                 }
+            },
+            closeWizard: { _ in
+                cleanupAttempts += 1
+                throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
             },
             isCurrent: { current })
         let model = ChatModelSignInModel(context: context, onAuthChanged: { catalogRefreshes += 1 })
@@ -50,17 +51,29 @@ struct ChatModelSignInTests {
         #expect(catalogRefreshes == 0)
     }
 
-    @Test func `closing during admission cancels the old wizard without publishing into the new session`() async throws {
+    @Test(arguments: [
+        ("success", true, false),
+        ("not_started", true, false),
+        ("not_started", false, false),
+        ("may_have_executed", true, false),
+        ("may_have_executed", false, false),
+        ("may_have_executed", false, true),
+    ])
+    func `held admission preserves cleanup custody without publishing auth state`(
+        outcome: String, closeBeforeAdmission: Bool, cleanupFails: Bool) async throws
+    {
         let started = AsyncStream<Void>.makeStream()
-        var pendingLogin: CheckedContinuation<Data, Never>?
+        defer { started.continuation.finish() }
+        var pendingLogin: CheckedContinuation<Data, any Error>?
         var current = true
         var admitted = false
+        var cleanupShouldFail = cleanupFails
         var statusReads = 0
         var newSessionCatalogRefreshes = 0
         var cancelledSessionIDs: [String] = []
         let context = OpenClawChatModelSignInContext(
             agentID: "old-agent",
-            request: { method, params in
+            request: { method, _ in
                 switch method {
                 case "models.authStatus":
                     statusReads += 1
@@ -68,45 +81,75 @@ struct ChatModelSignInTests {
                         #"{"providers":[],"providerCapabilities":[{"loginOptions":[{"id":"fixture/device","label":"Sign in"}]}]}"#
                             .utf8)
                 case "models.authLogin":
-                    return await withCheckedContinuation { continuation in
+                    return try await withCheckedThrowingContinuation { continuation in
                         pendingLogin = continuation
                         started.continuation.yield()
                     }
-                case "wizard.cancel":
-                    try cancelledSessionIDs.append(#require(params["sessionId"]?.stringValue))
-                    #expect(params["closeInput"]?.value as? Bool == true)
-                    if !admitted {
-                        throw GatewayResponseError(
-                            method: method, code: "INVALID_REQUEST", message: "Not admitted yet",
-                            details: ["code": AnyCodable("WIZARD_NOT_FOUND")])
-                    }
-                    return try JSONEncoder().encode(WizardStatusResult(status: AnyCodable("cancelled")))
                 default:
                     Issue.record("Stale sign-in must not request \(method)")
                     throw CancellationError()
                 }
+            },
+            closeWizard: { sessionID in
+                cancelledSessionIDs.append(sessionID)
+                if !admitted {
+                    throw GatewayResponseError(
+                        method: "wizard.cancel",
+                        code: "INVALID_REQUEST",
+                        message: "Not admitted yet",
+                        details: ["code": AnyCodable("WIZARD_NOT_FOUND")])
+                }
+                if cleanupShouldFail { throw URLError(.networkConnectionLost) }
+                return try JSONEncoder().encode(WizardStatusResult(status: AnyCodable("cancelled")))
             },
             isCurrent: { current })
         let model = ChatModelSignInModel(context: context, onAuthChanged: { newSessionCatalogRefreshes += 1 })
         await model.refresh()
         let option = try #require(model.authStatus?.loginOptions.first)
         let login = Task { await model.start(option) }
-        var events = started.stream.makeAsyncIterator()
-        _ = await events.next()
-        let oldSessionID = try #require(model.sessionID)
-        let response = try JSONEncoder().encode(WizardStartResult(sessionid: oldSessionID, done: false))
-        current = false
-        await model.close()
-        admitted = true
-        pendingLogin?.resume(returning: response)
-        await login.value
-        started.continuation.finish()
+        do {
+            var events = started.stream.makeAsyncIterator()
+            _ = await events.next()
+            let oldSessionID = try #require(model.sessionID)
+            if closeBeforeAdmission {
+                current = false
+                await model.close()
+            }
+            admitted = true
+            if outcome == "success" {
+                let response = try JSONEncoder().encode(WizardStartResult(sessionid: oldSessionID, done: false))
+                pendingLogin?.resume(returning: response)
+            } else {
+                pendingLogin?.resume(throwing: GatewayResponseError(
+                    method: "models.authLogin",
+                    code: "INVALID_REQUEST",
+                    message: "Selected profile changed",
+                    details: [
+                        "reason": AnyCodable("EXPECTED_PROFILE_MISMATCH"),
+                        "execution": AnyCodable(outcome),
+                    ]))
+            }
+            pendingLogin = nil
+            await login.value
 
-        #expect(cancelledSessionIDs == [oldSessionID, oldSessionID])
-        #expect(model.sessionID == nil)
-        #expect(model.step == nil)
-        #expect(statusReads == 1)
-        #expect(newSessionCatalogRefreshes == 0)
+            let expectedCloses = (closeBeforeAdmission ? 1 : 0) + (outcome == "not_started" ? 0 : 1)
+            #expect(cancelledSessionIDs == Array(repeating: oldSessionID, count: expectedCloses))
+            #expect(model.sessionID == (cleanupFails ? oldSessionID : nil))
+            #expect(model.step == nil)
+            #expect(statusReads == 1)
+            #expect(newSessionCatalogRefreshes == 0)
+            if cleanupFails {
+                cleanupShouldFail = false
+                await model.close()
+                #expect(model.sessionID == nil)
+                #expect(cancelledSessionIDs == [oldSessionID, oldSessionID])
+            }
+        } catch {
+            pendingLogin?.resume(throwing: error)
+            pendingLogin = nil
+            await login.value
+            throw error
+        }
     }
 
     @Test(arguments: ["done", "error", "cancelled"])
@@ -133,9 +176,6 @@ struct ChatModelSignInTests {
                     #expect(params["authChoice"]?.stringValue == "fixture/device")
                     return try JSONEncoder().encode(WizardStartResult(
                         sessionid: #require(params["sessionId"]?.stringValue), done: false))
-                case "wizard.cancel":
-                    #expect(terminalStatus == "cancelled")
-                    return try JSONEncoder().encode(WizardStatusResult(status: AnyCodable("cancelled")))
                 case "wizard.next":
                     if params["answer"] != nil {
                         loginFinished = true
@@ -153,6 +193,10 @@ struct ChatModelSignInTests {
                     Issue.record("Unexpected sign-in request: \(method)")
                     throw CancellationError()
                 }
+            },
+            closeWizard: { _ in
+                #expect(terminalStatus == "cancelled")
+                return try JSONEncoder().encode(WizardStatusResult(status: AnyCodable("cancelled")))
             },
             isCurrent: { true })
         let model = ChatModelSignInModel(context: context, onAuthChanged: { catalogRefreshes += 1 })
@@ -176,8 +220,8 @@ struct ChatModelSignInTests {
         #expect(model.step == nil)
         #expect(model.authStatus?.providers.first?.status == (terminalStatus == "cancelled" ? "missing" : "ok"))
         #expect(model.message == (terminalStatus == "done"
-            ? "Sign-in finished."
-            : "Sign-in ended. Review the account status before trying again."))
+                ? "Sign-in finished."
+                : "Sign-in ended. Review the account status before trying again."))
         #expect(statusReads == 2)
         #expect(catalogRefreshes == 1)
     }

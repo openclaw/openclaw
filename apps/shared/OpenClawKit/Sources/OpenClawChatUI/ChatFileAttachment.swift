@@ -43,14 +43,20 @@ struct ChatFileAttachment: View {
     let resolverReady: Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
 
-    @State private var requestID: UUID?
-    @State private var isLoading = false
-    @State private var downloadedFile: ChatDownloadedFile?
-    @State private var showsError = false
+    private struct DownloadRequest: Identifiable {
+        let id = UUID()
+        let capture: OpenClawChatModalPresentations.Capture
+    }
+
+    @State private var request: DownloadRequest?
+    @ChatModalState private var modals
 
     var body: some View {
         Button {
-            self.requestID = UUID()
+            // Capture the reader and chat owner at the tap, before the download
+            // suspends. A later completion cannot borrow a replacement screen.
+            guard let capture = self.modals.capture() else { return }
+            self.request = DownloadRequest(capture: capture)
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc")
@@ -58,12 +64,12 @@ struct ChatFileAttachment: View {
                     Text(self.label)
                         .font(OpenClawChatTypography.footnote)
                         .lineLimit(2)
-                    Text(self.isLoading ? "Downloading…" : "Download file")
+                    Text(self.request != nil ? "Downloading…" : "Download file")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if self.isLoading {
+                if self.request != nil {
                     ProgressView()
                 } else {
                     Image(systemName: "arrow.down.circle")
@@ -73,50 +79,40 @@ struct ChatFileAttachment: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .disabled(!self.resolverReady || self.isLoading)
+        .disabled(!self.resolverReady || self.request != nil)
         .accessibilityIdentifier("chat-file-download")
-        .task(id: self.requestID) {
-            guard self.requestID != nil else { return }
-            await self.download()
+        .task(id: self.request?.id) {
+            guard let request = self.request else { return }
+            await self.download(request)
         }
         .onChange(of: self.resolverReady) { _, ready in
-            if !ready { self.requestID = nil }
+            if !ready { self.request = nil }
         }
-        .alert("Unable to Download File", isPresented: self.$showsError) {
-            Button(role: .cancel) {} label: {
-                Text("OK").font(OpenClawChatTypography.body)
-            }
-        } message: {
-            Text("Reconnect and try again. If the file has expired or was removed, ask the assistant to send it again.")
-                .font(OpenClawChatTypography.body)
-        }
-        #if os(iOS)
-        .sheet(item: self.$downloadedFile) { file in
-            // The sheet retains the file until the system activity finishes.
-            OpenClawChatFileShareSheet(fileURL: file.url, onCompletion: { _ = file })
-        }
-        #endif
+        .modifier(self.$modals)
     }
 
-    @MainActor private func download() async {
-        self.isLoading = true
+    @MainActor private func download(_ request: DownloadRequest) async {
+        let owner = self.modals.owner
+        let capture = request.capture
         defer {
-            self.isLoading = false
-            self.requestID = nil
+            if self.request?.id == request.id { self.request = nil }
         }
         do {
+            guard capture.isCurrent else { return }
             let loaded = try await self.load(self.artifactId)
             try Task.checkCancellation()
             guard case let .data(media) = loaded else {
-                self.showsError = true
+                owner.present((), at: \.fileError, capture: capture)
                 return
             }
+            guard capture.isCurrent else { return }
             try Task.checkCancellation()
             let fileName = self.fileName
             let file = try await Task.detached(priority: .userInitiated) {
                 try ChatDownloadedFile(data: media.data, fileName: fileName)
             }.value
             try Task.checkCancellation()
+            guard capture.isCurrent else { return }
             #if os(macOS)
             let panel = NSSavePanel()
             panel.nameFieldStringValue = file.url.lastPathComponent
@@ -126,16 +122,16 @@ struct ChatFileAttachment: View {
                     let data = try Data(contentsOf: file.url)
                     try data.write(to: destination, options: .atomic)
                 } catch {
-                    self.showsError = true
+                    owner.present((), at: \.fileError, capture: capture)
                 }
             }
             #else
-            self.downloadedFile = file
+            owner.present(file, at: \.fileExport, capture: capture)
             #endif
         } catch is CancellationError {
             // Leaving the message or changing Gateway cancels the export.
         } catch {
-            if !Task.isCancelled { self.showsError = true }
+            if !Task.isCancelled { owner.present((), at: \.fileError, capture: capture) }
         }
     }
 }

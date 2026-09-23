@@ -53,6 +53,19 @@ struct LicenseDocumentLoaderTests {
         }
     }
 
+    @Test func `detail navigation retains only the bundled document identity`() throws {
+        let documents = LicenseDocumentLoader.bundledDocuments()
+        let document = try #require(documents.first)
+        let route = SettingsRoute.licenseDocument(id: document.id)
+        #expect(route.isDetail)
+        guard case let .licenseDocument(id) = route else { return }
+        let resolved = try #require(LicenseDocumentLoader.bundledDocuments().first { $0.id == id })
+        #expect(resolved.filename == document.filename)
+        #expect(resolved.title == document.title)
+        #expect(resolved.body == document.body)
+        #expect(!SettingsRoute.licenses.isDetail)
+    }
+
     private static func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawLicenseDocumentLoaderTests-\(UUID().uuidString)", isDirectory: true)

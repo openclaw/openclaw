@@ -2,6 +2,11 @@
 // against the trusted-proxy Gateway's supported direct-local password boundary instead.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  createDesktopProofOutputCapture,
+  desktopProofDiagnosticLogging,
+  desktopTerminationLimits,
+} from "../../../../scripts/lib/desktop-resize-proof.mts";
 import { runManagedCommand } from "../../../../scripts/lib/managed-child-process.mts";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
@@ -22,7 +27,16 @@ type ListedNode = {
 
 export async function prepareSkillLibraryNodeProcess(
   gateway: Pick<OpenClawTestInstance, "port" | "gatewayToken">,
+  options: { desktopDiagnostics?: boolean } = {},
 ) {
+  const diagnostics = desktopProofDiagnosticLogging(options.desktopDiagnostics === true);
+  let output: ReturnType<typeof createDesktopProofOutputCapture> | undefined;
+  try {
+    if (options.desktopDiagnostics)
+      output = createDesktopProofOutputCapture(desktopTerminationLimits.node);
+  } catch {
+    /* Optional diagnostics must not change node startup. */
+  }
   const node = await createOpenClawTestInstance({
     name: "skill-library-node",
     env: {
@@ -38,6 +52,7 @@ export async function prepareSkillLibraryNodeProcess(
       CODEX_HOME: undefined,
       OPENAI_API_KEY: undefined,
       ANTHROPIC_API_KEY: undefined,
+      ...diagnostics.env,
     },
   });
   const abort = new AbortController();
@@ -62,7 +77,7 @@ export async function prepareSkillLibraryNodeProcess(
     await fs.mkdir(workerTmpDir, { recursive: true, mode: 0o700 });
     await node.state.writeConfig({
       nodeHost: { workerRuns: { enabled: true } },
-      logging: { file: logFile },
+      logging: { file: logFile, ...diagnostics.logging },
     });
     const entrypoint = await node.entrypoint();
     const nodeId = loadOrCreateDeviceIdentity({ env: node.env }).deviceId;
@@ -94,11 +109,16 @@ export async function prepareSkillLibraryNodeProcess(
           signal: abort.signal,
           requireProcessTreeExit: process.platform !== "win32",
           onReady: (child) => {
-            const append = (data: Buffer) => {
+            const append = (stream: "stdout" | "stderr", data: Buffer) => {
               logs = (logs + data.toString()).slice(-8_000);
+              try {
+                output?.append(stream, data);
+              } catch {
+                output = undefined;
+              }
             };
-            child.stdout?.on("data", append);
-            child.stderr?.on("data", append);
+            child.stdout?.on("data", (data: Buffer) => append("stdout", data));
+            child.stderr?.on("data", (data: Buffer) => append("stderr", data));
           },
         }).then(
           (code) => {
@@ -160,7 +180,14 @@ export async function prepareSkillLibraryNodeProcess(
         throw error;
       }
     };
-    return { nodeId, stateDir: node.stateDir, logFile, start, stop };
+    return {
+      nodeId,
+      stateDir: node.stateDir,
+      logFile,
+      start,
+      stop,
+      diagnosticOutput: () => output?.snapshot(),
+    };
   } catch (error) {
     try {
       await stop();

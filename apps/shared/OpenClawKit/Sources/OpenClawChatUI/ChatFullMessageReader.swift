@@ -37,7 +37,7 @@ struct ChatFullMessageReader: View {
     let request: ChatFullMessageReaderRequest
     let markdownVariant: ChatMarkdownVariant
 
-    @Environment(\.dismiss) private var dismiss
+    let onClose: @MainActor () -> Void
     @State private var phase: Phase = .loading
 
     var body: some View {
@@ -73,7 +73,7 @@ struct ChatFullMessageReader: View {
             .navigationTitle("Full Message")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") { self.dismiss() }
+                    Button("Close") { self.onClose() }
                 }
             }
         }

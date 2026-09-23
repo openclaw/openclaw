@@ -10,7 +10,8 @@ struct CommandCenterTab: View {
     var headerTitle: String = "OpenClaw"
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var dashboardModel: RootSidebarModel
-    var openChat: () -> Void
+    var openChat: (OpenClawChatSessionTarget) -> Void
+    var prepareFork: (OpenClawChatSessionEntry) -> PreparedChatNavigation?
     var openSettings: () -> Void
     var openSessions: () -> Void
     var openApprovals: () -> Void
@@ -548,15 +549,17 @@ struct CommandCenterTab: View {
     private func open(_ route: WorkRoute) {
         switch route {
         case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey)
-            self.openChat()
+            self.openChat(IOSGatewayChatTransport.sessionTarget(
+                for: sessionKey ?? self.appModel.defaultChatSessionKey,
+                selectedAgentID: self.appModel.chatDeliveryAgentId))
         case .settings:
             self.openSettings()
         }
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.open(.chat(session.key))
+        self.openChat(IOSGatewayChatTransport.sessionTarget(
+            for: session.key, selectedAgentID: self.appModel.chatDeliveryAgentId, overrideAgentID: session.agentId))
     }
 
     private func openDefaultChatSession() {
@@ -606,14 +609,18 @@ struct CommandCenterTab: View {
     }
 
     private func forkSession(_ session: OpenClawChatSessionEntry) {
+        guard let prepared = prepareFork(session) else { return }
+        let fromLastCompleted = session.hasActiveRun == true
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(
-                    parentKey: session.key,
-                    fromLastCompleted: session.hasActiveRun == true)
+                let fork = try await prepared.fork(fromLastCompleted: fromLastCompleted)
+                guard prepared.isCurrent(), !Task.isCancelled else { return }
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
-                self.open(.chat(key))
+                _ = await prepared.commit(fork)
+            } catch is CancellationError {
+                return
             } catch {
+                guard prepared.isCurrent(), !Task.isCancelled else { return }
                 self.dashboardModel.reportSessionError(error)
             }
         }
@@ -827,7 +834,6 @@ struct CommandCenterTab: View {
 
 struct CommandSessionsScreen: View {
     @Environment(NodeAppModel.self) private var appModel
-    @Environment(\.dismiss) private var dismiss
     private enum GroupEditor: Equatable {
         case rename(String)
         case create
@@ -846,16 +852,19 @@ struct CommandSessionsScreen: View {
     @State private var groupPendingDelete: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
-    let openChat: () -> Void
+    let openChat: (OpenClawChatSessionTarget) -> Void
+    let prepareFork: (OpenClawChatSessionEntry) -> PreparedChatNavigation?
 
     init(
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
-        openChat: @escaping () -> Void)
+        openChat: @escaping (OpenClawChatSessionTarget) -> Void,
+        prepareFork: @escaping (OpenClawChatSessionEntry) -> PreparedChatNavigation?)
     {
         self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
+        self.prepareFork = prepareFork
     }
 
     var body: some View {
@@ -1216,13 +1225,8 @@ struct CommandSessionsScreen: View {
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.openSessionKey(session.key)
-    }
-
-    private func openSessionKey(_ key: String) {
-        self.appModel.openChat(sessionKey: key)
-        self.dismiss()
-        self.openChat()
+        self.openChat(IOSGatewayChatTransport.sessionTarget(
+            for: session.key, selectedAgentID: self.appModel.chatDeliveryAgentId, overrideAgentID: session.agentId))
     }
 
     private func patchSession(
@@ -1269,14 +1273,18 @@ struct CommandSessionsScreen: View {
     }
 
     private func forkSession(_ session: OpenClawChatSessionEntry) {
+        guard let prepared = prepareFork(session) else { return }
+        let fromLastCompleted = session.hasActiveRun == true
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(
-                    parentKey: session.key,
-                    fromLastCompleted: session.hasActiveRun == true)
+                let fork = try await prepared.fork(fromLastCompleted: fromLastCompleted)
+                guard prepared.isCurrent(), !Task.isCancelled else { return }
                 await self.refreshSessions()
-                self.openSessionKey(key)
+                _ = await prepared.commit(fork)
+            } catch is CancellationError {
+                return
             } catch {
+                guard prepared.isCurrent(), !Task.isCancelled else { return }
                 self.loadErrorText = error.localizedDescription
             }
         }

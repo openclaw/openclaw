@@ -63,7 +63,30 @@ extension SettingsProTab {
         }
     }
 
-    func destination(for route: SettingsRoute) -> some View {
+    @ViewBuilder func destination(for route: SettingsRoute) -> some View {
+        switch route {
+        case .watchMessageDelivery:
+            WatchMessageJournalView()
+        case let .licenseDocument(id):
+            if let document = LicenseDocumentLoader.bundledDocuments().first(where: { $0.id == id }) {
+                LicenseDocumentDetailView(document: document)
+            } else {
+                ContentUnavailableView(
+                    "No Licenses Bundled",
+                    systemImage: "doc.text",
+                    description: Text("License files are not available in this build."))
+                    .font(OpenClawType.body)
+            }
+        case let .gatewayCustomHeaders(gatewayStableID):
+            GatewayCustomHeadersSettingsView(gatewayStableID: gatewayStableID)
+        case .gatewayDiscoveryLogs:
+            GatewayDiscoveryDebugLogView()
+        default:
+            self.panelDestination(for: route)
+        }
+    }
+
+    private func panelDestination(for route: SettingsRoute) -> some View {
         List {
             switch route {
             case .gateway:
@@ -78,6 +101,8 @@ extension SettingsProTab {
                 self.aboutDestination
             case .licenses:
                 self.licensesDestination
+            default:
+                EmptyView()
             }
         }
         .font(OpenClawType.body)
@@ -260,9 +285,7 @@ extension SettingsProTab {
                 color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             Section {
-                NavigationLink {
-                    WatchMessageJournalView()
-                } label: {
+                NavigationLink(value: SettingsRoute.watchMessageDelivery) {
                     Label("Message Delivery", systemImage: "bubble.left.and.text.bubble.right")
                         .font(OpenClawType.body)
                 }
@@ -516,9 +539,7 @@ extension SettingsProTab {
         } else {
             Section {
                 ForEach(documents) { document in
-                    NavigationLink {
-                        LicenseDocumentDetailView(document: document)
-                    } label: {
+                    NavigationLink(value: SettingsRoute.licenseDocument(id: document.id)) {
                         Label {
                             Text(document.title)
                                 .font(OpenClawType.subhead)
@@ -919,9 +940,7 @@ extension SettingsProTab {
             self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
             self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
             if let headersStableID = self.gatewayCustomHeadersTargetStableID {
-                NavigationLink {
-                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
-                } label: {
+                NavigationLink(value: SettingsRoute.gatewayCustomHeaders(gatewayStableID: headersStableID)) {
                     Text("Custom Headers")
                         .font(OpenClawType.body)
                 }
@@ -962,9 +981,7 @@ extension SettingsProTab {
             self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
-            NavigationLink {
-                GatewayDiscoveryDebugLogView()
-            } label: {
+            NavigationLink(value: SettingsRoute.gatewayDiscoveryLogs) {
                 SettingsDetailRow(
                     "Discovery Logs",
                     value: .verbatim(self.gatewayController.discoveryStatusText))

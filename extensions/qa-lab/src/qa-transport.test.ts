@@ -459,3 +459,170 @@ describe("waitForQaTransportOutboundSequence", () => {
     });
   });
 });
+
+describe("waitForOutbound expected failures", () => {
+  function createFixture() {
+    const state = createQaBusState();
+    const assertTransportHealthy = vi.fn();
+    const adapter = createQaStateBackedTransportAdapter(state, {
+      id: "live",
+      label: "Live",
+      accountId: "sut",
+      requiredPluginIds: [],
+      supportedActions: [],
+      assertTransportHealthy,
+      sendInbound: async (input) => state.addInboundMessage(input),
+      createGatewayConfig: () => ({}),
+      waitReady: async () => undefined,
+      buildAgentDelivery: ({ target }) => ({
+        channel: "live",
+        to: target,
+        replyChannel: "live",
+        replyTo: target,
+      }),
+      handleAction: async () => undefined,
+      createReportNotes: () => [],
+    });
+    const expectedFailure = {
+      conversation: { id: "qa-operator", kind: "direct" as const },
+      senderId: "openclaw",
+      threadId: null,
+      text: "denied: Tool blocked_action not found",
+    };
+    const outbound = {
+      accountId: "sut",
+      senderId: "openclaw",
+      text: expectedFailure.text,
+      to: "dm:qa-operator",
+    };
+    return { state, adapter, assertTransportHealthy, expectedFailure, outbound };
+  }
+
+  it("still rejects an exact failure reply in the default success-only wait", async () => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    state.addOutboundMessage(outbound);
+
+    await expect(
+      adapter.waitForOutbound({ textIncludes: expectedFailure.text, sinceIndex: 0 }),
+    ).rejects.toThrow(expectedFailure.text);
+  });
+
+  it("consumes successive expected replies with global cursors and leaves normal waits strict", async () => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    state.addOutboundMessage({ ...outbound, accountId: "other" });
+    for (const marker of ["first", "second"]) {
+      const sinceIndex = state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound").length;
+      const text = `${marker}: Tool blocked_action not found`;
+      state.addInboundMessage({
+        conversation: expectedFailure.conversation,
+        senderId: "qa-operator",
+        text: expectedFailure.text,
+      });
+      state.addOutboundMessage({ ...outbound, accountId: "other" });
+      const message = state.addOutboundMessage({ ...outbound, text });
+
+      await expect(
+        adapter.waitForOutbound({ expectedFailure: { ...expectedFailure, text }, sinceIndex }),
+      ).resolves.toEqual(message);
+    }
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    const final = state.addOutboundMessage({ ...outbound, text: "normal completion" });
+    await expect(
+      adapter.waitForOutbound({ textIncludes: "normal completion", sinceIndex }),
+    ).resolves.toEqual(final);
+    expect(
+      state.getSnapshot().messages.filter((message) => message.accountId === "sut"),
+    ).toHaveLength(3);
+  });
+
+  it.each([
+    { description: "another conversation", change: { to: "dm:other" } },
+    { description: "another conversation kind", change: { to: "channel:qa-operator" } },
+    { description: "another sender", change: { senderId: "other" } },
+    { description: "an unexpected thread", change: { threadId: "42" } },
+    {
+      description: "extra failure text",
+      change: { text: "denied: Tool blocked_action not found; extra" },
+    },
+  ])("rejects an expected-looking failure from $description", async ({ change }) => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    const message = state.addOutboundMessage({ ...outbound, ...change });
+
+    await expect(adapter.waitForOutbound({ expectedFailure, sinceIndex: 0 })).rejects.toThrow(
+      message.text,
+    );
+  });
+
+  it.each(["before", "after", "duplicate"] as const)(
+    "rejects another failure %s the expected candidate",
+    async (position) => {
+      const { state, adapter, expectedFailure, outbound } = createFixture();
+      const other = {
+        ...outbound,
+        to: "dm:other",
+        text: "unexpected: Tool other_action not found",
+      };
+      if (position === "before") {
+        state.addOutboundMessage(other);
+      }
+      state.addOutboundMessage(outbound);
+      if (position !== "before") {
+        state.addOutboundMessage(position === "duplicate" ? outbound : other);
+      }
+
+      await expect(adapter.waitForOutbound({ expectedFailure, sinceIndex: 0 })).rejects.toThrow(
+        position === "duplicate" ? expectedFailure.text : other.text,
+      );
+    },
+  );
+
+  it("cannot accept a deleted candidate", async () => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    const message = state.addOutboundMessage(outbound);
+    state.deleteMessage({ accountId: "sut", messageId: message.id });
+
+    await expect(adapter.waitForOutbound({ expectedFailure, sinceIndex: 0 })).rejects.toThrow(
+      expectedFailure.text,
+    );
+  });
+
+  it("cannot accept a stale candidate or another account's current reply", async () => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    state.addOutboundMessage(outbound);
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    state.addOutboundMessage({ ...outbound, accountId: "other" });
+
+    await expect(
+      adapter.waitForOutbound({ expectedFailure, sinceIndex, timeoutMs: 5 }),
+    ).rejects.toThrow("timed out after 5ms");
+  });
+
+  it("requires the exact declared thread", async () => {
+    const { state, adapter, expectedFailure, outbound } = createFixture();
+    const message = state.addOutboundMessage({ ...outbound, threadId: "42" });
+
+    await expect(
+      adapter.waitForOutbound({
+        expectedFailure: { ...expectedFailure, threadId: "42" },
+        sinceIndex: 0,
+      }),
+    ).resolves.toEqual(message);
+  });
+
+  it("preserves transport health failures even with an exact candidate", async () => {
+    const { state, adapter, assertTransportHealthy, expectedFailure, outbound } = createFixture();
+    state.addOutboundMessage(outbound);
+    const failure = new Error("transport closed");
+    assertTransportHealthy.mockImplementation(() => {
+      throw failure;
+    });
+
+    await expect(adapter.waitForOutbound({ expectedFailure, sinceIndex: 0 })).rejects.toBe(failure);
+  });
+});

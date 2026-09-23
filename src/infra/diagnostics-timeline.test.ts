@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // Covers diagnostics timeline event writing and spans.
 import { spawnSync } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,12 +13,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
   flushDiagnosticsTimeline,
+  getActiveDiagnosticsTimelineSpan,
   isDiagnosticsTimelineEnabled,
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "./diagnostics-timeline.js";
 import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
+import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const tempDirs: string[] = [];
 const timelineUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.diagnosticsTimeline);
@@ -61,6 +67,139 @@ afterEach(async () => {
 });
 
 describe("diagnostics timeline", () => {
+  it("attributes queued and reused real worker completions before each submitting span settles", async () => {
+    const { env, path } = await createTimelineEnv();
+    const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
+      workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
+      maxWorkers: 1,
+    });
+    const counters = new SharedArrayBuffer(8);
+    const view = new Int32Array(counters);
+    const submit = (label: string, wait = false) =>
+      measureDiagnosticsTimelineSpan(
+        label,
+        async () => {
+          const spanId = getActiveDiagnosticsTimelineSpan()?.spanId;
+          const result = await pool.run({ label, counters, wait }, { timeoutMs: 10_000 });
+          const events = await readTimeline(path);
+          expect(
+            events.filter((event) => event.name === "worker.task" && event.parentSpanId === spanId),
+          ).toHaveLength(1);
+          expect(events.some((event) => event.type === "span.end" && event.spanId === spanId)).toBe(
+            false,
+          );
+          return result;
+        },
+        { env, workerTasks: true },
+      );
+    const completion = Promise.all([submit("first", true), submit("queued")]);
+    void completion.catch(() => {});
+    try {
+      await expect.poll(() => Atomics.load(view, 0)).toBe(1);
+      Atomics.store(view, 1, 1);
+      Atomics.notify(view, 1);
+      const results = await completion;
+      const reused = await submit("reused");
+      expect(results.map((result) => result.label)).toEqual(["first", "queued"]);
+      expect(results[0]?.threadId).toBe(results[1]?.threadId);
+      expect(reused.threadId).toBe(results[0]?.threadId);
+      const events = await readTimeline(path);
+      const marks = events.filter((event) => event.name === "worker.task");
+      expect(marks).toHaveLength(3);
+      expect(new Set(marks.map((event) => event.parentSpanId)).size).toBe(3);
+      for (const mark of marks) {
+        expect(attributesRecord(mark)).toMatchObject({ status: "captured", outcome: "ok" });
+        expect(attributesRecord(mark)).not.toHaveProperty("worker");
+      }
+    } finally {
+      Atomics.store(view, 1, 1);
+      Atomics.notify(view, 1);
+      await pool.close();
+      await Promise.allSettled([completion]);
+    }
+  });
+
+  it("keeps worker observation opt-in and excludes unrelated, descendant and expired spans", async () => {
+    const { env, path } = await createTimelineEnv();
+    const workers = channel("openclaw.worker.task");
+    const value = { outcome: "ok", queueMs: 1, preparationMs: 2, runMs: 3, transferMs: 0.5 };
+    let late = () => {};
+    await measureDiagnosticsTimelineSpan("default", () => workers.publish(value), { env });
+    await measureDiagnosticsTimelineSpan("disabled", () => workers.publish(value), {
+      env: { ...env, OPENCLAW_DIAGNOSTICS: "0" },
+      workerTasks: true,
+    });
+    await measureDiagnosticsTimelineSpan(
+      "owner",
+      async () => {
+        const restore = AsyncLocalStorage.snapshot();
+        late = () => restore(() => workers.publish(value));
+        await measureDiagnosticsTimelineSpan("descendant", () => workers.publish(value), { env });
+        workers.publish(value);
+      },
+      { env, workerTasks: true },
+    );
+    workers.publish(value);
+    await measureDiagnosticsTimelineSpan("successor", () => late(), { env, workerTasks: true });
+    const events = await readTimeline(path);
+    const marks = events.filter((event) => event.name === "worker.task");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.parentSpanId).toBe(events.find((event) => event.name === "owner")?.spanId);
+  });
+
+  it("bounds malformed and excess task marks without changing the original result or error", async () => {
+    const { env, path } = await createTimelineEnv();
+    const workers = channel("openclaw.worker.task");
+    const bad = {
+      get outcome(): never {
+        throw new Error("private-callback-canary");
+      },
+    };
+    const value = { outcome: "ok", queueMs: 1, preparationMs: 2, runMs: 3, transferMs: 0.5 };
+    const original = new Error("original-span-error");
+    const result = {};
+    expect(
+      await measureDiagnosticsTimelineSpan(
+        "result",
+        () => {
+          workers.publish(bad);
+          return result;
+        },
+        { env, workerTasks: true },
+      ),
+    ).toBe(result);
+    await expect(
+      measureDiagnosticsTimelineSpan(
+        "failure",
+        () => {
+          for (let index = 0; index < 20; index++) {
+            workers.publish(bad);
+            workers.publish(value);
+          }
+          throw original;
+        },
+        { env, workerTasks: true },
+      ),
+    ).rejects.toBe(original);
+    const events = await readTimeline(path);
+    const owner = events.find((event) => event.name === "failure")?.spanId;
+    const marks = events.filter(
+      (event) => event.name === "worker.task" && event.parentSpanId === owner,
+    );
+    expect(marks.map((event) => attributesRecord(event).status)).toEqual([
+      "invalid",
+      "captured",
+      "captured",
+      "captured",
+      "captured",
+      "truncated",
+    ]);
+    const before = events.length;
+    workers.publish(value);
+    expect(await readTimeline(path)).toHaveLength(before);
+    expect(JSON.stringify(events)).not.toContain("private-callback-canary");
+  });
+
   it("defers a timeline burst and writes its ordered events in one safe append", async () => {
     const { env, path } = await createTimelineEnv();
     const open = vi.spyOn(fs, "openSync");

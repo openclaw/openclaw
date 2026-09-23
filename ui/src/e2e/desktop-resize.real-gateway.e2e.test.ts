@@ -7,13 +7,15 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import { createServer } from "vite";
 import { expect, it } from "vitest";
-import type {
-  desktopProofTestReport,
-  readDesktopProofPhase,
-} from "../../../scripts/lib/desktop-resize-proof.mts";
 import {
+  desktopProofDiagnosticLogging,
   readDesktopProofGatewayCloses,
   readDesktopProofNodeStreamCloses,
+  desktopScenarioTermination,
+  encodeDesktopProofPhase,
+  withDesktopTerminationSnapshot,
+  type desktopProofTestReport,
+  type readDesktopProofPhase,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
@@ -57,11 +59,12 @@ const owners: NonNullable<Awaited<ReturnType<typeof readDesktopProofPhase>>["own
   gateway: "not-started",
   endpointTap: "not-started",
 };
+let termination: ReturnType<typeof desktopScenarioTermination> | undefined;
 function recordPhase(value: DesktopProofPhase) {
   if (fixturePath && diagnosticDirectory) {
     const file = path.join(diagnosticDirectory, "desktop-phase.json");
     // Commit before the next await; interruption during writing retains the prior record.
-    writeFileSync(`${file}.next`, JSON.stringify({ lastObservedPhase: value, owners }), {
+    writeFileSync(`${file}.next`, encodeDesktopProofPhase(value, owners, termination), {
       mode: 0o600,
     });
     renameSync(`${file}.next`, file);
@@ -211,6 +214,7 @@ suite.define(() => {
       phase("fixture");
       const fixture = await readDesktopResizeFixture(fixturePath!);
       const baseUrl = suite.server.baseUrl;
+      const diagnostics = desktopProofDiagnosticLogging(true);
       const gateway = await createOpenClawTestInstance({
         name: "desktop-resize-real-gateway",
         port: gatewayPort,
@@ -225,6 +229,7 @@ suite.define(() => {
           OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           VITEST: "1",
+          ...diagnostics.env,
         },
       });
       const state = gateway.state;
@@ -232,13 +237,29 @@ suite.define(() => {
       state.applyEnv();
       let guest: Awaited<ReturnType<typeof createDesktopResizeGuest>> | undefined;
       let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
+      let nodeOutput:
+        | Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>>["diagnosticOutput"]
+        | undefined;
       let admin: SkillLibraryWireClient | undefined;
       let nodeDeviceId: string | undefined;
       let packetProbe: Awaited<ReturnType<typeof observeDesktopEndpointPackets>> | undefined;
       const samples: Array<{ stage: string; width: number; height: number }> = [];
+      const observedRun = (run: () => Promise<void>) => (signal: AbortSignal) =>
+        withDesktopTerminationSnapshot(run, () => {
+          termination = { status: "unavailable" };
+          try {
+            termination = desktopScenarioTermination(
+              { stdout: gateway.stdout, stderr: gateway.stderr, retention: "tail" },
+              nodeOutput?.(),
+              signal.aborted || context.signal.aborted,
+            );
+          } finally {
+            recordPhase(lastPhase);
+          }
+        });
       await suite.runScenario(context, {
         retainedState: () => state.root,
-        run: async () => {
+        run: observedRun(async () => {
           phase("gateway-config");
           owners.endpointTap = "owned";
           recordPhase(lastPhase);
@@ -260,7 +281,7 @@ suite.define(() => {
             userHeader: "x-forwarded-user",
           };
           await state.writeConfig({
-            logging: { file: gatewayLogFile },
+            logging: { file: gatewayLogFile, ...diagnostics.logging },
             agents: {
               defaults: {
                 workspace: state.workspaceDir,
@@ -270,7 +291,9 @@ suite.define(() => {
             },
             cloudWorkers: {
               desktop: true,
-              profiles: { "resize-fixture": { provider: "desktop-resize-fixture", settings: {} } },
+              profiles: {
+                "resize-fixture": { provider: "desktop-resize-fixture", settings: {} },
+              },
             },
             plugins: {
               allow: ["desktop-resize-fixture"],
@@ -291,7 +314,9 @@ suite.define(() => {
             },
           });
           if (fixture.carrier === "node") {
-            node = await prepareSkillLibraryNodeProcess(gateway);
+            node = await prepareSkillLibraryNodeProcess(gateway, { desktopDiagnostics: true });
+            // Keep the owned getter after the deliberate node-stop case releases its handle.
+            nodeOutput = node.diagnosticOutput;
             nodeDeviceId = node.nodeId;
           }
           // The child hydrates its inventory at startup; test-process writes cannot publish to it.
@@ -881,7 +906,7 @@ suite.define(() => {
               2,
             ),
           );
-        },
+        }),
         close: async () => {
           const results = await Promise.allSettled([
             node?.stop(),

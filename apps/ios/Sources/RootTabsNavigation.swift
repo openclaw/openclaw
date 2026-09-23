@@ -4,7 +4,205 @@ import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var userNavigationAction: (@MainActor @Sendable () -> Bool)?
+}
+
+/// A fork keeps the click's navigation and connection owners through every await.
+/// The receipt never renews itself when a newer root, target, or route takes over.
+@MainActor
+struct PreparedChatNavigation {
+    struct Fork {
+        let target: OpenClawChatSessionTarget
+        let route: GatewayNodeSessionRoute?
+    }
+
+    let parent: OpenClawChatSessionTarget
+    let transport: any OpenClawChatTransport
+    let gatewayID: String?
+    let isLocalFixture: Bool
+    let isCurrent: @MainActor () -> Bool
+    let open: @MainActor (OpenClawChatSessionTarget) -> Bool
+
+    static func capture(
+        appModel: NodeAppModel,
+        router: NativeActionRouter?,
+        presentationID: UUID?,
+        session: OpenClawChatSessionEntry,
+        isCurrentContext: @escaping @MainActor () -> Bool,
+        currentNativeBinding: @escaping @MainActor () -> IOSNativeActionBinding?,
+        open: @escaping @MainActor (OpenClawChatSessionTarget) -> Void) -> Self?
+    {
+        guard isCurrentContext() else { return nil }
+        let authority = router?.capturePresentationAuthority(presentationID)
+        guard router == nil || authority != nil else { return nil }
+        let config = appModel.activeGatewayConnectConfig
+        let gatewayID = config?.nodeOptions.deviceAuthGatewayID ?? config?.effectiveStableID
+        let inputs = config?.controlUIInputs
+        let generation = appModel.gatewayConnectGeneration
+        let accountGeneration = appModel.operatorAuthorityGeneration
+        let selectedKey = appModel.chatSessionKey
+        let selectedAgent = appModel.chatDeliveryAgentId
+        let fixture = appModel.isScreenshotFixtureModeEnabled || appModel.isAppleReviewDemoModeEnabled
+        let binding = currentNativeBinding()
+        let isCurrent: @MainActor () -> Bool = {
+            isCurrentContext() &&
+                (router == nil || authority.map { router?.isCurrentPresentation($0) == true } == true) &&
+                appModel.activeGatewayConnectConfig?.controlUIInputs == inputs &&
+                appModel.gatewayConnectGeneration == generation &&
+                appModel.operatorAuthorityGeneration == accountGeneration &&
+                appModel.chatSessionKey == selectedKey && appModel.chatDeliveryAgentId == selectedAgent &&
+                (appModel.isScreenshotFixtureModeEnabled || appModel.isAppleReviewDemoModeEnabled) == fixture &&
+                // A newer native open can keep the same target without a selection change.
+                // Own nil-binding synchronization must not retire this receipt.
+                currentNativeBinding() === binding
+        }
+        return Self(
+            parent: IOSGatewayChatTransport.sessionTarget(
+                for: session.key,
+                selectedAgentID: selectedAgent,
+                overrideAgentID: session.agentId),
+            transport: appModel.makeChatTransport(outboxGatewayID: gatewayID),
+            gatewayID: gatewayID,
+            isLocalFixture: fixture,
+            isCurrent: isCurrent,
+            open: { target in
+                guard isCurrent() else { return false }
+                open(target)
+                return true
+            })
+    }
+
+    func fork(fromLastCompleted: Bool) async throws -> Fork {
+        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        let key: String
+        let route: GatewayNodeSessionRoute?
+        if self.isLocalFixture {
+            // Local review/screenshot transports deliberately retain their unsupported
+            // fork result. They must never fall through to a real Gateway request.
+            route = nil
+            key = try await self.transport.forkSession(
+                parentKey: self.parent.sessionKey,
+                fromLastCompleted: fromLastCompleted,
+                agentID: self.parent.agentID)
+        } else {
+            guard let transport = transport as? IOSGatewayChatTransport,
+                  let gatewayID,
+                  let captured = await transport.gateway.currentRoute(ifGatewayID: gatewayID)
+            else { throw OpenClawChatTransportSendError.notDispatched }
+            guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+            route = captured
+            do {
+                key = try await transport.forkSession(
+                    parentKey: self.parent.sessionKey,
+                    fromLastCompleted: fromLastCompleted,
+                    agentID: self.parent.agentID,
+                    ifCurrentRoute: captured)
+            } catch {
+                guard await transport.gateway.currentRoute(ifGatewayID: gatewayID) == captured,
+                      self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+                throw error
+            }
+        }
+        guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        return Fork(target: .init(sessionKey: key, agentID: self.parent.agentID), route: route)
+    }
+
+    func commit(_ fork: Fork) async -> Bool {
+        guard self.isCurrent(), !Task.isCancelled else { return false }
+        if !self.isLocalFixture {
+            guard let transport = transport as? IOSGatewayChatTransport,
+                  let gatewayID, let route = fork.route,
+                  await transport.gateway.currentRoute(ifGatewayID: gatewayID) == route
+            else { return false }
+        }
+        guard self.isCurrent(), !Task.isCancelled else { return false }
+        return self.open(fork.target)
+    }
+}
+
 extension RootTabs {
+    struct SessionObserverTaskIdentity: Equatable {
+        let sidebarRefreshID: String
+        let isSceneActive: Bool
+        let isSidebarVisible: Bool
+
+        var isObserverVisible: Bool {
+            self.isSceneActive && self.isSidebarVisible
+        }
+    }
+
+    static func initialDestination(arguments: [String]) -> SidebarDestination {
+        if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
+            return requested
+        }
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else { return .chat }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return .chat }
+        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "control", "overview": .overview
+        case "chat", "talk", "voice": .chat
+        case "agent", "agents": .agents
+        case "settings": .settings
+        default: .chat
+        }
+    }
+
+    static func requestedInitialSidebarDestination(arguments: [String]) -> SidebarDestination? {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        let requested = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return SidebarDestination.allCases.first { $0.rawValue.lowercased() == requested }
+    }
+
+    struct SidebarPagesPresentation: Identifiable, Equatable {
+        let id = UUID()
+    }
+
+    enum PresentedSheet: Identifiable, Equatable {
+        case quickSetup
+        case notificationSettings(path: String)
+        case sessionDashboard(sessionKey: String, agentId: String?)
+        case backgroundTasks(agentID: String, receipt: OpenClawChatModalPresentations.Receipt)
+        case newSessionOptions(OpenClawChatViewModel, receipt: OpenClawChatModalPresentations.Receipt)
+        case transcriptShare(URL, receipt: OpenClawChatModalPresentations.Receipt)
+
+        var chatReceipt: OpenClawChatModalPresentations.Receipt? {
+            switch self {
+            case let .backgroundTasks(_, receipt), let .newSessionOptions(_, receipt),
+                 let .transcriptShare(_, receipt): receipt
+            default: nil
+            }
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            switch (lhs, rhs) {
+            case (.quickSetup, .quickSetup): true
+            case let (.notificationSettings(left), .notificationSettings(right)): left == right
+            case let (.sessionDashboard(leftKey, leftAgent), .sessionDashboard(rightKey, rightAgent)):
+                leftKey == rightKey && leftAgent == rightAgent
+            case let (.backgroundTasks(_, left), .backgroundTasks(_, right)),
+                 let (.newSessionOptions(_, left), .newSessionOptions(_, right)),
+                 let (.transcriptShare(_, left), .transcriptShare(_, right)): left.id == right.id
+            default: false
+            }
+        }
+
+        var id: String {
+            switch self {
+            case .quickSetup: "quick-setup"
+            case .notificationSettings: "notification-settings"
+            case let .sessionDashboard(sessionKey, agentId):
+                "session-dashboard:\(agentId ?? ""):\(sessionKey)"
+            case let .backgroundTasks(_, receipt), let .newSessionOptions(_, receipt),
+                 let .transcriptShare(_, receipt): receipt.id.uuidString
+            }
+        }
+    }
+
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }

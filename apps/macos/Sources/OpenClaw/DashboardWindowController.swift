@@ -152,6 +152,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var pendingLoad: Task<Void, Never>?
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
+    #if DEBUG
+    private(set) var _testLastNavigationFailure: NavigationFailureObservation?
+    #endif
     var onClosed: (() -> Void)?
 
     init(
@@ -1601,18 +1604,21 @@ extension DashboardWindowController {
         }
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
             self.nativeBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
+        #if DEBUG
+        self.recordNavigationFailureForTesting(error, navigation: navigation, kind: .didFail)
+        #endif
         self.showLoadFailure(error)
     }
 
     func webView(
         _ webView: WKWebView,
-        didFailProvisionalNavigation _: WKNavigation!,
+        didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error)
     {
         if self.nativeBrowser.owns(webView) {
@@ -1620,6 +1626,9 @@ extension DashboardWindowController {
             return
         }
         guard webView === self.webView else { return }
+        #if DEBUG
+        self.recordNavigationFailureForTesting(error, navigation: navigation, kind: .didFailProvisionalNavigation)
+        #endif
         self.showLoadFailure(error)
     }
 
@@ -1689,6 +1698,18 @@ extension DashboardWindowController {
 
 #if DEBUG
 extension DashboardWindowController {
+    private func recordNavigationFailureForTesting(
+        _ error: Error, navigation: WKNavigation?, kind: NavigationFailureObservation.Kind)
+    {
+        self._testLastNavigationFailure = NavigationFailureObservation.recording(
+            error,
+            navigationIsNil: navigation == nil,
+            kind: kind,
+            previous: self._testLastNavigationFailure,
+            loadGeneration: self.loadGeneration,
+            navigationGeneration: self.navigationGeneration)
+    }
+
     var _testUserScripts: [WKUserScript] {
         self.webView.configuration.userContentController.userScripts
     }

@@ -221,6 +221,9 @@ struct OpenClawChatAttachmentsStrip: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(Text(verbatim: String(
+                            format: String(localized: "Remove %@"),
+                            attachment.fileName)))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -311,7 +314,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
 #if canImport(UIKit)
 struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
     let onImage: @MainActor (UIImage) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: @MainActor () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -340,11 +343,11 @@ struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
             if let image = info[.originalImage] as? UIImage {
                 self.parent.onImage(image)
             }
-            self.parent.dismiss()
+            self.parent.onDismiss()
         }
 
         func imagePickerControllerDidCancel(_: UIImagePickerController) {
-            self.parent.dismiss()
+            self.parent.onDismiss()
         }
     }
 }

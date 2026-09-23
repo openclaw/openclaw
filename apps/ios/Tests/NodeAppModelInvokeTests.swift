@@ -1209,6 +1209,30 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `ordinary root chat owner can create a session without a visible chat registration`() async throws {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        let owner = appModel.chatPresentation
+        owner.sync(appModel: appModel)
+        let chat = try #require(owner.viewModel)
+        defer { owner.viewModel?.detachTransport() }
+        chat.upsertQuestion(QuestionRecord(
+            id: "hidden-chat-question",
+            questions: [Question(
+                questionid: "choice", header: "Choice", question: "Choose the deployment target",
+                options: [QuestionOption(label: "Staging")])],
+            createdatms: 1, expiresatms: Int.max, status: .pending))
+        owner.sync(appModel: appModel)
+        #expect(owner.viewModel === chat)
+        #expect(!chat.isQuestionAuthorityRetired)
+        #expect(chat.questionCards.map(\.id) == ["hidden-chat-question"])
+        let originalTarget = chat.currentSessionTarget
+        #expect(await chat.startNewSession())
+        #expect(owner.viewModel === chat)
+        #expect(chat.currentSessionTarget != originalTarget)
+        #expect(appModel.chatSessionKey == chat.sessionKey)
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func `chat account replacement retires pinned questions and preserves attachment cleanup`(
         restoresOriginalAccount: Bool) throws

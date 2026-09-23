@@ -205,12 +205,12 @@ struct RootTabsSidebarRegressionTests {
         let selection = try Self.extract(
             source,
             from: "private func selectSidebarDestination(",
-            to: "private func handleOpenChatRequest(")
+            to: "private func handleLiveVoiceStartRequest(")
         let resetRange = try #require(selection.range(of: "self.sidebarNavigationPath.removeAll()"))
         let destinationRange = try #require(selection.range(of: "self.selectedSidebarDestination = destination"))
 
         #expect(source.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
-        #expect(navigationShell.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
+        #expect(navigationShell.contains("NavigationStack(path: self.userSettingsPath)"))
         #expect(sidebarDetail.contains("case .settings:"))
         #expect(resetRange.lowerBound < destinationRange.lowerBound)
     }

@@ -186,7 +186,13 @@ export function evaluateWorkflowExpression(
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
-      ...context.steps,
+      // GitHub evaluates a missing context property as an empty string.
+      ...Object.fromEntries(
+        Object.entries(context.steps ?? {}).map(([name, step]) => [
+          name,
+          { ...step, outcome: step.outcome ?? "" },
+        ]),
+      ),
     },
     needs: {
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },

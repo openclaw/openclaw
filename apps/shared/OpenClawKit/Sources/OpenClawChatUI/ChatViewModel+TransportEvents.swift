@@ -8,9 +8,12 @@ private let transportEventsLogger = Logger(subsystem: "ai.openclaw", category: "
 @MainActor
 private final class PendingRunOwnerReference {
     weak var value: OpenClawChatViewModel?
+    /// The arm retains its admitted route while the model remains weak.
+    let externalRoute: OpenClawChatExternalSubmissionRoute?
 
-    init(_ value: OpenClawChatViewModel) {
+    init(_ value: OpenClawChatViewModel, externalRoute: OpenClawChatExternalSubmissionRoute?) {
         self.value = value
+        self.externalRoute = externalRoute
     }
 }
 
@@ -25,6 +28,8 @@ extension OpenClawChatViewModel {
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         guard !self.isTransportDetached else { return }
         switch evt {
+        case let .routeUnavailable(reason):
+            self.detachTransport(reason: reason)
         case let .health(ok):
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
@@ -875,15 +880,19 @@ extension OpenClawChatViewModel {
     }
 
     func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
-        self.retirePendingRun(response.runId, hapticEvent: .runCompleted)
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        self.finishPendingRun(runId: response.runId, terminalState: .completed)
         self.logDiagnostic(
             "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
                 + "runId=\(response.runId) status=ok")
     }
 
     func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
+        // An aborted continuation identifies the original operation, including
+        // cached pre-admission aborts. It does not prove transcript or execution.
+        if response.isAbortedRun {
+            self.finishPendingRun(runId: response.runId, terminalState: .completed)
+            return true
+        }
         switch response.status {
         case "timeout":
             self.removePendingLocalUserEcho(for: response.runId)
@@ -923,7 +932,8 @@ extension OpenClawChatViewModel {
         after timestamp: Double?,
         terminalState: OpenClawChatRunTerminalState? = nil,
         allowNoOutputCompletion: Bool = false,
-        diagnostic: String) async -> Bool
+        diagnostic: String,
+        externalRoute: OpenClawChatExternalSubmissionRoute? = nil) async -> Bool
     {
         guard self.isCurrentPendingRunOwner(
             runId: runId,
@@ -932,14 +942,23 @@ extension OpenClawChatViewModel {
         else {
             return false
         }
-        self.logDiagnostic(diagnostic)
-        let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
-        let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
-        guard self.isCurrentPendingRunOwner(
+        let admission = await self.admitPendingRunObservation(
             runId: runId,
             sessionSnapshot: sessionSnapshot,
-            armID: armID)
-        else { return false }
+            armID: armID,
+            externalRoute: externalRoute,
+            terminalState: terminalState)
+        guard admission == .presentation else { return admission == .bookkeeping }
+        self.logDiagnostic(diagnostic)
+        let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+        let refresh = await refreshHistoryAfterRun(historyRequest: historyContext, externalRoute: externalRoute)
+        let refreshedAdmission = await self.admitPendingRunObservation(
+            runId: runId,
+            sessionSnapshot: sessionSnapshot,
+            armID: armID,
+            externalRoute: externalRoute,
+            terminalState: terminalState)
+        guard refreshedAdmission == .presentation else { return refreshedAdmission == .bookkeeping }
         // Live events advance ownership while history is in flight. A superseded snapshot
         // must not let message shape retire a run the gateway still reports in flight.
         if refresh.applied, !refresh.runSnapshotApplied { return true }
@@ -994,6 +1013,34 @@ extension OpenClawChatViewModel {
         return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
     }
 
+    private enum PendingRunAdmission {
+        case retired, bookkeeping, presentation
+    }
+
+    private func admitPendingRunObservation(
+        runId: String,
+        sessionSnapshot: SessionSnapshot,
+        armID: UInt64?,
+        externalRoute: OpenClawChatExternalSubmissionRoute?,
+        terminalState: OpenClawChatRunTerminalState?) async -> PendingRunAdmission
+    {
+        if let externalRoute, await !externalRoute.accountIsCurrent() { return .retired }
+        let canPresent = await externalRoute?.presentationIsCurrent() ?? true
+        guard self.isCurrentPendingRunOwner(runId: runId, sessionSnapshot: sessionSnapshot, armID: armID) else {
+            return .retired
+        }
+        guard canPresent else {
+            // A real terminal observation still releases this arm. Retirement of
+            // its screen alone neither completes the run nor permits projection.
+            if terminalState != nil {
+                self.retirePendingRun(runId)
+                return .retired
+            }
+            return .bookkeeping
+        }
+        return .presentation
+    }
+
     private func finishPendingRun(runId: String, terminalState: OpenClawChatRunTerminalState) {
         let hapticEvent: OpenClawChatHaptics.Event
         switch terminalState {
@@ -1003,9 +1050,14 @@ extension OpenClawChatViewModel {
             self.errorText = message
             hapticEvent = .runFailed
         }
+        // Reconciliation may have selected a newer run from this session.
+        // Retire this run without clearing that run's singleton activity.
+        let wasSelectedRun = self.liveUsageRunID == runId
         self.retirePendingRun(runId, hapticEvent: hapticEvent)
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        if wasSelectedRun {
+            self.turnToolCallsById = [:]
+            self.updateStreamingAssistantText(nil)
+        }
     }
 
     private func isCurrentPendingRunOwner(
@@ -1209,12 +1261,22 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func refreshHistoryAfterRun(historyRequest request: HistoryRequest? = nil) async
+    func refreshHistoryAfterRun(
+        historyRequest request: HistoryRequest? = nil,
+        externalRoute: OpenClawChatExternalSubmissionRoute? = nil) async
         -> RunHistoryRefreshResult
     {
         let request = request ?? self.beginHistoryRequest()
         do {
-            let payload = try await transport.requestHistory(sessionKey: request.session.key)
+            let payload: OpenClawChatHistoryPayload
+            if let externalRoute {
+                guard await externalRoute.isCurrent(), self.isCurrentSession(request.session) else { return .failed }
+                payload = try await externalRoute.lease.requestHistory(
+                    sessionKey: request.session.key, agentID: request.session.deliveryAgentID)
+                guard await externalRoute.isCurrent(), self.isCurrentSession(request.session) else { return .failed }
+            } else {
+                payload = try await transport.requestHistory(sessionKey: request.session.key)
+            }
             let runSnapshotApplied = request.runOwnershipGeneration == self.runOwnershipGeneration &&
                 request.id >= self.latestAppliedRunSnapshotRequestID
             let applied = self.applyHistoryPayload(
@@ -1242,7 +1304,8 @@ extension OpenClawChatViewModel {
     func armPendingRunOwner(
         runId: String,
         sessionSnapshot: SessionSnapshot? = nil,
-        userMessageTimestamp: Double? = nil)
+        userMessageTimestamp: Double? = nil,
+        externalRoute: OpenClawChatExternalSubmissionRoute? = nil)
     {
         self.pendingRunOwnerTasks[runId]?.cancel()
         self.nextPendingRunOwnerArmID &+= 1
@@ -1253,7 +1316,7 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerArmIDs[runId] = armID
         // One arm owns both completion waits and history polling. Rearms cancel
         // every child so stale route/session results cannot retire a successor run.
-        let owner = PendingRunOwnerReference(self)
+        let owner = PendingRunOwnerReference(self, externalRoute: externalRoute)
         let transport = self.transport
         self.pendingRunOwnerTasks[runId] = Task {
             await Self.runPendingRunOwner(
@@ -1370,6 +1433,11 @@ extension OpenClawChatViewModel {
                   sessionSnapshot: sessionSnapshot,
                   armID: armID)
         else { return nil }
+        let externalRoute = owner.externalRoute
+        if let externalRoute, await !externalRoute.accountIsCurrent() { return nil }
+        guard model.isCurrentPendingRunOwner(runId: runId, sessionSnapshot: sessionSnapshot, armID: armID) else {
+            return nil
+        }
         switch observation {
         case let .terminal(terminalState):
             let terminalAgeMs = completedObservedAtMs.map {
@@ -1386,7 +1454,8 @@ extension OpenClawChatViewModel {
                 terminalState: terminalState,
                 allowNoOutputCompletion: allowNoOutputCompletion,
                 diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
+                    + "runId=\(runId) observation=\(observation)",
+                externalRoute: externalRoute)
             return shouldContinue ? model.pendingRunTerminalRetryMs : nil
         case .checkAgain:
             let shouldContinue = await model.refreshIfPending(
@@ -1395,7 +1464,8 @@ extension OpenClawChatViewModel {
                 armID: armID,
                 after: userMessageTimestamp,
                 diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
+                    + "runId=\(runId) observation=\(observation)",
+                externalRoute: externalRoute)
             return shouldContinue ? model.pendingRunTerminalRetryMs : nil
         case .unavailable:
             return model.pendingRunUnavailableRetryMs
@@ -1467,7 +1537,8 @@ extension OpenClawChatViewModel {
             sessionSnapshot: sessionSnapshot,
             armID: armID,
             after: timestamp,
-            diagnostic: diagnostic)
+            diagnostic: diagnostic,
+            externalRoute: owner.externalRoute)
     }
 
     func clearPendingRun(

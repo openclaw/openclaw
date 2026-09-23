@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 export function createDiagnosticsFixture(state: OpenClawTestState, cleanupThrows = false) {
@@ -119,4 +119,44 @@ export function classifyConfigObservationError(error: unknown) {
     // Error getters and classification must not replace the original failure.
   }
   return classified;
+}
+
+export function classifyConfigReadErrorCode(code: string | null | undefined) {
+  return code == null
+    ? null
+    : [
+          "ENOENT",
+          "EACCES",
+          "EPERM",
+          "ENOSPC",
+          "EIO",
+          "EMFILE",
+          "SQLITE_BUSY",
+          "SQLITE_LOCKED",
+          "SQLITE_ERROR",
+        ].includes(code)
+      ? code
+      : "other";
+}
+
+export function classifyConfigReadIssues(issues: readonly ConfigValidationIssue[] | undefined) {
+  return (
+    issues?.slice(0, 8).map((issue) => ({
+      // Only fixed schema families and categories escape; validator messages
+      // can contain runner paths, authored values, or environment information.
+      field:
+        ["agents", "plugins", "commands"].find(
+          (key) => issue.path === key || issue.path.startsWith(`${key}.`),
+        ) ?? (issue.path ? "other" : "root"),
+      category: issue.message.startsWith("JSON5 parse failed:")
+        ? "parse"
+        : issue.message.startsWith("read failed:")
+          ? "read-or-observe"
+          : /include/i.test(issue.message)
+            ? "include"
+            : "validation-or-other",
+      errorName:
+        /^read failed: (TypeError|RangeError|SyntaxError|Error):/.exec(issue.message)?.[1] ?? null,
+    })) ?? []
+  );
 }

@@ -1072,7 +1072,7 @@ end
     expect(navigationTest).not.toContain("XCTExpectFailure");
     expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");
-    expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
+    expect(rootTabs).toContain("self.presentation.selectedSidebarDestination.rawValue");
   });
 
   it("requires the exact nonempty PNG manifest before Watch capture", () => {

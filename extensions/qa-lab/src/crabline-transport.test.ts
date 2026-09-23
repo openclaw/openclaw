@@ -103,6 +103,7 @@ describe("crabline transport", () => {
         const telegramConfig = gatewayConfig.channels?.telegram;
         expect(telegramConfig).toMatchObject({
           allowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
+          dmPolicy: "allowlist",
           groupAllowFrom: [expect.stringMatching(/^[1-9]\d+$/u)],
           groupPolicy: "allowlist",
         });

@@ -3,15 +3,25 @@ import OpenClawChatUI
 import OpenClawKit
 
 actor IOSSourceResourceLoader {
+    /// Source cache identity includes configured authentication and device options.
+    /// Keep those ordinary-route facts separate from captured native media access.
+    struct Connection: Sendable {
+        let config: GatewayConnectConfig
+        let gatewayID: String
+        let customHeaders: [String: String]
+    }
+
+    typealias ConnectionProvider = @MainActor @Sendable () -> Connection?
+
     private let gateway: GatewayNodeSession
-    private let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider
+    private let connectionProvider: ConnectionProvider
     private var revision: UInt64 = 0
     private var cached: (
         route: GatewayNodeSessionRoute,
-        connection: IOSMediaArtifactLoader.Connection,
+        connection: Connection,
         loader: OpenClawChatSourceResources)?
 
-    init(gateway: GatewayNodeSession, connectionProvider: @escaping IOSMediaArtifactLoader.ConnectionProvider) {
+    init(gateway: GatewayNodeSession, connectionProvider: @escaping ConnectionProvider) {
         self.gateway = gateway
         self.connectionProvider = connectionProvider
     }
@@ -66,7 +76,7 @@ actor IOSSourceResourceLoader {
     }
 
     private func isCurrent(
-        connection: IOSMediaArtifactLoader.Connection,
+        connection: Connection,
         route: GatewayNodeSessionRoute,
         revision: UInt64) async -> Bool
     {
@@ -78,8 +88,8 @@ actor IOSSourceResourceLoader {
     }
 
     private static func sameConnection(
-        _ lhs: IOSMediaArtifactLoader.Connection,
-        _ rhs: IOSMediaArtifactLoader.Connection) -> Bool
+        _ lhs: Connection,
+        _ rhs: Connection) -> Bool
     {
         lhs.gatewayID == rhs.gatewayID && lhs.config.hasSameConnectionInputs(as: rhs.config) &&
             lhs.customHeaders == rhs.customHeaders
@@ -88,7 +98,7 @@ actor IOSSourceResourceLoader {
     private func request(
         url: URL,
         maximumBytes: Int,
-        connection: IOSMediaArtifactLoader.Connection,
+        connection: Connection,
         route: GatewayNodeSessionRoute,
         revision: UInt64) async throws -> (Data, URLResponse)
     {

@@ -699,16 +699,28 @@ final class NodeAppModel {
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
-    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
+    func makeChatTransport(
+        outboxGatewayID: String? = nil,
+        nativeBinding: IOSNativeActionBinding? = nil) -> any OpenClawChatTransport
+    {
+        if let nativeBinding {
+            return IOSGatewayChatTransport(
+                gateway: nativeBinding.gateway,
+                globalAgentId: nativeBinding.session.agentID,
+                outboxGatewayID: nativeBinding.session.owner.gatewayID,
+                mediaArtifactLoader: IOSMediaArtifactLoader(
+                    connectionProvider: { nativeBinding.mediaConnection }),
+                nativeBinding: nativeBinding)
+        }
         if self.isScreenshotFixtureModeEnabled {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
         }
         if self.isAppleReviewDemoModeEnabled {
             return LocalFixtureChatTransport(fixture: .appleReviewDemo)
         }
-        let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider = { [weak self] in
+        let connectionProvider: IOSSourceResourceLoader.ConnectionProvider = { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
-            return IOSMediaArtifactLoader.Connection(
+            return IOSSourceResourceLoader.Connection(
                 config: config,
                 gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
@@ -719,7 +731,13 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
-            mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: connectionProvider),
+            mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: {
+                guard let connection = connectionProvider() else { return nil }
+                return IOSMediaArtifactLoader.Connection(
+                    config: connection.config,
+                    gatewayID: connection.gatewayID,
+                    customHeaders: connection.customHeaders)
+            }),
             sourceResourceLoader: IOSSourceResourceLoader(
                 gateway: self.operatorSession, connectionProvider: connectionProvider))
     }
@@ -1808,7 +1826,17 @@ final class NodeAppModel {
         await self.refreshAgentsFromGateway()
     }
 
+    @ObservationIgnored var chatSelectionDidChange: (@MainActor () -> Void)?
+
+    private var chatSelectionTarget: OpenClawChatSessionTarget {
+        OpenClawChatSessionTarget(sessionKey: self.chatSessionKey, agentID: self.chatDeliveryAgentId)
+    }
+
     func setSelectedAgentId(_ agentId: String?) {
+        let previousTarget = self.chatSelectionTarget
+        defer {
+            if self.chatSelectionTarget != previousTarget { self.chatSelectionDidChange?() }
+        }
         let trimmed = (agentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let nextSelectedAgentId = trimmed.isEmpty ? nil : trimmed
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3643,7 +3671,21 @@ extension NodeAppModel {
         return true
     }
 
+    func focusChatSession(_ target: OpenClawChatSessionTarget) {
+        let agentID = OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID
+        // The current encoded key can mask a different stored selection.
+        // Commit the target owner before a bare key removes that qualification.
+        if let agentID {
+            self.setSelectedAgentId(agentID)
+        }
+        self.focusChatSession(target.sessionKey)
+    }
+
     func focusChatSession(_ sessionKey: String?) {
+        let previousTarget = self.chatSelectionTarget
+        defer {
+            if self.chatSelectionTarget != previousTarget { self.chatSelectionDidChange?() }
+        }
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         self.focusedChatSessionKey = trimmed.isEmpty ? nil : trimmed
         self.synchronizeTalkSessionKey()

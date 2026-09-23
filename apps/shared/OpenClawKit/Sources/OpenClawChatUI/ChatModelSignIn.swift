@@ -8,15 +8,18 @@ import SwiftUI
 public struct OpenClawChatModelSignInContext: Sendable {
     public let agentID: String
     public let request: @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data
+    public let closeWizard: @MainActor @Sendable (String) async throws -> Data
     public let isCurrent: @MainActor @Sendable () async -> Bool
 
     public init(
         agentID: String,
         request: @escaping @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data,
+        closeWizard: @escaping @MainActor @Sendable (String) async throws -> Data,
         isCurrent: @escaping @MainActor @Sendable () async -> Bool)
     {
         self.agentID = agentID
         self.request = request
+        self.closeWizard = closeWizard
         self.isCurrent = isCurrent
     }
 }
@@ -116,6 +119,13 @@ final class ChatModelSignInModel {
                     "authChoice": AnyCodable(option.id),
                 ])
             } catch let error as GatewayResponseError {
+                if error.detailsReason == "EXPECTED_PROFILE_MISMATCH",
+                   error.details["execution"]?.stringValue == "may_have_executed"
+                {
+                    // Response fencing can hide an admitted wizard. Retain its
+                    // captured id until cleanup succeeds, without publishing auth state.
+                    _ = try await self.context.closeWizard(id)
+                }
                 if self.sessionID == id { self.sessionID = nil }
                 self
                     .message =
@@ -239,9 +249,7 @@ final class ChatModelSignInModel {
     }
 
     private func closeSession(_ id: String) async throws {
-        let data = try await self.context.request("wizard.cancel", [
-            "sessionId": AnyCodable(id), "closeInput": AnyCodable(true),
-        ])
+        let data = try await self.context.closeWizard(id)
         let result = try JSONDecoder().decode(WizardStatusResult.self, from: data)
         await self.finish(id, status: wizardStatusString(result.status), error: result.error)
     }
@@ -284,11 +292,16 @@ final class ChatModelSignInModel {
 
 @MainActor
 struct OpenClawChatModelSignInSheet: View {
-    @Environment(\.dismiss) private var dismiss
+    let onClose: @MainActor () -> Void
     @State private var model: ChatModelSignInModel
 
-    init(context: OpenClawChatModelSignInContext, onAuthChanged: @escaping @MainActor () async -> Void) {
+    init(
+        context: OpenClawChatModelSignInContext,
+        onAuthChanged: @escaping @MainActor () async -> Void,
+        onClose: @escaping @MainActor () -> Void)
+    {
         self._model = State(initialValue: ChatModelSignInModel(context: context, onAuthChanged: onAuthChanged))
+        self.onClose = onClose
     }
 
     var body: some View {
@@ -309,7 +322,7 @@ struct OpenClawChatModelSignInSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Button { self.dismiss() } label: {
+                Button { self.onClose() } label: {
                     Text("Close").font(OpenClawChatTypography.body)
                 }
                 if self.model.sessionID != nil {

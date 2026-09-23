@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, stat as fsStat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -14,6 +15,468 @@ export const desktopResizeStages = [
 ] as const;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
+export const desktopTerminationLimits = {
+  gateway: 512 * 1024,
+  node: 64 * 1024,
+  rfb: 448 * 1024,
+  line: 16 * 1024,
+  scenarioOutput: 24 * 1024,
+  rfbOutput: 8 * 1024 - 1024,
+  checkpoint: 32 * 1024,
+} as const;
+
+/** Only the explicitly opted-in fixture children change their console configuration. */
+export function desktopProofDiagnosticLogging(enabled: boolean) {
+  return {
+    env: enabled ? { OPENCLAW_LOG_LEVEL: "info" } : {},
+    logging: enabled ? { consoleStyle: "json" as const, consoleLevel: "info" as const } : undefined,
+  };
+}
+
+type OutputChunks = readonly (string | Uint8Array)[];
+type DesktopProofOutput = {
+  stdout: OutputChunks;
+  stderr: OutputChunks;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  retention: "head" | "tail";
+};
+
+/** A private head capture on an existing child's pipes; never an additional process owner. */
+export function createDesktopProofOutputCapture(maximum: number) {
+  if (!Number.isSafeInteger(maximum) || maximum < 2 || maximum > desktopTerminationLimits.rfb) {
+    throw new Error("Invalid desktop diagnostic capture bound");
+  }
+  const create = () => ({
+    data: Buffer.alloc(Math.floor(maximum / 2)),
+    length: 0,
+    truncated: false,
+  });
+  const streams = { stdout: create(), stderr: create() };
+  return {
+    append(stream: "stdout" | "stderr", chunk: Uint8Array) {
+      const target = streams[stream];
+      const length = Math.min(chunk.byteLength, target.data.length - target.length);
+      target.data.set(chunk.subarray(0, length), target.length);
+      target.length += length;
+      target.truncated ||= length !== chunk.byteLength;
+    },
+    snapshot(): DesktopProofOutput {
+      return {
+        stdout: [Buffer.from(streams.stdout.data.subarray(0, streams.stdout.length))],
+        stderr: [Buffer.from(streams.stderr.data.subarray(0, streams.stderr.length))],
+        stdoutTruncated: streams.stdout.truncated,
+        stderrTruncated: streams.stderr.truncated,
+        retention: "head",
+      };
+    },
+  };
+}
+
+const observerTriggers = [
+  "owner-close",
+  "browser-close",
+  "browser-error",
+  "stream-close",
+  "stream-error",
+  "authority-revoked",
+  "invalid-view-only-stream",
+  "authentication-failed",
+] as const;
+const brokerTriggers = ["attach-rejected", "websocket-error", "websocket-close"] as const;
+const transportTriggers = [
+  "owner-abort",
+  "target-close",
+  "target-error",
+  "websocket-close",
+  "websocket-error",
+  "send-error",
+  "invalid-frame",
+  "splice-unavailable",
+  "startup-error",
+] as const;
+const terminationProducers = [
+  "gateway-observer",
+  "gateway-broker",
+  "node-transport",
+  "rfb",
+] as const;
+type TerminationRecord = {
+  stream: "stdout" | "stderr";
+  ordinal: number;
+  producer: (typeof terminationProducers)[number];
+  trigger: string;
+  closeCode: number | null;
+  cleanupCode: number | null;
+};
+const closeCode = (value: unknown) =>
+  Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 65_535
+    ? Number(value)
+    : null;
+
+function terminationRecord(line: string, source: "gateway" | "node" | "rfb") {
+  if (source === "rfb") {
+    // TigerVNC 1.13.1 emits its stored first close reason from the connection destructor.
+    // This can follow client cleanup; the endpoint and arbitrary reason remain private.
+    if (!/^\s*VNCSConnST:\s+closing .+: /u.test(line)) {
+      return null;
+    }
+    const message = line.replace(/\r$/u, "");
+    return {
+      producer: "rfb" as const,
+      trigger: message.endsWith(": Clean disconnection")
+        ? "clean-disconnection"
+        : message.endsWith(": Client does not support desktop resize")
+          ? "resize-unsupported"
+          : "other-close",
+      closeCode: null,
+      cleanupCode: null,
+    };
+  }
+  const value: unknown = JSON.parse(line);
+  if (!isRecord(value) || value.level !== "info") {
+    return null;
+  }
+  let producer: TerminationRecord["producer"];
+  let allowed: readonly string[];
+  if (
+    source === "gateway" &&
+    value.subsystem === "gateway/desktop" &&
+    value.message === "desktop observer closed"
+  ) {
+    producer = "gateway-observer";
+    allowed = observerTriggers;
+  } else if (
+    source === "gateway" &&
+    value.subsystem === "gateway/node-stream" &&
+    value.message === "node stream closed" &&
+    value.streamKind === "desktop"
+  ) {
+    producer = "gateway-broker";
+    allowed = brokerTriggers;
+  } else if (
+    source === "node" &&
+    value.subsystem === "node-host/stream" &&
+    value.message === "node stream closed" &&
+    value.streamKind === "desktop"
+  ) {
+    producer = "node-transport";
+    allowed = transportTriggers;
+  } else {
+    return null;
+  }
+  return {
+    producer,
+    trigger: allowed.find((trigger) => trigger === value.trigger) ?? "unknown",
+    closeCode: closeCode(value.closeCode),
+    cleanupCode: producer === "gateway-observer" ? closeCode(value.cleanupCode) : null,
+  };
+}
+
+function projectTerminationOutput(
+  input: DesktopProofOutput | undefined,
+  source: "gateway" | "node" | "rfb",
+  maximum: number,
+  recordLimit: number,
+) {
+  const records: TerminationRecord[] = [];
+  const streams = (["stdout", "stderr"] as const).map((stream) => {
+    const chunks = input?.[stream] ?? [];
+    const retainedTruncation =
+      input?.[stream === "stdout" ? "stdoutTruncated" : "stderrTruncated"] === true ||
+      Object.getOwnPropertyDescriptor(chunks, "truncated")?.value === true;
+    const bytes = Buffer.alloc(Math.floor(maximum / 2));
+    let length = 0;
+    let inputLimited = false;
+    // A chunk count also bounds empty-chunk scans; encodeInto never allocates the full input.
+    for (let index = 0; index < chunks.length; index += 1) {
+      if (index >= 4096 || length === bytes.length) {
+        inputLimited = true;
+        break;
+      }
+      const chunk = chunks[index]!;
+      const remaining = bytes.length - length;
+      if (typeof chunk === "string") {
+        const result = new TextEncoder().encodeInto(
+          chunk.slice(0, remaining),
+          bytes.subarray(length),
+        );
+        length += result.written;
+        if (result.read !== chunk.length) {
+          inputLimited = true;
+          break;
+        }
+      } else {
+        const count = Math.min(chunk.byteLength, remaining);
+        bytes.set(chunk.subarray(0, count), length);
+        length += count;
+        if (count !== chunk.byteLength) {
+          inputLimited = true;
+          break;
+        }
+      }
+    }
+    let offset = 0;
+    let ordinal = 0;
+    let malformedLines = 0;
+    let oversizedLines = 0;
+    let recordsLimited = false;
+    let partialLine = false;
+    const partialPrefix = retainedTruncation && input?.retention === "tail";
+    while (offset < length) {
+      if (ordinal >= 4096) {
+        inputLimited = true;
+        break;
+      }
+      const end = bytes.indexOf(10, offset);
+      if (end < 0 || end >= length) {
+        partialLine = true;
+        break;
+      }
+      ordinal += 1;
+      if (!(partialPrefix && offset === 0)) {
+        if (end - offset > desktopTerminationLimits.line) {
+          oversizedLines += 1;
+        } else {
+          try {
+            const row = terminationRecord(
+              new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(offset, end)),
+              source,
+            );
+            if (row) {
+              if (records.length < recordLimit) {
+                records.push({ stream, ordinal, ...row });
+              } else {
+                recordsLimited = true;
+              }
+            }
+          } catch {
+            malformedLines += 1;
+          }
+        }
+      }
+      offset = end + 1;
+    }
+    return {
+      stream,
+      scannedBytes: length,
+      retainedTruncation,
+      inputLimited,
+      partialPrefix,
+      partialLine,
+      malformedLines,
+      oversizedLines,
+      recordsLimited,
+    };
+  });
+  return { status: input ? ("captured" as const) : ("unavailable" as const), streams, records };
+}
+
+type TerminationOutput = ReturnType<typeof projectTerminationOutput>;
+type ScenarioTermination =
+  | {
+      status: "captured";
+      boundary: "before-scenario-cleanup";
+      signalAborted: boolean;
+      correlation: "unavailable";
+      writerMayBeBuffered: true;
+      gateway: TerminationOutput;
+      node: TerminationOutput;
+    }
+  | { status: "unavailable" | "invalid" };
+
+/** No stream IDs or timestamps cross this boundary; ordinals are local to each producer pipe. */
+export function desktopScenarioTermination(
+  gateway: DesktopProofOutput,
+  node: DesktopProofOutput | undefined,
+  signalAborted: boolean,
+): ScenarioTermination {
+  try {
+    const value: ScenarioTermination = {
+      status: "captured",
+      boundary: "before-scenario-cleanup",
+      signalAborted,
+      correlation: "unavailable",
+      writerMayBeBuffered: true,
+      gateway: projectTerminationOutput(gateway, "gateway", desktopTerminationLimits.gateway, 32),
+      node: projectTerminationOutput(node, "node", desktopTerminationLimits.node, 16),
+    };
+    if (Buffer.byteLength(JSON.stringify(value)) > desktopTerminationLimits.scenarioOutput) {
+      return { status: "unavailable" };
+    }
+    return value;
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+export function desktopRfbTermination(
+  dynamic: DesktopProofOutput | undefined,
+  fixed: DesktopProofOutput | undefined,
+) {
+  try {
+    const value = {
+      status: "captured" as const,
+      boundary: "after-test-process-join-before-daemon-cleanup" as const,
+      correlation: "unavailable" as const,
+      writerMayBeBuffered: true,
+      dynamic: projectTerminationOutput(dynamic, "rfb", desktopTerminationLimits.rfb / 2, 8),
+      fixed: projectTerminationOutput(fixed, "rfb", desktopTerminationLimits.rfb / 2, 8),
+    };
+    return Buffer.byteLength(JSON.stringify(value)) <= desktopTerminationLimits.rfbOutput
+      ? value
+      : { status: "unavailable" as const };
+  } catch {
+    return { status: "unavailable" as const };
+  }
+}
+
+/** Diagnostic projection or persistence cannot replace the operation or cleanup error. */
+export async function withDesktopTerminationSnapshot<T>(
+  run: () => Promise<T>,
+  freeze: () => void,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    try {
+      freeze();
+    } catch {
+      /* Optional evidence is unavailable. */
+    }
+  }
+}
+
+function checkpointTermination(value: unknown): ScenarioTermination {
+  try {
+    if (!isRecord(value)) {
+      throw new Error("Invalid termination checkpoint");
+    }
+    if (value.status === "unavailable" || value.status === "invalid") {
+      return { status: value.status };
+    }
+    if (
+      value.status !== "captured" ||
+      value.boundary !== "before-scenario-cleanup" ||
+      typeof value.signalAborted !== "boolean" ||
+      value.correlation !== "unavailable" ||
+      value.writerMayBeBuffered !== true
+    ) {
+      throw new Error("Invalid termination checkpoint");
+    }
+    const output = (
+      raw: unknown,
+      maximum: number,
+      recordLimit: number,
+      producers: readonly string[],
+    ): TerminationOutput => {
+      if (
+        !isRecord(raw) ||
+        (raw.status !== "captured" && raw.status !== "unavailable") ||
+        !Array.isArray(raw.streams) ||
+        raw.streams.length !== 2 ||
+        !Array.isArray(raw.records) ||
+        raw.records.length > recordLimit
+      ) {
+        throw new Error("Invalid termination output");
+      }
+      return {
+        status: raw.status,
+        streams: raw.streams.map((entry, index) => {
+          if (!isRecord(entry) || entry.stream !== ["stdout", "stderr"][index]) {
+            throw new Error("Invalid termination stream");
+          }
+          const boolean = (key: string) => {
+            if (typeof entry[key] !== "boolean") {
+              throw new Error("Invalid termination flag");
+            }
+            return entry[key];
+          };
+          return {
+            stream: index === 0 ? "stdout" : "stderr",
+            scannedBytes: reportInteger(entry.scannedBytes, maximum / 2),
+            retainedTruncation: boolean("retainedTruncation"),
+            inputLimited: boolean("inputLimited"),
+            partialPrefix: boolean("partialPrefix"),
+            partialLine: boolean("partialLine"),
+            malformedLines: reportInteger(entry.malformedLines, 4096),
+            oversizedLines: reportInteger(entry.oversizedLines, 4096),
+            recordsLimited: boolean("recordsLimited"),
+          };
+        }),
+        records: raw.records.map((row) => {
+          if (!isRecord(row) || (row.stream !== "stdout" && row.stream !== "stderr")) {
+            throw new Error("Invalid termination row");
+          }
+          const producer = terminationProducers.find(
+            (candidate) => candidate === row.producer && producers.includes(candidate),
+          );
+          const allowed =
+            producer === "gateway-observer"
+              ? observerTriggers
+              : producer === "gateway-broker"
+                ? brokerTriggers
+                : transportTriggers;
+          if (
+            !producer ||
+            typeof row.trigger !== "string" ||
+            (row.trigger !== "unknown" && !(allowed as readonly string[]).includes(row.trigger)) ||
+            (row.closeCode !== null && closeCode(row.closeCode) === null) ||
+            (row.cleanupCode !== null && closeCode(row.cleanupCode) === null)
+          ) {
+            throw new Error("Invalid termination row");
+          }
+          return {
+            stream: row.stream,
+            ordinal: reportInteger(row.ordinal, 4096),
+            producer,
+            trigger: row.trigger,
+            closeCode: closeCode(row.closeCode),
+            cleanupCode: closeCode(row.cleanupCode),
+          };
+        }),
+      };
+    };
+    const safe: ScenarioTermination = {
+      status: "captured",
+      boundary: "before-scenario-cleanup",
+      signalAborted: value.signalAborted,
+      correlation: "unavailable",
+      writerMayBeBuffered: true,
+      gateway: output(value.gateway, desktopTerminationLimits.gateway, 32, [
+        "gateway-observer",
+        "gateway-broker",
+      ]),
+      node: output(value.node, desktopTerminationLimits.node, 16, ["node-transport"]),
+    };
+    return Buffer.byteLength(JSON.stringify(safe)) <= desktopTerminationLimits.scenarioOutput
+      ? safe
+      : { status: "invalid" };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+export function encodeDesktopProofPhase(
+  lastObservedPhase: string,
+  owners: unknown,
+  termination?: unknown,
+) {
+  const phase = desktopProofTestPhases.find((candidate) => candidate === lastObservedPhase);
+  if (!phase) {
+    throw new Error("Invalid desktop phase");
+  }
+  const value = {
+    lastObservedPhase: phase,
+    owners: desktopOwners(owners),
+    ...(termination === undefined ? {} : { termination: checkpointTermination(termination) }),
+  };
+  const encoded = JSON.stringify(value);
+  if (Buffer.byteLength(encoded) > desktopTerminationLimits.checkpoint) {
+    throw new Error("Desktop checkpoint exceeded bound");
+  }
+  return encoded;
+}
 const desktopProofTestPhases = [
   "file-loaded",
   "fixture",
@@ -521,19 +984,40 @@ export async function readDesktopProofPhase(file: string) {
     lastObservedPhase: null,
     owners: null,
   };
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     const stat = await lstat(file);
-    if (!stat.isFile() || stat.size > 1024) {
+    if (!stat.isFile() || stat.size > desktopTerminationLimits.checkpoint) {
+      return { status: "invalid" as const, ...absent };
+    }
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.dev !== stat.dev ||
+      opened.ino !== stat.ino ||
+      opened.size !== stat.size
+    ) {
+      return { status: "invalid" as const, ...absent };
+    }
+    const data = Buffer.alloc(stat.size);
+    const read = await handle.read(data, 0, data.length, 0);
+    const after = await handle.stat();
+    const closing = handle;
+    handle = undefined;
+    await closing.close();
+    if (
+      read.bytesRead !== data.length ||
+      after.size !== stat.size ||
+      after.mtimeMs !== opened.mtimeMs
+    ) {
       return { status: "invalid" as const, ...absent };
     }
     let value: unknown;
     try {
-      value = JSON.parse(await readFile(file, "utf8"));
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        return { status: "invalid" as const, ...absent };
-      }
-      throw error;
+      value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data));
+    } catch {
+      return { status: "invalid" as const, ...absent };
     }
     const phase = isRecord(value)
       ? desktopProofTestPhases.find((candidate) => candidate === value.lastObservedPhase)
@@ -543,10 +1027,19 @@ export async function readDesktopProofPhase(file: string) {
           status: "available" as const,
           lastObservedPhase: phase,
           owners: desktopOwners(isRecord(value) ? value.owners : undefined),
+          ...(isRecord(value) && value.termination !== undefined
+            ? { termination: checkpointTermination(value.termination) }
+            : {}),
         }
       : { status: "invalid" as const, ...absent };
   } catch {
     return { status: "unavailable" as const, ...absent };
+  } finally {
+    try {
+      await handle?.close();
+    } catch {
+      /* Diagnostic cleanup must not replace the child error. */
+    }
   }
 }
 

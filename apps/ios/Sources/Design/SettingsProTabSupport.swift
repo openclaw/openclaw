@@ -10,6 +10,17 @@ enum SettingsRoute: Hashable {
     case diagnostics
     case licenses
     case about
+    case watchMessageDelivery
+    case licenseDocument(id: String)
+    case gatewayCustomHeaders(gatewayStableID: String)
+    case gatewayDiscoveryLogs
+
+    var isDetail: Bool {
+        switch self {
+        case .watchMessageDelivery, .licenseDocument, .gatewayCustomHeaders, .gatewayDiscoveryLogs: true
+        default: false
+        }
+    }
 }
 
 enum SettingsLayout {

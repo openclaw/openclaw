@@ -1,9 +1,11 @@
+import Observation
 import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @AccessibilityFocusState private var approvalCardFocused: Bool
     let suppressedApproval: NodeAppModel.ExecApprovalInboxKey?
+    let dashboardPresentation: ApprovalDashboardPresentationState?
 
     func body(content: Content) -> some View {
         let prompt = self.presentedPrompt
@@ -20,6 +22,7 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
 
                     ExecApprovalPromptCard(
                         prompt: prompt,
+                        dashboardPresentation: self.dashboardPresentation,
                         isResolving: self.appModel.pendingExecApprovalPromptResolving,
                         canDismiss: self.appModel.pendingExecApprovalPromptCanDismiss,
                         errorText: self.appModel.pendingExecApprovalPromptErrorText,
@@ -59,6 +62,9 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
         .onChange(of: self.presentedPromptKey) { _, key in
             self.approvalCardFocused = key != nil
         }
+        .onChange(of: self.reviewOwner) { oldOwner, newOwner in
+            self.dashboardPresentation?.ownerDidChange(from: oldOwner, to: newOwner)
+        }
         .animation(.easeInOut(duration: 0.18), value: self.presentedPromptKey)
     }
 
@@ -69,6 +75,13 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
         return prompt
     }
 
+    private var reviewOwner: ApprovalDashboardPresentationState.Owner? {
+        guard self.presentedPrompt?.kind == "system-agent",
+              self.appModel.pendingExecApprovalPromptResolvedText == nil,
+              let key = self.presentedPromptKey else { return nil }
+        return .init(key: key, authorityGeneration: self.appModel.operatorAuthorityGeneration)
+    }
+
     private var presentedPromptKey: NodeAppModel.ExecApprovalInboxKey? {
         NodeAppModel.execApprovalInboxKey(self.presentedPrompt)
     }
@@ -76,6 +89,7 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
 
 private struct ExecApprovalPromptCard: View {
     let prompt: NodeAppModel.ExecApprovalPrompt
+    let dashboardPresentation: ApprovalDashboardPresentationState?
     let isResolving: Bool
     let canDismiss: Bool
     let errorText: String?
@@ -204,7 +218,7 @@ private struct ExecApprovalPromptCard: View {
         VStack(spacing: 10) {
             if self.resolvedText == nil {
                 if self.prompt.kind == "system-agent" {
-                    ApprovalDashboardReviewButton(prompt: self.prompt)
+                    ApprovalDashboardReviewButton(prompt: self.prompt, presentation: self.dashboardPresentation)
                 }
                 if self.prompt.allowsAllowOnce {
                     Button {
@@ -326,19 +340,96 @@ private struct ExecApprovalPromptCard: View {
     }
 }
 
+@MainActor
+@Observable
+final class ApprovalDashboardPresentationState {
+    struct Owner: Equatable {
+        let key: NodeAppModel.ExecApprovalInboxKey
+        let authorityGeneration: UInt64
+    }
+
+    var isPresented = false
+    private(set) var owner: Owner?
+    private(set) var presentationID: UUID?
+    var authorityGeneration: UInt64? {
+        self.owner?.authorityGeneration
+    }
+
+    func isCurrent(_ prompt: NodeAppModel.ExecApprovalPrompt, appModel: NodeAppModel) -> Bool {
+        appModel.hasOperatorAdminScope &&
+            prompt.attentionSource?.authorityGeneration == appModel.operatorAuthorityGeneration &&
+            appModel.pendingExecApprovalInboxItems.contains { $0.prompt == prompt }
+    }
+
+    func open(
+        _ prompt: NodeAppModel.ExecApprovalPrompt,
+        appModel: NodeAppModel,
+        admit: (@MainActor () -> Bool)?)
+    {
+        guard let key = NodeAppModel.execApprovalInboxKey(prompt),
+              self.isCurrent(prompt, appModel: appModel), admit?() ?? true else { return }
+        self.owner = Owner(key: key, authorityGeneration: appModel.operatorAuthorityGeneration)
+        self.presentationID = UUID()
+        self.isPresented = true
+    }
+
+    func binding(appModel: NodeAppModel, admit: (@MainActor () -> Bool)?) -> Binding<Bool> {
+        let generation = self.authorityGeneration
+        let presentationID = self.presentationID
+        return Binding(get: { self.isPresented }, set: { value in
+            guard value != self.isPresented,
+                  let presentationID, presentationID == self.presentationID,
+                  generation == self.authorityGeneration,
+                  generation == appModel.operatorAuthorityGeneration,
+                  admit?() ?? true else { return }
+            self.isPresented = value
+        })
+    }
+
+    /// onChange invokes the new body closure. Retire its departed owner value,
+    /// never a presentation ID captured from that new body.
+    func ownerDidChange(from oldOwner: Owner?, to newOwner: Owner?) {
+        guard let oldOwner, oldOwner != newOwner, self.owner == oldOwner else { return }
+        self.reset()
+    }
+
+    func authorityDidChange(from oldGeneration: UInt64, to newGeneration: UInt64) {
+        guard oldGeneration != newGeneration, self.authorityGeneration == oldGeneration else { return }
+        self.reset()
+    }
+
+    func retire(_ presentationID: UUID?) {
+        guard let presentationID, presentationID == self.presentationID else { return }
+        self.reset()
+    }
+
+    func reset() {
+        self.presentationID = nil
+        self.isPresented = false
+        self.owner = nil
+    }
+}
+
 struct ApprovalDashboardReviewButton: View {
     @Environment(NodeAppModel.self) private var appModel
-    @State private var isPresented = false
-    @State private var authorityGeneration: UInt64?
+    @Environment(\.userNavigationAction) private var userNavigationAction
+    @State private var state: ApprovalDashboardPresentationState
     let prompt: NodeAppModel.ExecApprovalPrompt
 
+    init(prompt: NodeAppModel.ExecApprovalPrompt, presentation: ApprovalDashboardPresentationState? = nil) {
+        self.prompt = prompt
+        _state = State(initialValue: presentation ?? ApprovalDashboardPresentationState())
+    }
+
     var body: some View {
-        Group {
+        let action = self.userNavigationAction
+        let generation = self.state.authorityGeneration
+        let presentationID = self.state.presentationID
+        let presentation = self.state.binding(appModel: self.appModel, admit: action)
+        return Group {
             if self.isCurrentPrompt {
                 Button {
-                    guard self.isCurrentPrompt else { return }
-                    self.authorityGeneration = self.appModel.operatorAuthorityGeneration
-                    self.isPresented = true
+                    self.state.open(self.prompt, appModel: self.appModel, admit: action)
                 } label: {
                     Text("Review in Dashboard")
                         .font(OpenClawType.subheadSemiBold)
@@ -349,26 +440,30 @@ struct ApprovalDashboardReviewButton: View {
                     .font(OpenClawType.footnote)
             }
         }
-        .sheet(isPresented: self.$isPresented) {
+        .sheet(isPresented: presentation) {
             if self.isCurrentPrompt,
-               self.authorityGeneration == self.appModel.operatorAuthorityGeneration,
+               self.state.authorityGeneration == self.appModel.operatorAuthorityGeneration,
                let id = AuthenticatedControlUI.percentEncodedPathSegment(self.prompt.id)
             {
                 DashboardPageScreen(
                     path: "/approve/\(id)",
                     title: String(localized: "Review approval"),
-                    onClose: { self.isPresented = false })
+                    onClose: { presentation.wrappedValue = false })
+                    .environment(\.userNavigationAction) {
+                        self.state.isPresented && presentationID == self.state.presentationID &&
+                            self.isCurrentPrompt && generation == self.state
+                            .authorityGeneration &&
+                            generation == self.appModel.operatorAuthorityGeneration && (action?() ?? true)
+                    }
             }
         }
-        .onChange(of: self.appModel.operatorAuthorityGeneration) { _, _ in
-            self.isPresented = false
+        .onChange(of: self.appModel.operatorAuthorityGeneration) { oldGeneration, newGeneration in
+            self.state.authorityDidChange(from: oldGeneration, to: newGeneration)
         }
     }
 
     private var isCurrentPrompt: Bool {
-        self.appModel.hasOperatorAdminScope &&
-            self.prompt.attentionSource?.authorityGeneration == self.appModel.operatorAuthorityGeneration &&
-            self.appModel.pendingExecApprovalInboxItems.contains { $0.prompt == self.prompt }
+        self.state.isCurrent(self.prompt, appModel: self.appModel)
     }
 }
 
@@ -390,8 +485,10 @@ private struct ExecApprovalPromptMetadataRow: View {
 
 extension View {
     func execApprovalPromptDialog(
-        suppressedApproval: NodeAppModel.ExecApprovalInboxKey? = nil) -> some View
+        suppressedApproval: NodeAppModel.ExecApprovalInboxKey? = nil,
+        dashboardPresentation: ApprovalDashboardPresentationState? = nil) -> some View
     {
-        modifier(ExecApprovalPromptDialogModifier(suppressedApproval: suppressedApproval))
+        modifier(ExecApprovalPromptDialogModifier(
+            suppressedApproval: suppressedApproval, dashboardPresentation: dashboardPresentation))
     }
 }

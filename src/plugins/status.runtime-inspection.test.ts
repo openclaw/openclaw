@@ -7,7 +7,7 @@ import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
-import * as configRuntime from "../config/config.js";
+import * as configIO from "../config/config.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import * as configObserver from "../config/io.observe.js";
 import { defaultRuntime } from "../runtime.js";
@@ -47,6 +47,8 @@ import * as statusSnapshot from "./status-snapshot.js";
 import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
 import {
   classifyConfigObservationError,
+  classifyConfigReadErrorCode,
+  classifyConfigReadIssues,
   createDiagnosticsFixture,
 } from "./status.runtime-inspection.test-helpers.js";
 import type { OpenClawPluginService } from "./types.js";
@@ -824,146 +826,137 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
       "config.snapshot.read.materialize",
       "config.snapshot.read.observe",
     ]);
-    for (const name of [id, "all"]) {
-      let lastCompletedStage = "<none>";
-      let measuredFailure: { stage: string; error: unknown } | undefined;
-      const readConfigSnapshot = configRuntime.readConfigFileSnapshot;
-      const configRead = vi
-        .spyOn(configRuntime, "readConfigFileSnapshot")
-        .mockImplementation((options = {}) =>
-          readConfigSnapshot({
-            ...options,
-            measure: async (stage, run) => {
-              const safeStage = stageNames.has(stage) ? stage : "<other stage>";
-              try {
-                const value = await (options.measure ? options.measure(stage, run) : run());
-                lastCompletedStage = safeStage;
-                return value;
-              } catch (error) {
-                measuredFailure = { stage: safeStage, error };
-                throw error;
-              }
-            },
-          }),
-        );
-      let observation: MockInstance<typeof configObserver.observeConfigSnapshot> | undefined;
-      try {
-        observation = vi.spyOn(configObserver, "observeConfigSnapshot");
-        const result = await handlePluginsCommand(
-          buildPluginsCommandParams({
-            cfg: config,
-            workspaceDir: state.workspaceDir,
-            commandBodyNormalized: `/plugins inspect ${name}`,
-          }),
-          true,
-        );
-        expect(result?.reply?.text).toContain("diagnostics-resource-service");
-        expect(result?.reply?.text).toContain('"status": "loaded"');
-        expect(process.listenerCount(event)).toBe(before);
-      } catch (error) {
+    let measurement: {
+      lastCompletedStage: string;
+      failure?: { stage: string; error: unknown };
+    };
+    const readConfigSnapshot = configIO.readConfigFileSnapshot;
+    // Observe the command's own read. A separate diagnostic read can hide transient
+    // validation/observation failures and must not change this ordered lifecycle proof.
+    const snapshotRead = vi
+      .spyOn(configIO, "readConfigFileSnapshot")
+      .mockImplementation((options = {}) =>
+        readConfigSnapshot({
+          ...options,
+          measure: async (stage, run) => {
+            const safeStage = stageNames.has(stage) ? stage : "<other stage>";
+            try {
+              const value = await (options.measure ? options.measure(stage, run) : run());
+              measurement.lastCompletedStage = safeStage;
+              return value;
+            } catch (error) {
+              measurement.failure = { stage: safeStage, error };
+              throw error;
+            }
+          },
+        }),
+      );
+    let observation: MockInstance<typeof configObserver.observeConfigSnapshot> | undefined;
+    try {
+      observation = vi.spyOn(configObserver, "observeConfigSnapshot");
+      for (const name of [id, "all"]) {
+        measurement = { lastCompletedStage: "<none>" };
+        const firstRead = snapshotRead.mock.results.length;
+        const firstObservation = observation.mock.calls.length;
         try {
-          // Observe the command's existing promise only after failure; do not warm config reads.
-          const read = configRead.mock.results[0];
-          let snapshot: Awaited<ReturnType<typeof readConfigSnapshot>> | undefined;
-          let readFailure: ReturnType<typeof classifyConfigObservationError> | undefined;
-          try {
-            snapshot = read?.type === "return" ? await read.value : undefined;
-          } catch (readError) {
-            // A rejected fallback observation must not hide the first observation's failure.
-            readFailure = classifyConfigObservationError(readError);
-          }
-          const observations = (observation?.mock.calls ?? []).flatMap(([, observed], index) =>
-            observed.path === state.configPath ? [{ index, observed }] : [],
-          );
-          const issuePaths = new Set([
-            "",
-            "agents",
-            "agents.defaults",
-            "agents.defaults.workspace",
-            "agents.entries",
-            "commands",
-            "commands.text",
-            "commands.plugins",
-            "plugins",
-            "plugins.enabled",
-            "plugins.allow",
-            "plugins.load.paths",
-            "plugins.entries.diagnostics-resource",
-            "plugins.slots.memory",
-          ]);
-          const messageKinds = [
-            "JSON5 parse failed:",
-            "Include resolution failed:",
-            "read failed:",
-            "plugin present but blocked:",
-            "plugin not found:",
-            "invalid config:",
-            "plugin schema missing for",
-            "Unrecognized key",
-            "Invalid input",
-            "Invalid option",
-          ];
-          console.error("diagnostics-chat config snapshot", {
-            selection: name,
-            readCalls: configRead.mock.calls.length,
-            readFailure,
-            observationCount: observations.length,
-            omittedObservations: Math.max(0, observations.length - 4),
-            observations: observations.slice(0, 4).map(({ index, observed }) => {
-              const result = observation?.mock.results[index];
-              const settled = observation?.mock.settledResults[index];
-              return {
-                index,
-                valid: observed.valid,
-                exists: observed.exists,
-                snapshotKind: observed.valid
-                  ? "valid-snapshot"
-                  : observed.issues.some(
-                        (issue) => issue.path === "" && issue.message.startsWith("read failed:"),
-                      )
-                    ? "read-failed-fallback"
-                    : "other",
-                result: result?.type ?? "unavailable",
-                settled: settled?.type ?? "unavailable",
-                failure:
-                  result?.type === "throw"
-                    ? classifyConfigObservationError(result.value)
-                    : settled?.type === "rejected"
-                      ? classifyConfigObservationError(settled.value)
-                      : undefined,
-              };
+          const result = await handlePluginsCommand(
+            buildPluginsCommandParams({
+              cfg: config,
+              workspaceDir: state.workspaceDir,
+              commandBodyNormalized: `/plugins inspect ${name}`,
             }),
-            matchesFixturePath: snapshot ? snapshot.path === state.configPath : undefined,
-            lastCompletedStage,
-            measuredFailure: measuredFailure
-              ? {
-                  stage: measuredFailure.stage,
-                  ...classifyConfigObservationError(measuredFailure.error),
-                }
-              : { stage: "<outside measured callback>" },
-            valid: snapshot?.valid,
-            exists: snapshot?.exists,
-            matchesWrittenFixture: snapshot?.raw === `${JSON.stringify(config, null, 2)}\n`,
-            issueCount: snapshot?.issues.length,
-            issues: snapshot?.issues.slice(0, 10).map((issue) => ({
-              path: issuePaths.has(issue.path) ? issue.path : "<other path>",
-              messageKind:
-                messageKinds.find((kind) => issue.message.startsWith(kind)) ?? "<other message>",
-            })),
-          });
-        } catch {
-          // Diagnostics must not replace the original failure.
-        }
-        throw error;
-      } finally {
-        try {
-          observation?.mockRestore();
-        } finally {
-          configRead.mockRestore();
+            true,
+          );
+          expect(result?.reply?.text).toContain("diagnostics-resource-service");
+          expect(result?.reply?.text).toContain('"status": "loaded"');
+          expect(process.listenerCount(event)).toBe(before);
+        } catch (error) {
+          try {
+            const readCount = snapshotRead.mock.results.length - firstRead;
+            const settled = snapshotRead.mock.settledResults[firstRead];
+            const read = snapshotRead.mock.results[firstRead];
+            const readFailure =
+              readCount !== 1
+                ? undefined
+                : read?.type === "throw"
+                  ? classifyConfigObservationError(read.value)
+                  : settled?.type === "rejected"
+                    ? classifyConfigObservationError(settled.value)
+                    : undefined;
+            const observations = observation.mock.calls
+              .slice(firstObservation)
+              .flatMap(([, observed], offset) =>
+                observed.path === state.configPath
+                  ? [{ index: firstObservation + offset, observed }]
+                  : [],
+              );
+            const snapshot =
+              readCount === 1 && settled?.type === "fulfilled" ? settled.value : undefined;
+            console.error(
+              JSON.stringify({
+                event: "chat-inspect-config-failure",
+                selector: name === id ? "single" : "all",
+                readCount,
+                readFailure,
+                observationCount: observations.length,
+                omittedObservations: Math.max(0, observations.length - 4),
+                observations: observations.slice(0, 4).map(({ index, observed }) => {
+                  const result = observation?.mock.results[index];
+                  const settledObservation = observation?.mock.settledResults[index];
+                  return {
+                    index: index - firstObservation,
+                    valid: observed.valid,
+                    exists: observed.exists,
+                    snapshotKind: observed.valid
+                      ? "valid-snapshot"
+                      : observed.issues.some(
+                            (issue) =>
+                              issue.path === "" && issue.message.startsWith("read failed:"),
+                          )
+                        ? "read-failed-fallback"
+                        : "other",
+                    result: result?.type ?? "unavailable",
+                    settled: settledObservation?.type ?? "unavailable",
+                    failure:
+                      result?.type === "throw"
+                        ? classifyConfigObservationError(result.value)
+                        : settledObservation?.type === "rejected"
+                          ? classifyConfigObservationError(settledObservation.value)
+                          : undefined,
+                  };
+                }),
+                snapshotPresent: snapshot !== undefined,
+                lastCompletedStage: measurement.lastCompletedStage,
+                measuredFailure: measurement.failure
+                  ? {
+                      stage: measurement.failure.stage,
+                      ...classifyConfigObservationError(measurement.failure.error),
+                    }
+                  : { stage: "<outside measured callback>" },
+                fixturePathMatches: snapshot ? snapshot.path === state.configPath : null,
+                exists: snapshot?.exists ?? null,
+                valid: snapshot?.valid ?? null,
+                rawPresent: snapshot ? snapshot.raw !== null : null,
+                readErrorCode: classifyConfigReadErrorCode(snapshot?.readError?.code),
+                issueCount: snapshot?.issues.length ?? null,
+                issuesTruncated: (snapshot?.issues.length ?? 0) > 8,
+                issues: classifyConfigReadIssues(snapshot?.issues),
+              }),
+            );
+          } catch {
+            // Diagnostics must not replace the original failure.
+          }
+          throw error;
         }
       }
+      expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\ndisposed\n");
+    } finally {
+      try {
+        observation?.mockRestore();
+      } finally {
+        snapshotRead.mockRestore();
+      }
     }
-    expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\ndisposed\n");
   });
 });
 

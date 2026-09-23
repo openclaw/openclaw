@@ -7,7 +7,10 @@ struct ChatSourcePreviewsView: View {
     let contextRevision: UUID
     let faviconsEnabled: Bool
     let loadFavicon: @MainActor @Sendable (String) async -> Data?
+    @ChatModalState private var modals
+    #if os(macOS)
     @State private var selectedSource: ChatSourcePreview?
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -18,7 +21,11 @@ struct ChatSourcePreviewsView: View {
                 HStack(alignment: .top, spacing: 8) {
                     ForEach(self.sources) { source in
                         Button {
+                            #if os(macOS)
                             self.selectedSource = source
+                            #else
+                            self.modals.owner.present(source, at: \.source, capture: self.modals.capture())
+                            #endif
                         } label: {
                             self.card(source)
                         }
@@ -39,20 +46,21 @@ struct ChatSourcePreviewsView: View {
             .scrollIndicators(.hidden)
         }
         .accessibilityIdentifier("chat-source-previews")
+        .modifier(self.$modals)
         .onChange(of: self.sources) { _, sources in
+            #if os(macOS)
             if let selected = self.selectedSource {
                 self.selectedSource = sources.first { $0.id == selected.id }
             }
-        }
-        #if os(iOS)
-        .sheet(item: self.$selectedSource) { source in
-            ScrollView {
-                ChatSourcePreviewDetail(source: source) { self.selectedSource = nil }
+            #else
+            if let selected = self.modals.owner.source,
+               selected.receipt.producerID == self.modals.producerID,
+               !sources.contains(where: { $0.id == selected.value.id })
+            {
+                self.modals.owner.dismiss(selected.receipt)
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            #endif
         }
-        #endif
     }
 
     private func card(_ source: ChatSourcePreview) -> some View {
@@ -91,7 +99,7 @@ struct ChatSourcePreviewsView: View {
     #endif
 }
 
-private struct ChatSourcePreviewDetail: View {
+struct ChatSourcePreviewDetail: View {
     let source: ChatSourcePreview
     let dismiss: () -> Void
 

@@ -2,10 +2,19 @@ import SwiftUI
 
 struct DeepLinkAgentPromptAlert: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
+    #if DEBUG
+    @Environment(NativeActionRouter.self) private var nativeActions: NativeActionRouter?
+    #endif
 
     private var promptBinding: Binding<NodeAppModel.AgentDeepLinkPrompt?> {
         Binding(
-            get: { self.appModel.pendingAgentDeepLinkPrompt },
+            get: {
+                let prompt = self.appModel.pendingAgentDeepLinkPrompt
+                #if DEBUG
+                self.nativeActions?.testLifetimeObservation?("deep-link-prompt-read present=\(prompt != nil)")
+                #endif
+                return prompt
+            },
             set: { _ in
                 // Keep prompt state until explicit user action.
             })

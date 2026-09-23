@@ -764,15 +764,38 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
 public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let key: String?
     public let agentId: String?
+    public let sessionId: String?
+    public let permissionMode: OpenClawChatPermissionMode?
+    public let toolOverrides: OpenClawChatSessionToolOverrides?
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    public let lastRunId: String?
+    public let status: String?
+    public let lastRunError: String?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil, key: String? = nil, agentId: String? = nil) {
+    public init(
+        hasActiveRun: Bool?,
+        activeRunIds: [String]? = nil,
+        key: String? = nil,
+        agentId: String? = nil,
+        lastRunId: String? = nil,
+        status: String? = nil,
+        lastRunError: String? = nil,
+        sessionId: String? = nil,
+        permissionMode: OpenClawChatPermissionMode? = nil,
+        toolOverrides: OpenClawChatSessionToolOverrides? = nil)
+    {
         self.key = key
         self.agentId = agentId
+        self.sessionId = sessionId
+        self.permissionMode = permissionMode
+        self.toolOverrides = toolOverrides
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.lastRunId = lastRunId
+        self.status = status
+        self.lastRunError = lastRunError
     }
 }
 
@@ -798,6 +821,11 @@ public struct OpenClawChatHistoryActivity: Codable, Sendable {
 }
 
 public struct OpenClawChatHistoryPayload: Codable, Sendable {
+    public struct InputReceipt: Codable, Sendable {
+        public let runId: String
+        public let state: String
+    }
+
     public struct InputConsumption: Codable, Sendable {
         public let runId: String
         public let consumedByEventId: String
@@ -810,6 +838,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let sessionInfo: OpenClawChatSessionInfo?
     public let inFlightRun: OpenClawChatInFlightRun?
     public let inputConsumptions: [InputConsumption]?
+    public let inputReceipts: [InputReceipt]?
     public let activity: [OpenClawChatHistoryActivity]?
 
     public init(
@@ -820,6 +849,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         sessionInfo: OpenClawChatSessionInfo? = nil,
         inFlightRun: OpenClawChatInFlightRun? = nil,
         inputConsumptions: [InputConsumption]? = nil,
+        inputReceipts: [InputReceipt]? = nil,
         activity: [OpenClawChatHistoryActivity]? = nil)
     {
         self.sessionKey = sessionKey
@@ -829,6 +859,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.sessionInfo = sessionInfo
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
+        self.inputReceipts = inputReceipts
         self.activity = activity
     }
 }
@@ -857,6 +888,17 @@ public struct OpenClawSessionsPreviewPayload: Codable, Sendable {
 public struct OpenClawChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String
+    public let summary: String?
+
+    public init(runId: String, status: String, summary: String? = nil) {
+        self.runId = runId
+        self.status = status
+        self.summary = summary
+    }
+
+    var isAbortedRun: Bool {
+        self.status == "timeout" && self.summary == "aborted" && !self.runId.isEmpty
+    }
 }
 
 public struct OpenClawChatCreateSessionResponse: Codable, Sendable {

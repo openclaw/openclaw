@@ -139,8 +139,10 @@ private actor SessionActionTransportState {
         return index
     }
 
-    func recordReset(_ sessionKey: String) {
+    func recordReset(_ sessionKey: String) -> Int {
+        let index = self.resetSessionKeys.count
         self.resetSessionKeys.append(sessionKey)
+        return index
     }
 
     func recordSessionListRequest() {
@@ -165,8 +167,12 @@ private struct SessionActionCompletionGate: Sendable {
         self.releaseContinuation = release.continuation
     }
 
-    func suspendCompletion() async {
+    func signalStarted() {
         self.startedContinuation.yield()
+    }
+
+    func suspendCompletion() async {
+        self.signalStarted()
         var iterator = self.releaseStream.makeAsyncIterator()
         _ = await iterator.next()
     }
@@ -181,11 +187,39 @@ private struct SessionActionCompletionGate: Sendable {
     }
 }
 
+@MainActor
+private final class SessionActionPresentationAuthority {
+    private var selectionID = UUID()
+    private var active = true
+    let retiredCompletion = SessionActionCompletionGate()
+
+    func capture() -> @MainActor () -> Bool {
+        let selectionID = self.selectionID
+        return { [self] in
+            let current = self.active && self.selectionID == selectionID
+            if !current { self.retiredCompletion.signalStarted() }
+            return current
+        }
+    }
+
+    func retire(reopen: Bool) {
+        self.active = false
+        self.selectionID = UUID()
+        if reopen { self.active = true }
+    }
+}
+
 private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = SessionActionTransportState()
     private let createGate: SessionActionCompletionGate?
     private let resetGate: SessionActionCompletionGate?
+    private let resetGates: [SessionActionCompletionGate]
     private let createIsUnsupported: Bool
+    private let directCreateEnabled: Bool
+    private let createFails: Bool
+    private let mutationGate: SessionActionCompletionGate?
+    private let healthGate: SessionActionCompletionGate?
+    private let healthSucceeds: Bool
     private let forkGate: SessionActionCompletionGate?
     private let rewindGate: SessionActionCompletionGate?
     private let forkAtMessageGate: SessionActionCompletionGate?
@@ -206,7 +240,13 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     init(
         createGate: SessionActionCompletionGate? = nil,
         resetGate: SessionActionCompletionGate? = nil,
+        resetGates: [SessionActionCompletionGate] = [],
         createIsUnsupported: Bool = false,
+        directCreateEnabled: Bool = false,
+        createFails: Bool = false,
+        mutationGate: SessionActionCompletionGate? = nil,
+        healthGate: SessionActionCompletionGate? = nil,
+        healthSucceeds: Bool = true,
         forkGate: SessionActionCompletionGate? = nil,
         rewindGate: SessionActionCompletionGate? = nil,
         forkAtMessageGate: SessionActionCompletionGate? = nil,
@@ -226,7 +266,13 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     {
         self.createGate = createGate
         self.resetGate = resetGate
+        self.resetGates = resetGates
         self.createIsUnsupported = createIsUnsupported
+        self.directCreateEnabled = directCreateEnabled
+        self.createFails = createFails
+        self.mutationGate = mutationGate
+        self.healthGate = healthGate
+        self.healthSucceeds = healthSucceeds
         self.forkGate = forkGate
         self.rewindGate = rewindGate
         self.forkAtMessageGate = forkAtMessageGate
@@ -337,6 +383,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         unread _: Bool?) async throws
     {
         await self.state.recordPatch(key, expectedSessionID: expectedSessionID)
+        await self.mutationGate?.suspendCompletion()
     }
 
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
@@ -365,33 +412,55 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     }
 
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
-        let state = self.state
-        let createGate = self.createGate
-        let createIsUnsupported = self.createIsUnsupported
-        return OpenClawChatNewSessionRouteLease(
+        OpenClawChatNewSessionRouteLease(
             listAgents: {
                 OpenClawChatAgentsListResponse(
                     defaultId: "worker",
                     agents: [OpenClawChatAgentChoice(id: "worker", workspaceGit: true)])
             },
             createSession: { key, _, agentID, parentKey, _, _ in
-                let index = await state.recordCreate(key: key, agentID: agentID, parentKey: parentKey)
-                if index == 0 {
-                    await createGate?.suspendCompletion()
-                }
-                if createIsUnsupported {
-                    throw NSError(
-                        domain: "OpenClawChatTransport",
-                        code: 0,
-                        userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
-                }
-                return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: nil)
+                try await self.completeCreate(key: key, agentID: agentID, parentKey: parentKey)
             })
     }
 
+    func createSession(
+        key: String,
+        label _: String?,
+        agentID: String?,
+        parentSessionKey: String?,
+        worktree _: Bool?,
+        worktreeBaseRef _: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        guard self.directCreateEnabled else { throw Self.unsupportedCreateError() }
+        return try await self.completeCreate(key: key, agentID: agentID, parentKey: parentSessionKey)
+    }
+
+    private func completeCreate(
+        key: String,
+        agentID: String?,
+        parentKey: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        let index = await self.state.recordCreate(key: key, agentID: agentID, parentKey: parentKey)
+        if index == 0 { await self.createGate?.suspendCompletion() }
+        if self.createIsUnsupported { throw Self.unsupportedCreateError() }
+        if self.createFails { throw NSError(domain: "SessionActionTransport", code: 4) }
+        return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: nil)
+    }
+
+    private static func unsupportedCreateError() -> NSError {
+        NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
+    }
+
     func resetSession(sessionKey: String) async throws {
-        await self.state.recordReset(sessionKey)
-        await self.resetGate?.suspendCompletion()
+        let index = await self.state.recordReset(sessionKey)
+        if self.resetGates.indices.contains(index) {
+            await self.resetGates[index].suspendCompletion()
+        } else {
+            await self.resetGate?.suspendCompletion()
+        }
     }
 
     func listSessions(
@@ -408,10 +477,12 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func deleteSession(key: String) async throws {
         await self.state.recordDelete(key)
+        await self.mutationGate?.suspendCompletion()
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
-        true
+        await self.healthGate?.suspendCompletion()
+        return self.healthSucceeds
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -689,6 +760,331 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.resetSessionKeys().isEmpty)
     }
 
+    @Test(arguments: ["plain", "worktree", "options", "unsupported", "failure"], [false, true])
+    func `retired presentation cannot adopt a direct or leased create after same target reopens`(
+        variant: String, leased: Bool) async throws
+    {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(
+            createGate: gate,
+            createIsUnsupported: variant == "unsupported",
+            directCreateEnabled: true,
+            createFails: variant == "failure")
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport,
+            captureSessionTransitionAuthority: { authority.capture() })
+        defer { viewModel.detachTransport() }
+        viewModel.input = "retained draft"
+        let original = viewModel.currentSessionSnapshot()
+        let historyGeneration = viewModel.lastIssuedHistoryRequestID
+        let lease = leased ? try await viewModel.newSessionRouteLease() : nil
+        let create = Task {
+            await viewModel.performStartNewSession(
+                agentID: variant == "options" ? "worker" : nil,
+                worktree: variant == "worktree",
+                worktreeBaseRef: variant == "worktree" ? "main" : nil,
+                routeLease: lease)
+        }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            create.cancel()
+            _ = await create.value
+            Issue.record("timed out waiting for creation")
+            return
+        }
+        authority.retire(reopen: true)
+        #expect(authority.capture()())
+        #expect(viewModel.currentSessionSnapshot() == original)
+        viewModel.errorText = "current presentation notice"
+        gate.release()
+
+        #expect(await create.value == false)
+        #expect(viewModel.currentSessionSnapshot() == original)
+        #expect(viewModel.lastIssuedHistoryRequestID == historyGeneration)
+        #expect(viewModel.input == "retained draft")
+        #expect(viewModel.errorText == "current presentation notice")
+        #expect(viewModel.isCreatingSession == false)
+        #expect(await transport.createdKeys().count == 1)
+        #expect(await transport.resetSessionKeys().isEmpty)
+        #expect(await transport.historySessionKeys().isEmpty)
+        #expect(await transport.sessionListRequestCount() == 0)
+    }
+
+    @Test(arguments: ["/new", "/reset"], [false, true])
+    func `local session command cannot recapture a reopened presentation after health probe`(
+        command: String, healthSucceeds: Bool) async
+    {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(
+            directCreateEnabled: true, healthGate: gate, healthSucceeds: healthSucceeds)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport,
+            captureSessionTransitionAuthority: { authority.capture() })
+        defer { viewModel.detachTransport() }
+        let original = viewModel.currentSessionSnapshot()
+        viewModel.input = command
+        viewModel.send()
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            Issue.record("timed out waiting for local command health probe")
+            return
+        }
+        authority.retire(reopen: true)
+        gate.release()
+        #expect(await self.waitForForkStart(authority.retiredCompletion))
+        #expect(viewModel.currentSessionSnapshot() == original)
+        #expect(viewModel.input == command)
+        #expect(viewModel.errorText == nil)
+        #expect(viewModel.isSubmittingDraft == false)
+        #expect(await transport.createdKeys().isEmpty)
+        #expect(await transport.resetSessionKeys().isEmpty)
+        #expect(await transport.sentSessionKeys().isEmpty)
+    }
+
+    @Test func `retiring a presentation during reset fallback prevents late bootstrap`() async throws {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(resetGate: gate, createIsUnsupported: true)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport,
+            captureSessionTransitionAuthority: { authority.capture() })
+        defer { viewModel.detachTransport() }
+        let original = viewModel.currentSessionSnapshot()
+        let historyGeneration = viewModel.lastIssuedHistoryRequestID
+        let lease = try await viewModel.newSessionRouteLease()
+        let create = Task {
+            await viewModel.performStartNewSession(worktree: false, routeLease: lease)
+        }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            create.cancel()
+            _ = await create.value
+            Issue.record("timed out waiting for reset fallback")
+            return
+        }
+        authority.retire(reopen: true)
+        gate.release()
+        #expect(await create.value == false)
+        #expect(viewModel.currentSessionSnapshot() == original)
+        #expect(viewModel.lastIssuedHistoryRequestID == historyGeneration)
+        #expect(viewModel.isCreatingSession == false)
+        #expect(viewModel.isLoading == false)
+        #expect(await transport.resetSessionKeys() == ["main"])
+        #expect(await transport.historySessionKeys().isEmpty)
+        #expect(await transport.sessionListRequestCount() == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func `retired reset cannot clear bootstrap loading started before or after it`(bootstrapFirst: Bool) async throws {
+        let resetGate = SessionActionCompletionGate()
+        let historyGate = SessionActionCompletionGate()
+        defer { resetGate.release()
+            historyGate.release()
+        }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(resetGate: resetGate, historyGates: [0: historyGate])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { viewModel.detachTransport() }
+        if bootstrapFirst {
+            viewModel.load()
+            #expect(await self.waitForForkStart(historyGate))
+        }
+        let captured = authority.capture()
+        let reset = Task { await viewModel.performReset(presentationIsCurrent: captured) }
+        guard await self.waitForForkStart(resetGate) else {
+            resetGate.release()
+            historyGate.release()
+            await reset.value
+            Issue.record("timed out waiting for reset")
+            return
+        }
+        if !bootstrapFirst {
+            viewModel.load()
+            #expect(await self.waitForForkStart(historyGate))
+        }
+        authority.retire(reopen: true)
+        resetGate.release()
+        await reset.value
+        #expect(viewModel.isLoading)
+        historyGate.release()
+        try await waitUntil("bootstrap releases its own loading") { await MainActor.run { !viewModel.isLoading } }
+        #expect(await transport.resetSessionKeys() == ["main"])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
+    @Test func `overlapping resets each retain loading until their own response settles`() async {
+        let firstGate = SessionActionCompletionGate()
+        let secondGate = SessionActionCompletionGate()
+        defer { firstGate.release()
+            secondGate.release()
+        }
+        let firstAuthority = SessionActionPresentationAuthority()
+        let secondAuthority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(resetGates: [firstGate, secondGate])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { viewModel.detachTransport() }
+        let firstCapture = firstAuthority.capture()
+        let first = Task { await viewModel.performReset(presentationIsCurrent: firstCapture) }
+        #expect(await self.waitForForkStart(firstGate))
+        let secondCapture = secondAuthority.capture()
+        let second = Task { await viewModel.performReset(presentationIsCurrent: secondCapture) }
+        #expect(await self.waitForForkStart(secondGate))
+        firstAuthority.retire(reopen: true)
+        firstGate.release()
+        await first.value
+        #expect(viewModel.isLoading)
+        secondAuthority.retire(reopen: true)
+        secondGate.release()
+        await second.value
+        #expect(!viewModel.isLoading)
+        #expect(await transport.resetSessionKeys() == ["main", "main"])
+        #expect(await transport.historySessionKeys().isEmpty)
+    }
+
+    @Test func `successful ordinary reset hands loading to bootstrap before releasing its activity`() async throws {
+        let resetGate = SessionActionCompletionGate()
+        let historyGate = SessionActionCompletionGate()
+        defer { resetGate.release()
+            historyGate.release()
+        }
+        let transport = SessionActionTransport(resetGate: resetGate, historyGates: [0: historyGate])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { viewModel.detachTransport() }
+        let reset = Task { await viewModel.performReset(presentationIsCurrent: { true }) }
+        #expect(await self.waitForForkStart(resetGate))
+        #expect(viewModel.isLoading)
+        resetGate.release()
+        await reset.value
+        #expect(await self.waitForForkStart(historyGate))
+        #expect(viewModel.isLoading)
+        historyGate.release()
+        try await waitUntil("successful reset bootstrap completes") { await MainActor.run { !viewModel.isLoading } }
+        #expect(await transport.resetSessionKeys() == ["main"])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
+    @Test(arguments: [false, true])
+    func `pending reset cannot keep a different or detached session loading`(detach: Bool) async throws {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let transport = SessionActionTransport(resetGate: gate)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { viewModel.detachTransport() }
+        let reset = Task { await viewModel.performReset(presentationIsCurrent: { true }) }
+        #expect(await self.waitForForkStart(gate))
+        #expect(viewModel.isLoading)
+        if detach { viewModel.detachTransport() }
+        else { viewModel.switchSession(to: "other") }
+        try await waitUntil("old reset no longer owns current loading") { await MainActor.run { !viewModel.isLoading } }
+        gate.release()
+        await reset.value
+        #expect(!viewModel.isLoading)
+        #expect(await transport.resetSessionKeys() == ["main"])
+        #expect(await transport.historySessionKeys() == (detach ? [] : ["other"]))
+    }
+
+    @Test(arguments: [false, true])
+    func `retired presentation cannot adopt a fork or its editor after same target reopens`(atMessage: Bool) async {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(
+            forkGate: atMessage ? nil : gate,
+            forkAtMessageGate: atMessage ? gate : nil)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport,
+            captureSessionTransitionAuthority: { authority.capture() })
+        defer { viewModel.detachTransport() }
+        viewModel.input = "retained draft"
+        let original = viewModel.currentSessionSnapshot()
+        let historyGeneration = viewModel.lastIssuedHistoryRequestID
+        let fork = Task {
+            if atMessage {
+                await viewModel.forkAtMessage(self.userMessage(entryID: "message-42"))
+            } else {
+                await viewModel.forkSession(key: "main")
+            }
+        }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            fork.cancel()
+            await fork.value
+            Issue.record("timed out waiting for fork")
+            return
+        }
+        authority.retire(reopen: true)
+        gate.release()
+        await fork.value
+        #expect(viewModel.currentSessionSnapshot() == original)
+        #expect(viewModel.lastIssuedHistoryRequestID == historyGeneration)
+        #expect(viewModel.input == "retained draft")
+        #expect(viewModel.errorText == nil)
+        #expect(await transport.forkedParentKeys().count == (atMessage ? 0 : 1))
+        #expect(await transport.forkedMessages().count == (atMessage ? 1 : 0))
+        #expect(await transport.historySessionKeys().isEmpty)
+        #expect(await transport.sessionListRequestCount() == 0)
+    }
+
+    @Test(arguments: ["delete", "archive", "batch-delete", "batch-archive", "restore"])
+    func `retired session mutation records remote completion without fallback navigation`(variant: String) async {
+        let gate = SessionActionCompletionGate()
+        defer { gate.release() }
+        let authority = SessionActionPresentationAuthority()
+        let transport = SessionActionTransport(mutationGate: gate)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "worker", transport: transport,
+            captureSessionTransitionAuthority: { authority.capture() })
+        defer { viewModel.detachTransport() }
+        let entry = self.entry(key: "worker", sessionId: "session-worker")
+        viewModel.sessions = [entry]
+        viewModel.input = "retained draft"
+        let original = viewModel.currentSessionSnapshot()
+        let historyGeneration = viewModel.lastIssuedHistoryRequestID
+        let mutation = Task { () -> ChatSessionBatchResult? in
+            switch variant {
+            case "delete": viewModel.deleteSession("worker")
+            case "archive": viewModel.setSessionArchived(entry, archived: true)
+            case "restore":
+                #expect(await viewModel.restoreSession(entry) == false)
+            default:
+                return await viewModel.performSessionBatch(
+                    sessions: [entry], action: variant == "batch-delete" ? .delete : .archive)
+            }
+            return nil
+        }
+        guard await self.waitForForkStart(gate) else {
+            gate.release()
+            mutation.cancel()
+            _ = await mutation.value
+            Issue.record("timed out waiting for session mutation")
+            return
+        }
+        authority.retire(reopen: true)
+        viewModel.errorText = "current presentation notice"
+        gate.release()
+        // The void sidebar APIs own unstructured tasks; observe their exact
+        // post-response authority check before asserting the local non-outcome.
+        #expect(await self.waitForForkStart(authority.retiredCompletion))
+        let result = await mutation.value
+        if variant.hasPrefix("batch-") {
+            #expect(result?.succeededKeys == ["worker"])
+            #expect(result?.errorsByKey.isEmpty == true)
+        }
+        #expect(viewModel.currentSessionSnapshot() == original)
+        #expect(viewModel.lastIssuedHistoryRequestID == historyGeneration)
+        #expect(viewModel.input == "retained draft")
+        #expect(viewModel.errorText == "current presentation notice")
+        #expect(await transport.deletedKeys().count == (variant.contains("delete") ? 1 : 0))
+        #expect(await transport.patchedKeys().count == (variant.contains("delete") ? 0 : 1))
+        #expect(await transport.historySessionKeys().isEmpty)
+        #expect(await transport.sessionListRequestCount() == 0)
+    }
+
     @Test(arguments: [false, true])
     func `new session completion preserves attachment ownership acquired during creation`(
         createIsUnsupported: Bool) async throws
@@ -752,8 +1148,7 @@ struct ChatViewModelSessionActionTests {
     }
 
     @Test func `unsupported create with advanced options fails without resetting`() async {
-        // SessionActionTransport relies on the protocol's default createSession,
-        // which throws the canonical unsupported error; the worktree request must
+        // Direct creation is unsupported by default in this fixture; the worktree request must
         // surface it instead of taking the plain-new reset fallback.
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)

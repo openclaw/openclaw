@@ -772,7 +772,7 @@ setInterval(() => {}, 1_000);
   });
 
   it.each<{
-    snapshot: "empty" | "live" | "failed" | "zombie" | "zombie-leader";
+    snapshot: "empty" | "live" | "failed" | "zombie" | "zombie-leader" | "mixed" | "long" | "many";
     afterSnapshot: string | null;
     expected: ReturnType<typeof inspectManagedProcessGroup>;
     policy?: Parameters<typeof inspectManagedProcessGroup>[1]["errorPolicy"];
@@ -780,6 +780,8 @@ setInterval(() => {}, 1_000);
     running?: boolean;
     remainingMs?: number;
     snapshotTimeoutMs?: number;
+    errorCode?: string;
+    diagnosticFault?: boolean;
   }>([
     { snapshot: "empty", afterSnapshot: "ESRCH", expected: "dead" },
     { snapshot: "live", afterSnapshot: "ESRCH", expected: "dead" },
@@ -789,6 +791,18 @@ setInterval(() => {}, 1_000);
     { snapshot: "failed", afterSnapshot: null, expected: "live" },
     { snapshot: "zombie", afterSnapshot: null, expected: "dead" },
     { snapshot: "zombie-leader", afterSnapshot: null, expected: "live" },
+    { snapshot: "mixed", afterSnapshot: null, expected: "live" },
+    { snapshot: "long", afterSnapshot: null, expected: "live" },
+    { snapshot: "many", afterSnapshot: null, expected: "dead" },
+    ...["ETIMEDOUT", "ENOENT", "EACCES", "EPERM", "ENOBUFS", "private-ps-marker"].map(
+      (errorCode) => ({
+        snapshot: "failed" as const,
+        afterSnapshot: null,
+        expected: "live" as const,
+        errorCode,
+      }),
+    ),
+    { snapshot: "failed", afterSnapshot: null, expected: "live", diagnosticFault: true },
     { snapshot: "empty", afterSnapshot: "EPERM", expected: "live" },
     {
       snapshot: "empty",
@@ -844,7 +858,7 @@ setInterval(() => {}, 1_000);
       expected: "indeterminate",
     },
   ])(
-    "checks current group state after $snapshot snapshot ($afterSnapshot, $policy, $platform, $running, budget $remainingMs)",
+    "checks current group state after $snapshot snapshot ($afterSnapshot, $policy, $platform, $running, budget $remainingMs, error $errorCode, diagnostic fault $diagnosticFault)",
     ({
       snapshot,
       afterSnapshot,
@@ -854,6 +868,8 @@ setInterval(() => {}, 1_000);
       running,
       remainingMs,
       snapshotTimeoutMs = 5_000,
+      errorCode,
+      diagnosticFault,
     }) => {
       let inspected = false;
       let probes = 0;
@@ -877,7 +893,7 @@ setInterval(() => {}, 1_000);
           // Mirror /proc reporting: without -L, ps collapses a pthread_exit leader
           // with a live sibling thread into one Z process row; -L exposes the thread.
           const threadRows = Array.isArray(call[1]) && call[1].includes("-L");
-          const stdout =
+          let stdout =
             snapshot === "zombie-leader"
               ? threadRows
                 ? "12345 Z\n12345 S\n"
@@ -887,20 +903,48 @@ setInterval(() => {}, 1_000);
                 : snapshot === "live"
                   ? "12345 S\n"
                   : "";
+          if (snapshot === "mixed") {
+            stdout = "12345 Z\n12345 S\n12345 t\n67890 Z\nprivate-ps-marker\n";
+          }
+          if (snapshot === "long") {
+            stdout = "private-ps-marker".repeat(1_024);
+          }
+          if (snapshot === "many") {
+            stdout = "12345 Z\n".repeat(1_025);
+          }
+          const error = Object.defineProperty(
+            Object.assign(new Error("private-ps-marker"), {
+              path: "private-ps-marker",
+              spawnargs: ["private-ps-marker"],
+            }),
+            "code",
+            {
+              get() {
+                if (diagnosticFault) {
+                  throw new Error("private-ps-marker");
+                }
+                return errorCode;
+              },
+            },
+          );
           return {
             pid: 12346,
             output: [],
             signal: null,
             status: snapshot === "empty" ? 1 : 0,
             stdout,
-            stderr: "",
-            ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
+            stderr: "private-ps-marker",
+            ...(snapshot === "failed" ? { error } : {}),
           };
         });
       try {
+        const inspection: NonNullable<
+          Parameters<typeof inspectManagedProcessGroup>[1]["inspection"]
+        > = {};
         const options = {
           errorPolicy: policy,
           platform,
+          inspection,
           ...(remainingMs === undefined ? {} : { deadlineAt: Date.now() + remainingMs }),
         };
         expect(
@@ -912,6 +956,41 @@ setInterval(() => {}, 1_000);
         const snapshotExpected =
           platform === "linux" && !running && (remainingMs === undefined || remainingMs > 0);
         expect(ps).toHaveBeenCalledTimes(snapshotExpected ? 1 : 0);
+        if (snapshotExpected) {
+          const category = !errorCode
+            ? "other"
+            : errorCode === "ETIMEDOUT"
+              ? "timeout"
+              : errorCode === "ENOENT"
+                ? "missing"
+                : errorCode === "EACCES" || errorCode === "EPERM"
+                  ? "denied"
+                  : errorCode === "ENOBUFS"
+                    ? "buffer"
+                    : "other";
+          const truncated = snapshot === "long" || snapshot === "many";
+          const failed = snapshot === "empty" || snapshot === "failed";
+          expect(inspection.snapshot).toEqual({
+            snapshotStatus: failed ? "failed" : "ok",
+            psExitCode: diagnosticFault ? null : snapshot === "empty" ? 1 : 0,
+            errorCategory: snapshot === "failed" ? category : null,
+            truncated,
+            zombieRows: failed || truncated ? null : snapshot === "live" ? 0 : 1,
+            nonZombieRows:
+              failed || truncated ? null : snapshot === "zombie" ? 0 : snapshot === "mixed" ? 2 : 1,
+            malformedOrOtherGroupRows: failed || truncated ? null : snapshot === "mixed" ? 2 : 0,
+          });
+          expect(JSON.stringify(inspection)).not.toContain("private-ps-marker");
+          expect(JSON.stringify(inspection)).not.toContain("12345");
+        } else if (platform === "linux" && !running) {
+          expect(inspection.snapshot).toMatchObject({
+            snapshotStatus: "budget-exhausted",
+            zombieRows: null,
+            nonZombieRows: null,
+          });
+        } else {
+          expect(inspection.snapshot).toBeUndefined();
+        }
         if (snapshotExpected) {
           expect(ps).toHaveBeenCalledWith(
             "ps",
@@ -948,6 +1027,8 @@ setInterval(() => {}, 1_000);
     { mode: "normal exit", cleanupDrainTimeoutMs: undefined },
     { mode: "normal exit", cleanupDrainTimeoutMs: 37 },
     { mode: "zombie normal exit", cleanupDrainTimeoutMs: undefined },
+    { mode: "live normal exit", cleanupDrainTimeoutMs: undefined },
+    { mode: "failed then dead", cleanupDrainTimeoutMs: undefined },
     { mode: "graceful abort", cleanupDrainTimeoutMs: undefined },
     { mode: "force on leader exit", cleanupDrainTimeoutMs: undefined },
   ] as const)(
@@ -965,6 +1046,7 @@ import cp from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 const mode = ${JSON.stringify(mode)};
+const recovered = mode === "live normal exit" || mode === "failed then dead";
 const cleanupDrainTimeoutMs = ${JSON.stringify(cleanupDrainTimeoutMs)};
 let now = 1_000, live = true;
 const probes = [], signals = [];
@@ -979,7 +1061,7 @@ process.kill = (pid, signal) => {
   if (!live) throw Object.assign(new Error("group gone"), { code: "ESRCH" });
   if (signal !== 0) {
     signals.push({ signal, at: now });
-    if (signal === "SIGKILL" && mode !== "normal exit") {
+    if (signal === "SIGKILL" && mode !== "normal exit" && !recovered) {
       live = false;
       child.exitCode = null;
       child.signalCode = "SIGKILL";
@@ -992,9 +1074,18 @@ process.kill = (pid, signal) => {
 cp.spawn = () => child;
 cp.spawnSync = (bin, args, options) => {
   assert.equal(bin, "ps");
-  assert.ok(args.includes("-L"));
+  assert.deepEqual(args, ["-s", "12345", "-L", "-o", "pgid=,state="]);
   assert.ok(Number.isInteger(options.timeout) && options.timeout > 0);
   probes.push({ at: now, timeout: options.timeout });
+  if (recovered) {
+    now += 1;
+    return { pid: 12346, output: [], status: 0, signal: null,
+      stdout: probes.length === 1 ? "12345 S\\n" : "12345 Z\\n", stderr: "private-ps-marker",
+      ...(mode === "failed then dead" && probes.length === 1 ? {
+        error: Object.assign(new Error("private-ps-marker"), { code: "ENOENT", path: "private-ps-marker" }),
+      } : {}),
+    };
+  }
   if (mode === "zombie normal exit") {
     now += 1;
     return { pid: 12346, output: [], status: 0, signal: null, stdout: "12345 Z\\n", stderr: "" };
@@ -1007,7 +1098,7 @@ syncBuiltinESMExports();
 const { runManagedCommand, waitForManagedProcessGroupExit } =
   await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)});
 const started = now;
-let outcome;
+let outcome, cleanupError;
 if (mode === "waiter") {
   outcome = await waitForManagedProcessGroupExit(child, 20, {
     errorPolicy: "indeterminate", platform: "linux", clampPollToDeadline: true, pollIntervalMs: 1,
@@ -1022,12 +1113,12 @@ if (mode === "waiter") {
       timeoutMs: 0, timeoutKillGraceMs: 100, timeoutForceKillOnLeaderExit: true,
     } : {}),
     onReady() {
-      if (mode === "normal exit" || mode === "zombie normal exit") {
+      if (mode === "normal exit" || mode === "zombie normal exit" || recovered) {
         child.emit("exit", 0, null);
         child.emit("close", 0, null);
       } else if (mode === "graceful abort") abort.abort();
     },
-  }).catch(error => error.code);
+  }).catch(error => { cleanupError = error; return error.code; });
 }
 console.log(JSON.stringify({ mode, elapsed: now - started, outcome, probes, signals }));
 if (mode === "waiter") {
@@ -1038,6 +1129,23 @@ if (mode === "waiter") {
   assert.equal(outcome, "EPROCESSGROUP_CLEANUP_FAILED");
   assert.ok(now - started <= (cleanupDrainTimeoutMs ?? 5_000), "preliminary snapshot must be charged to finalization");
   assert.ok(signals.some(entry => entry.signal === "SIGKILL"));
+  assert.equal(probes.length, 1);
+  assert.deepEqual(cleanupError.initialGroupInspection, {
+    initialState: "live", snapshotStatus: "failed", psExitCode: null, errorCategory: "timeout",
+    truncated: false, zombieRows: null, nonZombieRows: null, malformedOrOtherGroupRows: null,
+  });
+} else if (recovered) {
+  assert.equal(outcome, "EPROCESSGROUP_CLEANUP_FAILED");
+  assert.equal(cleanupError.processTreeState, "terminated");
+  assert.deepEqual(probes, [{ at: started, timeout: 5_000 }, { at: started + 1, timeout: 4_999 }]);
+  assert.deepEqual(signals, [{ signal: "SIGKILL", at: started + 1 }]);
+  const failed = mode === "failed then dead";
+  assert.deepEqual(cleanupError.initialGroupInspection, {
+    initialState: "live", snapshotStatus: failed ? "failed" : "ok", psExitCode: 0,
+    errorCategory: failed ? "missing" : null, truncated: false,
+    zombieRows: failed ? null : 0, nonZombieRows: failed ? null : 1, malformedOrOtherGroupRows: failed ? null : 0,
+  });
+  assert.ok(!JSON.stringify(cleanupError.initialGroupInspection).includes("private-ps-marker"));
 } else if (mode === "zombie normal exit") {
   assert.equal(outcome, 0, "completed zombie-only group remains a successful normal exit");
   assert.deepEqual(signals, []);
@@ -1048,6 +1156,7 @@ if (mode === "waiter") {
   const forced = signals.find(entry => entry.signal === "SIGKILL");
   assert.ok(forced && forced.at - started <= forceBudget, "snapshot must not delay escalation");
   assert.equal(live, false);
+  assert.equal(cleanupError.initialGroupInspection, undefined);
 }
 `,
       );

@@ -311,17 +311,8 @@ struct ChatInlineWidgetView: View {
 
     #if canImport(WebKit) && (os(iOS) || os(macOS))
     @State private var snapshotRequest: ChatInlineWidgetSnapshotRequest?
-    @State private var exportErrorMessage: String?
-
-    #if os(iOS)
-    @State private var sharedImage: ChatInlineWidgetSharedImage?
-    #endif
-
-    private var isPresentingExportError: Binding<Bool> {
-        Binding(
-            get: { self.exportErrorMessage != nil },
-            set: { if !$0 { self.exportErrorMessage = nil } })
-    }
+    @State private var snapshotPresentation: OpenClawChatModalPresentations.Capture?
+    @ChatModalState private var modals
     #endif
 
     var body: some View {
@@ -365,24 +356,7 @@ struct ChatInlineWidgetView: View {
             await self.load(path: path, replacing: nil, generation: self.loadGeneration)
         }
         #if canImport(WebKit) && (os(iOS) || os(macOS))
-        .alert("Widget export failed", isPresented: self.isPresentingExportError) {
-            Button(role: .cancel) {
-                self.exportErrorMessage = nil
-            } label: {
-                Text("OK")
-                    .font(OpenClawChatTypography.body)
-            }
-        } message: {
-            if let exportErrorMessage {
-                Text(exportErrorMessage)
-                    .font(OpenClawChatTypography.body)
-            }
-        }
-        #if os(iOS)
-        .sheet(item: self.$sharedImage) { item in
-            ChatInlineWidgetShareSheet(image: item.image)
-        }
-        #endif
+        .modifier(self.$modals)
         #endif
     }
 
@@ -430,7 +404,8 @@ struct ChatInlineWidgetView: View {
     }
 
     private func requestSnapshot(for action: ChatInlineWidgetSnapshotRequest.Action) {
-        guard let resource = self.resolvedResource else { return }
+        guard let resource = self.resolvedResource, let capture = self.modals.capture() else { return }
+        self.snapshotPresentation = capture
         self.snapshotRequest = ChatInlineWidgetSnapshotRequest(
             action: action,
             generation: self.loadGeneration,
@@ -440,49 +415,74 @@ struct ChatInlineWidgetView: View {
     private func handleSnapshot(_ outcome: ChatInlineWidgetSnapshotOutcome) {
         switch outcome {
         case let .failure(request):
-            guard self.consumeSnapshotRequest(request) else { return }
-            self.exportErrorMessage = String(localized: "The widget image could not be captured.")
+            guard let capture = self.consumeSnapshotRequest(request) else { return }
+            self.modals.owner.present(
+                String(localized: "The widget image could not be captured."),
+                at: \.widgetError,
+                capture: capture)
         case let .success(request, image):
-            guard self.consumeSnapshotRequest(request) else { return }
+            guard let capture = self.consumeSnapshotRequest(request) else { return }
             switch request.action {
             case .copy:
-                self.copySnapshot(image)
+                self.copySnapshot(image, capture: capture)
             case .save:
-                self.saveSnapshot(image)
+                self.saveSnapshot(image, capture: capture)
             }
         }
     }
 
-    private func consumeSnapshotRequest(_ request: ChatInlineWidgetSnapshotRequest) -> Bool {
+    private func consumeSnapshotRequest(
+        _ request: ChatInlineWidgetSnapshotRequest) -> OpenClawChatModalPresentations.Capture?
+    {
         guard self.snapshotRequest == request,
               request.generation == self.loadGeneration,
               request.resource == self.resolvedResource
-        else { return false }
+        else { return nil }
+        let capture = self.snapshotPresentation
         self.snapshotRequest = nil
-        return true
+        self.snapshotPresentation = nil
+        return capture?.isCurrent == true ? capture : nil
     }
 
     #if os(iOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(
+        _ image: ChatInlineWidgetSnapshotImage,
+        capture _: OpenClawChatModalPresentations.Capture)
+    {
         UIPasteboard.general.image = image
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
-        self.sharedImage = ChatInlineWidgetSharedImage(image: image)
+    private func saveSnapshot(
+        _ image: ChatInlineWidgetSnapshotImage,
+        capture: OpenClawChatModalPresentations.Capture)
+    {
+        self.modals.owner.present(image, at: \.widgetImage, capture: capture)
     }
     #elseif os(macOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(
+        _ image: ChatInlineWidgetSnapshotImage,
+        capture: OpenClawChatModalPresentations.Capture)
+    {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.writeObjects([image]) else {
-            self.exportErrorMessage = String(localized: "The widget image could not be copied.")
+            self.modals.owner.present(
+                String(localized: "The widget image could not be copied."),
+                at: \.widgetError,
+                capture: capture)
             return
         }
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func saveSnapshot(
+        _ image: ChatInlineWidgetSnapshotImage,
+        capture: OpenClawChatModalPresentations.Capture)
+    {
         guard let pngData = image.chatInlineWidgetPNGData else {
-            self.exportErrorMessage = String(localized: "The widget image could not be encoded as PNG.")
+            self.modals.owner.present(
+                String(localized: "The widget image could not be encoded as PNG."),
+                at: \.widgetError,
+                capture: capture)
             return
         }
 
@@ -494,7 +494,10 @@ struct ChatInlineWidgetView: View {
             do {
                 try pngData.write(to: url, options: .atomic)
             } catch {
-                self.exportErrorMessage = String(localized: "The widget image could not be saved.")
+                self.modals.owner.present(
+                    String(localized: "The widget image could not be saved."),
+                    at: \.widgetError,
+                    capture: capture)
             }
         }
     }
@@ -534,6 +537,7 @@ struct ChatInlineWidgetView: View {
         #if canImport(WebKit) && (os(iOS) || os(macOS))
         if self.resolvedResource != resource || resource == nil {
             self.snapshotRequest = nil
+            self.snapshotPresentation = nil
         }
         #endif
         self.resolvedResource = resource
@@ -859,12 +863,7 @@ private struct ChatInlineWidgetWebView: NSViewRepresentable {
 #endif
 
 #if os(iOS)
-private struct ChatInlineWidgetSharedImage: Identifiable {
-    let id = UUID()
-    let image: UIImage
-}
-
-private struct ChatInlineWidgetShareSheet: UIViewControllerRepresentable {
+struct ChatInlineWidgetShareSheet: UIViewControllerRepresentable {
     let image: UIImage
 
     func makeUIViewController(context _: Context) -> UIActivityViewController {

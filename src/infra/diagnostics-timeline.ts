@@ -1,9 +1,11 @@
 // Records structured diagnostics timeline events and spans.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
@@ -59,6 +61,8 @@ type DiagnosticsTimelineSpanOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   omitErrorMessage?: boolean;
+  /** Observe only worker completions submitted in this exact async span. */
+  workerTasks?: boolean;
 };
 
 type DiagnosticsTimelineOptions = {
@@ -379,6 +383,85 @@ function emitFailedDiagnosticsTimelineSpan(
   );
 }
 
+function observeSpanWorkerTasks(span: StartedDiagnosticsTimelineSpan): () => void {
+  const workers = channel("openclaw.worker.task");
+  let recorded = 0;
+  let invalid = false;
+  let truncated = false;
+  const emit = (attributes: DiagnosticsTimelineAttributes) =>
+    emitDiagnosticsTimelineEvent(
+      { type: "mark", name: "worker.task", parentSpanId: span.spanId, attributes },
+      { config: span.config, env: span.env },
+    );
+  const recordInvalid = () => {
+    if (invalid) {
+      return;
+    }
+    invalid = true;
+    emit({ status: "invalid" });
+  };
+  const observe = (message: unknown) => {
+    try {
+      // The pool restores the submitting context before publishing and settling.
+      // Descendants and coalesced followers do not own this span's worker metrics.
+      if (getActiveDiagnosticsTimelineSpan()?.spanId !== span.spanId) {
+        return;
+      }
+      if (!isRecord(message)) {
+        return recordInvalid();
+      }
+      const { outcome, queueMs, preparationMs, runMs, transferMs } = message;
+      if (
+        (outcome !== "ok" && outcome !== "failed") ||
+        typeof queueMs !== "number" ||
+        typeof preparationMs !== "number" ||
+        typeof runMs !== "number" ||
+        typeof transferMs !== "number" ||
+        ![queueMs, preparationMs, runMs, transferMs].every(
+          (value) => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER,
+        )
+      ) {
+        return recordInvalid();
+      }
+      if (recorded === 4) {
+        if (!truncated) {
+          truncated = true;
+          emit({ status: "truncated" });
+        }
+        return;
+      }
+      recorded++;
+      emit({
+        status: "captured",
+        outcome,
+        queueMs,
+        preparationMs,
+        runMs,
+        transferMs,
+      });
+    } catch {
+      // diagnostics_channel rethrows subscriber failures as uncaught exceptions.
+      try {
+        recordInvalid();
+      } catch {
+        /* Diagnostics cannot change task settlement. */
+      }
+    }
+  };
+  try {
+    workers.subscribe(observe);
+  } catch {
+    /* Work remains authoritative. */
+  }
+  return () => {
+    try {
+      workers.unsubscribe(observe);
+    } catch {
+      /* Preserve the work's result or error. */
+    }
+  };
+}
+
 /** Measures async work as a start/end timeline span, emitting an error span before rethrowing. */
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
@@ -389,6 +472,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
   if (!span) {
     return await run();
   }
+  const stopObserving = options.workerTasks ? observeSpanWorkerTasks(span) : undefined;
   try {
     const result = await runInDiagnosticsTimelineSpan(span, () => run());
     emitFinishedDiagnosticsTimelineSpan(span);
@@ -396,6 +480,8 @@ export async function measureDiagnosticsTimelineSpan<T>(
   } catch (error) {
     emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
+  } finally {
+    stopObserving?.();
   }
 }
 

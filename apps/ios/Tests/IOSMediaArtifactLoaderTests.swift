@@ -17,8 +17,8 @@ struct IOSMediaArtifactLoaderTests {
                 IOSMediaArtifactLoader.Connection(
                     config: config, gatewayID: config.effectiveStableID, customHeaders: ["X-Proxy-Token": "proxy"])
             },
-            requestFactory: { receivedTLS, maximumBytes in
-                #expect(receivedTLS == tls)
+            requestFactory: { connection, maximumBytes in
+                #expect(connection.tls == tls)
                 #expect(maximumBytes == 100 * 1024 * 1024)
                 return { request in
                     #expect(request.url?.absoluteString == "https://gateway.example/gw" + Self.ticketedPath)
@@ -143,8 +143,8 @@ struct IOSMediaArtifactLoaderTests {
                     gatewayID: config.effectiveStableID,
                     customHeaders: [:])
             },
-            requestFactory: { receivedTLS, maximumBytes in
-                #expect(receivedTLS == tls)
+            requestFactory: { connection, maximumBytes in
+                #expect(connection.tls == tls)
                 #expect(maximumBytes == 16 * 1024 * 1024)
                 return { request in
                     #expect(request.value(forHTTPHeaderField: "Accept") == "video/*")

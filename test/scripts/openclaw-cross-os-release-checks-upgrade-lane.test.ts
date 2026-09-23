@@ -167,42 +167,56 @@ describe("cross-OS manual gateway lane evidence", () => {
     const listeners: Array<{
       server: ReturnType<typeof createServer>;
       closed: ReturnType<typeof vi.fn>;
-      port?: number;
+      port: number;
     }> = [];
 
-    beforeEach(async () => {
+    beforeEach(() => {
       listeners.length = 0;
-      const actual = await vi.importActual<typeof import("node:net")>("node:net");
-      vi.mocked(createServer).mockImplementation((...args) => {
-        const server = actual.createServer(...args);
-        const closed = vi.fn();
-        const listener: (typeof listeners)[number] = { server, closed };
-        server.on("close", closed);
-        server.once("listening", () => {
-          const address = server.address();
-          if (address && typeof address !== "string") {
-            listener.port = address.port;
-          }
-        });
-        listeners.push(listener);
-        return server;
-      });
+      vi.mocked(createServer).mockClear();
     });
 
     afterEach(async () => {
       try {
-        for (const { server } of listeners) {
-          if (server.listening) {
-            await new Promise<void>((resolve, reject) => {
-              server.close((error) => (error ? reject(error) : resolve()));
-            });
-          }
+        // Join every native listener even if ownership observation failed before registration.
+        const results = await Promise.allSettled(
+          createdServers()
+            .filter((server) => server.listening)
+            .map(
+              (server) =>
+                new Promise<void>((resolve, reject) => {
+                  server.close((error) => (error ? reject(error) : resolve()));
+                }),
+            ),
+        );
+        const errors = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (errors.length > 0) {
+          throw new AggregateError(errors, "Failed to close native fixture listeners");
         }
       } finally {
-        // restoreAllMocks does not reset module spies' custom implementations.
-        vi.mocked(createServer).mockRestore();
+        vi.mocked(createServer).mockClear();
       }
     });
+
+    function createdServers() {
+      return vi
+        .mocked(createServer)
+        .mock.results.flatMap((result) => (result.type === "return" ? [result.value] : []));
+    }
+
+    function observeReservation(port: number) {
+      // Observe the real listener before setup probes; replacing the native spy can re-enter itself.
+      const owners = createdServers().filter((server) => {
+        const address = server.address();
+        return server.listening && address && typeof address !== "string" && address.port === port;
+      });
+      expect(owners).toHaveLength(1);
+      const server = owners[0]!;
+      const closed = vi.fn();
+      server.on("close", closed);
+      listeners.push({ server, closed, port });
+    }
 
     function expectReservationClosed(port: number) {
       const owners = listeners.filter((listener) => listener.port === port);
@@ -222,6 +236,7 @@ describe("cross-OS manual gateway lane evidence", () => {
         mocks.runCommand.mockImplementation(async (_command, args: string[]) => {
           if (args.includes("onboard")) {
             port = Number(args[args.indexOf("--gateway-port") + 1]);
+            observeReservation(port);
             phases.push("onboard");
             expect(await probeBind(port)).toBe("EADDRINUSE");
             if (outcome === "onboard") {

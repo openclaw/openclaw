@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
@@ -7,7 +8,6 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
-import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -15,10 +15,17 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const requireRecord = createRequireRecord("record", "expected-object-value");
-
 let instance: OpenClawTestInstance;
 const tempDirs = createTempDirTracker();
+
+function readFrame(payload: string | Buffer) {
+  try {
+    return asNullableRecord(JSON.parse(payload.toString()));
+  } catch {
+    return null;
+  }
+}
+
 const suite = createControlUiE2eSuite({
   name: "Partial refresh with a real Gateway",
   startServerBeforeBrowser: true,
@@ -122,36 +129,55 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          let currentSocket: WebSocket | undefined;
-          let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
-          page.on("websocket", (socket) => {
-            currentSocket = socket;
-            socket.on("framesent", ({ payload }) => {
-              const frame = requireRecord(JSON.parse(payload.toString()));
-              if (
-                frame.type !== "req" ||
-                frame.method !== "sessions.catalog.list" ||
-                typeof frame.id !== "string"
-              ) {
+          let gatewaySocket: WebSocket | undefined;
+          let latestCatalogRead: { id: string; succeeded: boolean } | undefined;
+          if (route === "new") {
+            const gatewayUrl = new URL(suite.server.baseUrl);
+            gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
+            page.on("websocket", (socket) => {
+              if (socket.url() !== gatewayUrl.href) {
                 return;
               }
-              const params = requireRecord(frame.params);
-              if (params.agentId === "main" && params.metadataOnly === true && !params.catalogId) {
-                latestDiscovery = { socket, id: frame.id, complete: false };
-              }
+              gatewaySocket = socket;
+              latestCatalogRead = undefined;
+              socket.on("framesent", ({ payload }) => {
+                if (gatewaySocket !== socket) {
+                  return;
+                }
+                const frame = readFrame(payload);
+                const params = asNullableRecord(frame?.params);
+                if (
+                  frame?.type === "req" &&
+                  frame.method === "sessions.catalog.list" &&
+                  typeof frame.id === "string" &&
+                  params?.agentId === "main" &&
+                  params.metadataOnly === true &&
+                  Object.keys(params).length === 2
+                ) {
+                  latestCatalogRead = { id: frame.id, succeeded: false };
+                }
+              });
+              socket.on("framereceived", ({ payload }) => {
+                if (gatewaySocket !== socket) {
+                  return;
+                }
+                const frame = readFrame(payload);
+                if (
+                  frame?.type === "res" &&
+                  latestCatalogRead &&
+                  frame.id === latestCatalogRead.id
+                ) {
+                  latestCatalogRead.succeeded = frame.ok === true;
+                }
+              });
+              socket.on("close", () => {
+                if (gatewaySocket === socket) {
+                  gatewaySocket = undefined;
+                  latestCatalogRead = undefined;
+                }
+              });
             });
-            socket.on("framereceived", ({ payload }) => {
-              const frame = requireRecord(JSON.parse(payload.toString()));
-              if (
-                frame.type === "res" &&
-                latestDiscovery !== undefined &&
-                frame.id === latestDiscovery.id &&
-                latestDiscovery.socket === socket
-              ) {
-                latestDiscovery.complete = frame.ok === true;
-              }
-            });
-          });
+          }
           await page.addInitScript(() => {
             localStorage.setItem(
               "openclaw:control-ui:community-invite",
@@ -178,8 +204,9 @@ suite.define(() => {
             // An absent CLI group can mean discovery has not started, or a completed empty result.
             await expect
               .poll(async () => {
-                const discovery = latestDiscovery;
-                if (!discovery?.complete || discovery.socket !== currentSocket) {
+                const discovery = latestCatalogRead;
+                const socket = gatewaySocket;
+                if (!discovery?.succeeded || !socket) {
                   return false;
                 }
                 const settled = await page.evaluate(async () => {
@@ -202,9 +229,7 @@ suite.define(() => {
                   return (await view?.updateComplete) === true;
                 });
                 // updated() can reset discovery; require the same completed request after rendering.
-                return (
-                  settled && latestDiscovery === discovery && currentSocket === discovery.socket
-                );
+                return settled && latestCatalogRead === discovery && gatewaySocket === socket;
               })
               .toBe(true);
           }

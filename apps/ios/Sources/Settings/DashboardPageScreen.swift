@@ -6,16 +6,18 @@ struct DashboardPageScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
-    @State private var navigationPath: [SettingsRoute] = []
+    @Environment(\.userNavigationAction) private var userNavigationAction
+    @State private var localNavigationPath: [SettingsRoute] = []
     let path: String
     let title: String
+    var navigationPath: Binding<[SettingsRoute]>?
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onClose: (() -> Void)?
     var onRouteChange: ((SettingsRoute?) -> Void)?
     var onApprovalNotificationsRoute: ((String?) -> Void)?
 
     var body: some View {
-        NavigationStack(path: self.$navigationPath) {
+        NavigationStack(path: self.userNavigationPath) {
             self.root
                 .toolbar {
                     if let onClose {
@@ -35,13 +37,25 @@ struct DashboardPageScreen: View {
                         onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
                 }
         }
-        .onChange(of: self.navigationPath) { _, path in
+        .onChange(of: self.userNavigationPath.wrappedValue) { _, path in
             self.onRouteChange?(path.last)
         }
     }
 
+    private var userNavigationPath: Binding<[SettingsRoute]> {
+        // A hosted Root supplies its already-guarded canonical path. Standalone
+        // dashboard sheets keep their own path and the same navigation admission.
+        if let navigationPath { return navigationPath }
+        let action = self.userNavigationAction
+        return Binding(get: { self.localNavigationPath }, set: { path in
+            guard path != self.localNavigationPath, action?() ?? true else { return }
+            self.localNavigationPath = path
+        })
+    }
+
     @ViewBuilder private var root: some View {
         let config = self.appModel.activeGatewayConnectConfig
+        let navigationPath = self.userNavigationPath
         if SettingsHubScreen.usesDashboard(
             isOperatorConnected: self.appModel.isOperatorGatewayConnected,
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
@@ -57,7 +71,7 @@ struct DashboardPageScreen: View {
                 config: config,
                 openPanel: { panel in
                     if let route = SettingsHubScreen.route(for: panel) {
-                        self.navigationPath.append(route)
+                        navigationPath.wrappedValue.append(route)
                     }
                 })
                 .navigationTitle(self.title)

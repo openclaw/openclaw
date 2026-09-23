@@ -5,7 +5,7 @@ import UIKit
 @MainActor
 struct ChatSelectableTextSheet: View {
     let text: String
-    @Environment(\.dismiss) private var dismiss
+    let onClose: @MainActor () -> Void
 
     var body: some View {
         NavigationStack {
@@ -15,7 +15,7 @@ struct ChatSelectableTextSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button {
-                            self.dismiss()
+                            self.onClose()
                         } label: {
                             Text("Close").font(OpenClawChatTypography.body)
                         }

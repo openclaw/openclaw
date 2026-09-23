@@ -1,6 +1,59 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    struct ModelPatchTarget: Hashable {
+        let canonicalSessionKey: String
+        let agentID: String?
+        let sessionRoutingContract: String?
+    }
+
+    struct VerbosePreferenceState: Equatable {
+        let level: String
+        let isExplicit: Bool
+    }
+
+    enum VerbosePreferenceRequest {
+        case pending(VerbosePreferenceState)
+        case succeeded(VerbosePreferenceState)
+        case failed
+    }
+
+    struct ThinkingPreferenceState: Equatable {
+        let level: String
+        let isExplicit: Bool
+    }
+
+    enum ThinkingPreferenceRequest {
+        case pending(ThinkingPreferenceState)
+        case succeeded(ThinkingPreferenceState)
+        case failed
+    }
+
+    enum VerboseLevelState {
+        case none
+        case value(String)
+
+        var level: String? {
+            if case let .value(level) = self { return level }
+            return nil
+        }
+    }
+
+    enum ToolOverridesState {
+        case none
+        case value(OpenClawChatSessionToolOverrides)
+
+        var overrides: OpenClawChatSessionToolOverrides? {
+            if case let .value(overrides) = self { return overrides }
+            return nil
+        }
+    }
+
+    struct FastModeState {
+        let override: OpenClawChatFastMode?
+        let effective: OpenClawChatFastMode?
+    }
+
     public nonisolated static let defaultModelSelectionID = "__default__"
     public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
 
@@ -74,6 +127,7 @@ extension OpenClawChatViewModel {
         return OpenClawChatModelSignInContext(
             agentID: context.agentID,
             request: context.request,
+            closeWizard: context.closeWizard,
             isCurrent: { [weak self] in
                 guard let self, self.isCurrentSession(session) else { return false }
                 let current = await context.isCurrent()

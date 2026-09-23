@@ -2,6 +2,50 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatViewModel {
+    struct HistoryRequest {
+        var id: UInt64
+        var session: SessionSnapshot
+        var pendingRunIDs: Set<String>
+        var visibleMessagesByID: [UUID: OpenClawChatMessage]
+        var historyMutationGeneration: UInt64
+        var progressCardGeneration: UInt64
+        var runOwnershipGeneration: UInt64
+        var latestUserTurn: LatestUserTurn?
+    }
+
+    struct RunHistoryRefreshResult {
+        let applied: Bool
+        let runSnapshotApplied: Bool
+        let supportsInFlightRunState: Bool
+        let hasInFlightRun: Bool
+        let sessionHasActiveRun: Bool
+
+        static let failed = RunHistoryRefreshResult(
+            applied: false,
+            runSnapshotApplied: false,
+            supportsInFlightRunState: false,
+            hasInFlightRun: false,
+            sessionHasActiveRun: false)
+    }
+
+    struct LatestUserTurn {
+        var idempotencyKey: String?
+        var refreshKey: String?
+        var occurrence: Int
+        var timestamp: Double?
+    }
+
+    struct RunMessageScope {
+        var session: SessionSnapshot
+        var latestUserTurn: LatestUserTurn?
+    }
+
+    struct ProvisionalFinalMessage {
+        var reconciliationKey: String
+        var runId: String?
+        var scope: RunMessageScope
+    }
+
     static func decodeMessages(
         _ raw: [AnyCodable],
         activity: [OpenClawChatHistoryActivity]? = nil) -> [OpenClawChatMessage]
@@ -792,6 +836,9 @@ extension OpenClawChatViewModel {
 
     func advanceSessionGeneration() {
         self.sessionGeneration &+= 1
+        #if DEBUG
+        self.testSessionGenerationObservation?("generation-advanced")
+        #endif
     }
 
     func invalidateRunSnapshots() {

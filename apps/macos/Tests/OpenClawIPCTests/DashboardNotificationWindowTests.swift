@@ -65,7 +65,7 @@ extension DashboardWindowOwnershipTests {
         try await self.withNotificationDashboard { server, manager in
             try await manager.show()
             let controller = try #require(manager._testController())
-            try await self.waitForDashboard(controller, path: "/")
+            try await self.waitForDashboard(controller, path: "/", phase: "initial")
             let window = try #require(controller.window)
 
             controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
@@ -76,7 +76,7 @@ extension DashboardWindowOwnershipTests {
             let restored = try #require(manager._testController())
             #expect(restored.window === window)
             #expect(restored.canDeliverNativeCommands)
-            try await self.waitForDashboard(restored, path: "/chat/main/dashboard/completed")
+            try await self.waitForDashboard(restored, path: "/chat/main/dashboard/completed", phase: "recovery")
             #expect(restored._testPendingNativeNavigation == nil)
         }
     }
@@ -567,7 +567,9 @@ extension DashboardWindowOwnershipTests {
         ]))
     }
 
-    private func waitForDashboard(_ controller: DashboardWindowController, path: String) async throws {
+    private func waitForDashboard(
+        _ controller: DashboardWindowController, path: String, phase: String = "dashboard") async throws
+    {
         let deadline = ContinuousClock.now + .seconds(5)
         // Check readiness even when the main actor resumes after the deadline.
         while !controller.canDeliverNativeCommands || controller.webView.isLoading ||
@@ -576,8 +578,14 @@ extension DashboardWindowOwnershipTests {
         {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(controller.canDeliverNativeCommands)
-        try #require(!controller.webView.isLoading)
-        try #require(controller.webView.url?.path == path)
+        let diagnostic = Comment(rawValue: """
+        phase=\(phase), expectedPath=\(path), deliverable=\(controller.canDeliverNativeCommands),
+        loading=\(controller.webView.isLoading), failurePage=\(controller.isShowingFailurePage),
+        navigationGeneration=\(controller._testNavigationGeneration),
+        lastNavigationFailure=\(String(describing: controller._testLastNavigationFailure))
+        """)
+        try #require(controller.canDeliverNativeCommands, diagnostic)
+        try #require(!controller.webView.isLoading, diagnostic)
+        try #require(controller.webView.url?.path == path, diagnostic)
     }
 }

@@ -20,14 +20,7 @@ struct ChatMermaidBlockView: View {
     @State private var generation = UUID()
     @State private var showSource = false
     @State private var isHovered = false
-    /// Keep the selected preview stable while rotation re-renders the inline diagram.
-    @State private var expanded: PreviewSelection?
-
-    private struct PreviewSelection: Identifiable {
-        let id = UUID()
-        let svg: String
-        let background: String
-    }
+    @ChatModalState private var modals
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -112,22 +105,16 @@ struct ChatMermaidBlockView: View {
         .onChange(of: self.request, initial: true) { _, _ in self.render() }
         .onDisappear { self.cancel() }
         .onHover { self.isHovered = $0 }
-        #if os(macOS)
-        .sheet(item: self.$expanded) { self.preview($0) }
-        #else
-        .fullScreenCover(item: self.$expanded) { self.preview($0) }
-        #endif
-    }
-
-    private func preview(_ selected: PreviewSelection) -> some View {
-        ChatMermaidPreviewView(svg: selected.svg, background: selected.background)
+        .modifier(self.$modals)
     }
 
     private func expand() {
         guard let rendered = self.rendered else { return }
-        self.expanded = PreviewSelection(
-            svg: rendered.svg,
-            background: self.cssColor(OpenClawChatTheme.assistantBubble))
+        // Freeze the selected SVG while the inline diagram re-renders.
+        self.modals.owner.present(
+            .init(svg: rendered.svg, background: self.cssColor(OpenClawChatTheme.assistantBubble)),
+            at: \.mermaid,
+            capture: self.modals.capture())
     }
 
     private var sourceView: some View {
@@ -207,10 +194,10 @@ struct ChatMermaidBlockView: View {
 }
 
 @MainActor
-private struct ChatMermaidPreviewView: View {
+struct ChatMermaidPreviewView: View {
     let svg: String
     let background: String
-    @Environment(\.dismiss) private var dismiss
+    let onClose: @MainActor () -> Void
     @State private var failed = false
 
     var body: some View {
@@ -218,7 +205,7 @@ private struct ChatMermaidPreviewView: View {
             HStack {
                 Spacer()
                 Button {
-                    self.dismiss()
+                    self.onClose()
                 } label: {
                     Image(systemName: "xmark")
                         .frame(width: 44, height: 44)

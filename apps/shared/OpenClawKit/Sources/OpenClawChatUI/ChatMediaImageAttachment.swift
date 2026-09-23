@@ -46,7 +46,7 @@ struct ChatMediaImageAttachment: View {
 
     @State private var state: LoadState = .loading
     @State private var retryGeneration = 0
-    @State private var showsFullImage = false
+    @ChatModalState private var modals
 
     var body: some View {
         Group {
@@ -62,7 +62,8 @@ struct ChatMediaImageAttachment: View {
                 .frame(maxWidth: .infinity)
             case let .loaded(image):
                 Button {
-                    self.showsFullImage = true
+                    self.modals.owner.present(
+                        image, at: \.image, capture: self.modals.capture())
                 } label: {
                     OpenClawPlatformImageFactory.image(image)
                         .resizable()
@@ -76,28 +77,6 @@ struct ChatMediaImageAttachment: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(self.label)
                 .accessibilityHint(String(localized: "Opens image preview"))
-                .sheet(isPresented: self.$showsFullImage) {
-                    ZStack(alignment: .topTrailing) {
-                        Color.black.ignoresSafeArea()
-                        ScrollView([.horizontal, .vertical]) {
-                            OpenClawPlatformImageFactory.image(image)
-                                .resizable()
-                                .scaledToFit()
-                                .padding(20)
-                        }
-                        Button {
-                            self.showsFullImage = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title2)
-                                .symbolRenderingMode(.hierarchical)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .padding(16)
-                        .accessibilityLabel(String(localized: "Close image preview"))
-                    }
-                }
             case .unavailable:
                 HStack(spacing: 8) {
                     Image(systemName: "photo.badge.exclamationmark")
@@ -118,6 +97,7 @@ struct ChatMediaImageAttachment: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
+        .modifier(self.$modals)
         .task(id: "\(self.artifactId):\(self.resolverReady):\(self.retryGeneration)") {
             await self.loadImage()
         }

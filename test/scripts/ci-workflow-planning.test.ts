@@ -22,6 +22,8 @@ import { parse } from "yaml";
 import {
   detectChangedScope,
   detectNodeFastScope,
+  isMacosToolingPath,
+  shouldRunIosScreenshots,
   shouldRunNativeI18n,
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
@@ -1599,7 +1601,13 @@ describe("ci workflow guards", () => {
                 "Swift lint",
                 ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
-                ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
+                ...(historical
+                  ? []
+                  : [
+                      "Run focused iOS voice cleanup simulator tests",
+                      "Run focused iOS native action simulator tests",
+                      "Prove native iOS actions against a real Gateway",
+                    ]),
               ],
               release: ["Build iOS app (Release)"],
               tests: [
@@ -1607,7 +1615,11 @@ describe("ci workflow guards", () => {
                 "Swift lint",
                 "Prepare iOS simulator",
                 "Build iOS app",
+                "Prove native managed document download and export",
                 "Run focused iOS voice cleanup simulator tests",
+                "Prove native iOS actions against a real Gateway",
+                "Prove installed iOS automatic run opening",
+                "Run focused iOS native action simulator tests",
                 "Run focused iOS lifecycle simulator tests",
                 "Run focused Apple Watch operation simulator tests",
               ],
@@ -5920,6 +5932,7 @@ describe("ci workflow guards", () => {
     eventName?: "pull_request" | "push" | "workflow_dispatch";
     releaseGate?: boolean;
     legacyOutput?: boolean;
+    nativeProofInput?: boolean;
     selectedJobs: string[];
   }>([
     {
@@ -5967,11 +5980,44 @@ describe("ci workflow guards", () => {
       changedPath: "test/scripts/mac-elevation-artifact.test.ts",
       selectedJobs: ["macos-node", "macos-swift"],
     },
+    ...[
+      "scripts/test-native-action-gateway.mts",
+      "scripts/lib/native-action-gateway-diagnostics.mts",
+      "test/fixtures/qa-gateway-rpc-proxy.mjs",
+      "test/e2e/qa-lab/runtime/profile-binding-wire-fixture.ts",
+      "test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts",
+      "test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-fixture.ts",
+      "test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.ts",
+      "test/helpers/qa-gateway-cleanup.ts",
+    ].map((changedPath) => ({
+      label: `Native action proof ${changedPath}`,
+      changedPath,
+      nativeProofInput: true,
+      selectedJobs: ["macos-node", "macos-swift", "ios-build"],
+    })),
+    ...[
+      "test/qa-gateway-rpc-proxy.test.ts",
+      "test/e2e/qa-lab/runtime/gateway-profile-binding-wire.e2e.test.ts",
+    ].map((changedPath) => ({
+      label: `Independent QA test ${changedPath}`,
+      changedPath,
+      nativeProofInput: false,
+      selectedJobs: [],
+    })),
     {
       label: "iOS app pull request",
       changedPath: "apps/ios/Sources/Foo.swift",
       selectedJobs: ["ios-build"],
     },
+    ...[
+      "scripts/test-ios-shortcuts-installed.mts",
+      "scripts/lib/installed-shortcuts-matrix.mts",
+      "test/scripts/installed-shortcuts-matrix.test.ts",
+    ].map((changedPath) => ({
+      label: `Installed iOS proof ${changedPath}`,
+      changedPath,
+      selectedJobs: ["ios-build"],
+    })),
     {
       label: "iOS app main push",
       changedPath: "apps/ios/Sources/Foo.swift",
@@ -6025,6 +6071,7 @@ describe("ci workflow guards", () => {
       eventName = "pull_request",
       releaseGate = false,
       legacyOutput,
+      nativeProofInput,
       selectedJobs,
     }) => {
       const workflow = readCiWorkflow();
@@ -6032,6 +6079,10 @@ describe("ci workflow guards", () => {
         (step: WorkflowStep) => step.name === "Build CI manifest",
       );
       const changedPaths = [changedPath];
+      if (nativeProofInput !== undefined) {
+        expect(isMacosToolingPath(changedPath)).toBe(nativeProofInput);
+        expect(shouldRunIosScreenshots(changedPaths)).toBe(false);
+      }
       const scopeOutputs = runCiChangedScopeFixture(changedPaths);
       if (legacyOutput) {
         delete scopeOutputs.run_macos_node;

@@ -685,6 +685,10 @@ struct OpenClawApp: App {
     @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @State private var nativeActions: NativeActionRouter
+    #if DEBUG && OPENCLAW_INSTALLED_NATIVE_ACTION_PROOF
+    @State private var installedNativeProof: InstalledNativeActionProofHost
+    #endif
     @State private var voiceLiveActivityCoordinator: VoiceLiveActivityCoordinator
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
@@ -718,11 +722,20 @@ struct OpenClawApp: App {
         _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
         _voiceLiveActivityCoordinator = State(initialValue: VoiceLiveActivityCoordinator())
-        _gatewayController = State(
-            initialValue: GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: !Self.screenshotModeEnabled,
-                deferDiscoveryUntilLocalNetworkRequest: true))
+        let gatewayController = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: !Self.screenshotModeEnabled,
+            deferDiscoveryUntilLocalNetworkRequest: true)
+        _gatewayController = State(initialValue: gatewayController)
+        let nativeActions = NativeActionRouter(appModel: appModel, gatewayController: gatewayController)
+        _nativeActions = State(initialValue: nativeActions)
+        #if DEBUG && OPENCLAW_INSTALLED_NATIVE_ACTION_PROOF
+        let installedNativeProof = InstalledNativeActionProofHost(router: nativeActions)
+        _installedNativeProof = State(initialValue: installedNativeProof)
+        OpenClawNativeActionServices.install(host: installedNativeProof)
+        #else
+        OpenClawNativeActionServices.install(host: nativeActions)
+        #endif
     }
 
     var body: some Scene {
@@ -735,6 +748,10 @@ struct OpenClawApp: App {
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
+                .environment(self.nativeActions)
+                #if DEBUG && OPENCLAW_INSTALLED_NATIVE_ACTION_PROOF
+                .environment(self.installedNativeProof)
+                #endif
                 .task {
                     if !Self.screenshotModeEnabled {
                         self.voiceLiveActivityCoordinator.start(appModel: self.appModel)

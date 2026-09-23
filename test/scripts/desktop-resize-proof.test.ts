@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { writeFileSync } from "node:fs";
 import {
   appendFile,
   chmod,
@@ -18,12 +19,18 @@ import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   type DesktopProofSourceStatus,
+  createDesktopProofOutputCapture,
+  desktopProofDiagnosticLogging,
   desktopProofAssets,
   desktopProofCommit,
   desktopProofSource,
   desktopProofSshdFailure,
   desktopProofTestReport,
   desktopResizeStages,
+  desktopRfbTermination,
+  desktopScenarioTermination,
+  desktopTerminationLimits,
+  encodeDesktopProofPhase,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofGatewayCloses,
@@ -33,6 +40,7 @@ import {
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
+  withDesktopTerminationSnapshot,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import {
@@ -60,6 +68,27 @@ const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
 const assets = { "index-fixture.js": "e".repeat(64) };
+const closeLine = (overrides: Record<string, unknown> = {}) =>
+  `${JSON.stringify({
+    level: "info",
+    subsystem: "gateway/desktop",
+    message: "desktop observer closed",
+    trigger: "stream-close",
+    closeCode: 1000,
+    cleanupCode: 1000,
+    sourceKey: "private-source",
+    ownerEpoch: "private-owner",
+    streamId: "private-stream",
+    connId: "private-connection",
+    nodeId: "private-node",
+    time: "private-time",
+    payload: "private-token",
+    ...overrides,
+  })}\n`;
+const proofOutput = (
+  stdout: Array<string | Uint8Array> = [],
+  stderr: Array<string | Uint8Array> = [],
+) => ({ stdout, stderr, retention: "head" as const });
 function sourceAdmissionFixture(status: string, tracked: string[]) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   const replies: Record<string, string> = {
@@ -151,6 +180,375 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("enables structured info only for opted-in children, overriding an inherited silent level", () => {
+    const inherited = { OPENCLAW_LOG_LEVEL: "silent", UNRELATED: "unchanged" };
+    const enabled = desktopProofDiagnosticLogging(true);
+    expect({ ...inherited, ...enabled.env }).toEqual({
+      OPENCLAW_LOG_LEVEL: "info",
+      UNRELATED: "unchanged",
+    });
+    expect(enabled.logging).toEqual({ consoleStyle: "json", consoleLevel: "info" });
+    expect({ ...inherited, ...desktopProofDiagnosticLogging(false).env }).toEqual(inherited);
+    expect(desktopProofDiagnosticLogging(false).logging).toBeUndefined();
+  });
+
+  it("projects actual info producers separately without private identities or inferred correlation", () => {
+    const evidence = desktopScenarioTermination(
+      proofOutput(
+        [
+          closeLine(),
+          closeLine({
+            subsystem: "gateway/node-stream",
+            message: "node stream closed",
+            streamKind: "desktop",
+            trigger: "websocket-close",
+            closeCode: 1006,
+          }),
+        ],
+        [
+          closeLine({ level: "debug" }),
+          closeLine({
+            subsystem: "gateway/node-stream",
+            message: "node stream closed",
+            streamKind: "portal",
+            trigger: "websocket-close",
+          }),
+        ],
+      ),
+      proofOutput(
+        [],
+        [
+          closeLine({
+            subsystem: "node-host/stream",
+            message: "node stream closed",
+            streamKind: "desktop",
+            trigger: "target-close",
+          }),
+        ],
+      ),
+      true,
+    );
+    expect(evidence.status).toBe("captured");
+    if (evidence.status !== "captured") throw new Error("Missing termination projection");
+    expect(
+      evidence.gateway.records.map(({ producer, trigger, closeCode }) => ({
+        producer,
+        trigger,
+        closeCode,
+      })),
+    ).toEqual([
+      { producer: "gateway-observer", trigger: "stream-close", closeCode: 1000 },
+      { producer: "gateway-broker", trigger: "websocket-close", closeCode: 1006 },
+    ]);
+    expect(evidence.node.records).toEqual([
+      {
+        stream: "stderr",
+        ordinal: 1,
+        producer: "node-transport",
+        trigger: "target-close",
+        closeCode: 1000,
+        cleanupCode: null,
+      },
+    ]);
+    expect(evidence).toMatchObject({
+      boundary: "before-scenario-cleanup",
+      signalAborted: true,
+      correlation: "unavailable",
+      writerMayBeBuffered: true,
+    });
+    expect(JSON.stringify(evidence)).not.toContain("private-");
+    const unknown = desktopScenarioTermination(
+      proofOutput([closeLine({ trigger: "private-trigger", closeCode: "private-code" })]),
+      undefined,
+      false,
+    );
+    expect(unknown.status === "captured" && unknown.gateway.records[0]).toMatchObject({
+      trigger: "unknown",
+      closeCode: null,
+    });
+    expect(unknown.status === "captured" && unknown.node.status).toBe("unavailable");
+    expect(JSON.stringify(unknown)).not.toContain("private-");
+  });
+
+  it("frames split UTF-8 within each pipe and never joins partial stdout to stderr", () => {
+    const bytes = Buffer.from(closeLine({ payload: "private-🦊" }));
+    const split = bytes.indexOf(Buffer.from("🦊")) + 1;
+    const capture = createDesktopProofOutputCapture(desktopTerminationLimits.node);
+    capture.append("stdout", bytes.subarray(0, split));
+    capture.append("stderr", Buffer.from("not-json\n"));
+    capture.append("stdout", bytes.subarray(split));
+    const evidence = desktopScenarioTermination(capture.snapshot(), undefined, false);
+    expect(evidence.status === "captured" && evidence.gateway.records).toHaveLength(1);
+    expect(
+      evidence.status === "captured" &&
+        evidence.gateway.streams.map(({ malformedLines }) => malformedLines),
+    ).toEqual([0, 1]);
+    const partial = desktopScenarioTermination(
+      proofOutput([bytes.subarray(0, split)], [bytes.subarray(split)]),
+      undefined,
+      false,
+    );
+    expect(partial.status === "captured" && partial.gateway.records).toEqual([]);
+    expect(partial.status === "captured" && partial.gateway.streams[0]?.partialLine).toBe(true);
+    expect(partial.status === "captured" && partial.gateway.streams[1]?.malformedLines).toBe(1);
+  });
+
+  it("retains fixed TigerVNC first-reason categories at the later daemon boundary", () => {
+    const evidence = desktopRfbTermination(
+      proofOutput([
+        " Connections: accepted: private-endpoint\n",
+        " VNCSConnST: closing private-endpoint: Clean disconnection\n",
+        " VNCSConnST: closing private-endpoint: Client does not support desktop resize\n",
+        " VNCSConnST: closing private-endpoint: private-error\n",
+        " Connections: closed: private-endpoint\n",
+      ]),
+      undefined,
+    );
+    expect(evidence.status).toBe("captured");
+    if (evidence.status !== "captured") throw new Error("Missing RFB projection");
+    expect(evidence.boundary).toBe("after-test-process-join-before-daemon-cleanup");
+    expect(evidence.correlation).toBe("unavailable");
+    expect(evidence.dynamic.records.map(({ trigger }) => trigger)).toEqual([
+      "clean-disconnection",
+      "resize-unsupported",
+      "other-close",
+    ]);
+    expect(evidence.fixed.status).toBe("unavailable");
+    expect(JSON.stringify(evidence)).not.toContain("private-");
+  });
+
+  it("caps all producer inputs and records while reserving the RFB share for each carrier", () => {
+    const gatewayLine = closeLine();
+    const nodeLine = closeLine({
+      subsystem: "node-host/stream",
+      message: "node stream closed",
+      streamKind: "desktop",
+      trigger: "target-close",
+    });
+    const rfbLine = " VNCSConnST: closing private-endpoint: Clean disconnection\n";
+    let invocationBytes = 0;
+    let invocationRecords = 0;
+    for (let carrier = 0; carrier < 2; carrier += 1) {
+      const scenario = desktopScenarioTermination(
+        proofOutput([gatewayLine.repeat(20_000)], [gatewayLine.repeat(20_000)]),
+        proofOutput([nodeLine.repeat(20_000)], [nodeLine.repeat(20_000)]),
+        false,
+      );
+      const rfb = desktopRfbTermination(
+        proofOutput([rfbLine.repeat(20_000)], [rfbLine.repeat(20_000)]),
+        proofOutput([rfbLine.repeat(20_000)], [rfbLine.repeat(20_000)]),
+      );
+      if (scenario.status !== "captured" || rfb.status !== "captured")
+        throw new Error("Missing bounded projection");
+      const outputs = [scenario.gateway, scenario.node, rfb.dynamic, rfb.fixed];
+      const scanned = outputs.reduce(
+        (sum, output) =>
+          sum + output.streams.reduce((bytes, stream) => bytes + stream.scannedBytes, 0),
+        0,
+      );
+      const records = outputs.reduce((sum, output) => sum + output.records.length, 0);
+      expect(scanned).toBe(1024 ** 2);
+      expect(outputs.map(({ records }) => records.length)).toEqual([32, 16, 8, 8]);
+      expect(
+        outputs.every(({ streams }) =>
+          streams.every((stream) => stream.inputLimited && stream.recordsLimited),
+        ),
+      ).toBe(true);
+      expect(
+        Buffer.byteLength(JSON.stringify({ termination: scenario, rfbTermination: rfb })),
+      ).toBeLessThanOrEqual(32 * 1024);
+      invocationBytes += scanned;
+      invocationRecords += records;
+    }
+    expect(invocationBytes).toBe(2 * 1024 ** 2);
+    expect(invocationRecords).toBe(128);
+  });
+
+  it("reports oversized, incomplete, malformed and truncated inputs without claiming no event", () => {
+    const capture = createDesktopProofOutputCapture(64);
+    capture.append("stdout", Buffer.alloc(1024 ** 2, 120));
+    capture.append("stderr", Buffer.alloc(1024 ** 2, 120));
+    const captured = capture.snapshot();
+    expect(captured.stdout[0]).toHaveLength(32);
+    expect(captured.stderr[0]).toHaveLength(32);
+    expect(captured).toMatchObject({
+      stdoutTruncated: true,
+      stderrTruncated: true,
+      retention: "head",
+    });
+    const evidence = desktopScenarioTermination(
+      proofOutput([
+        `${"x".repeat(desktopTerminationLimits.line + 1)}\n`,
+        "not-json\n",
+        closeLine(),
+        "incomplete",
+      ]),
+      undefined,
+      false,
+    );
+    expect(evidence.status === "captured" && evidence.gateway.streams[0]).toMatchObject({
+      oversizedLines: 1,
+      malformedLines: 1,
+      partialLine: true,
+    });
+    const tail = Object.assign([closeLine(), closeLine()], { truncated: true });
+    const truncated = desktopScenarioTermination(
+      { stdout: tail, stderr: [], retention: "tail" },
+      undefined,
+      false,
+    );
+    expect(truncated.status === "captured" && truncated.gateway.records).toHaveLength(1);
+    expect(truncated.status === "captured" && truncated.gateway.streams[0]).toMatchObject({
+      partialPrefix: true,
+      retainedTruncation: true,
+    });
+    const noNewline = desktopScenarioTermination(
+      proofOutput(["x".repeat(1024 ** 2)]),
+      undefined,
+      false,
+    );
+    expect(noNewline.status === "captured" && noNewline.gateway.streams[0]).toMatchObject({
+      inputLimited: true,
+      partialLine: true,
+    });
+    const emptyChunks = desktopScenarioTermination(
+      proofOutput(Array.from({ length: 4097 }, () => "")),
+      undefined,
+      false,
+    );
+    expect(emptyChunks.status === "captured" && emptyChunks.gateway.streams[0]?.inputLimited).toBe(
+      true,
+    );
+    const tinyLines = desktopScenarioTermination(
+      proofOutput(["\n".repeat(4097)]),
+      undefined,
+      false,
+    );
+    expect(tinyLines.status === "captured" && tinyLines.gateway.streams[0]).toMatchObject({
+      inputLimited: true,
+      malformedLines: 4096,
+    });
+  });
+
+  it("freezes once before cleanup and retains that snapshot in later owner checkpoints", async () => {
+    const capture = createDesktopProofOutputCapture(1024);
+    capture.append("stdout", Buffer.from(closeLine()));
+    let evidence: ReturnType<typeof desktopScenarioTermination> | undefined;
+    let freezes = 0;
+    const value = await withDesktopTerminationSnapshot(
+      async () => "passed",
+      () => {
+        freezes += 1;
+        evidence = desktopScenarioTermination(capture.snapshot(), undefined, false);
+      },
+    );
+    const before = JSON.stringify(evidence);
+    capture.append("stdout", Buffer.from(closeLine({ trigger: "owner-close" })));
+    expect(value).toBe("passed");
+    expect(freezes).toBe(1);
+    expect(JSON.stringify(evidence)).toBe(before);
+    const root = dirs.make("desktop-termination-checkpoint-");
+    const file = path.join(root, "desktop-phase.json");
+    await writeFile(
+      file,
+      encodeDesktopProofPhase(
+        "resize-matrix",
+        { gateway: "closed", endpointTap: "closed" },
+        evidence,
+      ),
+    );
+    expect(await readDesktopProofPhase(file)).toMatchObject({
+      status: "available",
+      owners: { gateway: "closed", endpointTap: "closed" },
+      termination: evidence,
+    });
+    expect(Buffer.byteLength(await readFile(file))).toBeLessThanOrEqual(
+      desktopTerminationLimits.checkpoint,
+    );
+  });
+
+  it("keeps valid phase and owners when optional evidence is invalid and rejects oversized checkpoint files", async () => {
+    const root = dirs.make("desktop-termination-invalid-");
+    const file = path.join(root, "desktop-phase.json");
+    const owners = { gateway: "closed", endpointTap: "closed" };
+    await writeFile(
+      file,
+      JSON.stringify({
+        lastObservedPhase: "resize-matrix",
+        owners,
+        termination: { status: "private-error" },
+      }),
+    );
+    expect(await readDesktopProofPhase(file)).toEqual({
+      status: "available",
+      lastObservedPhase: "resize-matrix",
+      owners,
+      termination: { status: "invalid" },
+    });
+    const evidence = desktopScenarioTermination(proofOutput([closeLine()]), undefined, false);
+    const encoded = encodeDesktopProofPhase("resize-matrix", owners, {
+      ...evidence,
+      unknown: "private-token".repeat(10_000),
+    });
+    expect(encoded).not.toContain("private-");
+    expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(desktopTerminationLimits.checkpoint);
+    await writeFile(
+      file,
+      `${JSON.stringify({ lastObservedPhase: "resize-matrix", owners })}${" ".repeat(desktopTerminationLimits.checkpoint)}`,
+    );
+    expect((await readDesktopProofPhase(file)).status).toBe("invalid");
+    const link = path.join(root, "symlink.json");
+    await symlink(file, link);
+    expect((await readDesktopProofPhase(link)).status).toBe("invalid");
+  });
+
+  it("preserves original failure and cleanup ordering when diagnostic projection or persistence fails", async () => {
+    const root = dirs.make("desktop-termination-errors-");
+    const primary = new Error("original assertion");
+    const cleanup = new Error("original cleanup");
+    const invalidOutput = {
+      get stdout(): string[] {
+        throw new Error("private-projection-error");
+      },
+      stderr: [],
+      retention: "head" as const,
+    };
+    expect(desktopScenarioTermination(invalidOutput, undefined, false)).toEqual({
+      status: "unavailable",
+    });
+    for (const freeze of [
+      () => {
+        throw new Error("private-projection-error");
+      },
+      () => writeFileSync(root, "unwritable checkpoint"),
+    ]) {
+      const failure = await withDesktopProofCleanup(
+        () =>
+          withDesktopTerminationSnapshot(async () => {
+            throw primary;
+          }, freeze),
+        async () => {
+          throw cleanup;
+        },
+        () => {},
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([primary, cleanup]);
+    }
+    const missing = path.join(root, "missing.json");
+    const failure = await withDesktopProofCleanup(
+      async () => {
+        throw primary;
+      },
+      async () => {
+        expect((await readDesktopProofPhase(missing)).status).toBe("unavailable");
+        throw cleanup;
+      },
+      () => {},
+    ).catch((error: unknown) => error);
+    expect((failure as AggregateError).errors).toEqual([primary, cleanup]);
+  });
+
   it("binds real-client callbacks to the exact socket and preserves recovery callbacks after factory restoration", async () => {
     type Options = Parameters<DesktopClient["connect"]>[0];
     const sockets: Array<{ url: string }> = [];

@@ -28,10 +28,31 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatFileAttachment.swift"),
             encoding: .utf8)
+        let modalSource = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatModalPresentations.swift"),
+            encoding: .utf8)
+        // The shared modal host owns the download error's action and message.
+        let fileErrorMessage = try Self.extract(
+            modalSource,
+            from: "private var fileDownloadErrorMessage: some View",
+            to: "    func body(content: Content)")
+        let fileErrorAlert = try Self.extract(
+            modalSource,
+            from: #".alert("Unable to Download File", isPresented: self.isPresented(\.fileError))"#,
+            to: "#if os(iOS)")
+        let fileErrorAction = try Self.extract(fileErrorAlert, from: #"Text("OK")"#, to: "} message: {")
+        let fileErrorAlertMessage = try Self.extract(fileErrorAlert, from: "message: {", to: "}")
+
         #expect(source.contains(".font(OpenClawChatTypography.footnote)"))
         #expect(source.contains(".font(OpenClawChatTypography.caption)"))
-        #expect(source.contains(".font(OpenClawChatTypography.body)"))
         #expect(!source.contains(".font(."))
+        #expect(fileErrorMessage.contains(".font(OpenClawChatTypography.body)"))
+        #expect(!fileErrorMessage.contains(".font(."))
+        #expect(fileErrorAction.contains(".font(OpenClawChatTypography.body)"))
+        #expect(fileErrorAlertMessage.contains("self.fileDownloadErrorMessage"))
+        #expect(!fileErrorAlert.contains(".font(."))
     }
 
     @Test func `gateway picker uses branded typography`() throws {

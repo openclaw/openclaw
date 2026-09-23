@@ -482,6 +482,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
           ...(senderAllowlist
             ? {
                 allowFrom: [...senderAllowlist],
+                dmPolicy: "allowlist" as const,
                 groupAllowFrom: [...senderAllowlist],
                 groupPolicy: "allowlist" as const,
               }
