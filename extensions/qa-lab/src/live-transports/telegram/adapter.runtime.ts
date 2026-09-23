@@ -10,6 +10,11 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import {
+  readTelegramPrivateProductionDescriptor,
+  requestTelegramPrivateAppTurn,
+  resolveTelegramPrivateProductionBot,
+} from "./private-production.runtime.js";
 import { buildTelegramQaConfig, waitForTelegramChannelRunning } from "./telegram-api.runtime.js";
 import { TelegramUserbotDriver, type TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 import {
@@ -20,6 +25,28 @@ import {
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type TelegramUserbotSkillRuntime = Awaited<ReturnType<typeof loadTelegramUserbotSkillRuntime>>;
+
+type TelegramRuntimeCredential = Pick<
+  TelegramTestCredential,
+  | "forumGroupId"
+  | "forumTopicId"
+  | "groupId"
+  | "participants"
+  | "sutBotId"
+  | "sutToken"
+  | "sutUsername"
+  | "testerUserId"
+> & {
+  environment: "production" | "test";
+};
+
+type TelegramRuntimeParticipant = {
+  alias: string;
+  credential?: TelegramRuntimeCredential;
+  mode: "hitl" | "userbot";
+  testerUserId: string;
+};
 
 const TELEGRAM_QA_DIAGNOSTIC_COUNT_LIMIT = 9_999;
 
@@ -74,45 +101,70 @@ export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const skillRuntime = await loadTelegramUserbotSkillRuntime({ repoRoot: options.repoRoot });
-  const credentialLease = await acquireQaCredentialLease<TelegramTestCredential>({
-    kind: "telegram-test-userbot",
-    source: options.credentialSource || "convex",
-    role: options.credentialRole,
-    resolveEnvPayload: () => {
-      throw new Error("Telegram live QA requires a Convex-leased Test Server userbot.");
-    },
-    parsePayload: (payload) => skillRuntime.parseCredential(payload),
-  });
-  try {
-    assertQaGatewayCredentialLeaseQuarantine(credentialLease);
-  } catch (error) {
-    await credentialLease.release();
-    throw error;
-  }
-  const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+  const privateDescriptor = readTelegramPrivateProductionDescriptor(options.credentialFile);
+  const privateProduction = privateDescriptor !== undefined;
+  const skillRuntime = privateProduction
+    ? undefined
+    : await loadTelegramUserbotSkillRuntime({ repoRoot: options.repoRoot });
+  const leasedRuntime = privateProduction
+    ? undefined
+    : await (async () => {
+        const credentialLease = await acquireQaCredentialLease<TelegramRuntimeCredential>({
+          kind: "telegram-test-userbot",
+          source: options.credentialSource || "convex",
+          role: options.credentialRole,
+          resolveEnvPayload: () => {
+            throw new Error("Telegram live QA requires a Convex-leased userbot.");
+          },
+          parsePayload: (payload) => skillRuntime!.parseCredential(payload),
+        });
+        try {
+          assertQaGatewayCredentialLeaseQuarantine(credentialLease);
+        } catch (error) {
+          await credentialLease.release();
+          throw error;
+        }
+        return {
+          credential: credentialLease.payload,
+          credentialLease,
+          heartbeat: startQaCredentialLeaseHeartbeat(credentialLease),
+        };
+      })();
+  const privateBot = privateProduction
+    ? await resolveTelegramPrivateProductionBot(process.env)
+    : undefined;
+  const credential: TelegramRuntimeCredential = privateDescriptor
+    ? {
+        environment: "production",
+        forumGroupId: privateDescriptor.forumGroupId,
+        forumTopicId: privateDescriptor.forumTopicId,
+        groupId: privateDescriptor.forumGroupId,
+        participants: undefined,
+        sutBotId: privateBot!.id,
+        sutToken: privateBot!.token,
+        sutUsername: privateBot!.username,
+        testerUserId: privateDescriptor.participants[0]!.userId,
+      }
+    : leasedRuntime!.credential;
   const leaseHealth = {
-    assertHealthy: () => heartbeat.throwIfFailed(),
-    whenUnhealthy: heartbeat.whenFailed,
+    assertHealthy: () => leasedRuntime?.heartbeat.throwIfFailed(),
+    whenUnhealthy: leasedRuntime?.heartbeat.whenFailed ?? new Promise<Error>(() => {}),
   };
   let leaseReleased = false;
   const releaseCredentialLease = async () => {
-    if (leaseReleased) {
+    if (leaseReleased || !leasedRuntime) {
       return;
     }
-    await releaseTelegramCredential({ heartbeat, release: () => credentialLease.release() });
+    await releaseTelegramCredential({
+      heartbeat: leasedRuntime.heartbeat,
+      release: () => leasedRuntime.credentialLease.release(),
+    });
     leaseReleased = true;
   };
   let stateRoot: string | undefined;
-  let apiProxy: Awaited<ReturnType<typeof skillRuntime.startApiProxy>> | undefined;
+  let apiProxy: Awaited<ReturnType<TelegramUserbotSkillRuntime["startApiProxy"]>> | undefined;
   let userbot: TelegramUserbotDriver | undefined;
-  const participants = [
-    { alias: "primary", credential: credentialLease.payload },
-    ...(credentialLease.payload.participants ?? []).map((participant) => ({
-      alias: participant.alias,
-      credential: { ...credentialLease.payload, ...participant, participants: undefined },
-    })),
-  ];
+  let participants: TelegramRuntimeParticipant[] = [];
   const drivers: TelegramUserbotDriver[] = [];
   const participantRoots: string[] = [];
   let primaryAlias: string | undefined;
@@ -144,17 +196,14 @@ export async function createTelegramQaTransportAdapter(
     `${observer}:${chatId}:${messageId}`;
   const routeKey = (observer: number, chatId: number, topic?: number) =>
     `${observer}:${chatId}:${topic ?? ""}`;
-  const initialChatId = Number(
-    directMessageOnly ? credentialLease.payload.sutBotId : credentialLease.payload.groupId,
-  );
   const resetRoutes = () => {
+    const initialChatId = Number(directMessageOnly ? credential.sutBotId : credential.groupId);
     routes.clear();
     routes.set(routeKey(0, initialChatId), {
-      id: credentialLease.payload.groupId,
+      id: credential.groupId,
       kind: directMessageOnly ? "direct" : "channel",
     });
   };
-  resetRoutes();
   const nativeMessageIds = new Map<
     string,
     { observer: number; chatId: number; messageId: number }
@@ -162,6 +211,7 @@ export async function createTelegramQaTransportAdapter(
   const busMessages = new Map<string, { id: string; update?: TelegramUserbotUpdate }>();
   let sendsInFlight = 0;
   let deferredReplies: Array<{ update: TelegramUserbotUpdate; observer: number }> = [];
+  let localMessageId = 1;
 
   const publishUpdate = async (update: TelegramUserbotUpdate, observer: number) => {
     const key = nativeKey(observer, update.chatId, update.messageId);
@@ -208,7 +258,7 @@ export async function createTelegramQaTransportAdapter(
     observerState.relevantUpdateKinds.add(update.kind);
     if (
       !routes.has(routeKey(observer, update.chatId, update.forumTopicId)) ||
-      update.senderId !== Number(credentialLease.payload.sutBotId)
+      update.senderId !== Number(credential.sutBotId)
     ) {
       observerState.filteredCount += 1;
       return;
@@ -226,36 +276,68 @@ export async function createTelegramQaTransportAdapter(
   };
 
   try {
-    stateRoot = skillRuntime.createStateRoot();
-    const restored = skillRuntime.restoreCredential(credentialLease.payload, stateRoot);
-    apiProxy = await skillRuntime.startApiProxy(leaseHealth);
-    await apiProxy.drainUpdates(restored.sutToken);
-    userbot = await TelegramUserbotDriver.start({
-      chatId: directMessageOnly ? `@${credentialLease.payload.sutUsername}` : restored.groupId,
-      ...(credentialLease.payload.forumGroupId
-        ? { observeChatIds: [credentialLease.payload.forumGroupId] }
-        : {}),
-      expectedUserId: credentialLease.payload.testerUserId,
-      driverEnv: restored.driverEnv,
-      leaseHealth,
-      userDriverPath: skillRuntime.userDriverPath,
-      onUpdate: (update) => observeUpdate(update, 0),
-    });
-    drivers.push(userbot);
-    for (const [offset, participant] of participants.slice(1).entries()) {
-      const root = skillRuntime.createStateRoot();
-      participantRoots.push(root);
-      const restoredParticipant = skillRuntime.restoreCredential(participant.credential, root);
-      drivers.push(
-        await TelegramUserbotDriver.start({
-          chatId: directMessageOnly ? `@${credentialLease.payload.sutUsername}` : restored.groupId,
-          expectedUserId: participant.credential.testerUserId,
-          driverEnv: restoredParticipant.driverEnv,
-          leaseHealth,
-          userDriverPath: skillRuntime.userDriverPath,
-          onUpdate: (update) => observeUpdate(update, offset + 1),
-        }),
+    participants = privateProduction
+      ? privateDescriptor!.participants.map((participant) => ({
+          alias: participant.alias,
+          mode: "hitl" as const,
+          testerUserId: participant.userId,
+        }))
+      : [
+          {
+            alias: "primary",
+            credential,
+            mode: "userbot",
+            testerUserId: credential.testerUserId,
+          },
+          ...(credential.participants ?? []).map((participant) => ({
+            alias: participant.alias,
+            credential: { ...credential, ...participant, participants: undefined },
+            mode: "userbot" as const,
+            testerUserId: participant.testerUserId,
+          })),
+        ];
+    resetRoutes();
+    if (!privateProduction) {
+      stateRoot = skillRuntime!.createStateRoot();
+      const restored = skillRuntime!.restoreCredential(
+        // SAFETY: The leased credential passed the Telegram test-credential parser above.
+        credential as TelegramTestCredential,
+        stateRoot,
       );
+      apiProxy = await skillRuntime!.startApiProxy(leaseHealth);
+      await apiProxy.drainUpdates(credential.sutToken);
+      userbot = await TelegramUserbotDriver.start({
+        chatId: directMessageOnly ? `@${credential.sutUsername}` : restored.groupId,
+        ...(credential.forumGroupId ? { observeChatIds: [credential.forumGroupId] } : {}),
+        expectedUserId: credential.testerUserId,
+        driverEnv: restored.driverEnv,
+        leaseHealth,
+        userDriverPath: skillRuntime!.userDriverPath,
+        onUpdate: (update) => observeUpdate(update, 0),
+      });
+      drivers.push(userbot);
+      for (const [offset, participant] of participants.slice(1).entries()) {
+        if (!participant.credential) {
+          continue;
+        }
+        const root = skillRuntime!.createStateRoot();
+        participantRoots.push(root);
+        const restoredParticipant = skillRuntime!.restoreCredential(
+          // SAFETY: Userbot participants are derived from the parsed Telegram test credential.
+          participant.credential as TelegramTestCredential,
+          root,
+        );
+        drivers.push(
+          await TelegramUserbotDriver.start({
+            chatId: directMessageOnly ? `@${credential.sutUsername}` : restored.groupId,
+            expectedUserId: participant.testerUserId,
+            driverEnv: restoredParticipant.driverEnv,
+            leaseHealth,
+            userDriverPath: skillRuntime!.userDriverPath,
+            onUpdate: (update) => observeUpdate(update, offset + 1),
+          }),
+        );
+      }
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
@@ -274,11 +356,11 @@ export async function createTelegramQaTransportAdapter(
       }
     }
     try {
-      if (participantCleanupUncertain) {
+      if (participantCleanupUncertain && leasedRuntime) {
         try {
-          await credentialLease.heartbeat();
+          await leasedRuntime.credentialLease.heartbeat();
         } finally {
-          await heartbeat.stop();
+          await leasedRuntime.heartbeat.stop();
         }
       } else {
         await releaseCredentialLease();
@@ -294,7 +376,7 @@ export async function createTelegramQaTransportAdapter(
     throw error;
   }
 
-  if (!userbot || !apiProxy || !stateRoot) {
+  if (!privateProduction && (!userbot || !apiProxy || !stateRoot)) {
     throw new Error("Telegram userbot runtime did not start.");
   }
   const activeApiProxy = apiProxy;
@@ -311,15 +393,14 @@ export async function createTelegramQaTransportAdapter(
       for (const driver of drivers) {
         driver.assertHealthy();
       }
-      heartbeat.throwIfFailed();
+      leasedRuntime?.heartbeat.throwIfFailed();
     },
     describeTransportState: () => describeTelegramQaObserverState(observerState),
     async sendInbound(input) {
-      heartbeat.throwIfFailed();
+      leasedRuntime?.heartbeat.throwIfFailed();
       let observer = participants.findIndex(
         (participant) =>
-          participant.alias === input.senderId ||
-          participant.credential.testerUserId === input.senderId,
+          participant.alias === input.senderId || participant.testerUserId === input.senderId,
       );
       if (observer < 0) {
         if (participants.length > 1) {
@@ -336,9 +417,8 @@ export async function createTelegramQaTransportAdapter(
         observer = 0;
       }
       const participant = participants[observer];
-      const driver = drivers[observer];
-      if (!participant || !driver) {
-        throw new Error("Telegram QA participant driver is unavailable.");
+      if (!participant) {
+        throw new Error("Telegram QA participant is unavailable.");
       }
       if (directMessageOnly && input.conversation.kind !== "direct") {
         throw new Error("Telegram QA direct-message-only policy rejects group sends.");
@@ -356,13 +436,11 @@ export async function createTelegramQaTransportAdapter(
       }
       const chatId =
         input.conversation.kind === "direct"
-          ? Number(credentialLease.payload.sutBotId)
+          ? Number(credential.sutBotId)
           : Number(
-              forumTopicId
-                ? (credentialLease.payload.forumGroupId ?? credentialLease.payload.groupId)
-                : credentialLease.payload.groupId,
+              forumTopicId ? (credential.forumGroupId ?? credential.groupId) : credential.groupId,
             );
-      // Shared rooms use one observer. TDLib message IDs belong to the observing account.
+      // Shared rooms use one observer. TDLib IDs and local-app attestations share that route.
       const routeObserver = input.conversation.kind === "direct" ? observer : 0;
       const routeId = routeKey(routeObserver, chatId, forumTopicId);
       const previous = routes.get(routeId);
@@ -381,31 +459,91 @@ export async function createTelegramQaTransportAdapter(
           "Telegram QA reply requires a message observed by this participant in this chat.",
         );
       }
-      const text = renderTelegramQaInboundText(input, credentialLease.payload.sutUsername);
+      const text = renderTelegramQaInboundText(input, credential.sutUsername);
       sendsInFlight += 1;
       try {
-        const sent = await driver.send({
-          text,
-          chatId: String(chatId),
-          ...(forumTopicId === undefined ? {} : { forumTopicId }),
-          replyToMessageId: reply?.messageId,
-        });
+        let sent: TelegramUserbotUpdate;
+        let messageObserver = observer;
+        let appProofReply: string | undefined;
+        if (participant.mode === "hitl") {
+          const appParticipant = privateDescriptor?.participants[observer];
+          if (!privateDescriptor || !appParticipant) {
+            throw new Error("Telegram local-app participant is unavailable.");
+          }
+          if (
+            input.conversation.kind === "group" &&
+            (forumTopicId !== privateDescriptor.forumTopicId ||
+              chatId !== Number(privateDescriptor.forumGroupId))
+          ) {
+            throw new Error("Telegram local-app forum send targets the wrong private topic.");
+          }
+          messageObserver = routeObserver;
+          const proof = await requestTelegramPrivateAppTurn({
+            descriptor: privateDescriptor,
+            destination: input.conversation.kind === "direct" ? "bot-dm" : "forum-topic",
+            participant: appParticipant,
+            text,
+          });
+          appProofReply = proof.replyText;
+          sent = {
+            kind: "message",
+            chatId,
+            ...(forumTopicId === undefined ? {} : { forumTopicId }),
+            messageId: localMessageId++,
+            senderId: Number(participant.testerUserId),
+            timestamp: Date.now(),
+            text,
+            entities: [],
+          };
+        } else {
+          const driver = drivers[observer];
+          if (!driver) {
+            throw new Error("Telegram QA participant driver is unavailable.");
+          }
+          sent = await driver.send({
+            text,
+            chatId: String(chatId),
+            ...(forumTopicId === undefined ? {} : { forumTopicId }),
+            replyToMessageId: reply?.messageId,
+          });
+        }
         if (
-          String(sent.senderId) !== participant.credential.testerUserId ||
+          String(sent.senderId) !== participant.testerUserId ||
           sent.chatId !== chatId ||
           (forumTopicId !== undefined && sent.forumTopicId !== forumTopicId)
         ) {
           throw new Error(
-            "Telegram send receipt does not match the leased participant and requested chat/topic.",
+            "Telegram send receipt does not match the configured participant and requested chat/topic.",
           );
         }
         const message = await context.messages.addInboundMessage({
           ...input,
           accountId,
-          senderId: participant.credential.testerUserId,
+          senderId: participant.testerUserId,
         });
-        nativeMessageIds.set(message.id, { observer, chatId, messageId: sent.messageId });
-        busMessages.set(nativeKey(observer, chatId, sent.messageId), { id: message.id });
+        nativeMessageIds.set(message.id, {
+          observer: messageObserver,
+          chatId,
+          messageId: sent.messageId,
+        });
+        busMessages.set(nativeKey(messageObserver, chatId, sent.messageId), { id: message.id });
+        if (appProofReply !== undefined) {
+          await observeUpdate(
+            {
+              kind: "message",
+              chatId,
+              ...(forumTopicId === undefined ? {} : { forumTopicId }),
+              messageId: localMessageId++,
+              replyToMessageId: sent.messageId,
+              senderId: Number(credential.sutBotId),
+              senderUsername: credential.sutUsername,
+              timestamp: Date.now(),
+              text: appProofReply,
+              entities: [],
+            },
+            messageObserver,
+          );
+        }
         // A shared-room reply can quote an ID in another user's private TDLib sequence.
         // Preserve the reply without claiming a cross-account quote relationship.
         const readyReplies = deferredReplies;
@@ -432,24 +570,22 @@ export async function createTelegramQaTransportAdapter(
     async prepareFlow({ config }) {
       if (
         config.requireParticipantIdentityFixture === true &&
-        (participants.length < 2 ||
-          !credentialLease.payload.forumGroupId ||
-          !credentialLease.payload.forumTopicId)
+        (participants.length < 2 || !credential.forumGroupId || !credential.forumTopicId)
       ) {
         throw new Error(
-          "Telegram participant identity proof requires one leased credential with distinct participants, forumGroupId, and forumTopicId.",
+          "Telegram participant identity proof requires distinct participants, forumGroupId, and forumTopicId.",
         );
       }
       return {
         telegramIdentityFixture: {
           participantAliases: participants.map((participant) => participant.alias),
-          forumTopicId: credentialLease.payload.forumTopicId,
+          forumTopicId: credential.forumTopicId,
         },
         readTelegramMessages: () => {
           for (const driver of drivers) {
             driver.assertHealthy();
           }
-          heartbeat.throwIfFailed();
+          leasedRuntime?.heartbeat.throwIfFailed();
           // Share the existing message lifetime; readers cannot mutate a later snapshot.
           return [...busMessages.values()].flatMap(({ update }) =>
             update ? [structuredClone(update)] : [],
@@ -458,17 +594,18 @@ export async function createTelegramQaTransportAdapter(
       };
     },
     createGatewayConfig: () =>
+      // SAFETY: The builder accepts an empty base and supplies every QA-owned config section.
       buildTelegramQaConfig({} as OpenClawConfig, {
-        apiRoot: activeApiProxy.apiRoot,
+        apiRoot: activeApiProxy?.apiRoot,
         directMessageOnly,
         enableDirectMessages: true,
         additionalTesterUserIds: participants
           .slice(1)
-          .map((participant) => participant.credential.testerUserId),
-        forumGroupId: credentialLease.payload.forumGroupId,
-        groupId: credentialLease.payload.groupId,
-        sutToken: credentialLease.payload.sutToken,
-        testerUserId: credentialLease.payload.testerUserId,
+          .map((participant) => participant.testerUserId),
+        forumGroupId: credential.forumGroupId,
+        groupId: credential.groupId,
+        sutToken: credential.sutToken,
+        testerUserId: credential.testerUserId,
         sutAccountId: accountId,
       }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
@@ -481,10 +618,10 @@ export async function createTelegramQaTransportAdapter(
       const topic = threadId ?? parsed?.threadId;
       const to =
         parsed?.chatType === "direct" || directMessageOnly
-          ? credentialLease.payload.testerUserId
+          ? credential.testerUserId
           : topic
-            ? (credentialLease.payload.forumGroupId ?? credentialLease.payload.groupId)
-            : credentialLease.payload.groupId;
+            ? (credential.forumGroupId ?? credential.groupId)
+            : credential.groupId;
       return {
         channel: "telegram",
         to,
@@ -496,26 +633,31 @@ export async function createTelegramQaTransportAdapter(
     async handleAction() {
       throw new Error("Telegram live QA adapter does not implement transport actions");
     },
-    createReportNotes: () => ["Runs through the Telegram Test Server userbot adapter."],
+    createReportNotes: () => [
+      privateProduction
+        ? "Runs through two operator-local Telegram.app participants; private UI attestations back the native send and reply observations."
+        : "Runs through the Telegram Test Server userbot adapter.",
+    ],
     async cleanup() {
       if (observerStopped) {
         return;
       }
       observerStopped = true;
-      const errors = await closeParticipants();
+      const errors: unknown[] = [];
+      errors.push(...(await closeParticipants()));
       if (errors.length) {
         throw new AggregateError(
           errors,
           "Telegram participant cleanup is unconfirmed; retained private state and lease.",
         );
       }
-      for (const root of [activeStateRoot, ...participantRoots]) {
+      for (const root of [...(activeStateRoot ? [activeStateRoot] : []), ...participantRoots]) {
         fs.rmSync(root, { recursive: true, force: true });
       }
     },
     async cleanupAfterGatewayStop() {
       const cleanupErrors: unknown[] = [];
-      if (!apiProxyClosed) {
+      if (!apiProxyClosed && activeApiProxy) {
         try {
           await activeApiProxy.close();
           apiProxyClosed = true;
@@ -523,14 +665,17 @@ export async function createTelegramQaTransportAdapter(
           cleanupErrors.push(error);
         }
       }
-      if (participantCleanupUncertain || (await shouldRetainQaGatewayCredentialLease())) {
+      if (
+        leasedRuntime &&
+        (participantCleanupUncertain || (await shouldRetainQaGatewayCredentialLease()))
+      ) {
         try {
-          await credentialLease.heartbeat();
+          await leasedRuntime.credentialLease.heartbeat();
         } catch (error) {
           cleanupErrors.push(error);
         }
         try {
-          await heartbeat.stop();
+          await leasedRuntime.heartbeat.stop();
         } catch (error) {
           cleanupErrors.push(error);
         }

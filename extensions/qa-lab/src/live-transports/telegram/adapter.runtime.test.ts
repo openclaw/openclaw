@@ -14,11 +14,15 @@ const mocks = vi.hoisted(() => ({
   loadTelegramUserbotSkillRuntime: vi.fn(),
   proxyClose: vi.fn(),
   proxyDrainUpdates: vi.fn(),
+  readTelegramPrivateProductionDescriptor: vi.fn(),
+  requestTelegramPrivateAppTurn: vi.fn(),
+  resolveTelegramPrivateProductionBot: vi.fn(),
   restoreCredential: vi.fn(),
   shouldRetainQaGatewayCredentialLease: vi.fn(),
   startApiProxy: vi.fn(),
   userbotAssertHealthy: vi.fn(),
   userbotClose: vi.fn(),
+  userbotCleanupPrivateForum: vi.fn(),
   userbotSend: vi.fn(),
   userbotStart: vi.fn(),
 }));
@@ -39,6 +43,12 @@ vi.mock("../../gateway-process-boundary.js", () => ({
 
 vi.mock("./userbot-driver.runtime.js", () => ({
   TelegramUserbotDriver: { start: mocks.userbotStart },
+}));
+
+vi.mock("./private-production.runtime.js", () => ({
+  readTelegramPrivateProductionDescriptor: mocks.readTelegramPrivateProductionDescriptor,
+  requestTelegramPrivateAppTurn: mocks.requestTelegramPrivateAppTurn,
+  resolveTelegramPrivateProductionBot: mocks.resolveTelegramPrivateProductionBot,
 }));
 
 vi.mock("./userbot-skill.runtime.js", () => ({
@@ -114,6 +124,7 @@ describe("Telegram QA transport adapter", () => {
     vi.clearAllMocks();
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-adapter-test-"));
     mocks.createStateRoot.mockReturnValue(stateRoot);
+    mocks.readTelegramPrivateProductionDescriptor.mockReturnValue(undefined);
     mocks.acquireQaCredentialLease.mockResolvedValue({
       payload: credential,
       source: "convex",
@@ -142,6 +153,7 @@ describe("Telegram QA transport adapter", () => {
       assertHealthy: mocks.userbotAssertHealthy,
       chatId: -100123,
       close: mocks.userbotClose,
+      cleanupPrivateForum: mocks.userbotCleanupPrivateForum,
       send: mocks.userbotSend,
     });
     mocks.proxyDrainUpdates.mockResolvedValue(undefined);
@@ -156,6 +168,7 @@ describe("Telegram QA transport adapter", () => {
         assertHealthy: mocks.userbotAssertHealthy,
         chatId: 200,
         close: mocks.userbotClose,
+        cleanupPrivateForum: mocks.userbotCleanupPrivateForum,
         send: mocks.userbotSend,
       };
     });
@@ -583,6 +596,80 @@ describe("Telegram QA transport adapter", () => {
     expect(mocks.leaseRelease).toHaveBeenCalledOnce();
   });
 
+  it("uses local Telegram.app participants without acquiring a shared credential", async () => {
+    const descriptor = {
+      file: "/private/descriptor.json",
+      mode: "private-production-local-apps",
+      forumGroupId: "-100456",
+      forumTopicId: 42,
+      topicTitle: "Private identity proof",
+      participants: [
+        { alias: "primary", host: "mainframe", userId: "100" },
+        { alias: "second", host: "macbook", userId: "101" },
+      ],
+    };
+    mocks.readTelegramPrivateProductionDescriptor.mockReturnValueOnce(descriptor);
+    mocks.resolveTelegramPrivateProductionBot.mockResolvedValue({
+      id: "200",
+      token: "private-token",
+      username: "qa_bot",
+    });
+    mocks.requestTelegramPrivateAppTurn.mockResolvedValue({ replyText: "synthetic-marker" });
+    const addInboundMessage = vi.fn().mockResolvedValue({ id: "in-hitl" });
+    const addOutboundMessage = vi.fn().mockResolvedValue({ id: "out-hitl" });
+    const adapter = await createTelegramQaTransportAdapter({
+      adapterOptions: { credentialFile: "/private/descriptor.json" },
+      messages: { addInboundMessage, addOutboundMessage },
+    } as never);
+    try {
+      expect(mocks.acquireQaCredentialLease).not.toHaveBeenCalled();
+      expect(mocks.startApiProxy).not.toHaveBeenCalled();
+      expect(adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
+        channels: {
+          telegram: {
+            accounts: {
+              sut: {
+                allowFrom: ["100", "101"],
+                groups: { "-100456": { allowFrom: ["100", "101"] } },
+              },
+            },
+          },
+        },
+      });
+      expect(
+        adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1:1234" }).channels?.telegram
+          ?.accounts?.sut,
+      ).not.toHaveProperty("apiRoot");
+
+      await adapter.sendInbound({
+        conversation: { id: "forum", kind: "group" },
+        senderId: "second",
+        threadId: "42",
+        text: "@openclaw Reply exactly: synthetic-marker",
+      });
+      expect(mocks.requestTelegramPrivateAppTurn).toHaveBeenCalledWith({
+        descriptor,
+        destination: "forum-topic",
+        participant: descriptor.participants[1],
+        text: "@qa_bot Reply exactly: synthetic-marker",
+      });
+      expect(addInboundMessage).toHaveBeenCalledWith(expect.objectContaining({ senderId: "101" }));
+      expect(addOutboundMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyToId: "in-hitl",
+          text: "synthetic-marker",
+          to: "thread:/v1/group/forum/42",
+        }),
+      );
+      expect(mocks.userbotSend).not.toHaveBeenCalled();
+    } finally {
+      await adapter.cleanup?.();
+      await adapter.cleanupAfterGatewayStop?.();
+    }
+    expect(mocks.userbotStart).not.toHaveBeenCalled();
+    expect(mocks.leaseRelease).not.toHaveBeenCalled();
+  });
+
   it.each(["participants", "forumGroupId", "forumTopicId"] as const)(
     "fails the cataloged identity scenario clearly when the lease lacks %s",
     async (missing) => {
@@ -598,7 +685,7 @@ describe("Telegram QA transport adapter", () => {
       try {
         const scenario = readQaScenarioById("telegram-participant-identity-inspection");
         await expect(prepareFlow(adapter, scenario.execution.config)).rejects.toThrow(
-          "requires one leased credential with distinct participants, forumGroupId, and forumTopicId",
+          "requires distinct participants, forumGroupId, and forumTopicId",
         );
         expect(mocks.userbotSend).not.toHaveBeenCalled();
       } finally {

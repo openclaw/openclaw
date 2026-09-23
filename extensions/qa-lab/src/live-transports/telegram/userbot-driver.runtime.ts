@@ -26,6 +26,18 @@ export type TelegramUserbotUpdate = {
   timestamp: number;
 };
 
+type PendingUserbotCommand =
+  | {
+      kind: "send";
+      reject(error: Error): void;
+      resolve(value: TelegramUserbotUpdate): void;
+    }
+  | {
+      kind: "cleanup-private-forum";
+      reject(error: Error): void;
+      resolve(): void;
+    };
+
 function isUtf16Boundary(text: string, offset: number) {
   const before = text.charCodeAt(offset - 1);
   const after = text.charCodeAt(offset);
@@ -138,10 +150,7 @@ export class TelegramUserbotDriver {
   private activeUserId: number | undefined;
   private closing = false;
   private commandId = 0;
-  private readonly pending = new Map<
-    string,
-    { reject(error: Error): void; resolve(value: TelegramUserbotUpdate): void }
-  >();
+  private readonly pending = new Map<string, PendingUserbotCommand>();
   private readyReject: (error: Error) => void = () => undefined;
   private readyResolve: () => void = () => undefined;
   private readonly ready: Promise<void>;
@@ -288,6 +297,17 @@ export class TelegramUserbotDriver {
       pending.reject(new Error("Telegram userbot emitted an invalid command result."));
       return;
     }
+    if (pending.kind === "cleanup-private-forum") {
+      if (
+        message.result.ok !== true ||
+        (message.result.status !== "deleted" && message.result.status !== "not-created")
+      ) {
+        pending.reject(new Error("Telegram userbot did not confirm private forum cleanup."));
+        return;
+      }
+      pending.resolve();
+      return;
+    }
     try {
       pending.resolve(parseUserbotUpdate({ ...message.result, kind: "message" }));
     } catch (error) {
@@ -334,10 +354,22 @@ export class TelegramUserbotDriver {
     this.commandId += 1;
     const id = String(this.commandId);
     const result = new Promise<TelegramUserbotUpdate>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { kind: "send", resolve, reject });
     });
     this.child.stdin.write(`${JSON.stringify({ id, method: "send", ...params })}\n`);
     return await result;
+  }
+
+  async cleanupPrivateForum() {
+    this.leaseHealth.assertHealthy();
+    this.assertHealthy();
+    this.commandId += 1;
+    const id = String(this.commandId);
+    const result = new Promise<void>((resolve, reject) => {
+      this.pending.set(id, { kind: "cleanup-private-forum", resolve, reject });
+    });
+    this.child.stdin.write(`${JSON.stringify({ id, method: "cleanup-private-forum" })}\n`);
+    await result;
   }
 
   async close() {

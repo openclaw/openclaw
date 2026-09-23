@@ -237,7 +237,7 @@ function runIdentityFlow(fault?: Fault) {
 }
 
 describe("Telegram participant identity executable flow", () => {
-  it("catalogs live participant identity qualification with the leased fixture gate", () => {
+  it("catalogs live participant identity qualification with the fixture gate", () => {
     const scenarios = readQaScenarioPack().scenarios.filter(
       (scenario) =>
         scenario.execution.kind === "flow" &&
@@ -265,7 +265,7 @@ describe("Telegram participant identity executable flow", () => {
     ).toEqual([]);
   });
 
-  it("executes both leased aliases through DM/forum, exact RPC/CLI inspection, and one restart", async () => {
+  it("executes both participant aliases through DM/forum, exact RPC/CLI inspection, and one restart", async () => {
     const proof = runIdentityFlow();
     await expect(proof.result).resolves.toMatchObject({ status: "pass" });
     expect(proof.turns.map((turn) => [turn.senderId, turn.conversation.kind])).toEqual([
@@ -293,10 +293,10 @@ describe("Telegram participant identity executable flow", () => {
   it.each([
     ["wrong-transport", "requires the live Telegram adapter"],
     ["wrong-provider", "requires the live Telegram adapter"],
-    ["missing-fixture", "requires distinct leased participant aliases"],
-    ["missing-participant", "requires distinct leased participant aliases"],
-    ["duplicate-alias", "requires distinct leased participant aliases"],
-    ["missing-topic", "requires distinct leased participant aliases"],
+    ["missing-fixture", "requires distinct participant aliases"],
+    ["missing-participant", "requires distinct participant aliases"],
+    ["duplicate-alias", "requires distinct participant aliases"],
+    ["missing-topic", "requires distinct participant aliases"],
     ["wrong-topic", "requested DM or leased forum topic"],
     ["extra-run", "exactly one newly admitted run"],
     ["unknown-person", "retain the admitted person"],

@@ -23,7 +23,7 @@ const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
-    apiRoot: string;
+    apiRoot?: string;
     directMessageOnly?: boolean;
     enableDirectMessages?: boolean;
     additionalTesterUserIds?: string[];
@@ -75,7 +75,7 @@ export function buildTelegramQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             botToken: params.sutToken,
-            apiRoot: params.apiRoot,
+            ...(params.apiRoot ? { apiRoot: params.apiRoot } : {}),
             ...(params.directMessageOnly || params.enableDirectMessages
               ? { dmPolicy: "allowlist", allowFrom: testerUserIds }
               : { dmPolicy: "disabled" }),

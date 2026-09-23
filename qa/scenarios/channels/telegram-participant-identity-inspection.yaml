@@ -6,14 +6,14 @@ scenario:
   coverage:
     primary:
       - gateway.identity-and-presence-apis
-  objective: Verify real Telegram DM and forum-topic admissions preserve the same person's pseudonym across routes, distinguish a second leased participant, and retain bounded redacted execution identity across one Gateway restart.
+  objective: Verify real Telegram DM and forum-topic admissions preserve one person identity across routes, distinguish a second participant, and retain bounded redacted execution identity across one Gateway restart.
   gatewayConfigPatch:
     logging:
       audit:
         enabled: true
         executionIdentity: true
   successCriteria:
-    - The primary leased user receives a DM reply and both leased participants receive replies in the configured forum topic.
+    - The primary QA user receives a DM reply and both participants receive replies in the configured forum topic.
     - Each turn has one newly admitted run and distinct execution context; the primary person's pseudonym is stable across DM and forum while the additional person's differs.
     - audit.run.inspect and audit CLI JSON and human output agree, retain bounded pseudonyms, and expose no raw participant, room, or message content.
     - Exact execution identity survives one lifecycle-owned Gateway restart, and generic decision displays remain unverified.
@@ -23,15 +23,15 @@ scenario:
     - docs/concepts/qa-e2e-automation/channel-qa-reference.md
   codeRefs:
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
-    - extensions/qa-lab/src/live-transports/telegram/userbot-skill.runtime.ts
+    - extensions/qa-lab/src/live-transports/telegram/private-production.runtime.ts
   execution:
     kind: flow
     channel: telegram
     suiteIsolation: isolated
     isolationReason: Enables identity before admission and inspects the same isolated audit database across a Gateway replacement restart.
-    timeoutMs: 300000
+    timeoutMs: 900000
     retryCount: 0
-    summary: Run with qa telegram --scenario telegram-participant-identity-inspection --provider-mode mock-openai. Requires one Convex-leased Test Server userbot credential with distinct primary and additional participants, forumGroupId, and forumTopicId. Uses the existing live adapter and no live model; incomplete fixtures fail without fallback.
+    summary: Run with qa telegram --scenario telegram-participant-identity-inspection --provider-mode mock-openai. The default mode requires a Convex-leased Test Server fixture with distinct participants and a forum topic. An explicitly supplied private-production descriptor uses two operator-local Telegram.app participants and private native-observation acknowledgements without leasing a production user. Uses the live adapter and no live model; incomplete fixtures fail without fallback.
     config:
       requiredChannelDriver: live
       requiredProviderMode: mock-openai
@@ -49,14 +49,14 @@ scenario:
 
 flow:
   steps:
-    - name: inspects leased Telegram people across DM and forum executions
+    - name: inspects Telegram people across DM and forum executions
       actions:
         - assert:
             expr: "transport.id === 'telegram' && env.providerMode === config.requiredProviderMode"
             message: Telegram participant identity proof requires the live Telegram adapter and mock-openai provider
         - assert:
             expr: "typeof telegramIdentityFixture !== 'undefined' && telegramIdentityFixture.participantAliases?.[0] === 'primary' && telegramIdentityFixture.participantAliases.length >= 2 && new Set(telegramIdentityFixture.participantAliases).size === telegramIdentityFixture.participantAliases.length && Number.isSafeInteger(telegramIdentityFixture.forumTopicId) && telegramIdentityFixture.forumTopicId > 0"
-            message: Telegram participant identity proof requires distinct leased participant aliases and forumTopicId from the prepared fixture
+            message: Telegram participant identity proof requires distinct participant aliases and forumTopicId from the prepared fixture
         - call: waitForGatewayHealthy
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
