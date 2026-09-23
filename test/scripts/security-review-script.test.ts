@@ -98,6 +98,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
       encoding: "utf8",
       env: {
         GITHUB_TOKEN: "fixture-token",
+        OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: "fixture-autoscrub-token",
         ...(deadline === undefined
           ? {}
           : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
@@ -146,6 +147,144 @@ describe("combined security review entry point", () => {
     expect(result.waits).toEqual([1_000]);
     expect(result.combined.at(-1)).toBe("success");
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
+  });
+
+  it.each([
+    { route: `GET ${pullPath}`, response: pr, requestTimeout: "fetch" },
+    { route: rolePath, response: { role_name: "maintain" }, requestTimeout: "body" },
+    { route: jobsPath, response: jobs, requestTimeout: "fetch" },
+  ])(
+    "restarts evaluation after a $requestTimeout deadline on $route",
+    ({ route, response, requestTimeout }) => {
+      const result = evaluate({ [route]: { responses: [{ requestTimeout }, response] } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([1_000]);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+      expect(result.combined.at(-1)).toBe("success");
+    },
+  );
+
+  it("recovers the dependency-graph read deadline without granting contributor approval", () => {
+    const graphPath = `/repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`;
+    const result = evaluate({
+      [rolePath]: { role_name: "read" },
+      [`GET ${pullPath}/files`]: [files[0], { filename: "pnpm-lock.yaml", status: "modified" }],
+      [`GET ${graphPath}`]: { responses: [{ requestTimeout: "fetch" }, []] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.requests.filter((entry) => entry.path === graphPath)).toHaveLength(2);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.stdout).toContain("awaiting maintainer approval");
+  });
+
+  it("rereads author authority after a read deadline instead of retaining approval", () => {
+    const result = evaluate({
+      [jobsPath]: { responses: [{ requestTimeout: "fetch" }, jobs] },
+      [rolePath]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { role_name: "maintain" },
+        after: { role_name: "read" },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(afterWait.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
+  it("recovers a lockfile read deadline before submitting one cleanup commit", () => {
+    const result = evaluate(
+      {
+        [`GET ${pullPath}`]: {
+          ...pr,
+          changed_files: 1,
+          head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+        [rolePath]: { role_name: "read" },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${pr.base.sha}`]: {
+          responses: [
+            { requestTimeout: "fetch" },
+            {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+            },
+          ],
+        },
+        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } } },
+      },
+      "autoscrub",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
+  });
+
+  it("does not replay a failed notice write when a sibling read later times out", () => {
+    const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+    const result = evaluate({
+      [`POST ${commentPath}`]: { httpError: 500 },
+      [rolePath]: {
+        responses: [
+          { role_name: "maintain" },
+          { role_name: "maintain" },
+          { requestTimeout: "fetch" },
+        ],
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(
+      result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
+    ).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
+  });
+
+  it("bounds persistent read deadlines without granting approval", () => {
+    const result = evaluate({ [rolePath]: { requestTimeout: "fetch" } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === rolePath)).toHaveLength(4);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it.each([
+    { name: "status", route: statusPath },
+    { name: "comment", route: "POST /repos/openclaw/openclaw/issues/7/comments" },
+  ])("does not restart evaluation after an uncertain $name write deadline", ({ route }) => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [files[1]],
+      [route]: { requestTimeout: "body" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(
+      result.requests.filter((entry) => `${entry.method} ${entry.path}` === route),
+    ).toHaveLength(1);
+    expect(result.stderr).toContain("exceeded timeout 30000ms");
+    expect(result.combined).not.toContain("success");
   });
 
   it("exhausts HTTP 500 retries without publishing approval", () => {
@@ -595,6 +734,11 @@ describe("combined security review entry point", () => {
       deadline: "2026-01-02T00:01:00Z",
     },
     { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
+    {
+      route: `GET ${pullPath}`,
+      failure: { requestTimeout: "fetch" },
+      deadline: "2026-01-02T00:01:00Z",
+    },
     {
       route: `GET ${pullPath}/files`,
       failure: files.slice(0, 1),
