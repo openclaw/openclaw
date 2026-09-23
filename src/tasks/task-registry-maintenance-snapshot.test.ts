@@ -46,12 +46,13 @@ describe("task-registry maintenance snapshot", () => {
   it.each(["database", "store", "state directory"] as const)(
     "rejects a changed %s after an awaited visitor before selecting another task",
     async (replacement) => {
-      const stored = ["first", "second"].map((taskId) => ({
-        ...createStoredTask(),
-        taskId,
-        runtime: "cli" as const,
-        status: "succeeded" as const,
-      }));
+      const stored = ["first", "second"].map((taskId) => {
+        const task = createStoredTask();
+        task.taskId = taskId;
+        task.runtime = "cli";
+        task.status = "succeeded";
+        return task;
+      });
       configureTaskRegistryRuntime({
         store: createInMemoryTaskRegistryStore({
           tasks: new Map(stored.map((task) => [task.taskId, task])),
