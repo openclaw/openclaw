@@ -160,6 +160,80 @@ describe("retained plugin session source recovery", () => {
     });
   });
 
+  it("reconciles a smaller retained index and reports only its differing session metadata", async () => {
+    await withOpenClawTestState({ label: "retained-index-runtime-metadata" }, async (state) => {
+      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      for (let index = 0; index < 10; index += 1) {
+        entries[`agent:main:unchanged-${index}`] = {
+          sessionId: `unchanged-${index}`,
+          updatedAt: 20,
+        };
+      }
+      entries["agent:main:kept"].skillsSnapshot = { prompt: "original", skills: [] };
+      entries["agent:main:deleted"].inputTokens = 100;
+      fs.writeFileSync(storePath, JSON.stringify(entries).padEnd(190_020));
+      const options = { cfg, env: state.env, allAgents: true };
+      const imported = await runDoctorSessionSqlite({ ...options, mode: "import" });
+      expect(imported.totals.sqliteEntries).toBe(12);
+      const readCanonical = () =>
+        Object.keys(entries).map((sessionKey) => loadExactSessionEntry({ ...scope, sessionKey }));
+      const canonical = readCanonical();
+      const manifestPath = expectDefined(imported.migrationRun?.manifestPath, "import manifest");
+      const failed = expectDefined(readSessionSqliteMigrationManifest(manifestPath), "manifest");
+      failed.failedAt = failed.startedAt;
+      const failedTarget = expectDefined(failed.targets[0], "failed target");
+      failedTarget.issues = [];
+      failedTarget.validationBeforeArchive = "not_run";
+      fs.writeFileSync(manifestPath, JSON.stringify(failed));
+
+      entries["agent:main:kept"].skillsSnapshot.prompt = "runtime snapshot";
+      entries["agent:main:kept"].updatedAt = 21;
+      entries["agent:main:deleted"].inputTokens = 200;
+      const changed = JSON.stringify(entries).padEnd(187_332);
+      fs.writeFileSync(storePath, changed);
+      const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
+      const report = expectDefined(recovered.targets[0], "recovered target");
+
+      expect(report.sqliteEntries).toBe(12);
+      expect(report.importedEntries).toBe(0);
+      expect(countBlockingSessionSqliteIssues(report)).toBe(0);
+      expect(readCanonical()).toEqual(canonical);
+      const archive = expectDefined(report.archivedLegacyStoreFiles?.[0], "protected index");
+      expect(fs.readFileSync(archive, "utf8")).toBe(changed);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+      expect(report.issues.filter((issue) => issue.sessionKey)).toEqual([
+        expect.objectContaining({
+          code: "retained_plugin_source_conflict",
+          sessionKey: "agent:main:kept",
+          message: expect.stringContaining("skillsSnapshot, updatedAt"),
+        }),
+        expect.objectContaining({
+          code: "retained_plugin_source_conflict",
+          sessionKey: "agent:main:deleted",
+          message: expect.stringContaining("inputTokens"),
+        }),
+      ]);
+      const failureJson = JSON.parse(
+        fs.readFileSync(
+          expectDefined(recovered.migrationRun?.failureReportJsonPath, "failure JSON"),
+          "utf8",
+        ),
+      );
+      expect(
+        failureJson.targets[0].recoveryIssues.map(({ code }: { code: string }) => code),
+      ).toEqual(report.issues.map(({ code }) => code));
+      const markdown = fs.readFileSync(
+        expectDefined(recovered.migrationRun?.failureReportMarkdownPath, "failure Markdown"),
+        "utf8",
+      );
+      expect(markdown).toContain(`Current recovery issues: ${report.issues.length}`);
+      expect(markdown).toContain("skillsSnapshot, updatedAt");
+      expect(markdown).toContain("inputTokens");
+    });
+  });
+
   it.each([
     { reversed: false, foreign: false },
     { reversed: true, foreign: false },

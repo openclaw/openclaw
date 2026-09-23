@@ -130,6 +130,9 @@ changed transcripts against complete canonical history. Verified content refresh
 the receipt without overwriting current session settings or resurrecting deleted
 history. Changed index values and other unverifiable plugin inputs move to the protected
 migration archive with their validation error and recovery path in the report.
+For changed indexes, Doctor compares session keys and IDs with canonical SQLite and
+names differing metadata fields in per-session warnings. This comparison does not
+authorize replaying old values or accepting changed bytes as the original import.
 Snapshot-path repair leaves these historical inputs unchanged.
 
 A retained plugin source conflict does not prevent Gateway readiness after the
