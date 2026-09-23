@@ -2489,7 +2489,25 @@ AFTER_CD
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
-    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+    for (const [context, expected] of [
+      [{ eventName: "push" }, 3],
+      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 3],
+      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 3],
+      [{ eventName: "push", runnerBackend: "github" }, 2],
+      [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
+      [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
+      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 2],
+      [{ eventName: "push", repository: "contributor/openclaw" }, 2],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], {
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          ...context,
+        }),
+        JSON.stringify(context),
+      ).toBe(expected);
+    }
   });
 
   it("runs the Docker seed tier with the published updater and a checked main smoke package", () => {
@@ -4005,9 +4023,7 @@ setImmediate(() => {
         "test-wear",
       ]) {
         for (const lint of [undefined, false, true]) {
-          const extendedBudget =
-            ((task === "test-play" || task === "test-third-party") && lint === true) ||
-            (task === "build-play" && runner === "ubuntu-24.04");
+          const extendedBudget = task === "build-play" && runner === "ubuntu-24.04";
           expect(
             evaluateTimeout("android", { ...context, matrix: { task, lint } }),
             `${label}: ${task}, lint=${lint}`,
