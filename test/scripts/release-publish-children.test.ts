@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const roots: string[] = [];
 const workflowSha = "a".repeat(40);
 const repository = "openclaw/openclaw";
-const runUrl = `https://github.com/${repository}/actions/runs/91`;
+const dispatchArgs = ["-f", "publish_scope=all-publishable", "-f", `ref=${"b".repeat(40)}`];
 
 type Job = { name: string; status: string; conclusion: string | null };
 type RunState = { status: string; conclusion?: string; jobs: Job[] };
@@ -21,6 +21,14 @@ const previewFailed = job("preview_plugin_pack (featherless, ...)", "failure");
 const previewPassed = job("preview_plugin_pack (featherless, ...)", "success");
 const publish = (conclusion: string | null, status = "completed") =>
   job("Publish plugin npm package (@openclaw/featherless)", conclusion, status);
+const failedBeforePublish: RunState[] = [
+  { status: "in_progress", jobs: [previewFailed, publish(null, "waiting")] },
+  { status: "completed", conclusion: "failure", jobs: [previewFailed, publish("skipped")] },
+];
+const succeeded: RunState[] = [
+  { status: "in_progress", jobs: [previewPassed, publish(null, "in_progress")] },
+  { status: "completed", conclusion: "success", jobs: [previewPassed, publish("success")] },
+];
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -28,50 +36,47 @@ afterEach(() => {
   }
 });
 
-// Each `gh run view --json status,...` poll advances through `states`; a
-// `gh run rerun` switches to `rerunStates` and bumps the run attempt.
-function fixture(scenario: { states: RunState[]; rerunStates?: RunState[]; attempt?: number }) {
+// Each `gh run view --json status,...` poll advances that run through its
+// states; a workflow dispatch creates the next run id in `runs` order.
+function fixture(runs: Record<string, RunState[]>) {
   const root = mkdtempSync(join(tmpdir(), "release-publish-children-"));
   roots.push(root);
   mkdirSync(join(root, "bin"));
   writeFileSync(join(root, "calls"), "");
   writeFileSync(join(root, "summary"), "");
-  writeFileSync(
-    join(root, "state.json"),
-    JSON.stringify({ phase: "states", index: -1, attempt: scenario.attempt ?? 1 }),
-  );
+  writeFileSync(join(root, "state.json"), JSON.stringify({ index: {}, dispatched: 0 }));
+  writeFileSync(join(root, "plugin-npm-dispatch-args"), dispatchArgs.join("\0") + "\0");
   writeFileSync(
     join(root, "bin", "gh"),
     `#!${process.execPath}
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 const root = process.env.FIXTURE_ROOT;
 const args = process.argv.slice(2);
-appendFileSync(root + '/calls', JSON.stringify(args) + '\\n');
-const scenario = ${JSON.stringify(scenario)};
+const runs = ${JSON.stringify(runs)};
+const ids = Object.keys(runs);
 const state = JSON.parse(readFileSync(root + '/state.json', 'utf8'));
 const save = () => writeFileSync(root + '/state.json', JSON.stringify(state));
-const timeline = scenario[state.phase];
-const current = () => timeline[Math.min(Math.max(state.index, 0), timeline.length - 1)];
 const json = args.includes('--json') ? args[args.indexOf('--json') + 1] : '';
 const jq = args.includes('--jq') ? args[args.indexOf('--jq') + 1] : '';
-if (args[0] === 'run' && args[1] === 'view' && json === 'status,url,updatedAt') {
-  state.index += 1; save();
-  console.log(JSON.stringify({ status: current().status, url: ${JSON.stringify(runUrl)}, updatedAt: 'T' + state.index }));
-} else if (args[0] === 'run' && args[1] === 'view' && json === 'headSha,url') {
-  console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: ${JSON.stringify(runUrl)} }));
-} else if (args[0] === 'run' && args[1] === 'view' && json === 'jobs') {
-  console.log(jq === '.jobs' ? JSON.stringify(current().jobs) : '');
-} else if (args[0] === 'run' && args[1] === 'view' && json === 'conclusion') {
-  console.log(current().conclusion ?? '');
-} else if (args[0] === 'run' && args[1] === 'view' && json === 'conclusion,url,createdAt,updatedAt') {
-  console.log(JSON.stringify({ conclusion: current().conclusion, url: ${JSON.stringify(runUrl)}, createdAt: '2026-09-23T20:00:00Z', updatedAt: '2026-09-23T20:05:00Z' }));
-} else if (args[0] === 'run' && args[1] === 'rerun') {
-  if (!args.includes('--failed') || !scenario.rerunStates) throw new Error('unexpected rerun');
-  state.phase = 'rerunStates'; state.index = -1; state.attempt += 1; save();
+const url = (id) => 'https://github.com/${repository}/actions/runs/' + id;
+if (args[0] === 'run' && args[1] === 'view') {
+  const id = args[args.indexOf('--repo') + 2];
+  const timeline = runs[id];
+  if (json === 'status,url,updatedAt') { state.index[id] = (state.index[id] ?? -1) + 1; save(); }
+  const current = timeline[Math.min(Math.max(state.index[id] ?? 0, 0), timeline.length - 1)];
+  if (json === 'status,url,updatedAt') console.log(JSON.stringify({ status: current.status, url: url(id), updatedAt: 'T' + state.index[id] }));
+  else if (json === 'headSha,url') console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: url(id) }));
+  else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : '');
+  else if (json === 'conclusion,url,createdAt,updatedAt') console.log(JSON.stringify({ conclusion: current.conclusion, url: url(id), createdAt: '2026-09-23T20:00:00Z', updatedAt: '2026-09-23T20:05:00Z' }));
+  else throw new Error('Unexpected view: ' + JSON.stringify(args));
 } else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/pending_deployments'))) {
   console.log('[]');
-} else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/actions/runs/91'))) {
-  console.log(state.attempt);
+} else if (args[0] === 'api' && args.some((arg) => arg.includes('/commits/'))) {
+  console.log(${JSON.stringify(workflowSha)});
+} else if (args[0] === 'api' && args.some((arg) => arg.endsWith('/dispatches'))) {
+  const id = ids[++state.dispatched]; save();
+  appendFileSync(root + '/calls', 'dispatch ' + readFileSync(0, 'utf8').trim() + '\\n');
+  console.log(JSON.stringify({ workflow_run_id: Number(id), html_url: url(id) }));
 } else throw new Error('Unexpected operation: ' + JSON.stringify(args));
 `,
     { mode: 0o755 },
@@ -90,15 +95,18 @@ if (args[0] === 'run' && args[1] === 'view' && json === 'status,url,updatedAt') 
             GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-123",
             GITHUB_REPOSITORY: repository,
             GITHUB_STEP_SUMMARY: join(root, "summary"),
+            RUNNER_TEMP: root,
+            CHILD_WORKFLOW_REF: "release-publish/aaaaaaaaaaaa-123",
             PARENT_WORKFLOW_SHA: workflowSha,
           },
         },
       );
       return {
         ...result,
-        reruns: readFileSync(join(root, "calls"), "utf8")
+        dispatches: readFileSync(join(root, "calls"), "utf8")
           .split("\n")
-          .filter((line) => line.startsWith('["run","rerun"')).length,
+          .filter((line) => line.startsWith("dispatch "))
+          .map((line) => JSON.parse(line.slice("dispatch ".length)) as { inputs: unknown }),
         summary: readFileSync(join(root, "summary"), "utf8"),
       };
     },
@@ -106,101 +114,80 @@ if (args[0] === 'run' && args[1] === 'view' && json === 'status,url,updatedAt') 
 }
 
 const watchPlugins =
-  'wait_for_run plugin-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "" true "" "Publish plugin npm package"';
-const failedBeforePublish: RunState[] = [
-  { status: "in_progress", jobs: [previewFailed, publish(null, "waiting")] },
-  { status: "completed", conclusion: "failure", jobs: [previewFailed, publish("skipped")] },
-];
+  'plugin_npm_run_id=91\nwait_for_plugin_npm_release || status=$?\necho "final=${plugin_npm_run_id}"\nexit "${status:-0}"';
 
 describe("plugin npm child pre-publish flake tolerance", () => {
-  it("waits for the run, reruns a pre-publish failure once, and continues on success", () => {
-    const result = fixture({
-      states: failedBeforePublish,
-      rerunStates: [
-        { status: "in_progress", jobs: [previewPassed, publish(null, "in_progress")] },
-        { status: "completed", conclusion: "success", jobs: [previewPassed, publish("success")] },
-      ],
-    }).run(watchPlugins);
+  it("waits for the run, dispatches a fresh child after a pre-publish failure, and continues on its success", () => {
+    const result = fixture({ 91: failedBeforePublish, 92: succeeded }).run(watchPlugins);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.reruns).toBe(1);
+    expect(result.dispatches.map((dispatch) => dispatch.inputs)).toEqual([
+      { publish_scope: "all-publishable", ref: "b".repeat(40) },
+    ]);
     expect(result.stdout).toContain(
       "waiting for the run to finish before deciding whether to retry",
     );
-    expect(result.stdout).toContain("rerunning its failed jobs once");
-    expect(result.stdout).toContain("attempt 2 started after the automatic retry");
-    expect(result.summary).toContain("failed jobs rerun automatically once");
-    expect(result.summary).toContain("plugin-npm-release.yml: success");
+    expect(result.stdout).toContain(
+      "run 91 failed before any 'Publish plugin npm package' job ran",
+    );
+    expect(result.stdout).toContain("dispatching a fresh child (1 of 2)");
+    expect(result.stdout).toContain("final=92");
+    expect(result.summary).toContain("fresh child 92 dispatched (1 of 2)");
   });
 
   it.each([
     {
       label: "a failure after publication started",
-      scenario: {
-        states: [
-          {
-            status: "completed",
-            conclusion: "failure",
-            jobs: [
-              previewPassed,
-              publish("success"),
-              job("Publish plugin npm package (@openclaw/x)", "failure"),
-            ],
-          },
-        ],
-        rerunStates: [],
-      },
-      stderr: "failed after publication started; not retrying",
+      states: [
+        {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [
+            previewPassed,
+            publish("success"),
+            job("Publish plugin npm package (@openclaw/x)", "failure"),
+          ],
+        },
+      ],
+      stderr: "failed after publication started; not dispatching a replacement",
     },
     {
       label: "a cancelled pre-publish job",
-      scenario: {
-        states: [
-          {
-            status: "completed",
-            conclusion: "cancelled",
-            jobs: [job(previewFailed.name, "cancelled"), publish("skipped")],
-          },
-        ],
-        rerunStates: [],
-      },
-      stderr: "with a non-retryable job conclusion; not retrying",
+      states: [
+        {
+          status: "completed",
+          conclusion: "cancelled",
+          jobs: [job(previewFailed.name, "cancelled"), publish("skipped")],
+        },
+      ],
+      stderr: "with a non-retryable job conclusion; not dispatching a replacement",
     },
-    {
-      label: "a failure on an attempt that was already rerun",
-      scenario: { states: failedBeforePublish, rerunStates: [], attempt: 2 },
-      stderr: "covers only attempt 1, not retrying",
-    },
-  ])("aborts without a rerun on $label", ({ scenario, stderr }) => {
-    const result = fixture(scenario).run(watchPlugins);
+  ])("aborts without a fresh child on $label", ({ states, stderr }) => {
+    const result = fixture({ 91: states, 92: succeeded }).run(watchPlugins);
     expect(result.status).toBe(1);
-    expect(result.reruns).toBe(0);
+    expect(result.dispatches).toHaveLength(0);
     expect(result.stderr).toContain(stderr);
+    expect(result.stdout).toContain("final=91");
   });
 
-  it("aborts when the single retry fails again", () => {
-    const result = fixture({ states: failedBeforePublish, rerunStates: failedBeforePublish }).run(
-      watchPlugins,
-    );
+  it("aborts after two fresh children fail before publication", () => {
+    const result = fixture({
+      91: failedBeforePublish,
+      92: failedBeforePublish,
+      93: failedBeforePublish,
+      94: succeeded,
+    }).run(watchPlugins);
     expect(result.status).toBe(1);
-    expect(result.reruns).toBe(1);
-    expect(result.stderr).toContain("failed again after its single automatic retry");
-  });
-
-  it("aborts when the rerun never starts a second attempt", () => {
-    const result = fixture({ states: failedBeforePublish, rerunStates: failedBeforePublish }).run(
-      `gh() { [[ "$1 $2" == "run rerun" ]] || command gh "$@"; }\n${watchPlugins}`,
-    );
-    expect(result.status).toBe(1);
-    expect(result.reruns).toBe(0);
-    expect(result.stderr).toContain("did not start attempt 2 within 5 minutes");
+    expect(result.dispatches).toHaveLength(2);
+    expect(result.stderr).toContain("failed after 2 fresh dispatches; not dispatching again");
+    expect(result.stdout).toContain("final=93");
   });
 
   it("keeps failing fast for watchers without a publish stage", () => {
-    const result = fixture({ states: failedBeforePublish }).run(
+    const result = fixture({ 91: failedBeforePublish }).run(
       'wait_for_run ci.yml 91 "$PARENT_WORKFLOW_SHA" "" false',
     );
     expect(result.status).toBe(1);
-    expect(result.reruns).toBe(0);
+    expect(result.dispatches).toHaveLength(0);
     expect(result.stderr).toContain("has failed jobs before the workflow completed");
   });
 });

@@ -374,53 +374,50 @@ print_failed_run_summary() {
   done < <(printf '%s\n' "${failed_json}" | jq -r '[.databaseId, .name] | @tsv' 2>/dev/null || true)
 }
 
-# Reruns a failed child's failed jobs once when every failure happened before
-# any "${publish_job_prefix}" job ran, so the attempt published nothing.
-# Returns 0 once attempt 2 is observable; 1 when the failure is not a
-# pre-publish flake, the allowance is spent, or the rerun did not materialize.
-retry_prepublish_child_failure() {
+# Succeeds when every failed job of a terminal child ran before any
+# "${publish_job_prefix}" job, so the run published nothing.
+child_failed_before_publish() {
   local workflow="$1"
   local run_id="$2"
   local publish_job_prefix="$3"
   local url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-  local run_attempt jobs_json verdict next_attempt poll
+  local jobs_json verdict
 
-  run_attempt="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.run_attempt')" || return 1
-  # Later attempts spend the single automatic allowance whoever requested them.
-  if [[ "$run_attempt" != "1" ]]; then
-    echo "${workflow} attempt ${run_attempt} failed; the single automatic retry covers only attempt 1, not retrying: ${url}" >&2
-    return 1
-  fi
   jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs')" || return 1
   verdict="$(jq -r --arg prefix "$publish_job_prefix" '
     def failed: .status == "completed" and (.conclusion | IN("success", "skipped", "neutral") | not);
     if any(.[]; (.name | startswith($prefix)) and .status == "completed" and .conclusion != "skipped") then "after publication started"
     elif ([.[] | select(failed)] | length) == 0 then "without failed jobs"
-    elif all(.[] | select(failed); .conclusion | IN("failure", "timed_out")) then "prepublish"
+    elif all(.[] | select(failed); .conclusion | IN("failure", "timed_out")) then "before publication"
     else "with a non-retryable job conclusion" end' <<< "$jobs_json")" || return 1
-  if [[ "$verdict" != "prepublish" ]]; then
-    echo "${workflow} attempt 1 failed ${verdict}; not retrying: ${url}" >&2
+  if [[ "$verdict" != "before publication" ]]; then
+    echo "${workflow} run ${run_id} failed ${verdict}; not dispatching a replacement: ${url}" >&2
     return 1
   fi
-  print_failed_run_summary "${run_id}"
-  echo "${workflow} attempt 1 failed before any '${publish_job_prefix}' job ran; rerunning its failed jobs once: ${url}"
-  if ! gh run rerun --repo "$GITHUB_REPOSITORY" "$run_id" --failed; then
-    echo "${workflow} automatic failed-job rerun was rejected: ${url}" >&2
-    return 1
-  fi
-  for poll in $(seq 1 10); do
-    next_attempt="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.run_attempt' 2>/dev/null || true)"
-    if [[ "$next_attempt" == "2" ]]; then
-      echo "${workflow} attempt 2 started after the automatic retry: ${url}/attempts/2"
-      echo "- ${workflow}: attempt 1 failed before publication; failed jobs rerun automatically once (${url}/attempts/2)" >> "$GITHUB_STEP_SUMMARY"
-      return 0
+  echo "${workflow} run ${run_id} failed before any '${publish_job_prefix}' job ran: ${url}"
+}
+
+# Watches the plugin npm child in plugin_npm_run_id. A run that failed before
+# any publish job ran published nothing, and rerunning it cannot pass because
+# its preflight readback is bound to the attempt that produced the artifacts,
+# so a fresh child is dispatched with the recorded inputs, at most twice.
+wait_for_plugin_npm_release() {
+  local redispatched=0 arg npm_args
+  while ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" false; do
+    if (( redispatched == 2 )); then
+      echo "plugin-npm-release.yml failed after 2 fresh dispatches; not dispatching again." >&2
+      return 1
     fi
-    if [[ "$poll" != "10" ]]; then
-      sleep 30
-    fi
+    child_failed_before_publish plugin-npm-release.yml "${plugin_npm_run_id}" "Publish plugin npm package" || return 1
+    npm_args=()
+    while IFS= read -r -d '' arg; do
+      npm_args+=("$arg")
+    done < "${RUNNER_TEMP}/plugin-npm-dispatch-args"
+    redispatched=$((redispatched + 1))
+    echo "plugin-npm-release.yml run ${plugin_npm_run_id} published nothing; dispatching a fresh child (${redispatched} of 2)."
+    plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")" || return 1
+    echo "- plugin-npm-release.yml: previous run failed before publication; fresh child ${plugin_npm_run_id} dispatched (${redispatched} of 2)" >> "$GITHUB_STEP_SUMMARY"
   done
-  echo "${workflow} did not start attempt 2 within 5 minutes of the automatic retry: ${url}" >&2
-  return 1
 }
 
 wait_for_run() {
@@ -430,11 +427,10 @@ wait_for_run() {
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
   local approved_environment="${6:-}"
-  # With a publish job name prefix, a failed job no longer aborts the watch:
-  # the run finishes, and a failure confined to jobs before that stage is
-  # rerun once by retry_prepublish_child_failure.
-  local publish_job_prefix="${7:-}"
-  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json failed_count approval_status run_json jobs_json started_jobs state retried
+  # fail_fast=false keeps watching past a failed job until the run is terminal,
+  # so the caller can judge the whole run (see wait_for_plugin_npm_release).
+  local fail_fast="${7:-true}"
+  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json failed_count approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
     return 1
@@ -442,35 +438,16 @@ wait_for_run() {
 
   last_state=""
   failed_count=0
-  retried=false
   while true; do
     run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,url,updatedAt)"
     status="$(printf '%s' "$run_json" | jq -r '.status')"
     if [[ "$status" == "completed" ]]; then
-      if [[ -z "${publish_job_prefix}" ]]; then
-        break
-      fi
-      conclusion="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion --jq '.conclusion')"
-      if [[ "$conclusion" == "success" ]]; then
-        break
-      fi
-      if [[ "${retried}" == "true" ]]; then
-        echo "${workflow} failed again after its single automatic retry; not retrying: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
-        break
-      fi
-      retried=true
-      if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha" ||
-        ! retry_prepublish_child_failure "$workflow" "$run_id" "$publish_job_prefix"; then
-        break
-      fi
-      last_state=""
-      failed_count=0
-      continue
+      break
     fi
     jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs' || true)"
     failed_json="$(jq -c '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' <<< "${jobs_json}")" || return 1
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
-      if [[ -z "${publish_job_prefix}" ]]; then
+      if [[ "${fail_fast}" == "true" ]]; then
         echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
         jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
         print_failed_run_summary "${run_id}"
