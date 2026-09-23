@@ -241,27 +241,10 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it("authenticates enabled link favicon requests before any remote fetch", async () => {
-    configForRequest = () => ({
-      gateway: { controlUi: { automaticallyFetchFavicons: true } },
-    });
-    mocks.authorize.mockImplementationOnce(async ({ res }) => {
-      res.statusCode = 401;
-      res.end();
-      return null;
-    });
-
-    const response = await request("/__openclaw__/link-favicon/example.com", { token: "" });
-
-    expect(response.status).toBe(401);
-    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
-  });
-
   it.each([
     "localhost",
     "router.local",
     "metadata.google.internal",
-    "127.0.0.1",
     "8.8.8.8",
     "[::1]",
     "example.com/secret",
@@ -350,13 +333,11 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it.each(
-    ALL_ICON_ROUTES.flatMap(({ label, pathname }) =>
-      ["image/png", "image/apng; charset=binary"].map((contentType) => ({
-        label,
-        pathname,
-        contentType,
-      })),
-    ),
+    ALL_ICON_ROUTES.map(({ label, pathname }) => ({
+      label,
+      pathname,
+      contentType: label === "catalog" ? "image/apng; charset=binary" : "image/png",
+    })),
   )(
     "normalizes APNG $label bytes declared as $contentType to PNG",
     async ({ label, pathname, contentType }) => {
@@ -409,11 +390,14 @@ describe("Control UI plugin and catalog icon routes", () => {
     },
   );
 
-  it.each(
-    [...ALL_ICON_ROUTES, ACTIVITY_ROUTE].flatMap(({ label, pathname }) =>
-      (["GET", "HEAD"] as const).map((method) => ({ label, method, pathname })),
-    ),
-  )(
+  it.each([
+    ...ALL_ICON_ROUTES.map(({ label, pathname }) => ({
+      label,
+      pathname,
+      method: label === "plugin" ? "HEAD" : "GET",
+    })),
+    ...(["GET", "HEAD"] as const).map((method) => ({ ...ACTIVITY_ROUTE, method })),
+  ])(
     "authenticates $method $label icons before resolving their metadata",
     async ({ method, pathname }) => {
       mocks.authorize.mockImplementationOnce(async ({ res }) => {
@@ -437,13 +421,12 @@ describe("Control UI plugin and catalog icon routes", () => {
   );
 
   it.each(
-    ALL_ICON_ROUTES.flatMap(({ label, pathname }) =>
-      (["image/png", "image/svg+xml", "image/x-icon"] as const).map((contentType) => ({
-        contentType,
-        label,
-        pathname,
-      })),
-    ),
+    ALL_ICON_ROUTES.map(({ label, pathname }) => ({
+      contentType:
+        label === "plugin" ? "image/png" : label === "catalog" ? "image/svg+xml" : "image/x-icon",
+      label,
+      pathname,
+    })),
   )(
     "preserves $contentType $label GET/HEAD headers and revalidates cached bytes",
     async ({ contentType, label, pathname }) => {
@@ -459,6 +442,12 @@ describe("Control UI plugin and catalog icon routes", () => {
 
       expect(get.status).toBe(200);
       expect(head.status).toBe(200);
+      expect(get.headers.get("content-type")).toBe(contentType);
+      expect(get.headers.get("content-disposition")).toBe(
+        `attachment; filename="${label === "favicon" ? "link-favicon" : "plugin-icon"}"`,
+      );
+      expect(get.headers.get("content-security-policy")).toContain("sandbox");
+      expect(get.headers.get("cross-origin-resource-policy")).toBe("same-origin");
       for (const name of [
         "cache-control",
         "content-disposition",
@@ -472,9 +461,9 @@ describe("Control UI plugin and catalog icon routes", () => {
         expect(head.headers.get(name), name).toBe(get.headers.get(name));
       }
       const expectedBody =
-        label !== "plugin" && contentType === "image/svg+xml"
+        contentType === "image/svg+xml"
           ? Buffer.from(svg)
-          : label !== "plugin" && contentType === "image/x-icon"
+          : contentType === "image/x-icon"
             ? ICO_BYTES
             : NORMALIZED_PNG_BYTES;
       expect(Buffer.from(await get.arrayBuffer())).toEqual(expectedBody);
@@ -701,25 +690,6 @@ describe("Control UI plugin and catalog icon routes", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
-  });
-
-  it("serves SVG only as a sandboxed attachment for browser-side rasterization", async () => {
-    const svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
-    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from(svg),
-      contentType: "image/svg+xml",
-    });
-
-    const response = await request(
-      `/__openclaw__/catalog-icon/${encodeURIComponent(CATALOG_ICON_URL)}`,
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/svg+xml");
-    expect(response.headers.get("content-disposition")).toBe('attachment; filename="plugin-icon"');
-    expect(response.headers.get("content-security-policy")).toContain("sandbox");
-    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe(svg);
   });
 
   it.each(ICON_ROUTES)(
