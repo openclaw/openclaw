@@ -62,6 +62,7 @@ export class AgentsApiClient {
           instructions,
           reasoning: reasoningEffort === undefined ? undefined : { effort: reasoningEffort },
           multi_agent: { enabled: false },
+          tools: [{ type: "web_search", mode: "live" }],
         },
         environment: { type: "openai_hosted" },
       },

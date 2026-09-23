@@ -1310,7 +1310,6 @@
       "test/scripts/sync-labels.test.ts": 1,
       "test/scripts/sync-plugin-sdk-exports.test.ts": 5,
       "test/scripts/targeted-docker-lane-groups.test.ts": 1,
-      "test/scripts/telegram-bot-api.test.ts": 1,
       "test/scripts/telegram-e2e-userbot-skill.test.ts": 19,
       "test/scripts/test-built-status-message-runtime.test.ts": 1,
       "test/scripts/test-device-pair-telegram.test.ts": 1,

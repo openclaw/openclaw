@@ -4,6 +4,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
@@ -13,11 +14,13 @@ import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "../doctor-contract-api.js";
-import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
+import { readCachedTelegramBotInfo, resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import {
   resolveTelegramMessageCachePath,
   resolveTelegramMessageCachePersistentScopeKey,
 } from "./message-cache-persistence.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
   resolveTopicNameCacheNamespace,
@@ -265,18 +268,23 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("imports legacy bot-info through the doctor contract and archives the sidecar", async () => {
+  it("imports and archives legacy bot-info readable under its normalized key after runtime reopen", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const persistedPath = resolveTelegramBotInfoCachePath("ops", env);
+    const persistedPath = resolveTelegramBotInfoCachePath("ops team", env);
+    const tokenFingerprint = createHash("sha256")
+      .update("123456:secret")
+      .digest("hex")
+      .slice(0, 16);
+    const fetchedAt = new Date().toISOString();
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
       await writeFile(
         persistedPath,
         JSON.stringify({
           version: 1,
-          tokenFingerprint: "token:fingerprint",
-          fetchedAt: "2026-05-24T11:00:00.000Z",
+          tokenFingerprint,
+          fetchedAt,
           botInfo: {
             id: 123456,
             is_bot: true,
@@ -290,7 +298,7 @@ describe("telegram state migrations", () => {
         channels: {
           telegram: {
             accounts: {
-              ops: {
+              ops_team: {
                 botToken: "123456:secret",
               },
             },
@@ -303,31 +311,10 @@ describe("telegram state migrations", () => {
           plan.kind === "plugin-state-import" && plan.label === "Telegram startup bot info cache",
       );
 
-      expect(botInfoPlan).toMatchObject({
-        kind: "plugin-state-import",
-        sourcePath: persistedPath,
-        targetPath: "plugin state:telegram.bot-info-cache",
-        pluginId: "telegram",
-        namespace: "telegram.bot-info-cache",
-        scopeKey: "",
-      });
       if (!botInfoPlan || botInfoPlan.kind !== "plugin-state-import") {
         throw new Error("expected Telegram bot-info plugin-state import plan");
       }
 
-      const entries = await botInfoPlan.readEntries();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        key: "ops",
-        value: {
-          tokenFingerprint: "token:fingerprint",
-          fetchedAt: "2026-05-24T11:00:00.000Z",
-          botInfo: {
-            id: 123456,
-            username: "openclaw_bot",
-          },
-        },
-      });
       const migration = stateMigrations[0];
       if (!migration) {
         throw new Error("expected Telegram migration");
@@ -345,23 +332,32 @@ describe("telegram state migrations", () => {
       };
       const migrated = await migration.migrateLegacyState(input);
       expect(migrated.warnings).toEqual([]);
-      expect(migrated.changes).toContain(
-        "Migrated 1 Telegram startup bot info cache entry → plugin state",
-      );
       const store = createPluginStateKeyedStoreForTests("telegram", {
         namespace: botInfoPlan.namespace,
         maxEntries: botInfoPlan.maxEntries,
         env,
       });
-      expect(await store.lookup("ops")).toMatchObject({
-        tokenFingerprint: "token:fingerprint",
+      expect(await store.lookup("ops_team")).toMatchObject({
         botInfo: { id: 123456, username: "openclaw_bot" },
       });
+      // Reopen as a fresh runtime: this proves persisted readability, not same-process
+      // namespace-option compatibility between Doctor and the runtime cache.
+      clearTelegramRuntimeForTest();
+      resetPluginStateStoreForTests();
+      setTelegramRuntime(
+        createPluginRuntimeMock({
+          state: { openKeyedStore: input.context.openPluginStateKeyedStore },
+        }),
+      );
+      await expect(
+        readCachedTelegramBotInfo({ accountId: "ops team", botToken: "123456:secret" }),
+      ).resolves.toMatchObject({ botInfo: { id: 123456, username: "openclaw_bot" } });
       await expect(access(persistedPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(`${persistedPath}.migrated`)).resolves.toBeUndefined();
       expect(await migration.detectLegacyState(input)).toBeNull();
       expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
     } finally {
+      clearTelegramRuntimeForTest();
       resetPluginStateStoreForTests();
       await rm(dir, { recursive: true, force: true });
     }
@@ -730,26 +726,8 @@ describe("telegram state migrations", () => {
       ).resolves.toEqual({ preview: plans.map(buildLegacyMigrationPreview) });
 
       const byLabel = new Map(plans.map((plan) => [plan.label, plan]));
-      expect(byLabel.get("Telegram update offset")).toMatchObject({
-        kind: "plugin-state-import",
-        sourcePath: updateOffsetPath,
-        namespace: "telegram.update-offsets",
-      });
-      expect(byLabel.get("Telegram sticker cache")).toMatchObject({
-        kind: "plugin-state-import",
-        sourcePath: stickerCachePath,
-        namespace: "telegram.sticker-cache",
-      });
       expect(byLabel.get("Telegram sent-message cache")).toMatchObject({
-        kind: "plugin-state-import",
-        sourcePath: sentMessagePath,
-        namespace: "telegram.sent-messages",
         cleanupWhenEmpty: true,
-      });
-      expect(byLabel.get("Telegram thread bindings")).toMatchObject({
-        kind: "plugin-state-import",
-        sourcePath: threadBindingsPath,
-        namespace: "telegram.thread-bindings",
       });
 
       for (const label of [

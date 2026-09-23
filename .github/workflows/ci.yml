@@ -3124,7 +3124,7 @@ jobs:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
-          VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}
         run: |
           if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
@@ -3145,7 +3145,7 @@ jobs:
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
-            --maxWorkers "${VITEST_MAX_WORKERS:-2}" \
+            --maxWorkers "${OPENCLAW_VITEST_MAX_WORKERS:-2}" \
             --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics

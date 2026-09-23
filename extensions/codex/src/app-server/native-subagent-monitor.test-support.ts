@@ -1,10 +1,14 @@
-import type {
-  deliverAgentHarnessTaskCompletion,
-  AgentHarnessCompletionDelivery,
-  AgentHarnessScopedSetDeliveryStatusParams,
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-  AgentHarnessTaskRuntimeScope,
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessTaskAssignment,
+  type captureAgentHarnessCompletionCustody,
+  type createAgentHarnessTaskEventSink,
+  type deliverAgentHarnessTaskCompletion,
+  type AgentHarnessCompletionDelivery,
+  type AgentHarnessScopedSetDeliveryStatusParams,
+  type AgentHarnessTaskRecord,
+  type AgentHarnessTaskRuntime,
+  type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
@@ -145,55 +149,67 @@ export function createClient() {
 }
 
 export function createRuntime() {
-  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => ({
-    taskId: params.sourceId ?? params.runId,
-    runtime: "subagent",
-    taskKind: "codex-native",
-    sourceId: params.sourceId,
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    agentId: params.agentId,
-    runId: params.runId,
-    label: params.label,
-    task: params.task,
-    status: "running",
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    createdAt: params.startedAt ?? Date.now(),
-    startedAt: params.startedAt,
-    lastEventAt: params.lastEventAt,
-    progressSummary: params.progressSummary,
-  }));
+  const records = new Map<string, AgentHarnessTaskRecord>();
+  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => {
+    const task: AgentHarnessTaskRecord = {
+      taskId: params.sourceId ?? params.runId,
+      runtime: "subagent",
+      taskKind: "codex-native",
+      sourceId: params.sourceId,
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      agentId: params.agentId,
+      runId: params.runId,
+      label: params.label,
+      task: params.task,
+      status: "running",
+      deliveryStatus: params.deliveryStatus ?? "not_applicable",
+      notifyPolicy: params.notifyPolicy ?? "silent",
+      createdAt: params.startedAt ?? Date.now(),
+      startedAt: params.startedAt,
+      lastEventAt: params.lastEventAt,
+      progressSummary: params.progressSummary,
+      detail: params.detail,
+    };
+    records.set(params.runId, task);
+    return task;
+  });
+  const update = (params: {
+    runId: string;
+    expectedTask?: AgentHarnessTaskAssignment;
+    completionCustody?: unknown;
+  }): AgentHarnessTaskRecord[] => {
+    const { expectedTask, completionCustody: _custody, ...patch } = params;
+    // Recovery fixtures can expose their own store through the listing mock.
+    // Mutations must commit to that same row, without bypassing its receipt fence.
+    const matches = taskRuntime.listTaskRecords().filter((task) => task.runId === params.runId);
+    const task = matches.length === 1 ? matches[0] : undefined;
+    if (!task || (expectedTask && !matchesAgentHarnessTaskAssignment(task, expectedTask))) {
+      return [];
+    }
+    Object.assign(task, patch);
+    records.set(params.runId, task);
+    return [task];
+  };
   const taskRuntime = {
+    assertTaskAssignmentSupported: vi.fn(),
     createRunningTaskRun,
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
-    recordTaskRunProgressByRunId: vi.fn(() => []),
-    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>((params) => [
-      {
-        ...taskRecord({
-          childThreadId: params.runId.slice("codex-thread:".length),
-          status: params.status,
-          endedAt: params.endedAt,
-        }),
-        runId: params.runId,
-      },
-    ]),
-    listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => []),
+    recordTaskRunProgressByRunId:
+      vi.fn<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>(update),
+    finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>(update),
+    listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => [...records.values()]),
     setDetachedTaskDeliveryStatusByRunId: vi.fn(
-      (params: AgentHarnessScopedSetDeliveryStatusParams): AgentHarnessTaskRecord[] => [
-        {
-          ...taskRecord({
-            childThreadId: params.runId.slice("codex-thread:".length),
-            status: "succeeded",
-          }),
-          ...params,
-        },
-      ],
+      (params: AgentHarnessScopedSetDeliveryStatusParams) => update(params),
     ),
   };
   return {
     ...taskRuntime,
+    captureAgentHarnessCompletionCustody: vi.fn<typeof captureAgentHarnessCompletionCustody>(
+      () => undefined,
+    ),
+    createAgentHarnessTaskEventSink: vi.fn<typeof createAgentHarnessTaskEventSink>(() => vi.fn()),
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
     deliverAgentHarnessTaskCompletion: vi.fn(
       async (
@@ -224,22 +240,24 @@ export function createRecordedRuntime(
     records.set(params.runId, task);
     return task;
   });
-  runtime.finalizeTaskRunByRunId.mockImplementation((params) => {
+  const update = (params: {
+    runId: string;
+    expectedTask?: AgentHarnessTaskAssignment;
+    completionCustody?: unknown;
+  }) => {
+    const { expectedTask, completionCustody: _custody, ...patch } = params;
     const task = records.get(params.runId);
-    if (!task) {
+    if (!task || (expectedTask && !matchesAgentHarnessTaskAssignment(task, expectedTask))) {
       return [];
     }
-    Object.assign(task, params);
-    return [task];
-  });
-  runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
-    const task = records.get(params.runId);
-    if (!task) {
-      return [];
-    }
-    Object.assign(task, params);
-    return [task];
-  });
+    const updated = { ...task };
+    Object.assign(updated, patch);
+    records.set(params.runId, updated);
+    return [updated];
+  };
+  runtime.recordTaskRunProgressByRunId.mockImplementation(update);
+  runtime.finalizeTaskRunByRunId.mockImplementation(update);
+  runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation(update);
   return runtime;
 }
 

@@ -16,6 +16,7 @@ import {
 } from "./openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -28,7 +29,8 @@ import {
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -80,7 +82,7 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
 }
 
 describe("existing shared-state schema admission", () => {
-  it("writes node state and initializes its lazy store without taking over release repair", () => {
+  it("writes node state and initializes its lazy store without taking over release repair", async () => {
     const { options, before } = createExistingState((db) => {
       db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
@@ -94,7 +96,7 @@ describe("existing shared-state schema admission", () => {
       `);
     });
 
-    withExistingOpenClawStateSchema(options, () => {
+    await withExistingOpenClawStateSchema(options, async () => {
       writeConfigMachineState("node.schema-policy-probe", { nodeId: "paired-node" }, options);
       const database = openOpenClawStateDatabase(options);
       expect(
@@ -103,7 +105,7 @@ describe("existing shared-state schema admission", () => {
           .get(),
       ).toBeUndefined();
       const store = new NodeWorkerPreparedWorkspaceStore(options);
-      const registered = store.register({
+      const registered = await store.register({
         action: "register",
         gatewayNamespace: "test-gateway",
         environmentId: "test-environment",
@@ -114,7 +116,7 @@ describe("existing shared-state schema admission", () => {
         sourceManifestRef: `sha256:${"c".repeat(64)}`,
         preparedManifestRef: `sha256:${"d".repeat(64)}`,
       });
-      expect(store.find("test-environment")).toEqual(registered);
+      expect(await store.find("test-environment")).toEqual(registered);
       expect(readConfigMachineState("node.schema-policy-probe", options)).toEqual({
         nodeId: "paired-node",
       });
@@ -124,7 +126,7 @@ describe("existing shared-state schema admission", () => {
       });
     });
 
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     const reopened = openOpenClawStateDatabase(options);
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -138,12 +140,14 @@ describe("existing shared-state schema admission", () => {
     expect(readConfigMachineState("node.schema-policy-probe", options)).toEqual({
       nodeId: "paired-node",
     });
-    expect(new NodeWorkerPreparedWorkspaceStore(options).find("test-environment")).toMatchObject({
+    expect(
+      await new NodeWorkerPreparedWorkspaceStore(options).find("test-environment"),
+    ).toMatchObject({
       preparation_key: "a".repeat(64),
       state: "available",
     });
 
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     const repaired = openOpenClawStateDatabase(options);
     expect(

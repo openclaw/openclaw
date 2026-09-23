@@ -24,7 +24,7 @@ extensions/amazon-bedrock/stream.runtime.ts	13
 extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
-extensions/anthropic/cli-migration.ts	2
+extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	10
 extensions/anthropic/register.runtime.ts	2
 extensions/anthropic/session-catalog-continue.ts	1
@@ -3039,7 +3039,7 @@ src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2
-src/node-host/node-worker-workspace.ts	3
+src/node-host/node-worker-workspace.ts	1
 src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/skills.ts	1
@@ -3119,7 +3119,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	10
+src/plugins/clawhub.ts	7
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3

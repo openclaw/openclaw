@@ -130,8 +130,15 @@ join native reader cleanup before returning. Doctor imports legacy registry rows
 through the shared-state writer, with host transaction and commit admission under
 the captured maintenance scope. Imports retain sequential per-row transactions,
 existing-row precedence, and sharded-before-monolithic ordering; source cleanup
-waits for durable acknowledgement. Runtime registry writes, reservations, and
-currentness callbacks retain their synchronous owners.
+waits for durable acknowledgement. Container registry updates, completion, and
+removal execute through the same writer, preserving captured inputs, immutable
+fields, update/remove ordering, and removal-intent guards. Docker and Podman use
+the existing pending/ready state for one-time setup; interrupted setup retains
+its container and data and cannot be reused as ready. Legacy entries without a
+readiness marker keep their existing behavior. Browser writes, reservation/lock
+primitives, removal-intent admission, and currentness callbacks retain their
+existing synchronous owners. Existing records need no schema or data migration,
+and retention is unchanged.
 
 Shared-state operations that request host transaction or commit admission acquire
 fresh lifecycle coordinator custody on their executing SQLite worker. A live
@@ -1883,6 +1890,18 @@ lifecycle owner. A future backend must supply equivalent product behavior or
 an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
+
+Prepared node-workspace registration, binding, mutation completion, and retirement
+run in the same shared-state worker as the node launch journal. Existing-only
+reads do not create a database or run schema opening. Filesystem preparation and
+workspace serialization stay on the host; writes recheck cancellation and host
+ownership at transaction admission. Retiring rows remain cleanup-only after a
+lost mutation permit, and successful overlays return only after durable
+completion. Retention fences legacy synchronous acquisitions while awaiting the
+retirement tombstone, then preserves the existing path checks before removal.
+The deprecated public synchronous workspace capability retains its read path;
+internal callers and bundled plugins use its async companion. Table shape,
+identifiers, transaction boundaries, and retained recovery state are unchanged.
 
 Session membership, participant display facts, and category membership are prepared
 in the existing session read worker and retained by the session-row projection.

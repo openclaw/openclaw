@@ -17,11 +17,19 @@ import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  transitionTaskAssignment,
+  getDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/task-runtime.test-helpers.js";
+import {
+  AgentHarnessTaskAssignmentOwnerRetiredError,
   createAgentHarnessTaskRuntime,
+  captureAgentHarnessTaskAssignment,
   deliverAgentHarnessTaskCompletion,
   isDurableAgentHarnessCompletionDelivery,
 } from "./agent-harness-task-runtime.js";
@@ -53,6 +61,11 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   recordTaskRunProgressByRunId: vi.fn(() => []),
   finalizeTaskRunByRunId: vi.fn(() => []),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+  transitionTaskAssignment: vi.fn((params) => {
+    params.assertCurrent();
+    return [];
+  }),
+  getDetachedTaskLifecycleRuntime: vi.fn(() => ({})),
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
@@ -75,6 +88,113 @@ describe("agent-harness-task-runtime", () => {
   function createScope(requesterSessionKey = "agent:main:channel:C123") {
     return createAgentHarnessTaskRuntimeScope({ requesterSessionKey });
   }
+
+  it.each(["core", "custom", "legacy"] as const)(
+    "checks exact-assignment support before admission with the %s runtime",
+    (owner) => {
+      const exactTransition = vi.fn(() => []);
+      if (owner !== "core") {
+        setDetachedTaskLifecycleRuntime({
+          ...getDetachedTaskLifecycleRuntime(),
+          ...(owner === "custom" ? { transitionTaskAssignment: exactTransition } : {}),
+        });
+      }
+      try {
+        const runtime = createAgentHarnessTaskRuntime({
+          runtime: "subagent",
+          taskKind: "example-harness",
+          scope: createScope(),
+        });
+        if (owner === "legacy") {
+          expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+            "Upgrade the custom task runtime adapter",
+          );
+        } else {
+          expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+        }
+        expect(createRunningTaskRun).not.toHaveBeenCalled();
+        expect(exactTransition).not.toHaveBeenCalled();
+        expect(transitionTaskAssignment).not.toHaveBeenCalled();
+        // Legacy callers retain their unguarded operations without opting into exact settlement.
+        runtime.createRunningTaskRun({ runId: "example:child", task: "work" });
+        runtime.finalizeTaskRunByRunId({
+          runId: "example:child",
+          status: "succeeded",
+          endedAt: 2,
+        });
+        expect(createRunningTaskRun).toHaveBeenCalledOnce();
+        expect(finalizeTaskRunByRunId).toHaveBeenCalledOnce();
+      } finally {
+        if (owner !== "core") {
+          resetDetachedTaskLifecycleRuntimeForTests();
+        }
+      }
+    },
+  );
+
+  it("keeps the runtime owner captured before an assignment's delayed settlement", () => {
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope(),
+    });
+    expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+    const task = runtime.createRunningTaskRun({ runId: "example:child", task: "work" });
+    const expectedTask = captureAgentHarnessTaskAssignment(task);
+    setDetachedTaskLifecycleRuntime({ ...getDetachedTaskLifecycleRuntime() });
+    try {
+      expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+        AgentHarnessTaskAssignmentOwnerRetiredError,
+      );
+      expect(() =>
+        runtime.finalizeTaskRunByRunId({
+          expectedTask,
+          runId: task.runId!,
+          status: "succeeded",
+          endedAt: 2,
+        }),
+      ).toThrow(AgentHarnessTaskAssignmentOwnerRetiredError);
+      expect(transitionTaskAssignment).toHaveBeenCalledOnce();
+      expect(finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    } finally {
+      resetDetachedTaskLifecycleRuntimeForTests();
+    }
+  });
+
+  it.each(["replacement", "metadata"] as const)(
+    "uses the original assignment receipt after pre-handoff %s",
+    async (change) => {
+      const task = {
+        taskId: "original-task",
+        runtime: "subagent" as const,
+        taskKind: "example-harness",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session" as const,
+        runId: "example:child",
+        task: "work",
+        status: "succeeded" as const,
+        deliveryStatus: "pending" as const,
+        notifyPolicy: "silent" as const,
+        createdAt: 1,
+      };
+      const expectedTask = captureAgentHarnessTaskAssignment(task);
+      vi.mocked(listTaskRecords).mockReturnValue([
+        { ...task, ...(change === "replacement" ? { createdAt: 2 } : { label: "New metadata" }) },
+      ]);
+      const result = await deliverAgentHarnessTaskCompletion({
+        scope: createScope("agent:main:main"),
+        expectedTask,
+        childSessionKey: task.runId,
+        childSessionId: "child",
+        announceId: "example:child:done",
+        status: "succeeded",
+        result: "Original result",
+      });
+      expect(result.delivered).toBe(change === "metadata");
+      expect(deliverSubagentAnnouncement).toHaveBeenCalledTimes(change === "metadata" ? 1 : 0);
+    },
+  );
 
   it("records the scoped harness process identity without recapturing a reused PID", () => {
     const executionOwner = { host: "gateway-host", pid: 4321, startIdentity: 100 };
