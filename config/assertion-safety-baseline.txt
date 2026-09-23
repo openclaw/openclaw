@@ -2168,7 +2168,7 @@ src/cli/deps.ts	2
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	7
 src/cli/dns-cli.ts	3
-src/cli/exec-approvals-cli.ts	10
+src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	3
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/qa-parent-watchdog.ts	3

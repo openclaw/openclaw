@@ -14,9 +14,7 @@ import {
   type ApprovalGetResult,
   type ApprovalKind,
   type ApprovalResolveResult,
-  type ApprovalSnapshot,
 } from "../../packages/gateway-protocol/src/index.js";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
   getTerminalTableWidth,
@@ -46,7 +44,18 @@ import {
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
-import { rethrowExpectedCliError } from "./failure-output.js";
+import {
+  APPROVAL_DECISIONS,
+  approvalRecordedDecision,
+  escapeApprovalTextForTerminal,
+  exitWithError,
+  failApprovalsCommand,
+  formatCliError,
+  formatResolver,
+  isApprovalDecision,
+  type ExecApprovalsCliOpts,
+} from "./exec-approvals-cli-shared.js";
+import { registerApprovalsHistoryCommand } from "./exec-approvals-history.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -99,16 +108,6 @@ type EffectivePolicyReport = {
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
-type ExecApprovalsCliOpts = NodesRpcOpts & {
-  node?: string;
-  gateway?: boolean;
-  file?: string;
-  stdin?: boolean;
-  agent?: string;
-  reason?: string;
-  expiresInDays?: string;
-};
-
 type PendingApprovalCliEntry = {
   id: string;
   kind: ApprovalKind;
@@ -119,11 +118,8 @@ type PendingApprovalCliEntry = {
   summary: string;
 };
 
-const APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
 const APPROVAL_ID_TOKEN_PREFIX = "id64_";
-const APPROVAL_TERMINAL_UNSAFE_CHAR =
-  /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
 async function readStdin(
   stream: NodeJS.ReadableStream = process.stdin,
@@ -307,10 +303,6 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   return { snapshot, nodeId, source: nodeId ? "node" : "gateway" };
 }
 
-function exitWithError(message: string): never {
-  throw new Error(message);
-}
-
 function requireTrimmedNonEmpty(value: string, message: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -382,48 +374,11 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
   renderApprovalsSnapshot(next, params.targetLabel);
 }
 
-function formatCliError(err: unknown): string {
-  const msg = formatErrorMessage(err);
-  const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
-  return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
-}
-
-function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
-  rethrowExpectedCliError(err);
-  const message = formatCliError(err);
-  if (opts.json) {
-    throw new Error(message);
-  }
-  defaultRuntime.error(message);
-  defaultRuntime.exit(1);
-}
-
-function isApprovalDecision(value: string): value is ApprovalDecision {
-  return (APPROVAL_DECISIONS as readonly string[]).includes(value);
-}
-
 function shortenPendingApprovalSummary(value: string): string {
   if (value.length <= PENDING_APPROVAL_SUMMARY_MAX_LENGTH) {
     return value;
   }
   return `${truncateUtf16Safe(value, PENDING_APPROVAL_SUMMARY_MAX_LENGTH - 3)}...`;
-}
-
-function escapeApprovalTextForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\\") {
-      escaped += "\\\\";
-      continue;
-    }
-    if (APPROVAL_TERMINAL_UNSAFE_CHAR.test(char)) {
-      escaped += `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
 }
 
 // Gateway-minted ids are UUID-shaped, but explicit ids from an agent host are
@@ -643,20 +598,6 @@ function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
       `${formatApprovalIdForTerminal(entry.id)}: ${escapeApprovalTextForTerminal(entry.summary)}`,
     );
   }
-}
-
-function approvalRecordedDecision(approval: ApprovalSnapshot): ApprovalDecision | null {
-  return "decision" in approval && isApprovalDecision(approval.decision) ? approval.decision : null;
-}
-
-function formatResolver(approval: ApprovalResolveResult["approval"]): string {
-  const resolver = approval.resolver;
-  if (!resolver) {
-    return "unknown resolver";
-  }
-  return resolver.id
-    ? `${resolver.kind}:${escapeApprovalTextForTerminal(resolver.id)}`
-    : resolver.kind;
 }
 
 function describeTerminalApprovalFailure(approval: ApprovalResolveResult["approval"]): string {
@@ -1309,6 +1250,8 @@ export function registerExecApprovalsCli(program: Command) {
       }
     });
   nodesCallOpts(grantsRevokeCmd);
+
+  registerApprovalsHistoryCommand(approvals);
 
   const getCmd = approvals
     .command("get")
