@@ -24,6 +24,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import { resolveGatewayAuthPolicyGeneration } from "../../auth-policy.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
@@ -35,7 +36,7 @@ import {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -44,7 +45,6 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -57,8 +57,13 @@ import {
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
-  resolveAuthenticatedProfile,
-  resolveGatewayConnectUserProfile,
+  bindGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorAccess,
+  rejectGatewayConnectOperatorAccess,
+} from "./connect-operator-access.js";
+import {
+  createGatewayConnectProfileLifecycle,
+  resolveGatewayConnectProfileAdmission,
 } from "./connect-user-profile.js";
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
@@ -182,10 +187,12 @@ export async function attachAuthenticatedGatewayConnect(
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   const sharedSecretOperatorOwner =
@@ -194,34 +201,19 @@ export async function attachAuthenticatedGatewayConnect(
   const ownerProfileExpected =
     shouldTrackPresence &&
     shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
-  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
-  if (
-    ownerProfileExpected ||
-    (authenticatedUserId && (!resolveAuthenticatedGitHubIdentity || rolesConfigured))
-  ) {
-    try {
-      // The live profile callback refreshes edits and detached provider-avatar adoption.
-      authenticatedUserProfile = await resolveGatewayConnectUserProfile({
-        ownerProfileExpected,
-        authenticatedUserId,
-        authResult,
-        resolveAuthenticatedGitHubIdentity,
-      });
-    } catch (error) {
-      logWsControl.warn(
-        `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
-      );
-      if (
-        !ownerProfileExpected &&
-        rolesConfigured &&
-        role === "operator" &&
-        !sharedSecretOperatorOwner
-      ) {
-        await rejectUnavailableProfileConnect(context, error);
-        return;
-      }
-    }
+  const profileAdmission = await resolveGatewayConnectProfileAdmission({
+    context,
+    state,
+    ownerProfileExpected,
+    authenticatedUserId,
+    resolveAuthenticatedGitHubIdentity,
+    assertCurrent: profileLifecycle.assertCurrent,
+  });
+  if (!profileAdmission.ok) {
+    return;
   }
+  const preparedProfile = profileAdmission.prepared;
+  const authenticatedUserProfile = preparedProfile?.profile;
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const effectiveScopes = resolveEffectiveConnectionScopes({
@@ -233,8 +225,9 @@ export async function attachAuthenticatedGatewayConnect(
   });
   const rolePolicy =
     role === "operator" && !sharedSecretOperatorOwner
-      ? resolveOperatorRolePolicyForProfile(
+      ? resolveOperatorRolePolicyForAssignment(
           authenticatedUserProfile?.profileId,
+          preparedProfile?.authority.role ?? null,
           context.configSnapshot,
         )
       : undefined;
@@ -411,6 +404,7 @@ export async function attachAuthenticatedGatewayConnect(
       : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
+    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(context.configSnapshot),
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
@@ -424,34 +418,10 @@ export async function attachAuthenticatedGatewayConnect(
       : {}),
   };
   attachGatewayLocalUserIngress(nextClient, localUserIngress);
-  const attachAuthenticatedProfile = (profileId: string, updatedAt: number) => {
-    if (
-      isClosed() ||
-      context.handler.getClient() !== nextClient ||
-      nextClient.invalidated ||
-      socket.readyState !== WEBSOCKET_OPEN_READY_STATE
-    ) {
-      return;
-    }
-    nextClient.preparedRecipientProfileId = undefined;
-    const profile = resolveAuthenticatedProfile(profileId, updatedAt);
-    if (nextClient.authenticatedUserProfile) {
-      Object.assign(nextClient.authenticatedUserProfile, profile);
-    } else {
-      nextClient.authenticatedUserProfile = profile;
-    }
-    prepareGatewayRecipientProfile(nextClient);
-    attachGatewayLocalUserIngress(
-      nextClient,
-      prepareLocalUserIngress(nextClient.authenticatedUserProfile),
-    );
-    const { profileId: id, ...display } = profile;
-    buildRequestContext().refreshConnectedUserProfile?.({ id, ...display });
-  };
   if (resolveAuthenticatedGitHubIdentity) {
     nextClient.authenticatedGitHubIdentitySync = async () => {
       const result = await resolveAuthenticatedGitHubIdentity();
-      attachAuthenticatedProfile(result.profileId, result.updatedAt);
+      await profileLifecycle.attach(result.profileId, result.updatedAt, prepareLocalUserIngress);
       return result;
     };
   }
@@ -533,13 +503,30 @@ export async function attachAuthenticatedGatewayConnect(
     close(1011, message);
     return;
   }
-  prepareGatewayRecipientProfile(nextClient);
+  try {
+    prepareGatewayConnectOperatorAccess(nextClient);
+  } catch {
+    await rejectGatewayConnectOperatorAccess(context);
+    return;
+  }
+  if (!profileLifecycle.isCurrent(preparedProfile)) {
+    await rejectUnavailableProfileConnect(
+      context,
+      new Error("Gateway profile changed before registration"),
+    );
+    return;
+  }
+  prepareGatewayRecipientProfile(nextClient, { identity: preparedProfile?.recipient });
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
       ...clientMeta,
       auth: authMethod,
     });
+    return;
+  }
+  profileLifecycle.bind(nextClient);
+  if (!bindGatewayConnectOperatorAccess(context, nextClient)) {
     return;
   }
   clearHandshakeTimer();
@@ -689,7 +676,7 @@ export async function attachAuthenticatedGatewayConnect(
           try {
             const updated = await adoptTailscaleProfileAvatar(result.profileId, profilePic);
             if (updated.avatarMime) {
-              attachAuthenticatedProfile(updated.id, updated.updatedAt);
+              await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
             }
           } catch (error) {
             logGateway.warn(
@@ -718,7 +705,7 @@ export async function attachAuthenticatedGatewayConnect(
         if (!updated.avatarMime) {
           return;
         }
-        attachAuthenticatedProfile(updated.id, updated.updatedAt);
+        await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
       },
       (error) =>
         logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),

@@ -77,6 +77,8 @@ async function observePaneRenders(page: Page) {
 suite.define(() => {
   it("updates the shared roster and viewers without repeatedly redrawing an unchanged conversation", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      // Startup timers must belong to the clock before the app schedules them.
+      await page.clock.install();
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
@@ -116,8 +118,9 @@ suite.define(() => {
           document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
             ?.state.chatAvatarStatus === "none",
       );
-      await page.clock.install();
       await pauseVirtualClock(page);
+      // Finish the delayed swarm roster read and its render before measuring events.
+      await page.clock.runFor(1_000);
       const probe = await observePaneRenders(page);
       const counts = { foreign: [] as number[], presence: 0, selected: 0, viewer: 0 };
       try {

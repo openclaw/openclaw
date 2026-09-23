@@ -75,7 +75,7 @@ describe("native profile-bound input admission", () => {
           if (!prepared.ok) {
             throw new Error("Native session preparation failed");
           }
-          const binding = createExpectedProfileBinding(source.id, fixture.client)!;
+          const binding = (await createExpectedProfileBinding(source.id, fixture.client))!;
           binding.markInvoked();
           linkEmail(email, target.id);
           await expect(
@@ -521,7 +521,7 @@ describe("native profile-bound input admission", () => {
           hasAvatar: false,
           updatedAt: profile.updatedAt,
         };
-        const binding = createExpectedProfileBinding(profile.id, fixture.client)!;
+        const binding = (await createExpectedProfileBinding(profile.id, fixture.client))!;
         const write = vi.fn();
         const questionCall = resolveAgentQuestionGatewayCall({
           version: 2,

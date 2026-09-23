@@ -56,8 +56,8 @@ describe("synchronous context accounting", () => {
         completedCompactionEnd(false, 18_000, 8_000),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: 18_000 },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: 18_000, successful: false },
       ],
     },
     {
@@ -74,7 +74,7 @@ describe("synchronous context accounting", () => {
           },
         }),
       ],
-      expected: [{ kind: "model", contextTokens: undefined }],
+      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
@@ -84,8 +84,8 @@ describe("synchronous context accounting", () => {
         accountingAssistant(0, "error"),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: undefined },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: undefined, successful: false },
       ],
     },
   ])("records $name in producer order", ({ events, expected }) => {
@@ -143,8 +143,8 @@ describe("synchronous context accounting", () => {
       },
     });
     const expected: EmbeddedContextAccountingEvent[] = [
-      { kind: "model", contextTokens: 90_000 },
-      { kind: "model", contextTokens: 20_000 },
+      { kind: "model", contextTokens: 90_000, successful: false },
+      { kind: "model", contextTokens: 20_000, successful: false },
     ];
     try {
       const before = accountingAssistant(90_000);

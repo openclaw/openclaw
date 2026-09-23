@@ -91,13 +91,21 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
-    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+    asyncQuestionStorage?:
+      | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
+      | null;
+    onAsyncQuestionSubmit?: (
+      message: string,
+      itemId?: string,
+      sourceMessageId?: string,
+    ) => Promise<boolean>;
     presented?: boolean;
     historyState?: ChatState;
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
+    providerReviewNotice?: TemplateResult | typeof nothing;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;
@@ -367,6 +375,7 @@ export function renderChat(props: ChatProps) {
   const notices = renderChatComposerNotices(props);
   // Transcript invalidation replaces its render context; bind submission afterward.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
+  questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const defaultComposer = renderChatComposer({
     ...props,
     asyncQuestions,

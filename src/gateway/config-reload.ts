@@ -855,8 +855,6 @@ export function startGatewayConfigReloader(opts: {
         ...installMetadata.forceChangedPaths,
       ],
       candidateConfig: nextConfig,
-      candidateCompareConfig: nextCompareConfig,
-      previousCompareConfig: currentCompareConfig,
       previousConfig: currentConfig,
     });
     if (pluginLifecycle) {

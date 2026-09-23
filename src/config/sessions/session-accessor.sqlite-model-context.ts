@@ -1,6 +1,6 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
-import { sql } from "kysely";
+import { sql, type AliasableExpression } from "kysely";
 import {
   iterateSessionContextEntries,
   iterateSessionContextMessages,
@@ -29,16 +29,19 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
-import {
-  projectModelContextEventSql,
-  projectModelContextNavigationSql,
-} from "./session-model-context-projection.js";
+import { projectModelContextEventSql } from "./session-model-context-projection.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventModelBytesSql,
+  transcriptEventModelNavigationSql,
+  transcriptEventNavigationSql,
+} from "./transcript-payload.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -457,10 +460,10 @@ function withTranscriptContextSnapshot<T>(
           const header = executeSqliteQueryTakeFirstSync(
             database.db,
             base
-              .select("event_json")
+              .select(transcriptEventJsonSql(database.db).as("event_json"))
               .where(
                 /* kysely-allow-raw: the header discriminator is owned by the transcript codec. */
-                sql<string>`json_extract(event_json, '$.type')`,
+                sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
                 "=",
                 "session",
               )
@@ -472,10 +475,7 @@ function withTranscriptContextSnapshot<T>(
               for (const row of iterateSqliteQuerySync(
                 database.db,
                 base
-                  .select((eb) => [
-                    "seq",
-                    projectModelContextNavigationSql(eb.ref("event_json")).as("navigation_json"),
-                  ])
+                  .select(["seq", transcriptEventModelNavigationSql().as("navigation_json")])
                   .orderBy("seq", "asc"),
               )) {
                 // Only navigation crosses into JavaScript before the canonical context is selected.
@@ -502,7 +502,7 @@ function withTranscriptContextSnapshot<T>(
           const readPayload = prepareSqliteQuerySync<ContextEntry, { event_json: string }>(
             database.db,
             (parameter) =>
-              base.select("event_json").where(
+              base.select(transcriptEventJsonSql(database.db).as("event_json")).where(
                 "seq",
                 "=",
                 parameter((row) => row.seq),
@@ -530,14 +530,29 @@ function withTranscriptContextSnapshot<T>(
                   .map(({ entry }) => entry.seq);
                 const query = base
                   .select((eb) => {
-                    const projected = projectModelContextEventSql(
-                      eb.ref("event_json"),
-                      omitted.length
-                        ? eb.case().when("seq", "in", omitted).then(1).else(0).end()
-                        : eb.val(0),
-                      modelToolResultOmissionSql(batch),
-                    );
-                    return ["seq", eb.fn<number>("octet_length", [projected]).as("bytes")];
+                    const omitCheckpoint = omitted.length
+                      ? eb.case().when("seq", "in", omitted).then(1).else(0).end()
+                      : eb.val(0);
+                    const storedBytes = transcriptEventModelBytesSql(omitCheckpoint);
+                    const omission = modelToolResultOmissionSql(batch);
+                    // Stored costs describe the original model view, not a transient omission notice.
+                    const bytes: AliasableExpression<number> = omission
+                      ? eb
+                          .case()
+                          .when(omission, "is not", null)
+                          .then(
+                            eb.fn<number>("octet_length", [
+                              projectModelContextEventSql(
+                                transcriptEventJsonSql(database.db),
+                                omitCheckpoint,
+                                omission,
+                              ),
+                            ]),
+                          )
+                          .else(storedBytes)
+                          .end()
+                      : storedBytes;
+                    return ["seq", bytes.as("bytes")];
                   })
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
@@ -564,7 +579,7 @@ function withTranscriptContextSnapshot<T>(
                   .select((eb) => [
                     "seq",
                     projectModelContextEventSql(
-                      eb.ref("event_json"),
+                      transcriptEventJsonSql(database.db),
                       omitted.length > 0
                         ? eb.case().when("seq", "in", omitted).then(1).else(0).end()
                         : eb.val(0),

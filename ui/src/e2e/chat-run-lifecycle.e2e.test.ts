@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -164,6 +165,8 @@ suite.define(() => {
     // the live terminal projection or its retained local timestamps.
     const completedSession = {
       key: sessionKey,
+      sessionId: `session:${sessionKey}`,
+      kind: "direct",
       hasActiveRun: false,
       activeRunIds: [],
       status: "done",
@@ -173,6 +176,8 @@ suite.define(() => {
       runtimeMs: 13_000,
       updatedAt: firstStartedAt + 994_000,
     };
+    // A terminal event also refreshes the roster; every read must retain its timing.
+    await gateway.setSessionsListResponse({ sessions: [completedSession] });
     await gateway.setMethodResponse("chat.history", {
       ...prepareChatHistoryFixture(messages),
       sessionId: `session:${sessionKey}`,
@@ -189,6 +194,18 @@ suite.define(() => {
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
+    const refreshedSession = await currentPage.evaluate(async (key) => {
+      const app = document.querySelector<
+        HTMLElement & { runtime?: { context?: ApplicationContext } }
+      >("openclaw-app");
+      const sessions = app?.runtime?.context?.sessions;
+      if (!sessions) {
+        throw new Error("Session capability is missing");
+      }
+      await sessions.refresh({ agentId: "main", force: true });
+      return sessions.state.result?.sessions.find((row) => row.key === key);
+    }, sessionKey);
+    expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await elapsedLabel.waitFor();
     await expect.poll(() => operationLabel.textContent()).toBe("1 command");
     expect.soft(await elapsedLabel.textContent()).toBe("13s");

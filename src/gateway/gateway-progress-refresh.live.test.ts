@@ -40,9 +40,12 @@ type History = {
 describeLive("progress refresh through the live embedded runtime", () => {
   it(
     "steers the active parent and refreshes an idle card without resuming work or adding chat",
-    async () => {
-      const instance = await createOpenClawTestInstance({
+    async ({ signal: testSignal, onTestFinished }) => {
+      const stopping = new AbortController();
+      const signal = AbortSignal.any([testSignal, stopping.signal]);
+      const acquiringInstance = createOpenClawTestInstance({
         name: "progress-refresh",
+        signal,
         env: {
           ...Object.fromEntries(
             listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
@@ -58,6 +61,15 @@ describeLive("progress refresh through the live embedded runtime", () => {
         },
       });
       const clients: GatewayClient[] = [];
+      signal.addEventListener(
+        "abort",
+        () => {
+          for (const client of clients) {
+            client.stop();
+          }
+        },
+        { once: true },
+      );
       const events: EventFrame[] = [];
       const listeners = new Set<(event: EventFrame) => void>();
       const onEvent = (event: EventFrame) => {
@@ -70,36 +82,64 @@ describeLive("progress refresh through the live embedded runtime", () => {
         predicate: (event: EventFrame) => boolean,
         trigger: () => Promise<unknown>,
       ) => {
+        signal.throwIfAborted();
         const received = Promise.withResolvers<EventFrame>();
         const listener = (event: EventFrame) => {
           if (predicate(event)) {
             received.resolve(event);
           }
         };
-        const signal = AbortSignal.timeout(RUN_TIMEOUT_MS);
-        const timedOut = () =>
-          received.reject(new Error("Timed out waiting for live Gateway event"));
+        const waitSignal = AbortSignal.any([signal, AbortSignal.timeout(RUN_TIMEOUT_MS)]);
+        const aborted = () => received.reject(waitSignal.reason);
         listeners.add(listener);
-        signal.addEventListener("abort", timedOut, { once: true });
+        waitSignal.addEventListener("abort", aborted, { once: true });
         try {
           const [, event] = await Promise.all([trigger(), received.promise]);
+          signal.throwIfAborted();
           return event;
         } finally {
           listeners.delete(listener);
-          signal.removeEventListener("abort", timedOut);
+          waitSignal.removeEventListener("abort", aborted);
         }
       };
+      let body: Promise<void> | undefined;
+      let cleanupPromise: Promise<void> | undefined;
+      const stopClients = () =>
+        runQaGatewayFixture(async () => {}, ...clients.map((client) => () => client.stopAndWait()));
+      const cleanup = () => {
+        stopping.abort();
+        return (cleanupPromise ??= acquiringInstance.then((instance) =>
+          runQaGatewayFixture(
+            () => fs.writeFile(path.join(instance.state.workspaceDir, "release"), "release"),
+            stopClients,
+            () => instance.stopGateway(),
+            async () => {
+              await body?.catch(() => {});
+            },
+            // A pending connection can hand off its client while the body unwinds.
+            stopClients,
+            () => instance.cleanup(),
+          ),
+        ));
+      };
+      onTestFinished(cleanup);
+      const instance = await acquiringInstance;
+      signal.throwIfAborted();
       const workspace = instance.state.workspaceDir;
       const startedPath = path.join(workspace, "started");
       const releasePath = path.join(workspace, "release");
       const launchesPath = path.join(workspace, "launches");
       const commandPath = path.join(workspace, "wait.cjs");
-      const taskName = `LIVE_PROGRESS_${randomUUID()}`;
       const finalMarker = `WORK_COMPLETED_${randomUUID()}`;
       const staleMarker = `STALE_${randomUUID()}`;
       const rootRunId = `progress-work-${randomUUID()}`;
+      const ownBody = (run: () => Promise<void>) => () => {
+        body = run();
+        return body;
+      };
       await runQaGatewayFixture(
-        async () => {
+        ownBody(async () => {
+          signal.throwIfAborted();
           instance.state.applyEnv();
           const config: OpenClawConfig = {
             gateway: {
@@ -151,15 +191,17 @@ describeLive("progress refresh through the live embedded runtime", () => {
               "});",
               `fs.writeFileSync(${JSON.stringify(startedPath)}, "started");`,
             ].join("\n"),
+            { signal },
           );
-          const identities = await Promise.all(
-            ["progress-parent", "progress-refresh"].map((identityKey) =>
-              ensurePairedTestGatewayClientIdentity({ identityKey }),
-            ),
-          );
+          const identities = [];
+          for (const identityKey of ["progress-parent", "progress-refresh"]) {
+            signal.throwIfAborted();
+            identities.push(await ensurePairedTestGatewayClientIdentity({ identityKey }));
+          }
           expect(identities[0]?.deviceId).not.toBe(identities[1]?.deviceId);
           await instance.startGateway();
           for (const deviceIdentity of identities) {
+            signal.throwIfAborted();
             clients.push(
               await connectTestGatewayClient({
                 url: instance.url,
@@ -167,9 +209,11 @@ describeLive("progress refresh through the live embedded runtime", () => {
                 deviceIdentity,
                 caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
                 requestTimeoutMs: RUN_TIMEOUT_MS + 5_000,
+                onRetry: () => signal.throwIfAborted(),
                 ...(clients.length === 0 ? { onEvent } : {}),
               }),
             );
+            signal.throwIfAborted();
           }
           const [parent, refresher] = clients;
           if (!parent || !refresher) {
@@ -212,6 +256,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
           );
           await waitRun(warmupRunId);
           // The previous completed turn must not fence steering of the next active parent.
+          signal.throwIfAborted();
           const started = Promise.withResolvers<void>();
           const watcher = watch(workspace, (_event, filename) => {
             if (filename === path.basename(startedPath)) {
@@ -219,10 +264,9 @@ describeLive("progress refresh through the live embedded runtime", () => {
             }
           });
           watcher.on("error", started.reject);
-          const startSignal = AbortSignal.timeout(RUN_TIMEOUT_MS);
-          const startTimedOut = () =>
-            started.reject(new Error("Live agent did not start the barrier"));
-          startSignal.addEventListener("abort", startTimedOut, { once: true });
+          const startSignal = AbortSignal.any([signal, AbortSignal.timeout(RUN_TIMEOUT_MS)]);
+          const startAborted = () => started.reject(startSignal.reason);
+          startSignal.addEventListener("abort", startAborted, { once: true });
           try {
             await Promise.all([
               started.promise,
@@ -230,7 +274,6 @@ describeLive("progress refresh through the live embedded runtime", () => {
                 sessionKey: SESSION_KEY,
                 idempotencyKey: rootRunId,
                 message: [
-                  `This synthetic task is named ${taskName}; preserve that exact label in any status card.`,
                   `First run exec with command: node ${JSON.stringify(commandPath)}`,
                   "Use yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
                   "If a progress refresh arrives while waiting, write the current status using progress_card before continuing to poll. Otherwise do not write a card.",
@@ -241,10 +284,12 @@ describeLive("progress refresh through the live embedded runtime", () => {
             ]);
           } finally {
             watcher.close();
-            startSignal.removeEventListener("abort", startTimedOut);
+            startSignal.removeEventListener("abort", startAborted);
           }
           const refresh = async () => {
+            signal.throwIfAborted();
             const previous = await seedStaleCard();
+            const eventIndex = events.length;
             let accepted: ProgressCardRefreshResult | undefined;
             await waitDuring(
               (event) => {
@@ -270,15 +315,17 @@ describeLive("progress refresh through the live embedded runtime", () => {
             const { card } = await parent.request<ProgressCardGetResult>("progressCard.get", {
               sessionKey: SESSION_KEY,
             });
-            expect(card?.revision).toBeGreaterThan(previous.revision);
-            expect(JSON.stringify(card)).toContain(taskName);
+            if (!card) {
+              throw new Error("Missing refreshed progress card");
+            }
+            expect(card.revision).toBeGreaterThan(previous.revision);
             expect(JSON.stringify(card)).not.toContain(staleMarker);
             if (!accepted) {
               throw new Error("Missing progress refresh receipt");
             }
-            return accepted;
+            return { accepted, eventIndex, revision: card.revision };
           };
-          await refresh();
+          const activeRefresh = await refresh();
           const active = await readHistory();
           expect(active.sessionInfo.hasActiveRun).toBe(true);
           expect(active.inFlightRun?.runId).toBe(rootRunId);
@@ -294,18 +341,21 @@ describeLive("progress refresh through the live embedded runtime", () => {
             finalMarker,
           );
           expect(
-            events.some((event) => {
+            events.slice(activeRefresh.eventIndex).some((event) => {
               const payload = asOptionalRecord(event.payload);
               const data = asOptionalRecord(payload?.data);
+              const details = asOptionalRecord(asOptionalRecord(data?.result)?.details);
               return (
                 event.event === "agent" &&
                 payload?.runId === rootRunId &&
                 payload.stream === "tool" &&
                 data?.name === "progress_card" &&
-                data.phase === "result"
+                data.phase === "result" &&
+                data.isError !== true &&
+                details?.revision === activeRefresh.revision
               );
             }),
-            "the active parent must execute the refresh tool itself",
+            "the active parent must publish the refreshed card revision itself",
           ).toBe(true);
           const beforeIdle = await readHistory();
           expect(beforeIdle.sessionInfo.agentRuntime?.id).toBe("openclaw");
@@ -318,7 +368,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
           );
 
           const idleEventIndex = events.length;
-          const idle = await refresh();
+          const { accepted: idle } = await refresh();
           await waitRun(idle.runId);
           const afterIdle = await readHistory();
           expect(afterIdle.messages).toEqual(beforeIdle.messages);
@@ -328,14 +378,8 @@ describeLive("progress refresh through the live embedded runtime", () => {
           );
           expect(await fs.readFile(launchesPath, "utf8")).toBe("started\n");
           logLiveProgress("progress refresh: idle card updated without chat or resumed work");
-        },
-        () => fs.writeFile(releasePath, "release"),
-        () =>
-          runQaGatewayFixture(
-            async () => {},
-            ...clients.map((client) => () => client.stopAndWait()),
-          ),
-        () => instance.cleanup(),
+        }),
+        cleanup,
       ).catch((error: unknown) => {
         console.error(instance.logs());
         throw error;

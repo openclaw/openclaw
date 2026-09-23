@@ -19,7 +19,6 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { assertAgentDatabaseMaintenanceAccess } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -83,7 +82,6 @@ function assertAgentDatabaseOperationCurrent(
   // Coalesced callers keep their own scope; admission cannot lend its cleanup authority.
   assertAgentDeletionDatabaseCleanupAccess(database, options);
   assertCurrent?.();
-  assertAgentDatabaseMaintenanceAccess(database.db);
 }
 
 /** Bind both admission drivers to the canonical private database-open generator. */

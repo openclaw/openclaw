@@ -9,8 +9,8 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { withoutTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema.js";
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
@@ -281,11 +281,7 @@ describe("agent schema 21 migration", () => {
       const database = new DatabaseSync(pathname);
       let oldWriter: DatabaseSync | undefined;
       try {
-        database.exec(
-          withoutCanonicalSessionValidationSchema(
-            withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-          ),
-        );
+        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_V21_SQL));
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
@@ -334,11 +330,7 @@ describe("agent schema 21 migration", () => {
       const pathname = state.path("interrupted-validation.sqlite");
       const database = new DatabaseSync(pathname);
       try {
-        database.exec(
-          withoutCanonicalSessionValidationSchema(
-            withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-          ),
-        );
+        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_V21_SQL));
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);

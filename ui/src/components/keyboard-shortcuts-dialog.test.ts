@@ -176,9 +176,9 @@ describe("keyboard shortcuts dialog", () => {
     dialog.toggle();
     await dialog.updateComplete;
 
-    dialog.shadowRoot
-      ?.querySelector("openclaw-modal-dialog")
-      ?.dispatchEvent(new CustomEvent("modal-cancel"));
+    const cancellation = new CustomEvent("modal-cancel", { cancelable: true });
+    dialog.shadowRoot?.querySelector("openclaw-modal-dialog")?.dispatchEvent(cancellation);
+    expect(cancellation.defaultPrevented).toBe(true);
     await dialog.updateComplete;
 
     expect(dialog.isOpen).toBe(false);

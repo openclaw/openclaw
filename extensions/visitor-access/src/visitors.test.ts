@@ -4,6 +4,7 @@ import { VisitorAccessError } from "./errors.js";
 import {
   DAY_MS,
   NOW,
+  closeVisitorFixtures,
   guestRole,
   requestUrl,
   staffRole,
@@ -14,11 +15,12 @@ import {
 
 describe("VisitorAccessService", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(NOW);
   });
 
   afterEach(() => {
+    closeVisitorFixtures();
     vi.useRealTimers();
   });
 
@@ -32,6 +34,7 @@ describe("VisitorAccessService", () => {
 
     expect(fixture.emails()).toEqual(["visitor@example.com"]);
     expect(fixture.grants.get("visitor@example.com")).toEqual({
+      grantId: expect.any(String),
       email: "visitor@example.com",
       githubLogin: "visitor",
       invitedVia: "session:maintainer",
@@ -97,6 +100,14 @@ describe("VisitorAccessService", () => {
       roles: { default: "missing", definitions: { guest: guestRole } },
     },
     ...[
+      {
+        reason: "the Visitor Access policy is not required",
+        role: { ...guestRole, accessPolicyPlugin: undefined },
+      },
+      {
+        reason: "a different access policy is required",
+        role: { ...guestRole, accessPolicyPlugin: "unrelated-policy" },
+      },
       { reason: "sandboxing is inherited", role: { ...guestRole, sandbox: "inherit" as const } },
       {
         reason: "other sessions are writable",
@@ -139,7 +150,7 @@ describe("VisitorAccessService", () => {
     {
       name: "an independent role with guest-shaped permissions",
       assignedRole: "staff",
-      otherRole: guestRole,
+      otherRole: { ...guestRole, accessPolicyPlugin: undefined },
       access: 'existing role "staff" retained; this invitation does not restrict it',
     },
     {
@@ -229,7 +240,7 @@ describe("VisitorAccessService", () => {
     },
   );
 
-  it("checks live authority again after durable recording before granting provider access", async () => {
+  it("checks live authority after recording cleanup before granting provider access", async () => {
     const fixture = visitorFixture();
     const recorded = createDeferred<void>();
     const release = createDeferred<void>();
@@ -255,7 +266,7 @@ describe("VisitorAccessService", () => {
 
     expect(fixture.emails()).toEqual([]);
     expect(fixture.mutations()).toEqual([]);
-    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW + 14 * DAY_MS);
+    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW);
   });
 
   it.each(["invite", "renew", "revoke"] as const)(
@@ -271,15 +282,13 @@ describe("VisitorAccessService", () => {
           throw new Error("Visitor authority is no longer current");
         }
       });
-      if (operation === "invite") {
-        fixture.cloudflare.afterWrite = () => {
-          current = false;
-        };
-      } else if (operation === "renew") {
+      if (operation !== "revoke") {
         const register = fixture.store.register.bind(fixture.store);
-        vi.spyOn(fixture.store, "register").mockImplementationOnce(async (key, grant) => {
+        vi.spyOn(fixture.store, "register").mockImplementation(async (key, grant) => {
           await register(key, grant);
-          current = false;
+          if (grant.expiresAt !== null && grant.expiresAt > NOW) {
+            current = false;
+          }
         });
       } else {
         const remove = fixture.store.delete.bind(fixture.store);
@@ -531,7 +540,7 @@ describe("VisitorAccessService", () => {
   );
 
   it.each(["rejected", "committed but response lost"] as const)(
-    "retains and reconciles a grant after its provider write is %s",
+    "retains inactive cleanup across restart after its provider write is %s",
     async (outcome) => {
       const fixture = visitorFixture();
       const committed = outcome === "committed but response lost";
@@ -543,23 +552,34 @@ describe("VisitorAccessService", () => {
       ).rejects.toBeInstanceOf(VisitorAccessError);
 
       expect(fixture.emails()).toEqual(committed ? ["visitor@example.com"] : []);
-      expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW + DAY_MS);
+      expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW);
       const list = await fixture.service.list(fixture.authority.assertCurrent);
       expect(list).toContain(committed ? "0 missing from policy" : "1 missing from policy");
-      expect(list).toContain(committed ? "| managed |" : "MISSING FROM POLICY");
-      const writes = fixture.mutations().length;
-      fixture.cloudflare.failWrites = false;
-      fixture.cloudflare.loseWriteResponse = false;
+      expect(list).toContain(
+        committed ? "EXPIRED; provider cleanup pending" : "MISSING FROM POLICY",
+      );
+      fixture.service.close();
+      const restarted = visitorFixture({
+        grants: [...fixture.grants.values()],
+        emails: fixture.emails(),
+      });
+      await restarted.service.initialize();
+      expect(() => restarted.service.authorize(["visitor@example.com"])).toThrow(
+        /active visitor invitation/,
+      );
       await expect(
-        fixture.service.invite({ email: "visitor@example.com", days: 1 }, fixture.authority),
+        restarted.service.invite({ email: "visitor@example.com", days: 1 }, restarted.authority),
       ).resolves.toContain("Renewed");
-      expect(fixture.emails()).toEqual(["visitor@example.com"]);
-      expect(fixture.grants.get("visitor@example.com")?.createdAt).toBe(NOW);
-      expect(fixture.mutations()).toHaveLength(writes + (committed ? 0 : 1));
+      expect(restarted.emails()).toEqual(["visitor@example.com"]);
+      expect(restarted.grants.get("visitor@example.com")?.createdAt).toBe(NOW);
+      expect(() =>
+        restarted.service.authorize(["visitor@example.com"]).assertCurrent(),
+      ).not.toThrow();
+      expect(restarted.mutations()).toHaveLength(committed ? 0 : 1);
       vi.setSystemTime(NOW + DAY_MS);
-      await fixture.service.sweep();
-      expect(fixture.grants.size).toBe(0);
-      expect(fixture.emails()).toEqual([]);
+      await restarted.service.sweep();
+      expect(restarted.grants.size).toBe(0);
+      expect(restarted.emails()).toEqual([]);
     },
   );
 

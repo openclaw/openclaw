@@ -17,6 +17,7 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
@@ -38,6 +39,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   agentRunTracking?: GatewayAgentRunTaskOwner;
   operatorRoleActor?: GatewayOperatorRoleActor;
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
@@ -76,6 +78,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
+        : {}),
+      ...(params?.operatorAccessAuthority !== undefined
+        ? { operatorAccessAuthority: params.operatorAccessAuthority }
         : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),

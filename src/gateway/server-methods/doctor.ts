@@ -105,6 +105,7 @@ type DoctorMemoryDreamingPayload = DoctorMemoryDreamingConfigPayload & DreamingS
 
 export type DoctorMemoryStatusPayload = {
   agentId: string;
+  searchRuntimeRegistered?: boolean;
   provider?: string;
   embedding: {
     ok: boolean;
@@ -591,7 +592,7 @@ export const createDoctorHandlers = (
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
-    const { manager, error } = await getActiveMemorySearchManagerCore({
+    const { manager, error, searchRuntimeRegistered } = await getActiveMemorySearchManagerCore({
       cfg,
       agentId,
       purpose: "status",
@@ -599,6 +600,7 @@ export const createDoctorHandlers = (
     if (!manager) {
       const payload: DoctorMemoryStatusPayload = {
         agentId,
+        searchRuntimeRegistered,
         embedding: {
           ok: false,
           error: error ?? "memory search unavailable",
@@ -625,7 +627,7 @@ export const createDoctorHandlers = (
       const workspaceDir = normalizeOptionalString(
         (status as Record<string, unknown>).workspaceDir,
       );
-      const configuredWorkspaces = requestedAgentId
+      const allWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]
           : []
@@ -633,8 +635,6 @@ export const createDoctorHandlers = (
             primaryWorkspaceDir: workspaceDir,
             primaryAgentId: agentId,
           }).map((entry) => entry.workspaceDir);
-      const allWorkspaces =
-        configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
       const storeStats =
         allWorkspaces.length > 0
           ? mergeDreamingStoreStats(

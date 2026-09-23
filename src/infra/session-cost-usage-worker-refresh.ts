@@ -195,7 +195,7 @@ type RollupScanInput = {
 
 function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
   const previous = params.appendOnly ? params.previous?.entry : undefined;
-  // This task exclusively owns the decoded row; the CAS comparison retains the original text.
+  // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;

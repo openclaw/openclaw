@@ -1,5 +1,6 @@
 // Regresses task registry maintenance behavior for issue 60299.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import {
@@ -8,11 +9,13 @@ import {
   getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
-import { createTaskRegistryMaintenanceHarness } from "./task-registry.maintenance.test-support.js";
+import {
+  createTaskRegistryMaintenanceHarness,
+  resetTaskRegistryMaintenanceMocks,
+} from "./task-registry.maintenance.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -43,7 +46,7 @@ function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
 
 afterEach(async () => {
   await stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  resetTaskRegistryMaintenanceMocks();
   resetDetachedTaskLifecycleRuntimeForTests();
 });
 
@@ -74,7 +77,7 @@ function expectTaskStatus(
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session entry lists across stale subagent task checks in one pass", async () => {
+  it("batches backing reads across stale subagent task checks in one pass", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -82,17 +85,70 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const listSessionEntriesMock = vi.fn(() => []);
+    const readSessionBackingFactsInWorker = vi.fn(
+      async (scopes: readonly { sessionKeys: readonly string[] }[]) => scopes.map(() => []),
+    );
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      listSessionEntries: listSessionEntriesMock,
+      readSessionBackingFactsInWorker,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
-    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
+    expect(readSessionBackingFactsInWorker.mock.calls[0]?.[0]).toEqual([
+      {
+        storePath: "/tmp/openclaw-test-sessions-main.json",
+        sessionKeys: tasks.map((task) => task.childSessionKey),
+      },
+    ]);
   });
+
+  it("does not open backing stores when process liveness already retains the task", async () => {
+    const task = makeStaleTask({
+      runtime: "cli",
+      runId: "live-cli",
+      childSessionKey: "agent:main:subagent:retained",
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeRunIds: ["live-cli"],
+      readSessionBackingFactsInWorker: async () => {
+        throw new Error("unneeded backing store is unavailable");
+      },
+    });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it.each(["batch", "recovery"] as const)(
+    "retains a child whose backing changes during the %s read",
+    async (stage) => {
+      const task = makeStaleTask({
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:repaired",
+      });
+      let reads = 0;
+      const { currentTasks } = createTaskRegistryMaintenanceHarness({
+        tasks: [task],
+        readSessionBackingFactsInWorker: async (scopes) => {
+          reads += 1;
+          if (reads === (stage === "batch" ? 1 : 2)) {
+            sessionChanges.emit({ sessionKey: task.childSessionKey! });
+          }
+          return scopes.map(() => []);
+        },
+      });
+      if (stage === "recovery") {
+        setDetachedTaskLifecycleRuntime({
+          ...getDetachedTaskLifecycleRuntime(),
+          tryRecoverTaskBeforeMarkLost: async () => ({ recovered: false }),
+        });
+      }
+      expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+      expectTaskStatus(currentTasks, task.taskId, "running");
+    },
+  );
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
     const childSessionKey = "agent:main:discord:direct:user-1";

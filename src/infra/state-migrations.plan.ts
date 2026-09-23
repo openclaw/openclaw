@@ -21,7 +21,9 @@ import {
   type LegacyStateMigrationMode,
   type LegacyStateMigrationEndpoint,
   type LegacyStateMigrationPlan,
+  type LegacyStateMigrationStep,
   type LegacyStateMigrationStepPlan,
+  type LegacyStateMigrationStepReceipt,
 } from "./state-migrations.types.js";
 
 export type PreparedLegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome">;
@@ -38,6 +40,31 @@ export function migrationStepPlan(
     reversibility: step.reversibility,
     ...(step.refusal ? { refusal: step.refusal } : {}),
   };
+}
+
+export function createBlockedLegacyStateMigrationStepReceipts(params: {
+  steps: readonly LegacyStateMigrationStep[];
+  blocker: LegacyStateMigrationStepReceipt;
+  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+}): LegacyStateMigrationStepReceipt[] {
+  const originatingRefusal =
+    params.blocker.originatingRefusal ??
+    (params.blocker.refusal && { stepId: params.blocker.id, ...params.blocker.refusal });
+  return params.steps.map((step) => {
+    const message = `Migration step "${step.id}" was not run because prior step "${params.blocker.id}" refused execution.`;
+    // Read-only validation can record another cause without reopening writer admission.
+    const independentRefusal = step.inspectRefusal?.();
+    const receipt: LegacyStateMigrationStepReceipt = {
+      ...migrationStepPlan(step),
+      outcome: "refused",
+      changes: [],
+      warnings: independentRefusal ? [independentRefusal.message, message] : [message],
+      refusal: independentRefusal ?? { code: "blocked-by-prior-refusal", message },
+      ...(originatingRefusal ? { originatingRefusal: { ...originatingRefusal } } : {}),
+    };
+    params.onStepReceipt?.(receipt);
+    return receipt;
+  });
 }
 
 export function closeMigrationPlanTail(

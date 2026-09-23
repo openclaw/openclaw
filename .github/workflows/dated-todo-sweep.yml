@@ -25,7 +25,7 @@ jobs:
   analyze:
     # Manual runs may select a ref; secrets are available only when that ref is
     # the trusted default branch. Scheduled runs already target that branch.
-    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     outputs:
       sweep-date: ${{ steps.sweep-date.outputs.date }}
     runs-on: ubuntu-24.04

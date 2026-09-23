@@ -14,9 +14,20 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  countExecutionContexts,
+  createMappedWebhookProof,
+  hasSqliteColumns,
+  inspectExecution,
+  parseAuditInspection,
+  readCliOwnerRows,
+  requireOwnerDisplay,
+  stateDatabasePath,
+  waitFor,
+  type ExactOwnerRow,
+} from "./autonomous-task-lifecycle-receipts.fixtures.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "autonomous-task-lifecycle-receipts";
@@ -30,29 +41,6 @@ type ProofResult = {
   durationMs: number;
   status: QaScriptEvidenceStatus;
 };
-type ExactOwnerRow = {
-  context_id: string;
-  execution_id: string;
-  run_id: string;
-  status: string;
-};
-type OwnerDisplayProducer = "cron-lifecycle" | "task-lifecycle" | "flow-lifecycle";
-
-function hasSqliteColumns(db: DatabaseSync, table: string, columns: readonly string[]): boolean {
-  const exists = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(table);
-  if (!exists) {
-    return false;
-  }
-  const present = new Set(
-    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
-      (row) => row.name,
-    ),
-  );
-  return columns.every((column) => present.has(column));
-}
-
 function parseOptions(argv: readonly string[]): ProducerOptions {
   const readValue = (name: string) => {
     const index = argv.indexOf(name);
@@ -68,39 +56,8 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-function parseJson<T>(raw: string, label: string): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`);
-  }
-}
-
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function stateDatabasePath(gateway: QaGatewayChild): string {
-  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("QA Gateway did not expose its isolated state directory");
-  }
-  return path.join(stateDir, "state", "openclaw.sqlite");
-}
-
-function countExecutionContexts(gateway: QaGatewayChild): number {
-  const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-  try {
-    if (!hasSqliteColumns(db, "execution_identity_contexts", ["context_id"])) {
-      return 0;
-    }
-    const row = db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get() as {
-      count: number;
-    };
-    return row.count;
-  } finally {
-    db.close();
-  }
 }
 
 function readCronOwnerRows(
@@ -183,114 +140,21 @@ function readCronOwnerBindingDiagnostic(gateway: QaGatewayChild, jobId: string):
   }
 }
 
-function readCliOwnerRows(
-  gateway: QaGatewayChild,
-  runId: string,
-): { task: ExactOwnerRow } | undefined {
-  const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-  try {
-    if (
-      !hasSqliteColumns(db, "execution_identity_contexts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "execution_owner_lifecycle_bindings", [
-        "owner_kind",
-        "owner_id",
-        "context_id",
-        "execution_id",
-      ]) ||
-      !hasSqliteColumns(db, "task_runs", ["task_id"])
-    ) {
-      return undefined;
-    }
-    const task = db
-      .prepare(
-        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
-         FROM task_runs AS task
-         JOIN execution_owner_lifecycle_bindings AS binding
-           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
-         JOIN execution_identity_contexts AS context
-           ON context.context_id = binding.context_id
-          AND context.execution_id = binding.execution_id
-         WHERE task.runtime = 'cli' AND task.run_id = ? AND task.ended_at IS NOT NULL
-         LIMIT 1`,
-      )
-      .get(runId) as ExactOwnerRow | undefined;
-    return task ? { task } : undefined;
-  } finally {
-    db.close();
-  }
-}
-
-async function waitFor<T>(label: string, read: () => T | undefined): Promise<T> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const value = read();
-    if (value !== undefined) {
-      return value;
-    }
-    await delay(50);
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
-function requireOwnerDisplay(result: AuditRunInspectResult, producer: OwnerDisplayProducer) {
-  const receipt = result.decisionDisplays.find(
-    (candidate) =>
-      candidate.provenance.state === "verified" && candidate.provenance.producer === producer,
-  );
-  if (
-    !receipt ||
-    receipt.enforcement.coverageState !== "attribution-only" ||
-    receipt.decision.outcome !== "not-applicable"
-  ) {
-    throw new Error(`inspection omitted exact attribution-only ${producer} display`);
-  }
-  return receipt;
-}
-
-async function inspectExecution(params: {
-  gateway: QaGatewayChild;
-  executionId: string;
-  producers: OwnerDisplayProducer[];
-  privateSentinels: string[];
-}) {
-  const jsonRaw = await params.gateway.runCli([
-    "audit",
-    "--execution",
-    params.executionId,
-    "--explain",
-    "--json",
-  ]);
-  const json = parseJson<AuditRunInspectResult>(jsonRaw, "owner lifecycle inspection");
-  for (const producer of params.producers) {
-    requireOwnerDisplay(json, producer);
-  }
-  for (const sentinel of params.privateSentinels) {
-    if (jsonRaw.includes(sentinel)) {
-      throw new Error(`owner receipt leaked private sentinel ${sentinel}`);
-    }
-  }
-  const human = await params.gateway.runCli([
-    "audit",
-    "--execution",
-    params.executionId,
-    "--explain",
-  ]);
-  for (const producer of params.producers) {
-    if (!human.includes(`Display producer: ${producer}`)) {
-      throw new Error(`human inspection omitted ${producer}`);
-    }
-  }
-  return { json, jsonRaw, human };
-}
-
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
   const gatewayOwner = createQaGatewayChild();
   let gateway: QaGatewayChild | undefined;
+  const webhook = createMappedWebhookProof(HOOK_TOKEN);
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(options.repoRoot, "dist/index.js")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transportBaseUrl: "http://127.0.0.1",
@@ -305,6 +169,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
           enabled: true,
           token: HOOK_TOKEN,
           mappings: [
+            webhook.mapping,
             {
               id: "qa-suppressed-source",
               match: { path: "suppressed" },
@@ -341,6 +206,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
       throw new Error("pre-admission mapping suppression allocated execution identity");
     }
 
+    const webhookProof = await webhook.admit(gateway);
+
     const cronSentinel = `PRIVATE-CRON-${randomUUID()}`;
     const cronJob = (await gateway.call("cron.add", {
       name: "QA autonomous receipt",
@@ -375,7 +242,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       producers: ["cron-lifecycle", "task-lifecycle"],
       privateSentinels: [cronSentinel],
     });
-    const cronCursorPage = parseJson<AuditRunInspectResult>(
+    const cronCursorPage = parseAuditInspection(
       await gateway.runCli([
         "audit",
         "--execution",
@@ -421,6 +288,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const beforeRestart = JSON.stringify({
       cron: cronInspection.json,
       task: taskInspection.json,
+      webhooks: webhookProof.inspections,
     });
     await gateway.restartAfterStateMutation(async () => {});
     const cronAfter = await inspectExecution({
@@ -435,7 +303,12 @@ async function runProof(options: ProducerOptions): Promise<string> {
       producers: ["task-lifecycle"],
       privateSentinels: [taskSentinel],
     });
-    const afterRestart = JSON.stringify({ cron: cronAfter.json, task: taskAfter.json });
+    const webhooksAfter = await webhookProof.verifyAfterRestart(gateway);
+    const afterRestart = JSON.stringify({
+      cron: cronAfter.json,
+      task: taskAfter.json,
+      webhooks: webhooksAfter.inspections,
+    });
     if (afterRestart !== beforeRestart) {
       throw new Error("owner lifecycle JSON changed across Gateway replacement");
     }
@@ -468,6 +341,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
       `${JSON.stringify(
         {
           suppression: { httpStatus: 204, identityAllocation: 0 },
+          webhooks: webhookProof.contexts,
+          webhookAdmittedAfterRestart: webhooksAfter.admittedContext,
           cron: {
             contextId: cronRows.cron.context_id,
             executionId: cronRows.cron.execution_id,
@@ -483,7 +358,12 @@ async function runProof(options: ProducerOptions): Promise<string> {
           cursorCompatibility: { cronPrefixAccepted: true },
           genericDuplicateAbsent: true,
           byteEquivalentAfterRestart: true,
-          privacy: { cronPromptAbsent: true, taskPromptAbsent: true },
+          privacy: {
+            cronPromptAbsent: true,
+            taskPromptAbsent: true,
+            webhookMappingRequestAndBodyAbsent: true,
+            auditLogLinesChecked: webhooksAfter.auditLogLinesChecked,
+          },
           resultSha256: sha256(afterRestart),
         },
         null,
@@ -554,7 +434,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

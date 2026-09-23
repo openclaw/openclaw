@@ -1,10 +1,12 @@
-import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  sameSessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { resolveStateDir } from "../../config/state-dir.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
@@ -56,8 +58,7 @@ export async function withSessionManagerWrite<T>(
   const identity = { ...target };
   const assertCurrent = captureOwnedTranscriptWriteAssertion(identity);
   const options = toDatabaseOptions(resolveSqliteReadScope(identity));
-  options.env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
+  options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   options.path = resolveOpenClawAgentSqlitePath(options);
   // A tool's cancellation race or a void extension callback can return first.
   // Its existing runtime owner must still retain the admitted write.
@@ -69,13 +70,7 @@ export async function withSessionManagerWrite<T>(
           options,
           (database) => {
             const current = manager.getSessionTarget();
-            if (
-              !current ||
-              current.agentId !== identity.agentId ||
-              current.sessionId !== identity.sessionId ||
-              current.sessionKey !== identity.sessionKey ||
-              current.storePath !== identity.storePath
-            ) {
+            if (!sameSessionTranscriptTargetBinding(identity, current)) {
               throw new Error("Session manager identity changed before transcript write admission");
             }
             // Each native kernel or worker command still validates live authority at commit.

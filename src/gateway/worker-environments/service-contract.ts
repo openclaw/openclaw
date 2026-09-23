@@ -93,7 +93,7 @@ export type WorkerEnvironmentServiceContract = {
       }
     | undefined;
   assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
-  touchSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  touchSessionAttachment(binding: WorkerEnvironmentAttachment): Promise<void>;
   execSessionAttachment(
     binding: WorkerEnvironmentAttachment,
     command: import("./tunnel-contract.js").WorkerWorkspaceCommand,

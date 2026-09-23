@@ -7,6 +7,11 @@ export const cronOwnerHardeningEntrypoints = {
     sourceWorkerName: "service",
     distWorkerPath: "cron/service.js",
   },
+  store: {
+    currentModuleUrl,
+    sourceWorkerName: "store",
+    distWorkerPath: "cron/store.js",
+  },
   stateDatabase: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-state-db",

@@ -4,6 +4,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -48,6 +49,7 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { getStandaloneSlashCommandName } from "./reply-inline.js";
 import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
@@ -277,6 +279,14 @@ export async function handleInlineActions(params: {
         })
       : false;
     if (shouldSkip) {
+      const runState = resolveReplyOperationRunState(opts);
+      if (runState) {
+        // The stop owner cancelled this queued input; no answer remains due.
+        runState.replyCompletion = resolveReplyCompletion(
+          runState.replyCompletion?.expectation ?? "required",
+          "blocked",
+        );
+      }
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
@@ -432,6 +442,16 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
+        opts?.abortSignal?.throwIfAborted();
+        if (opts?.runId) {
+          // Tool commands leave transcript persistence with ordinary reply dispatch.
+          opts.onAgentRunStart?.(opts.runId, undefined, {
+            completionSource: "reply-dispatch",
+            getResult: () => ({}),
+          });
+        }
+        // The execution owner can observe revocation while arming cancellation.
+        opts?.abortSignal?.throwIfAborted();
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {

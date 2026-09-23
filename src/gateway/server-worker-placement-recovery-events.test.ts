@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -7,6 +8,7 @@ const runtimeMocks = vi.hoisted(() => ({
   createDiskSpace: vi.fn(),
   createSessionEvidenceResolver: vi.fn(),
   publicationWarn: vi.fn(),
+  destroyEnvironment: vi.fn(),
 }));
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -38,6 +40,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
   createWorkerPlacementSessionEvidenceResolver: runtimeMocks.createSessionEvidenceResolver,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
@@ -86,7 +89,7 @@ async function withRecoveryRuntime(
     };
     changes: ReturnType<typeof vi.fn>;
     environments: { start: ReturnType<typeof vi.fn> };
-    listPlacements: ReturnType<typeof vi.fn>;
+    readChangeSnapshot: ReturnType<typeof vi.fn<() => Promise<RecoveryPlacement[]>>>;
     placements: Map<string, RecoveryPlacement>;
     runtime: ReturnType<typeof createGatewayWorkerPlacementRuntime>;
     start: () => Promise<void>;
@@ -98,6 +101,7 @@ async function withRecoveryRuntime(
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.useFakeTimers();
     runtimeMocks.publicationWarn.mockClear();
+    runtimeMocks.destroyEnvironment.mockReset();
     const changes = vi.fn();
     const unsubscribeChanges = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === "agent:main:move-source") {
@@ -125,7 +129,7 @@ async function withRecoveryRuntime(
     );
     runtimeMocks.createDispatch.mockImplementation(() => ({
       dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
+      forceDestroyEnvironment: runtimeMocks.destroyEnvironment,
       reclaim: vi.fn(),
       reconcile: vi.fn(async () => await options.startup?.(placements)),
       reconcileActive: vi.fn(async () => await options.sweep?.(placements)),
@@ -150,13 +154,15 @@ async function withRecoveryRuntime(
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
-    const listPlacements = vi.fn(() => [...placements.values()]);
+    const readChangeSnapshot = vi.fn(async () => structuredClone([...placements.values()]));
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: (sessionId: string) => placements.get(sessionId),
-        list: listPlacements,
+        list: () => [...placements.values()],
+        readChangeSnapshot,
         retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
@@ -177,7 +183,7 @@ async function withRecoveryRuntime(
         context,
         changes,
         environments,
-        listPlacements,
+        readChangeSnapshot,
         placements,
         runtime,
         start: async () => {
@@ -316,11 +322,11 @@ describe("worker placement recovery session events", () => {
     const sweep = vi.fn();
     await withRecoveryRuntime(
       { sweep, hasContext: false },
-      async ({ context, listPlacements, runtime }) => {
+      async ({ context, readChangeSnapshot, runtime }) => {
         await runtime.dispatchService.reconcileActive();
 
         expect(sweep).toHaveBeenCalledOnce();
-        expect(listPlacements).not.toHaveBeenCalled();
+        expect(readChangeSnapshot).not.toHaveBeenCalled();
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
       },
     );
@@ -333,10 +339,9 @@ describe("worker placement recovery session events", () => {
         hasSubscribers: false,
         sweep: (placements) => void placements.set(recovered.sessionId, recovered),
       },
-      async ({ context, changes, listPlacements, runtime }) => {
+      async ({ context, changes, runtime }) => {
         await runtime.dispatchService.reconcileActive();
 
-        expect(listPlacements).toHaveBeenCalledTimes(2);
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           sessionKey: recovered.sessionKey,
           agentId: recovered.agentId,
@@ -364,6 +369,76 @@ describe("worker placement recovery session events", () => {
       },
     );
   });
+
+  it("reserves reconciliation and coalesces its reporting before the worker snapshot yields", async () => {
+    const snapshot = createDeferredCore<RecoveryPlacement[]>();
+    const snapshotStarted = createDeferredCore();
+    const operationStarted = createDeferredCore();
+    const firstOperation = createDeferredCore();
+    const started: string[] = [];
+    await withRecoveryRuntime(
+      {
+        sweep: async () => {
+          started.push("first");
+          operationStarted.resolve();
+          await firstOperation.promise;
+        },
+        startup: () => void started.push("second"),
+      },
+      async ({ readChangeSnapshot, runtime }) => {
+        readChangeSnapshot.mockImplementationOnce(() => {
+          snapshotStarted.resolve();
+          return snapshot.promise;
+        });
+        const first = runtime.dispatchService.reconcileActive();
+        const second = runtime.dispatchService.reconcile("startup");
+        let destroy: Promise<unknown> | undefined;
+        try {
+          await snapshotStarted.promise;
+          expect(readChangeSnapshot).toHaveBeenCalledOnce();
+          expect(started).toEqual([]);
+          destroy = runtime.dispatchService.forceDestroyEnvironment("environment-recovered");
+          snapshot.resolve([]);
+          await operationStarted.promise;
+          expect(runtimeMocks.destroyEnvironment).not.toHaveBeenCalled();
+          firstOperation.resolve();
+          await Promise.all([first, second, destroy]);
+          expect(started).toEqual(["first"]);
+          expect(readChangeSnapshot).toHaveBeenCalledTimes(2);
+          expect(runtimeMocks.destroyEnvironment).toHaveBeenCalledOnce();
+        } finally {
+          snapshot.resolve([]);
+          firstOperation.resolve();
+          await Promise.all([first, second, destroy]);
+        }
+      },
+    );
+  });
+
+  it.each(["before", "after"] as const)(
+    "preserves the operation failure when the %s snapshot fails",
+    async (phase) => {
+      const operationError = new Error("reconciliation failed");
+      const snapshotError = new Error("snapshot worker failed");
+      await withRecoveryRuntime(
+        {
+          sweep: () => {
+            throw operationError;
+          },
+        },
+        async ({ readChangeSnapshot, runtime, warn }) => {
+          if (phase === "after") {
+            readChangeSnapshot.mockResolvedValueOnce([]);
+          }
+          readChangeSnapshot.mockRejectedValueOnce(snapshotError);
+          await expect(runtime.dispatchService.reconcileActive()).rejects.toBe(operationError);
+          expect(warn).toHaveBeenCalledWith(
+            "Worker placement session change reporting failed: snapshot worker failed",
+          );
+        },
+      );
+    },
+  );
 
   it("publishes startup reconciliation before the runtime becomes ready", async () => {
     const recovered = recoveryPlacement();

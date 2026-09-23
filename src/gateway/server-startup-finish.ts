@@ -29,12 +29,11 @@ import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.j
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
-import { createRequiredSharedGatewaySessionGenerationReader } from "./server-shared-auth-generation.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { collectGatewayWorkerPoolMetrics } from "./server/process-vitals.js";
-import { disconnectDisallowedGatewayBrowserOriginClients } from "./server/ws-origin-policy.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { DEFAULT_TERMINAL_DETACH_SECONDS } from "./terminal/session-limits.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -171,9 +170,7 @@ export async function finishGatewayStartup(params: {
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
       getResolvedAuth,
-      getRequiredSharedGatewaySessionGeneration: createRequiredSharedGatewaySessionGenerationReader(
-        sharedGatewaySessionGenerationState,
-      ),
+      getRequiredSharedGatewaySessionGeneration: sharedGatewaySessionGenerationState.reader,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
@@ -552,7 +549,7 @@ export async function finishGatewayStartup(params: {
         (nextConfig.gateway?.terminal?.detachedSessionTimeoutSeconds ??
           DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
       );
-      disconnectDisallowedGatewayBrowserOriginClients(clients, nextConfig);
+      disconnectDisallowedGatewayPolicyClients(clients.authorityClients, nextConfig);
       for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
@@ -583,12 +580,14 @@ export async function finishGatewayStartup(params: {
         opts.controlUiEnabled ?? nextConfig.gateway?.controlUi?.enabled ?? true,
       );
       runtime.configureDiagnostics(nextConfig);
+      runtimeState.reconcileAuditPolicy?.(nextConfig);
       const rateLimit = nextConfig.gateway?.auth?.rateLimit;
       authRateLimiter.updateConfig(rateLimit);
       browserAuthRateLimiter.updateConfig({ ...rateLimit, exemptLoopback: false });
       nodeReapprovalCoordinator.updateConfig(rateLimit);
       terminalLaunchPolicy.commitConfig();
       workerLiveEvents?.rebindAll(nextConfig);
+      workerEnvironmentService?.schedulePreparedRefill();
     },
     acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
     channelManager,

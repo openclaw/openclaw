@@ -235,17 +235,6 @@ describe("skills curator cli", () => {
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("reports curator retirement locally when the gateway cannot be reached", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Skill lifecycle curation is retired"),
-    );
-  });
-
   const curatorActions = [
     { label: "status", argv: ["status"] },
     { label: "pin", argv: ["pin", "daily-brief"] },

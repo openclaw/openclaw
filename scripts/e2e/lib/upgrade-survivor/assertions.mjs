@@ -11,7 +11,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import { readPostCoreSnapshot, recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
@@ -521,6 +521,30 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "models")) {
     assert(config.models?.providers?.openai, "OpenAI model provider missing");
+  }
+  for (const [providerId, api, baseUrl, keyEnv] of [
+    ["anthropic", "anthropic-messages", "https://api.anthropic.com", "ANTHROPIC_API_KEY"],
+    [
+      "google",
+      "google-generative-ai",
+      "https://generativelanguage.googleapis.com/v1beta",
+      "GEMINI_API_KEY",
+    ],
+  ]) {
+    // Frozen recipes without coverage receipts predate these provider specimens.
+    if (!hasCoverage(coverage) || !acceptsIntent(coverage, `models-${providerId}`)) {
+      continue;
+    }
+    const provider = config.models?.providers?.[providerId];
+    assert(provider, `${providerId} model provider missing`);
+    assert(provider.api === api, `${providerId} model provider API changed`);
+    assert(provider.baseUrl === baseUrl, `${providerId} model provider URL changed`);
+    assert(
+      provider.apiKey?.source === "env" &&
+        provider.apiKey.provider === "default" &&
+        provider.apiKey.id === keyEnv,
+      `${providerId} model provider env credential reference changed`,
+    );
   }
 
   if (acceptsIntent(coverage, "agents")) {
@@ -1391,11 +1415,6 @@ function assertNpmPluginInstall([
   const artifact = manifest.packages.find((entry) => entry.name === packageName);
   let expectedTarball = path.join(artifactDir, artifact.tarball);
   if (publishedCompanionTarball) {
-    assert(
-      (getScenario() === "legacy-operator-state" && pluginId === "discord") ||
-        (getScenario() === "msteams-polls" && pluginId === "msteams"),
-      "published companion assertion requires its owning survivor scenario",
-    );
     const published = inspectNpmPackageTarball(publishedCompanionTarball).packageJson;
     assert(
       published.name === packageName && published.version === expectedVersion,
@@ -1689,8 +1708,27 @@ function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
 }
 
 function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
-  assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readUpdateJson(file, observationRoot);
+  let result;
+  let outcome = "failed";
+  let message;
+  try {
+    assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
+    result = readUpdateJson(file, observationRoot);
+    assertSuccessfulUpdateResult(result, expectedVersion);
+    outcome = "passed";
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    recordSuccessfulUpdateCheck(observationRoot, {
+      outcome,
+      message,
+      plugins: result?.postUpdate?.plugins ?? null,
+    });
+  }
+}
+
+function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
   if (

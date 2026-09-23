@@ -5,7 +5,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   AdmittedRunContext,
   PreparedAgentRunAdmission,
@@ -16,7 +15,6 @@ import {
   classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
-import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -48,6 +46,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -60,6 +59,7 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
+  InternalFollowupRun,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
 import {
@@ -71,7 +71,10 @@ import {
   type AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import {
+  createAgentTurnTimingTracker,
+  resolveRunStartupPhase,
+} from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
@@ -87,38 +90,6 @@ import {
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
-};
-
-function resolveRunStartupPhase(
-  phase: EmbeddedAgentExecutionPhase,
-): ChatRunStartupPhase | undefined {
-  switch (phase) {
-    case "runner_entered":
-    case "workspace":
-    case "runtime_plugins":
-      return "preparing_workspace";
-    case "before_agent_reply":
-    case "model_resolution":
-    case "auth":
-    case "context_engine":
-    case "attempt_dispatch":
-    case "context_assembled":
-      return "preparing_context";
-    case "turn_accepted":
-    case "process_spawned":
-    case "model_call_started":
-      return "starting_model";
-    case "tool_execution_started":
-    case "assistant_output_started":
-      return undefined;
-  }
-  return undefined;
-}
 
 async function executeAgentTurnInternalLoop(
   params: AgentTurnParams,
@@ -554,6 +525,10 @@ async function executeAgentTurnInternal(
     boundary: "auto-reply.agent-runner",
     operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
+    assertSourceCurrent:
+      params.followupRun.run.senderIsOwner === true
+        ? captureCommandOwnerAssertion(params.followupRun.run)
+        : undefined,
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;

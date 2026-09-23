@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -134,7 +134,7 @@ function resolveDashboardTitleAuthProfile(params: {
   if (sessionProfile) {
     return sessionProfile;
   }
-  const configuredRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  const configuredRef = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
   const configuredProfile = configuredRef
     ? splitTrailingAuthProfile(configuredRef).profile
     : undefined;

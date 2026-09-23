@@ -57,7 +57,12 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("start"),
     runId: text.optional(),
     requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .object({
+        channel: text.optional(),
+        accountId: text.optional(),
+        senderId: text.optional(),
+        authorizationSource: text.optional(),
+      })
       .optional(),
     target: z.object({
       stateDir: z.string(),

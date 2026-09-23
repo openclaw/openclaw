@@ -20,6 +20,14 @@ function resolveUnconfiguredModel(modelId: string) {
 }
 
 describe("OpenAI model route contract", () => {
+  it.each(["gpt-6-sol", "gpt-6-luna"])("resolves both auth routes for %s", (modelId) => {
+    const result = resolveUnconfiguredModel(modelId);
+    expect(result.kind === "routes" ? result.routes.map((route) => route.api) : []).toEqual([
+      "openai-responses",
+      "openai-chatgpt-responses",
+    ]);
+  });
+
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");

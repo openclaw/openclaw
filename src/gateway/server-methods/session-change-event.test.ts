@@ -309,7 +309,7 @@ describe("sessions.changed coalescing", () => {
         event: "sessions.changed",
         payload: { sessionKey, reason: "patch" },
       });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await vi.advanceTimersByTimeAsync(6_000);
       slow.resolve(initial);
       await vi.advanceTimersByTimeAsync(0);
@@ -552,7 +552,7 @@ describe("sessions.changed coalescing", () => {
         mocks.loadRow.mockReturnValue(latest);
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(
           vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
         ).toMatchObject([
@@ -624,7 +624,7 @@ describe("sessions.changed coalescing", () => {
         await projection.ensureMaterialized();
         // A cold resident row may have no capture; the committed producer ID still fences it.
         vi.spyOn(projection, "capture").mockReturnValueOnce(undefined);
-        holdExactPreparation(projection, prepared.promise);
+        const preparation = holdExactPreparation(projection, prepared.promise);
         emitSessionsChanged(context, { reason: "patch", sessionKey, sessionId: "original" });
         await Promise.resolve();
         replaceSessionEntrySync(target, {
@@ -650,6 +650,49 @@ describe("sessions.changed coalescing", () => {
           { reason: "delete", sessionId: "original" },
           { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
         ]);
+        preparation.mockRestore();
+
+        for (const failedCapture of [false, true]) {
+          send.mockClear();
+          const held = createDeferred();
+          const heldPreparation = holdExactPreparation(projection, held.promise);
+          const sessionId = failedCapture ? "recaptured-after-failure" : "recaptured-replacement";
+          try {
+            emitSessionsChanged(context, { reason: "patch", sessionKey });
+            await Promise.resolve();
+            if (failedCapture) {
+              vi.spyOn(projection, "capture").mockImplementationOnce(() => {
+                throw new Error("synthetic pending capture failure");
+              });
+            }
+            emitSessionsChanged(context, { reason: "send", sessionKey });
+            replaceSessionEntrySync(target, {
+              sessionId,
+              updatedAt: Date.now(),
+              visibility: "shared",
+            });
+            // Settled notices omit sessionId and coalesce with the queued generation.
+            emitSessionsChanged(context, { reason: "agent.input.settled", sessionKey });
+            held.resolve();
+            await flushPendingSessionsChangedEvents(context);
+            expect(
+              send.mock.calls
+                .map(([frame]) => JSON.parse(frame).payload)
+                .filter((payload) => payload.sessionKey === sessionKey),
+            ).toMatchObject([
+              {
+                reason: "agent.input.settled",
+                sessionKey,
+                sessionId,
+                session: { sessionId },
+              },
+            ]);
+          } finally {
+            held.resolve();
+            await flushPendingSessionsChangedEvents(context);
+            heldPreparation.mockRestore();
+          }
+        }
       } finally {
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);

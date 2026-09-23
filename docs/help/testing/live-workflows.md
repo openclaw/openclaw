@@ -35,6 +35,12 @@ When debugging real providers/models (requires real creds):
   - Defaults to two batches of three children. Set
     `OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES` (1–5) and
     `OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN` (1–6) to change the bounded workload.
+- Live Gateway concurrency: dispatch `OpenClaw Performance` on `main` with
+  `mode=gateway-concurrency` and `live_openai_candidate=true`. It runs 96 real
+  turns across 32 agents with 1,000 seeded sessions, concurrent session activity,
+  and load-phase CPU profiles. Dreaming is disabled while ordinary indexing and
+  recaps remain enabled. Results stay in Actions artifacts. See
+  [Gateway concurrency benchmark](/ci/scheduled-workflows#gateway-concurrency-benchmark).
 - Runtime performance reports: dispatch `OpenClaw Performance` with
   `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs

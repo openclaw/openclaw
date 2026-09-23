@@ -423,7 +423,7 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "announce through channel", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -453,7 +453,7 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -607,7 +607,7 @@ describe("sessions_send gateway loopback", () => {
           terminalReply: { disposition: "visible", text: deliveredReply },
           terminalReceipt: { runId, sourceReplyDelivered: true },
         });
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -628,7 +628,7 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );

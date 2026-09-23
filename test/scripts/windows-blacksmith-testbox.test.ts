@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -321,7 +322,32 @@ foreach ($case in $cases) {
       ],
       { encoding: "utf8", timeout: 10000 },
     );
-    expect(result.status, result.stderr).toBe(0);
+    const redact = (text: string | null | undefined) => {
+      let value = text ?? "";
+      for (const [root, replacement] of [
+        [dir, "<fixture>"],
+        [process.cwd(), "<repo>"],
+        [os.homedir(), "<home>"],
+      ] as const) {
+        value = value
+          .replaceAll(root, replacement)
+          .replaceAll(root.replaceAll("\\", "/"), replacement);
+      }
+      return value.slice(0, 2048);
+    };
+    // A failed or timed-out spawn can have no status or stderr; expose its cause without paths.
+    const error = result.error as NodeJS.ErrnoException | undefined;
+    const outcome = {
+      status: result.status,
+      signal: result.signal,
+      error: error ? { message: redact(error.message), code: error.code } : undefined,
+    };
+    const diagnostic = JSON.stringify({
+      ...outcome,
+      stdout: redact(result.stdout),
+      stderr: redact(result.stderr),
+    });
+    expect(outcome, diagnostic).toEqual({ status: 0, signal: null, error: undefined });
     expect(JSON.parse(result.stdout)).toEqual({ installations: 40, descriptors: 25 });
   });
 });

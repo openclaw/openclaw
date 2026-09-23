@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 describe("cleanupDiscordProviderStartup", () => {
   it.each([false, true])(

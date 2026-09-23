@@ -150,7 +150,7 @@ it.each([false, true])(
           return prepared;
         },
       );
-      const acquire = vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait");
+      const inspect = vi.spyOn(checkpoint, "inspectStartupMigrationCheckpointWithLease");
       const operation = runDoctorConfigPreflight({
         migrateState: false,
         migrateLegacyConfig: false,
@@ -167,7 +167,7 @@ it.each([false, true])(
           "held",
         );
         expect(pendingRead).not.toHaveBeenCalled();
-        expect(acquire).not.toHaveBeenCalled();
+        expect(inspect).not.toHaveBeenCalled();
         expect(snapshotClosed).toBe(false);
         expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);

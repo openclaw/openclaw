@@ -8,7 +8,7 @@ run_hosted_prepare_gates() {
   local recent_sha=""
   local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
   if [ -z "$remote_record" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+    remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
@@ -30,13 +30,14 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo=$(printf '%s\n' "$remote_record" | jq -er '.baseRepository.nameWithOwner | select(type == "string" and length > 0)') || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
+  # A directory argv[1] keeps the imported module's standalone entrypoint inactive.
   local args=(
-    "$scripts_dir/verify-pr-hosted-gates.mjs"
+    "$scripts_dir"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
@@ -49,7 +50,13 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+  if printf '%s\n' "$remote_record" | run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" \
+    node --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { main } = await import(pathToFileURL(process.argv[1] + "/verify-pr-hosted-gates.mts").href);
+      main(process.argv.slice(2), JSON.parse(readFileSync(0, "utf8")));
+    ' "${args[@]}"; then
     local reused_head
     reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
     if [ -n "$reused_head" ]; then
@@ -346,6 +353,58 @@ write_gates_env_stamp() {
   } > .local/gates.env
 }
 
+# Correction publication requires the native gate owner's exact candidate
+# stamp. An explicit pending Crabbox stamp is admission to its protected-main
+# publisher, not proof; retain that separately authorized route.
+require_correction_publication_gates() (
+  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
+  local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
+  local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
+  require_artifact .local/gates.env || return 1
+  source .local/gates.env || return 1
+  local qualified_head="$LAST_VERIFIED_HEAD_SHA"
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$qualified_head" != "$head" ]; then
+    # GraphQL can assign a hosted OID for the identical reviewed local tree.
+    # Only a verified publication receipt can bind that pair.
+    local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    PR_NUMBER=""
+    [ -s .local/prep.env ] && source .local/prep.env || return 1
+    [ "$PR_NUMBER" = "$pr" ] && [ "$LOCAL_PREP_HEAD_SHA" = "$head" ] &&
+      [ "$PREP_HEAD_SHA" = "$qualified_head" ] &&
+      [ "$(pr_git rev-parse "$head^{tree}")" = "$(pr_git rev-parse "$qualified_head^{tree}")" ] || {
+      echo "Correction publication requires gates for the exact reviewed candidate." >&2
+      return 1
+    }
+  fi
+  case "$GATES_MODE" in
+    full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
+    hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    remote_testbox)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = blacksmith-testbox ] &&
+        [[ "$REMOTE_GATES_LEASE_ID" == tbx_* ]] || return 1
+      ;;
+    remote_crabbox_aws)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = aws ] &&
+        [[ "$REMOTE_GATES_RUN_ID" == run_* ]] && [[ "$REMOTE_GATES_LEASE_ID" == cbx_* ]] &&
+        [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
+      ;;
+    remote_crabbox_aws_pending)
+      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      require_active_org_admin_for_crabbox_gate >/dev/null || return 1
+      # The candidate is not hosted yet. Bind eligibility to the publication
+      # lease, then let the existing publisher verify the newly hosted head.
+      [ -n "${PREP_PUBLICATION_LEASE_SHA:-}" ] || return 1
+      read_crabbox_gate_pr_binding "$pr" "$PREP_PUBLICATION_LEASE_SHA" >/dev/null || return 1
+      ;;
+    *) echo "Unrecognized correction gate mode: $GATES_MODE" >&2; return 1 ;;
+  esac
+)
+
 derive_prepare_gate_change_plan() {
   PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
@@ -370,6 +429,7 @@ derive_prepare_gate_change_plan() {
 
 prepare_gates() {
   local pr="$1"
+  local remote_record="${2:-}"
   local gates_remote_mode
   gates_remote_mode=$(resolve_pr_gates_remote_mode) || return 1
   if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
@@ -387,6 +447,7 @@ prepare_gates() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
+  require_prepared_review "$pr" || return 1
   derive_prepare_gate_change_plan
   local changed_files="$PREPARE_GATE_CHANGED_FILES"
   local docs_only="$PREPARE_GATE_DOCS_ONLY"
@@ -417,9 +478,9 @@ prepare_gates() {
     exit 1
   fi
 
-  local remote_record="" changelog_mode
+  local changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    [ -n "$remote_record" ] || remote_record=$(read_pr_observation "$pr") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
       echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
       echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
@@ -544,6 +605,11 @@ prepare_gates() {
     fi
   fi
 
+  require_prepared_review "$pr" || return 1
+  [ "$(pr_git rev-parse HEAD)" = "$current_head" ] || {
+    echo "Candidate changed while gates ran; no gate stamp written." >&2
+    return 1
+  }
   write_gates_env_stamp \
     "$pr" \
     "$docs_only" \

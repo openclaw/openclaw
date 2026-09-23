@@ -85,7 +85,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}settings/about`);
           await waitForControlUiGatewayReady(page);
-          const strip = page.getByRole("group", { name: "Control UI build details" });
+          const strip = page.locator('dl[aria-label="Control UI build details"]');
           const copy = strip.locator(".about-commit__copy");
           await copy.waitFor();
           const original = await copy.elementHandle();
@@ -239,7 +239,7 @@ suite.define(() => {
       const aboutLink = page.getByRole("link", { name: "About", exact: true });
       await expect.poll(() => aboutLink.getAttribute("aria-current")).toBe("page");
 
-      const strip = page.getByRole("group", { name: "Control UI build details" });
+      const strip = page.locator('dl[aria-label="Control UI build details"]');
       const items = strip.locator(":scope > dd");
       await expect.poll(() => items.count()).toBe(3);
       await expect.poll(() => items.nth(0).textContent()).toContain("2026.7.10");

@@ -31,7 +31,7 @@ import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { AsyncQuestionPresentation } from "./chat-async-question.ts";
+import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
@@ -97,6 +97,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
+  progressCardLifetime?: object;
   progressCardInitialLoading?: boolean;
   progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;
@@ -139,6 +140,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputNotice?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
@@ -173,6 +175,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDismissRealtimeTalkInputNotice?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;

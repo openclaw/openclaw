@@ -8,6 +8,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -154,6 +155,7 @@ export async function createGatewayHttpTransport(params: {
   ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
 }> {
   const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   if (params.testListener) {
     const address = params.testListener.address();
     if (
@@ -178,13 +180,15 @@ export async function createGatewayHttpTransport(params: {
   const getHookDispatcher = async () => {
     const { createGatewayHookDispatcher } = await import("./server/hooks.js");
     return (loadedHookDispatcher ??= runWithSpawnBroker(spawnBroker, () =>
-      createGatewayHookDispatcher({
-        deps: params.deps,
-        logHooks: params.logHooks,
-        ...(params.getGatewayRequestContext
-          ? { resolveGatewayContext: params.getGatewayRequestContext }
-          : {}),
-      }),
+      runWithReadOnlyWorkers(() =>
+        createGatewayHookDispatcher({
+          deps: params.deps,
+          logHooks: params.logHooks,
+          ...(params.getGatewayRequestContext
+            ? { resolveGatewayContext: params.getGatewayRequestContext }
+            : {}),
+        }),
+      ),
     ));
   };
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {

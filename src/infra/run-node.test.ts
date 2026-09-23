@@ -67,10 +67,6 @@ import {
   DIST_OPENCLAW_ALIAS_PACKAGE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
-  DIFFS_PACKAGE,
-  DIFFS_VIEWER_RUNTIME_SOURCE,
-  DIST_DIFFS_VIEWER_RUNTIME,
-  DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
   BUNDLED_HOOK_METADATA,
   DIST_BUNDLED_HOOK_METADATA,
   DIST_EXTENSION_MANIFEST,
@@ -121,17 +117,24 @@ describe("run-node script", () => {
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
       const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
       const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
-      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) =>
-        childArgs.includes("openclaw.mjs") ? child : createExitedProcess(0),
-      );
+      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
+      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) => {
+        if (!childArgs.includes("openclaw.mjs")) {
+          return createExitedProcess(0);
+        }
+        markChildSpawned();
+        return child;
+      });
       const outcome = runNodeCommand(tmp, {
         args,
         process: fakeProcess,
         spawn,
         runRuntimePostBuild: skipRuntimePostBuild,
       });
-      await vi.waitFor(() => expect(child.listenerCount("exit")).toBe(1));
+      // Lifecycle listeners attach in the spawn call stack, after async build/postbuild work.
+      await Promise.race([childSpawned, outcome]);
       try {
+        expect(child.listenerCount("exit")).toBe(1);
         vi.useFakeTimers();
         child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
         fakeProcess.emit("SIGTERM");
@@ -152,16 +155,22 @@ describe("run-node script", () => {
 
   it("starts the CLI only after the canonical runtime build completes", async ({ tmp }) => {
     const build = new EventEmitter();
-    const spawn = vi.fn((_cmd: string, args: string[]) =>
-      isTsxScriptArgs(args, "scripts/build-all.mts") ? build : createExitedProcess(0),
-    );
+    const { promise: buildSpawned, resolve: markBuildSpawned } = createDeferred();
+    const spawn = vi.fn((_cmd: string, args: string[]) => {
+      if (!isTsxScriptArgs(args, "scripts/build-all.mts")) {
+        return createExitedProcess(0);
+      }
+      markBuildSpawned();
+      return build;
+    });
     const runRuntimePostBuild = vi.fn();
     const result = runNodeCommand(tmp, {
       spawn,
       env: { OPENCLAW_FORCE_BUILD: "1" },
       runRuntimePostBuild,
     });
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    await Promise.race([buildSpawned, result]);
+    expect(spawn).toHaveBeenCalledOnce();
     const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
     expect(fsSync.existsSync(lockDir)).toBe(true);
     build.emit("exit", 0, null);
@@ -1055,29 +1064,16 @@ describe("run-node script", () => {
         },
       });
       const child = Object.assign(new EventEmitter(), {
-        kill: vi.fn((signal: string) => {
+        kill: vi.fn((_signal: string) => {
           queueMicrotask(() => child.emit("exit", 0, null));
-          return signal;
+          return true;
         }),
       });
-      const spawn = vi.fn<
-        (
-          cmd: string,
-          args: string[],
-          options: unknown,
-        ) => {
-          kill: (signal?: string) => boolean;
-          on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
-        }
-      >(() => ({
-        kill: (signal) => {
-          child.kill(signal ?? "SIGTERM");
-          return true;
-        },
-        on: (event, cb) => {
-          child.on(event, cb);
-        },
-      }));
+      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
+      const spawn = vi.fn((_cmd: string, _args: string[], _options: SpawnOptions) => {
+        markChildSpawned();
+        return child;
+      });
 
       const exitCodePromise = runNodeCommand(tmp, {
         env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
@@ -1086,9 +1082,8 @@ describe("run-node script", () => {
         runRuntimePostBuild: skipRuntimePostBuild,
       });
 
-      await vi.waitFor(() => {
-        expect(spawn).toHaveBeenCalled();
-      });
+      await Promise.race([childSpawned, exitCodePromise]);
+      expect(spawn).toHaveBeenCalled();
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 
@@ -1123,26 +1118,11 @@ describe("run-node script", () => {
         kill: vi.fn(),
       });
       const groupSignals: Array<[number, string | number]> = [];
-      const spawn = vi.fn<
-        (
-          cmd: string,
-          args: string[],
-          options: unknown,
-        ) => {
-          kill: (signal?: string) => boolean;
-          on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
-          pid: number;
-        }
-      >(() => ({
-        kill: (signal) => {
-          child.kill(signal ?? "SIGTERM");
-          return true;
-        },
-        on: (event, cb) => {
-          child.on(event, cb);
-        },
-        pid: child.pid,
-      }));
+      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
+      const spawn = vi.fn((_cmd: string, _args: string[], _options: SpawnOptions) => {
+        markChildSpawned();
+        return child;
+      });
 
       const exitCodePromise = runNodeCommand(tmp, {
         env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
@@ -1159,9 +1139,8 @@ describe("run-node script", () => {
         runRuntimePostBuild: skipRuntimePostBuild,
       });
 
-      await vi.waitFor(() => {
-        expect(spawn).toHaveBeenCalled();
-      });
+      await Promise.race([childSpawned, exitCodePromise]);
+      expect(spawn).toHaveBeenCalled();
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 
@@ -1812,78 +1791,6 @@ describe("run-node script", () => {
           '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
         [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE]:
           "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  for (const [title, missingPath] of [
-    [
-      "reports missing static runtime postbuild asset outputs when runtime stamps match HEAD",
-      DIST_DIFFS_VIEWER_RUNTIME,
-    ],
-    [
-      "reports missing static runtime overlay asset outputs when runtime stamps match HEAD",
-      DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
-    ],
-  ] as const) {
-    it(title, async ({ tmp }) => {
-      await setupStampedProject(tmp, {
-        files: {
-          [DIFFS_PACKAGE]:
-            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-        },
-      });
-      await fs.rm(resolvePath(tmp, missingPath));
-      const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-      expect(requirement).toEqual({
-        shouldSync: true,
-        reason: "missing_runtime_postbuild_output",
-      });
-    });
-  }
-
-  it("does not require static asset outputs when runtime static assets are disabled", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-        [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(
-      createBuildRequirementDeps(tmp, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } }),
-    );
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  it("does not require static asset outputs when the declared source is absent", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });

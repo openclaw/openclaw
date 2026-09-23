@@ -112,6 +112,65 @@ it.each(["returned false", "ESRCH"])(
   },
 );
 
+it.each([false, true])(
+  "retains signal failures after strict POSIX cleanup joins (leader signal fails: %s)",
+  async (leaderSignalFails) => {
+    const root = dirs.make("managed-joined-diagnostics-");
+    const owner = createVitestResourceOwner(root);
+    const child = new ChildProcess();
+    Object.defineProperties(child, { pid: { value: 12345 }, exitCode: { value: 0 } });
+    const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+    const leaderError = Object.assign(new Error("leader signal denied"), { code: "EACCES" });
+    mocks.spawn.mockReturnValue(child);
+    const leaderSignal = vi.spyOn(child, "kill").mockImplementation(() => {
+      if (leaderSignalFails) {
+        throw leaderError;
+      }
+      return false;
+    });
+    let terminationAttempted = false;
+    const groupSignal = vi.spyOn(process, "kill").mockImplementation((_pid, received) => {
+      if (received === 0) {
+        throw Object.assign(new Error("group observation"), {
+          code: terminationAttempted ? "ESRCH" : "EPERM",
+        });
+      }
+      terminationAttempted = true;
+      throw groupError;
+    });
+
+    await expect(
+      runManagedCommand({
+        bin: "fixture",
+        platform: "darwin",
+        shell: false,
+        stdio: "ignore",
+        requireProcessTreeExit: true,
+        env: { TMPDIR: root },
+        onReady: () => {
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processGroupId: 12345,
+      processTreeState: "terminated",
+      cause: expect.objectContaining({
+        name: "AggregateError",
+        errors: leaderSignalFails ? [groupError, leaderError] : [groupError],
+      }),
+    });
+    expect(groupSignal.mock.calls).toEqual([
+      [-12345, 0],
+      [-12345, "SIGKILL"],
+      [-12345, 0],
+    ]);
+    expect(leaderSignal).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    owner.assertReleased();
+  },
+);
+
 it.each([
   ["win32", true, true],
   ["win32", false, true],

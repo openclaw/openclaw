@@ -17,6 +17,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
+import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
@@ -88,6 +89,7 @@ export function createApplicationTheme(
   let disposed = false;
   const publish = () => {
     const generation = ++presentationGeneration;
+    setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {

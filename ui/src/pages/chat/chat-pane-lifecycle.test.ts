@@ -10,9 +10,12 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  createGatewayBrowserClientFixture,
   createInitializationContext,
   createTestChatPane,
   type TestChatPane,
@@ -24,6 +27,7 @@ import {
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
+import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -119,6 +123,56 @@ describe("chat pane first-turn attachment lifecycle", () => {
       pane.disconnectedCallback();
     }
   });
+});
+
+describe("chat pane initial panel layout", () => {
+  it.each(["absent", "closed", "open"] as const)(
+    "restores its own %s layout instead of another split pane's layout",
+    (preference) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const left = "agent:main:left";
+      const right = "agent:main:right";
+      const rightLayout = openSlot({ columns: [] }, "workspace");
+      const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "tasks"), preference === "open");
+      const client = createGatewayBrowserClientFixture();
+      const context = createInitializationContext(client);
+      const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+      pane.context = context;
+      pane.sessionKey = left;
+      pane.chatMessagesBySession = new Map();
+      patchSettings({
+        sessionKey: right,
+        sidebarSessionLayouts: {
+          [right]: rightLayout,
+          ...(preference !== "absent" ? { [left]: leftLayout } : {}),
+        },
+        sidebarSessionActivePanels: {
+          [right]: "workspace",
+          ...(preference !== "absent" ? { [left]: "tasks" } : {}),
+        },
+      });
+      const stopAfterAttach = new Error("stop after attach");
+      vi.spyOn(pane.chatState, "attach").mockImplementation(() => {
+        throw stopAfterAttach;
+      });
+      const expectOwnLayout = () => {
+        expect(pane.state.sessionKey).toBe(left);
+        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "workspace")).toBe(false);
+        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "tasks")).toBe(preference === "open");
+        expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "tasks");
+      };
+      try {
+        expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+        expectOwnLayout();
+        pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
+        expectOwnLayout();
+        expect(loadSettings().sidebarSessionLayouts?.[right]).toMatchObject(rightLayout);
+        expect(loadSettings().sessionKey).toBe(right);
+      } finally {
+        pane.disconnectedCallback();
+      }
+    },
+  );
 });
 
 describe("chat pane session suggestion lifecycle", () => {

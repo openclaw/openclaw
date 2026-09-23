@@ -413,6 +413,20 @@ export function threadStartResult(threadId = "thread-1", options: { cwd?: string
   return createThreadStartResult(threadId, cwd);
 }
 
+export function createThreadStartRequest(threadId = "thread-1") {
+  const responses: Record<string, unknown> = {
+    "configRequirements/read": { requirements: null },
+    "config/read": { config: {}, origins: {}, layers: [] },
+    "thread/start": threadStartResult(threadId),
+  };
+  return vi.fn(async (method: string, _params?: unknown) => {
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return responses[method];
+  });
+}
+
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
   return {
     method: "account/rateLimits/updated",

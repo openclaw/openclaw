@@ -94,11 +94,12 @@ describe("worker turn launcher remote handoff", () => {
     manager.appendMessage(makeTextToolResult("call-1", "read", "result", false, 12));
     let descriptor: WorkerLaunchDescriptor | undefined;
     const environment = browserEnvironment();
+    environment.desktop!.apps![0]!.args = ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"];
     const bootstrapReceipt = environment.bootstrapReceipt;
     if (!bootstrapReceipt) {
       throw new Error("expected bootstrap receipt");
     }
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const reconcileWorkspace = vi.fn(
       async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
         if (request.source.kind !== "local") {
@@ -320,6 +321,7 @@ describe("worker turn launcher remote handoff", () => {
     expect(descriptor?.assignment.browser).toEqual({
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      launcherArgs: ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"],
     });
     expect(descriptor?.assignment.initialMessages).toEqual([
       {
@@ -487,7 +489,7 @@ describe("worker turn launcher remote handoff", () => {
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => browserEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),

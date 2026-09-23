@@ -114,7 +114,10 @@ describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
-  async function installWithNpmResult(npmResult: SpawnResult) {
+  async function installWithNpmResult(
+    npmResult: SpawnResult | Promise<SpawnResult>,
+    activity?: import("./install-progress.js").InstallActivityObserver["activity"],
+  ) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
@@ -131,7 +134,7 @@ describe("installPackageDir", () => {
       }),
       "utf-8",
     );
-    vi.mocked(runCommandWithTimeout).mockResolvedValue(npmResult);
+    vi.mocked(runCommandWithTimeout).mockImplementation(() => Promise.resolve(npmResult));
 
     return await installPackageDir({
       sourceDir,
@@ -141,6 +144,7 @@ describe("installPackageDir", () => {
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: true,
       depsLogMessage: "Installing deps…",
+      logger: { activity },
     });
   }
 
@@ -148,6 +152,46 @@ describe("installPackageDir", () => {
     vi.restoreAllMocks();
     await fixtureRootTracker.cleanup();
   });
+
+  it.each([0, 1])(
+    "reports dependency settlement only after npm finishes with code %s",
+    async (code) => {
+      const pending = createDeferred<SpawnResult>();
+      const events: import("../../packages/gateway-protocol/src/schema/plugins.js").PluginInstallActivity[] =
+        [];
+      const install = installWithNpmResult(pending.promise, (event) => {
+        events.push(event);
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(events).toContainEqual(
+            expect.objectContaining({ stage: "dependencies", status: "started" }),
+          ),
+        );
+        expect(events.map(({ stage, status }) => [stage, status])).toEqual([
+          ["files", "started"],
+          ["files", "completed"],
+          ["dependencies", "started"],
+        ]);
+      } finally {
+        pending.resolve({
+          code,
+          stdout: "",
+          stderr: code ? "registry refused dependency" : "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        });
+        await install;
+      }
+      const result = await install;
+      expect(result.ok).toBe(code === 0);
+      expect(events.at(-1)).toEqual({ ...events[2], status: code === 0 ? "completed" : "failed" });
+      if (!result.ok) {
+        expect(result.error).toContain("registry refused dependency");
+      }
+    },
+  );
 
   it("keeps the existing install in place when staged validation fails", async () => {
     await fixtureRootTracker.setup();

@@ -4,11 +4,24 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
+import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { startUpdateRunWatcher } from "../update-run-watcher.js";
+import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -59,6 +72,7 @@ beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-status-");
 });
 afterEach(async () => {
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   warn.mockClear();
@@ -66,6 +80,111 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it.each(["accepting", "suspension"] as const)(
+    "rechecks root ownership after a lazy restart read resets into %s",
+    async (nextPhase) => {
+      markGatewayRestartDraining();
+      const preparing = createDeferredCore();
+      const prepared = createDeferredCore();
+      const reconciling = createDeferredCore();
+      const reconciled = createDeferredCore();
+      const reconcile = vi
+        .spyOn(ledger, "getUpdateRunWithReconciliationAsync")
+        .mockImplementation(async () => {
+          reconciling.resolve();
+          await reconciled.promise;
+          return { run: undefined };
+        });
+      const handlers = createLazyCoreHandlers({
+        methods: ["update.runs.get"],
+        loadHandlers: async () => {
+          preparing.resolve();
+          await prepared.promise;
+          return updateStatusHandlers;
+        },
+      });
+      const respond = vi.fn<RespondFn>();
+      const request = handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "read-after-rollback",
+          method: "update.runs.get",
+          params: { runId: randomUUID() },
+        },
+        respond,
+        client: {
+          connId: "read-after-rollback",
+          connect: {
+            role: "operator",
+            scopes: ["operator.admin"],
+            client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
+            minProtocol: 1,
+            maxProtocol: 1,
+          },
+        },
+        isWebchatConnect: () => false,
+        context: { logGateway } as GatewayRequestContext,
+        methodRegistry: createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(handlers)),
+      });
+      await preparing.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      resetGatewayWorkAdmission();
+      if (nextPhase === "suspension") {
+        expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+        prepared.resolve();
+        await request;
+        expect(reconcile).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      } else {
+        prepared.resolve();
+        await reconciling.promise;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        reconciled.resolve();
+        await request;
+        expect(respond).toHaveBeenCalledWith(true, { run: null });
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
+  it.each(["signal", "drain"] as const)(
+    "reads recorded progress without reconciliation during restart %s",
+    async (phase) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+      clock.mockReturnValue(now);
+      if (phase === "signal") {
+        expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+      } else {
+        markGatewayRestartDraining();
+      }
+      const response = await requestUpdateRead("update.runs.get", { runId: run.runId });
+      if (phase === "signal") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      } else {
+        expect(response).toHaveBeenCalledWith(true, { run });
+      }
+      expect(getUpdateRun(run.runId)).toEqual(run);
+      expect(warn).not.toHaveBeenCalled();
+
+      resetGatewayWorkAdmission();
+      await requestUpdateRead("update.runs.get", { runId: run.runId });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        reason: "legacy-driver-expired",
+      });
+    },
+  );
+
   it("reads fresh status concurrently without copying the shared database", async () => {
     const run = createUpdateRun({ trigger: "api" });
     const backup = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationFromOwnedDatabase");

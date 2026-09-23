@@ -392,22 +392,28 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     let starts = 0;
     let observed: { pending: boolean; starts: number } | undefined;
     f.menu.addEventListener("animationstart", () => starts++);
-    const observer = new MutationObserver(() => {
+    const animationName = f.menu.style.animationName;
+    const getAnimations = f.menu.getAnimations.bind(f.menu);
+    // Create the real CSS animation at its first sample so it cannot start in an earlier frame.
+    f.menu.style.animationName = "none";
+    const sample = vi.spyOn(f.menu, "getAnimations").mockImplementation((options) => {
       if (!f.menu.classList.contains("show")) {
-        return;
+        return getAnimations(options);
       }
-      observer.disconnect();
-      // Queue behind the helper's first frame, before the pending CSS animation starts.
-      requestAnimationFrame(() => {
+      sample.mockRestore();
+      f.menu.style.animationName = animationName;
+      const animations = getAnimations(options);
+      // The owner captures native finished promises before this cancellation microtask.
+      queueMicrotask(() => {
         observed = {
-          pending: f.menu.getAnimations().some((animation) => animation.pending),
+          pending: animations.some((animation) => animation.pending),
           starts,
         };
         f.dropdown.open = false;
         f.outside.focus();
       });
+      return animations;
     });
-    observer.observe(f.menu, { attributes: true, attributeFilter: ["class"] });
     try {
       f.dropdown.open = true;
       await expect.poll(() => observed).toEqual({ pending: true, starts: 0 });
@@ -416,7 +422,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       expect(document.activeElement).toBe(f.outside);
       await open(f);
     } finally {
-      observer.disconnect();
+      sample.mockRestore();
+      f.menu.style.animationName = animationName;
     }
   });
 
@@ -526,6 +533,45 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     await frame();
     expect(document.activeElement).toBe(f.outside);
   });
+
+  it("preserves a row focused as the popup becomes usable", async () => {
+    const f = await fixture();
+    const shown = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    f.dropdown.open = true;
+    await f.dropdown.updateComplete;
+    await f.popup.updateComplete;
+    f.parent.focus();
+    expect(document.activeElement).toBe(f.parent);
+
+    await shown;
+    expect(document.activeElement).toBe(f.parent);
+  });
+
+  it.each(["search editor", "submenu row"] as const)(
+    "preserves %s focus while the root dropdown finishes opening",
+    async (target) => {
+      const f = await fixture();
+      const search = document.createElement("input");
+      search.type = "search";
+      search.slot = "submenu";
+      f.parent.prepend(search);
+      const focused = target === "search editor" ? search : f.nested;
+      const shown = new Promise<void>((resolve) => {
+        f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+      });
+
+      await duringAnimation(f, "show", async () => {
+        await f.parent.openSubmenu();
+        focused.focus();
+        expect(document.activeElement).toBe(focused);
+      });
+
+      await shown;
+      expect(document.activeElement).toBe(focused);
+    },
+  );
 
   it("preserves keyboard selection made during the dropdown opening animation", async () => {
     const { userEvent } = await import("vitest/browser");

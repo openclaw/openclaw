@@ -12,7 +12,10 @@ import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeCachedOpenClawAgentDatabase,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
@@ -24,15 +27,20 @@ import {
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
+import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import * as verification from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
   resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
@@ -95,14 +103,57 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+it.each(["settled", "pending"] as const)(
+  "prepares missing storage after an existing-only miss (%s)",
+  async (timing) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-prepare-missing-")) };
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "main", env });
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent: () => execution.assertCurrent(),
+      createAdmission(binding) {
+        return () => ({
+          nativeLocations: binding.nativeLocations,
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(request);
+            execution.assertCurrent();
+            if (!grant()) {
+              throw new Error("Missing database fixture lost admission");
+            }
+          }),
+        });
+      },
+    };
+    try {
+      const missing = execution.runExisting(source, async () => "unexpected");
+      if (timing === "settled") {
+        expect(await missing).toBeUndefined();
+      }
+      const preparing = execution.prepare(source);
+      expect(await missing).toBeUndefined();
+      await preparing;
+      expect(fs.existsSync(execution.path)).toBe(true);
+      expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
+    } finally {
+      await execution.release();
+    }
+  },
+);
+
 it.each([
   "verified",
+  "two-leases",
+  "two-leases-missing-metadata",
+  "two-leases-stale",
+  "two-leases-unknown-owner",
+  "two-leases-unclean",
+  "prepared-existing",
   "invalidated",
   "failed",
   "revoked-before-grant",
   "missing-metadata",
   "version-mismatch",
   "closed-host",
+  "closed-host-blocked",
   "closed-host-revoked",
   "closed-host-replaced",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
@@ -113,13 +164,43 @@ it.each([
   counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
-  const siblingLease = closedHost
-    ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
-    : undefined;
+  const siblingLease =
+    closedHost || proof.startsWith("two-leases")
+      ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
+      : undefined;
+  if (proof === "two-leases") {
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+  }
+  if (proof === "two-leases-missing-metadata") {
+    removeAgentIntegrityMetadataForTest(env);
+  }
+  if (proof === "two-leases-stale" || proof === "two-leases-unknown-owner") {
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE agent_database_leases SET owner_start_time = ? WHERE lease_id = ?")
+      .run(proof === "two-leases-stale" ? -1 : null, siblingLease!);
+  } else if (proof === "two-leases-unclean") {
+    releaseOpenClawAgentDatabaseLease(siblingLease!, { env });
+  }
   const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
     ? undefined
     : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (closedHost) {
+  if (proof === "closed-host-blocked") {
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
+    const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+    try {
+      reader.exec("BEGIN");
+      reader
+        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
+        .get();
+      database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.walMaintenance.health?.state).toBe("blocked");
+      expect(database.db.isOpen).toBe(false);
+      expect(readOpenClawAgentIntegrityVerification(database.path, env)).toBeUndefined();
+    } finally {
+      reader.close();
+    }
+  } else if (closedHost) {
     closeOpenClawAgentDatabaseByPath(database.path);
   }
   const assertCurrent = () => {
@@ -180,21 +261,36 @@ it.each([
       store.close();
     }
   }
+  const quickCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseQuickCheck");
   try {
     if (proof === "failed") {
-      await expect(generation.runExisting(source, async () => "opened")).rejects.toThrow(
+      await expect(generation.run(source, async () => "opened")).rejects.toThrow(
         "OpenClaw agent database claim is no longer current",
       );
       expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
       expect(Array.from(new Int32Array(counter.checks))).toEqual([0, 0]);
       return;
     }
-    await expect(generation.runExisting(source, async () => "opened")).resolves.toBe("opened");
+    await expect(
+      generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
+    ).resolves.toBe("opened");
+    if (proof === "prepared-existing") {
+      expect(quickCheck).toHaveBeenCalledOnce();
+    }
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
-      proof === "verified" || proof === "closed-host" ? [0, 0] : [1, 1],
+      proof === "verified" ||
+        proof === "prepared-existing" ||
+        proof === "closed-host" ||
+        proof === "closed-host-blocked" ||
+        proof === "two-leases" ||
+        proof === "two-leases-missing-metadata" ||
+        proof === "version-mismatch"
+        ? [0, 0]
+        : [1, 1],
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
+    quickCheck.mockRestore();
     try {
       await generation.close();
     } finally {

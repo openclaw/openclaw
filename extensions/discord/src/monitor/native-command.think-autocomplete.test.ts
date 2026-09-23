@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
+  useBundledProviderPolicyArtifactsForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearSessionStoreCacheForTest,
@@ -13,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
@@ -439,7 +441,7 @@ describe("discord native /think autocomplete", () => {
     expect(values).toContain("max");
   });
 
-  it("falls back when a configured binding is unavailable", async () => {
+  it("reads configured binding choices without preparing its runtime", async () => {
     const cfg = createConfig();
     resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
@@ -469,8 +471,8 @@ describe("discord native /think autocomplete", () => {
       threadBindings: createNoopThreadBindingManager("default"),
     });
 
-    expect(context).toBeNull();
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(context).toMatchObject({ provider: "openai", model: "gpt-5.4", agentId: "main" });
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
 
     const { command, levelArg } = requireThinkLevelCommand();
     const choices = resolveCommandArgChoices({
@@ -482,6 +484,10 @@ describe("discord native /think autocomplete", () => {
       catalog: [],
     });
     const values = choices.map((choice) => choice.value);
-    expect(values).not.toContain("xhigh");
+    expect(values).toContain("xhigh");
   });
 });
+
+installDiscordIngressTestRuntime();
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);

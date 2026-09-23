@@ -891,6 +891,43 @@ syncBuiltinESMExports();
       stderr: [`missing required tar entry ${CODE_MODE_WORKER_PATH}`],
     },
     {
+      name: "accepts executor-plugin packages with the default Node worker",
+      inventory: [
+        "dist/agents/code-mode-node.worker.js",
+        "dist/plugin-sdk/code-mode-executor-runtime.js",
+      ],
+      files: {
+        "dist/agents/code-mode-node.worker.js": "export {};\n",
+        "dist/plugin-sdk/code-mode-executor-runtime.js": "export {};\n",
+      },
+      options: {
+        includeCodeModeWorker: false,
+        packageJson: {
+          exports: {
+            "./plugin-sdk/code-mode-executor-runtime":
+              "./dist/plugin-sdk/code-mode-executor-runtime.js",
+          },
+        },
+      },
+      status: 0,
+      successText: true,
+    },
+    {
+      name: "rejects executor-plugin packages that only ship the retired QuickJS worker",
+      inventory: ["dist/plugin-sdk/code-mode-executor-runtime.js"],
+      files: { "dist/plugin-sdk/code-mode-executor-runtime.js": "export {};\n" },
+      options: {
+        packageJson: {
+          exports: {
+            "./plugin-sdk/code-mode-executor-runtime":
+              "./dist/plugin-sdk/code-mode-executor-runtime.js",
+          },
+        },
+      },
+      status: "nonzero",
+      stderr: ["missing required tar entry dist/agents/code-mode-node.worker.js"],
+    },
+    {
       name: "rejects Code Mode workers that postinstall would remove",
       version: FIRST_CODE_MODE_WORKER_VERSION,
       options: { includeCodeModeWorkerInInventory: false, postinstall: true },

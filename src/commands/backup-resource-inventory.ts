@@ -1,5 +1,5 @@
 /** Frozen backup ownership and resource policy shared by archive traversal and SQLite discovery. */
-import { statSync, type Dirent, type Stats } from "node:fs";
+import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
@@ -64,6 +64,7 @@ export type BackupResourcePlan = BackupResourcePolicy &
 export type BackupResourceInventory = BackupResourcePolicy &
   Readonly<{
     coreDatabases: readonly BackupCoreDatabase[];
+    coreDatabaseSourcePaths: readonly string[];
     resolveSqliteSource: (
       sourcePath: string,
       identity?: Stats,
@@ -328,21 +329,54 @@ export function sealBackupResourceInventory(
   resources: BackupResourcePlan,
   coreDatabases: readonly BackupCoreDatabase[],
 ): BackupResourceInventory {
-  const owners = Object.freeze(coreDatabases.map((owner) => Object.freeze({ ...owner })));
+  const owners: BackupCoreDatabase[] = [];
+  const ownersByPath = new Map<string, BackupCoreDatabase>();
+  const ownersByRealpath = new Map<string, BackupCoreDatabase>();
+  for (const database of coreDatabases) {
+    const sourcePath = path.resolve(database.sourcePath);
+    const realPath = database.identity ? realpathSync(database.sourcePath) : sourcePath;
+    const previous =
+      ownersByRealpath.get(realPath) ??
+      owners.find(
+        (owner) =>
+          owner.identity &&
+          database.identity &&
+          sameFileIdentity(owner.identity, database.identity),
+      );
+    if (
+      previous &&
+      (previous.role !== database.role ||
+        (previous.role === "agent" &&
+          database.role === "agent" &&
+          previous.agentId !== database.agentId))
+    ) {
+      throw new Error(`SQLite path aliases multiple core database owners: ${sourcePath}`);
+    }
+    // Registry rows can spell the same owner's path differently. Keep one owner
+    // and retain every archive name so aliases reuse its verified snapshot.
+    const owner = previous ?? Object.freeze({ ...database, sourcePath });
+    const archiveOwner = ownersByPath.get(sourcePath);
+    if (archiveOwner && archiveOwner !== owner) {
+      throw new Error(`SQLite path aliases multiple core database owners: ${sourcePath}`);
+    }
+    if (!previous) {
+      owners.push(owner);
+    }
+    ownersByPath.set(sourcePath, owner);
+    ownersByRealpath.set(realPath, owner);
+  }
   const protectedPaths = Object.freeze(
-    [
-      ...new Set([...resources.protectedPaths, ...owners.map(({ sourcePath }) => sourcePath)]),
-    ].toSorted(),
+    [...new Set([...resources.protectedPaths, ...ownersByPath.keys()])].toSorted(),
   );
   const resolveSqliteSource: BackupResourceInventory["resolveSqliteSource"] = (
     sourcePath,
     identity,
   ) => {
     const candidate = path.resolve(sourcePath);
-    const exact = owners.filter((database) => path.resolve(database.sourcePath) === candidate);
+    const exact = ownersByPath.get(candidate);
     let current = identity;
     let unresolvableLink = false;
-    if (!exact.length && !current) {
+    if (!exact && !current) {
       try {
         current = statSync(candidate, { throwIfNoEntry: false });
       } catch (error) {
@@ -352,18 +386,15 @@ export function sealBackupResourceInventory(
         unresolvableLink = true;
       }
     }
-    const aliases = exact.length
-      ? exact
-      : current
-        ? owners.filter(
+    const owner =
+      exact ??
+      (current
+        ? owners.find(
             (database) => database.identity && sameFileIdentity(database.identity, current),
           )
-        : [];
-    if (aliases.length > 1) {
-      throw new Error(`SQLite path aliases multiple core database owners: ${candidate}`);
-    }
+        : undefined);
     return (
-      aliases[0] ??
+      owner ??
       (resources.pluginResourceRoots.some((root) => isPathWithin(candidate, root))
         ? { role: "plugin" }
         : unresolvableLink
@@ -374,7 +405,10 @@ export function sealBackupResourceInventory(
 
   return Object.freeze({
     ...createBackupPathPolicy({ ...resources, protectedPaths }),
-    coreDatabases: owners,
+    coreDatabases: Object.freeze(owners),
+    coreDatabaseSourcePaths: Object.freeze(
+      [...ownersByPath].filter(([, owner]) => owner.identity).map(([sourcePath]) => sourcePath),
+    ),
     resolveSqliteSource,
   });
 }

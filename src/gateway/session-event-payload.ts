@@ -134,6 +134,7 @@ function buildGatewaySessionEventFields(params: {
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
+    providerReview: sessionRow.providerReview ?? null,
     // Explicit null lets a newer start evict the previous terminal run identity.
     lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.

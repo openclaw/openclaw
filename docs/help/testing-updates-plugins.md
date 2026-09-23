@@ -166,7 +166,9 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status.
+  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
+  OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
@@ -177,6 +179,34 @@ Important lanes:
   and shared runtime sentinels, and updates to the candidate tarball. Package
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
+
+Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
+model refs to run one `openclaw agent --local` marker turn per model after the
+update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
+OpenAI uses `OPENAI_API_KEY`; missing selected keys fail the lane. Docker forwards
+only selected provider keys. Each turn has its own session and
+`live-<provider>.json` / `.err` artifacts (additional models from the same provider
+use `-2`, `-3`, etc.). `summary.json` records `liveModels.models` entries with
+`model`, `ok`, and `latencyMs`.
+
+The legacy `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1` form still selects
+`openai/gpt-5.5`, or `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL` when supplied.
+An explicit model list takes precedence over that flag; the summary records
+`liveModels.source` and `overridesLiveOpenai`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS` budget (default 180 seconds)
+applies separately to each turn. Live turns use the recipe's configured thinking
+default so each model can apply its supported reasoning levels. Scenarios that
+prohibit live providers retain that restriction.
+
+Frozen extended-stable candidate targets use their historical runner and reject
+both live-selection variables before Docker starts, with exit code 2.
+
+```bash
+# Export the three provider keys before invoking the lane.
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.5 \
+OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview" \
+pnpm test:docker:published-upgrade-survivor
+```
 
 Useful published-upgrade survivor variants:
 

@@ -20,6 +20,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
@@ -82,6 +83,85 @@ function usageLine(id: string): string {
     },
   })}\n`;
 }
+
+it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-corrupt-body";
+    const sessionFile = state.path("usage-corrupt-body.jsonl");
+    await fs.writeFile(sessionFile, usageLine("stored"));
+    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    const prepared = prepareUsageCostWorker({ agentId, sessionFiles: [sessionFile] });
+    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
+      undefined,
+      prepared.agentDir,
+    );
+    const request = {
+      kind: "sessions" as const,
+      pricingFingerprint,
+      sessions: [{ sessionFile }],
+      dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+    };
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const stored = db
+      .prepare(
+        "SELECT value_json, blob, updated_at FROM cache_entries WHERE scope = 'session-cost-usage-rollup-v3' AND key = ?",
+      )
+      .get(sessionFile)!;
+    if (!(stored.blob instanceof Uint8Array)) {
+      throw new Error("Expected stored usage body");
+    }
+    const corrupt = () =>
+      db
+        .prepare(
+          "UPDATE cache_entries SET blob = zeroblob(length(blob)) WHERE scope = 'session-cost-usage-rollup-v3' AND key = ?",
+        )
+        .run(sessionFile);
+    corrupt();
+    const rejected = await runUsageCostWorker(prepared, request);
+    expect(rejected).toMatchObject({
+      kind: "sessions",
+      summaries: [null],
+      cacheStatus: { status: "stale" },
+    });
+    if (rejected.kind !== "sessions") {
+      throw new Error("Expected rejected session report");
+    }
+    expect(rejected.invalidRows).toHaveLength(1);
+
+    // A valid newer writer wins before the old report's rebuild request arrives.
+    const newer = JSON.stringify({ ...JSON.parse(String(stored.value_json)), scannedAt: 999_999 });
+    db.prepare(
+      "UPDATE cache_entries SET value_json = ?, blob = ?, updated_at = updated_at + 1 WHERE scope = 'session-cost-usage-rollup-v3' AND key = ?",
+    ).run(newer, stored.blob, sessionFile);
+    const before = readSessionCostUsageRollupRows(agentId);
+    await refreshCostUsageCacheForAgent({
+      agentId,
+      sessionFiles: [sessionFile],
+      rebuildRows: rejected.invalidRows,
+    });
+    expect(readSessionCostUsageRollupRows(agentId)).toEqual(before);
+    expect(await runUsageCostWorker(prepared, request)).toMatchObject({
+      summaries: [{ totalTokens: 10 }],
+      invalidRows: [],
+    });
+
+    corrupt();
+    const current = await runUsageCostWorker(prepared, request);
+    if (current.kind !== "sessions") {
+      throw new Error("Expected current session report");
+    }
+    await refreshCostUsageCacheForAgent({
+      agentId,
+      sessionFiles: [sessionFile],
+      rebuildRows: current.invalidRows,
+    });
+    expect(await runUsageCostWorker(prepared, request)).toMatchObject({
+      summaries: [{ totalTokens: 10 }],
+      cacheStatus: { status: "fresh" },
+      invalidRows: [],
+    });
+  });
+});
 
 it("loads fresh session usage without executing cache reads on the caller", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -238,6 +318,54 @@ it("retains the process-held incognito cache without creating its sentinel file"
       summaries: [{ sessionId, sessionFile, totalTokens: 10, totalCost: 1 }],
       cacheStatus: { status: "fresh", cachedFiles: 1 },
     });
+    const { db } = openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
+    for (const changes of [1, Number.POSITIVE_INFINITY]) {
+      let changed = 0;
+      // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
+      const run = WorkerTaskPool.prototype.run;
+      const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+        this: WorkerTaskPool<unknown, unknown>,
+        input: WorkerTaskInput<unknown>,
+        options: WorkerTaskOptions<unknown>,
+      ) {
+        const onRequest = options.onRequest;
+        if (!onRequest) {
+          return run.call(this, input, options);
+        }
+        return run.call(this, input, {
+          ...options,
+          onRequest: (value, context) => {
+            if (changed < changes && isRecord(value) && value.kind === "memory-cache-body") {
+              db.prepare(`UPDATE cache_entries SET
+                value_json = json_set(value_json, '$.scannedAt', json_extract(value_json, '$.scannedAt') + 1),
+                updated_at = updated_at + 1 WHERE scope = 'session-cost-usage-rollup-v3'`).run();
+              changed++;
+            }
+            return onRequest(value, context);
+          },
+        });
+      });
+      try {
+        const reading = runUsageCostWorker(prepared, {
+          kind: "sessions",
+          pricingFingerprint,
+          sessions: [{ sessionId, sessionFile }],
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        });
+        if (changes === 1) {
+          await expect(reading).resolves.toMatchObject({
+            summaries: [{ totalTokens: 10, totalCost: 1 }],
+            cacheStatus: { status: "fresh", cachedFiles: 1 },
+          });
+          expect(changed).toBe(1);
+        } else {
+          await expect(reading).rejects.toMatchObject({ code: "unavailable" });
+          expect(changed).toBe(3);
+        }
+      } finally {
+        observer.mockRestore();
+      }
+    }
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -12,10 +12,12 @@ import {
   countPendingQueueItems,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryContextKey,
+} from "./delivery-context.js";
 import {
   clearFollowupDrainCallback,
-  createOverflowSummaryRetrySource,
   dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,

@@ -67,9 +67,13 @@ export function createProgressCardHandlers(
       if (!session) {
         return;
       }
-      sessionMutationAuthorization?.assertCurrent();
-      const card = await store.get(session.sessionKey, session.agentId);
-      sessionMutationAuthorization?.assertCurrent();
+      const readCard = async () => {
+        sessionMutationAuthorization?.assertCurrent();
+        const card = await store.get(session.sessionKey, session.agentId);
+        sessionMutationAuthorization?.assertCurrent();
+        return card;
+      };
+      const card = await readCard();
       if (!card) {
         respond(
           false,
@@ -81,7 +85,7 @@ export function createProgressCardHandlers(
       const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
       invocation.sessionMutationCommitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
-      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey);
+      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey, readCard);
     },
     "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {

@@ -218,8 +218,8 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policyRestart: "Policy changes take effect after the Gateway restarts.",
-      policySaved: "Retention policy saved. Restart the Gateway to apply it.",
+      policyApplies: "Policy changes apply without restarting the Gateway.",
+      policySaved: "Retention policy saved.",
       policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
       buildSnapshot: "Build snapshot",
       rebuild: "Rebuild",
@@ -250,7 +250,6 @@ const enSettings = {
         "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
-      buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
         requested: "Requested",
         provisioning: "Provisioning",
@@ -270,8 +269,7 @@ const enSettings = {
       recoverMessage:
         "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
       acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
-      recovered:
-        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recovered: "Capture reservation cleared. The next eligible worker can capture again.",
       recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
       migration: "Needs migration",
       migrationHint:
@@ -286,9 +284,11 @@ const enSettings = {
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
     deleteConfirm:
-      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     advertised: "Advertised",
-    restartRequired: "Restart required",
+    unavailable: "Unavailable",
+    profileSaved: "Profile saved. Build a snapshot from the Snapshots view.",
+    settingsSaved: "Saved. Changes apply without restarting the Gateway.",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
     catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
     providerFact: "Provider: {provider}",
@@ -341,7 +341,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Enable Browser and Terminal access on Linux, native Windows, or prepared macOS workers. Supports direct or coordinator-backed AWS and Azure, and coordinator-backed Hetzner. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -358,7 +358,8 @@ const enSettings = {
       suspendAfterHelp:
         "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
+      actionsHelp:
+        "New workers use the saved profile. Existing workers keep their provisioning settings.",
     },
     errors: {
       title: "Profile needs attention",
@@ -642,6 +643,11 @@ const enSettings = {
       checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
+      activePhase: "Updating · {phase}",
+      currentStep: "Current step",
+      runTarget: "Update target",
+      lastProgress: "Last progress",
+      scheduledUpdate: "Automatic update",
       commits: "Commits",
       available: "Update available {target}",
       upToDate: "Up to date",
@@ -670,11 +676,11 @@ const enSettings = {
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
       reportOwnerRequired:
-        "Reporting requires a connected Gateway owner with administrator access.",
+        "Reporting requires a connected, identified user with administrator access.",
       reportResult: "Failure report",
       reportSubmitting: "Submitting report…",
       reportCreated: "GitHub issue created",
-      reportFallback: "GitHub CLI submission was unavailable. Use the prefilled issue link.",
+      reportFallback: "Review and submit the prefilled issue in your browser.",
       reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
       reportRetryable: "No GitHub issue submission was started. This report can be retried.",
       reportDuplicate: "This update attempt was already reported.",
@@ -772,33 +778,47 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
-      chromeExtensionOnMac: "Chrome on this Mac",
       chromeExtensionDetected: "Installed",
       chromeExtensionNotInstalled: "Not installed",
       chromeExtensionUnknown: "Status unavailable",
-      chromeExtensionChecking: "Checking installation…",
-      chromeExtensionCheckAgain: "Check again",
-      chromeExtensionRepair: "Repair Mac connection",
-      chromeExtensionRepairHint:
-        "The extension is installed. Repair the Mac connection to enable automatic pairing.",
       chromeExtensionEnableHint:
         "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
-      chromeExtensionStatusFailed:
-        "Could not check Chrome installation automatically. You can still run setup. Make sure the OpenClaw Mac app and CLI are up to date.",
       chromeExtensionStatusUnsupported:
         "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
-      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionStatusFailed:
+        "Could not check Chrome installation automatically. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
+      chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
-        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
-      chromeExtensionPreparing: "Preparing Chrome…",
-      chromeExtensionPending:
-        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
-      chromeExtensionStoreRequired:
-        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
-      chromeExtensionInstalled:
-        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+        "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Working on this device…",
+      chromeExtensionRefresh: "Refresh setup status",
+      chromeExtensionVerify: "Verify connection",
+      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTabsHint:
+        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+      chromeExtensionPhases: {
+        inspection_required: "Setup required on this device.",
+        preparing: "Preparing Chrome on this device.",
+        needs_browser_action: "Chrome needs your attention on this device.",
+        waiting_for_connection: "Connection has not been verified on this device.",
+        ready: "Extension connected on this device.",
+        blocked: "Setup is blocked on this device.",
+      },
+      chromeExtensionNextActions: {
+        none: "",
+        install: "Choose Set up Chrome on this device to prepare the native host.",
+        open_chrome:
+          "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
+        approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
+        install_from_store:
+          "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
+        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        repair_native_host: "Check the local CLI installation, then run setup again.",
+        unsupported:
+          "Automatic setup is unavailable on this host. Follow the extension documentation.",
+      },
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -1148,14 +1168,14 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
-      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
-        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
+        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
-      scope: "Applies to everyone on this Gateway. Changes require a Gateway restart.",
+      scope: "Applies to everyone on this Gateway without restarting it.",
       claude: "Show Claude Code sessions",
       codex: "Show Codex sessions",
       opencode: "Show OpenCode sessions",
@@ -1255,6 +1275,9 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        noSearchRuntime: "Host memory search is unavailable",
+        noSearchRuntimeDescription:
+          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",

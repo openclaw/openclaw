@@ -113,7 +113,7 @@ sys.exit(record.main())
     path.join(root, "uv"),
     `#!${process.execPath}
     const fs=require('node:fs');
-    if(process.argv.includes('status')) { console.log(JSON.stringify({ok:true,authorized:true,testDc:true,tdlibVersion:'1.8.67',user:{id:123}})); }
+    if(process.argv.includes('status')) { console.log(JSON.stringify({ok:true,authorized:true,testDc:true,tdlibVersion:'1.8.67',user:{id:123},chatId:-1001})); }
     else if(process.argv.includes('prepare-group')) { console.log(JSON.stringify({ok:true,groupId:'-1001',status:'created'})); }
     else if(process.argv.includes('cleanup-group')) { console.log(JSON.stringify({ok:true,groupId:'-1001',status:'deleted'})); }
     else if(${JSON.stringify(mode)}==='uncertain-send') {

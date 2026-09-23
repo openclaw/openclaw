@@ -292,7 +292,7 @@ it("preserves stale wire responses without consuming sequences or replacing cano
 });
 
 it("keeps patch metadata and pin/archive timestamps coherent across reads", async ({ connect }) => {
-  const scenario = { sessionKey: notes.key, sessions: [notes] };
+  const scenario = { sessionKey: notes.key, sessions: [{ ...notes, updatedAt: 1 }] };
   const { request } = await connect(scenario);
   const readRow = async () => {
     const { payload } = await request("sessions.list", { archived: "all" });
@@ -309,8 +309,9 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
     return row;
   };
   const patch = (fields: Row) => request("sessions.patch", { key: notes.key, ...fields });
-  await patch({ color: "blue" });
-  expect((await readRow()).color).toBe("blue");
+  const committed = (await patch({ color: "blue" })).payload.entry as Row;
+  expect(committed.updatedAt).toBeGreaterThan(1);
+  expect(await readRow()).toMatchObject({ color: "blue", updatedAt: committed.updatedAt });
   await patch({ color: null });
   expect((await readRow()).color).toBeNull();
   await patch({ pinned: true });
@@ -323,9 +324,10 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
   expect(archived).toMatchObject({ archived: true, archivedAt: expect.any(Number), pinned: false });
   expect(archived).not.toHaveProperty("pinnedAt");
   await patch({ archived: true });
-  expect((await readRow()).archivedAt).toBe(archived.archivedAt);
+  const repeatedArchive = await readRow();
+  expect(repeatedArchive.archivedAt).toBe(archived.archivedAt);
   expect(await patch({ pinned: true })).toMatchObject({ ok: false });
-  expect(await readRow()).toEqual(archived);
+  expect(await readRow()).toEqual(repeatedArchive);
   await patch({ archived: false, pinned: true });
   expect(await readRow()).toMatchObject({
     archived: false,

@@ -61,7 +61,8 @@ export type LobsterPasserKind =
   | "snail"
   | "duck"
   | "jellyfish"
-  | ThemeCritterId;
+  | ThemeCritterId
+  | (string & {});
 
 // How an arriving pet gets onto the ledge. Rolled per arrival from its own
 // seeded stream; "walk" is the classic pop-up from behind the ledge.

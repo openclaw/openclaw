@@ -224,7 +224,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.toolSearch.maxSearchLimit": "Tool Search Max Results",
   "tools.codeMode": "Code Mode",
   "tools.codeMode.enabled": "Enable Code Mode",
-  "tools.codeMode.runtime": "Code Mode Runtime",
+  "tools.codeMode.executor": "Code Mode Executor",
   "tools.codeMode.mode": "Code Mode Surface",
   "tools.codeMode.timeoutMs": "Code Mode Timeout",
   "tools.codeMode.memoryLimitBytes": "Code Mode Memory Limit",

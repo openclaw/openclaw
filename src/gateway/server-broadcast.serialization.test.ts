@@ -166,7 +166,15 @@ describe("broadcast serialization failures", () => {
   });
 
   it.each([
-    ["first", { message: { text: '"🦞"\n\\\ud800', items: [undefined, Symbol("omitted")] } }],
+    [
+      "first",
+      {
+        message: {
+          text: '"🦞"\n\\\ud800'.repeat(256),
+          items: [undefined, Symbol("omitted")],
+        },
+      },
+    ],
     ["middle", { sessionKey: "agent:main:chat", message: null, omitted: undefined }],
     ["last", { sessionKey: "agent:main:chat", omitted: undefined, message: undefined }],
     ["native property key", { message: { toJSON: (key: string) => ({ key }) } }],
@@ -201,6 +209,73 @@ describe("broadcast serialization failures", () => {
       );
     }
   });
+
+  it.each(["getter", "toJSON", "proxy"])(
+    "observes %s message mutations between recipients when long strings repeat",
+    (publisher) => {
+      const peers = [makeClient("first"), makeClient("second"), makeClient("third")];
+      const initial = '"🦞"\n\\\ud800'.repeat(256);
+      let current = initial;
+      const reads: string[] = [];
+      const read = () => {
+        reads.push(current);
+        return current;
+      };
+      const message =
+        publisher === "getter"
+          ? {
+              get text() {
+                return read();
+              },
+            }
+          : publisher === "toJSON"
+            ? {
+                toJSON(key: string) {
+                  expect(key).toBe("message");
+                  return { text: read() };
+                },
+              }
+            : new Proxy(
+                { text: initial },
+                {
+                  get(target, key, receiver) {
+                    return key === "text" ? read() : Reflect.get(target, key, receiver);
+                  },
+                },
+              );
+      const source = { message };
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+        prepareSessionEventProjection: () => (client) => ({
+          ...source,
+          session: { sharingRole: client.connId },
+        }),
+      });
+      peers[0]!.socket.send.mockImplementationOnce(() => {
+        current = initial + " changed";
+      });
+      peers[1]!.socket.send.mockImplementationOnce(() => {
+        current = initial;
+      });
+
+      broadcast("session.message", source);
+
+      expect(reads).toEqual([initial, initial + " changed", initial]);
+      for (const [index, peer] of peers.entries()) {
+        expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+          JSON.stringify({
+            type: "event",
+            event: "session.message",
+            payload: {
+              message: { text: reads[index] },
+              session: { sharingRole: peer.client.connId },
+            },
+            seq: 1,
+          }),
+        );
+      }
+    },
+  );
 
   it.each(["message", "first recipient", "second recipient", "source toJSON"])(
     "consumes only delivered sequences when %s cannot serialize",

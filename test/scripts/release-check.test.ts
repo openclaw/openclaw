@@ -219,8 +219,7 @@ require("node:module").syncBuiltinESMExports();
             `console.log(JSON.stringify({\n` +
             `  execArgv: process.execArgv,\n` +
             `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8"),\n` +
-            `  concurrentSparkplugDisabled: process.execArgv.includes("--no-concurrent-sparkplug")\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
             `}));`,
         ],
         {
@@ -246,7 +245,6 @@ require("node:module").syncBuiltinESMExports();
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
-        concurrentSparkplugDisabled: !process.versions.bun,
       });
 
       diagnostics.stage("packed-fixture-setup");

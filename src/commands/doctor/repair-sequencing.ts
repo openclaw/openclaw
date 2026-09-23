@@ -41,6 +41,11 @@ import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./shared/con
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
+import {
+  assertInstalledPluginIdRecoveryCurrent,
+  recoverInstalledPluginConfigIds,
+  type InstalledPluginIdRecovery,
+} from "./shared/installed-plugin-id-recovery.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
@@ -62,6 +67,7 @@ import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  installedPluginIdRecovery?: InstalledPluginIdRecovery;
   env?: NodeJS.ProcessEnv;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
@@ -79,6 +85,7 @@ export async function runDoctorRepairSequence(params: {
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  installedPluginIdRecovery: InstalledPluginIdRecovery;
 }> {
   let state = params.state;
   const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
@@ -86,6 +93,11 @@ export async function runDoctorRepairSequence(params: {
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
+  await assertInstalledPluginIdRecoveryCurrent(
+    state.candidate,
+    params.installedPluginIdRecovery,
+    env,
+  );
   let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const resolveCurrentPluginMetadataScope = () => {
@@ -219,6 +231,7 @@ export async function runDoctorRepairSequence(params: {
     repairedPluginOpenClawHostLinks ||
     missingConfiguredPluginInstallRepair.pluginInventoryChanged
   ) {
+    pluginMetadataSnapshotState.inventoryChanged = true;
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();
@@ -242,6 +255,13 @@ export async function runDoctorRepairSequence(params: {
       }),
     );
   }
+  const installedPluginRecovery = await recoverInstalledPluginConfigIds(state.candidate, env, {
+    previousRecovery: params.installedPluginIdRecovery,
+    repairedPluginIds,
+    records: missingConfiguredPluginInstallRepair.records,
+  });
+  applyMutation(installedPluginRecovery);
+  appendNotes(warningNotes, installedPluginRecovery.notices);
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
     applyMutation(
@@ -298,7 +318,7 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       runWithCurrentPluginMetadata(() =>
         maybeRepairStalePluginConfig(state.candidate, env, {
-          preservePluginIds: failedPluginIds,
+          preservePluginIds: [...failedPluginIds, ...installedPluginRecovery.preservePluginIds],
           // A host-version-bound runtime can be absent between core swap and package
           // convergence. Preserve its allow, deny, and explicit enable/disable policy.
           surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
@@ -379,6 +399,7 @@ export async function runDoctorRepairSequence(params: {
     warningNotes,
     authProfilesRepaired,
     modelRetirementRepairRan,
+    installedPluginIdRecovery: installedPluginRecovery.recovery,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     openAICodexAuthProfileIdMap,
     ...(pluginMetadataSnapshotState.current

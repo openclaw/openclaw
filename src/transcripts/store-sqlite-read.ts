@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
@@ -247,4 +249,18 @@ export function readStoredTranscriptSummary(
     ...(summary ? { summary } : {}),
     ...(row.markdown !== null ? { markdown: row.markdown } : {}),
   };
+}
+
+export function readTranscriptJsonlDigest(
+  database: DatabaseSync,
+  session: TranscriptSessionIdentity,
+): string {
+  const query = meetingTranscriptUtteranceQuery(database, session)
+    .selectAll()
+    .orderBy("sequence", "asc");
+  const digest = createHash("sha256");
+  for (const row of iterateSqliteQuerySync(database, query)) {
+    digest.update(`${JSON.stringify(utteranceFromRow(row))}\n`);
+  }
+  return digest.digest("hex");
 }

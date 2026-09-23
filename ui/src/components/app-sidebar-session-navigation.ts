@@ -126,7 +126,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   sessionPeopleSortAvailable(): boolean {
-    return this.sessionPeopleSortCapability() === true;
+    return this.sessionPeopleSortCapability() !== false;
   }
 
   effectiveSessionSortMode(): SidebarSessionSortMode {

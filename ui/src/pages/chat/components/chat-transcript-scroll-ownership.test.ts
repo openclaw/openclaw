@@ -235,9 +235,10 @@ describe("chat transcript scroll ownership", () => {
         `restore-${command}`,
         rows,
       );
+      let scrollHeight = 800;
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4800 },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
       });
       const writes: ScrollToOptions[] = [];
       container.scrollTo = (options?: ScrollToOptions | number) => {
@@ -249,7 +250,7 @@ describe("chat transcript scroll ownership", () => {
       const settled = vi.fn();
       transcript.scrollToOffset(420, settled);
       renderRows(rows);
-      expect(container.scrollTop).toBe(420);
+      expect(settled).not.toHaveBeenCalled();
       if (key) {
         const target = container.appendChild(document.createElement("div"));
         render(content, target);
@@ -290,20 +291,69 @@ describe("chat transcript scroll ownership", () => {
       } else {
         expect(transcript.scrollToEnd()).toBe(true);
       }
-      const expectedOffset = container.scrollTop;
+      const inputOffset = container.scrollTop;
       writes.length = 0;
+      if (preservesRestore) {
+        scrollHeight = 4800;
+      }
       for (let frame = 0; frame < 15; frame++) {
         flushFrames();
         renderRows(rows);
       }
       if (preservesRestore) {
         expect(settled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+        expect(container.scrollTop).toBe(420);
       } else {
         expect(settled).not.toHaveBeenCalled();
         expect(writes.some((write) => write.top === 420)).toBe(false);
+        expect(container.scrollTop).toBe(inputOffset);
       }
-      expect(container.scrollTop).toBe(expectedOffset);
       transcript.hostDisconnected();
     },
   );
+
+  it("keeps reader input in control after a reachable restoration settles", async () => {
+    const flushFrames = stubAnimationFrames();
+    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, renderRows, transcript } = await mountTestTranscript(
+      "settled-restore-input",
+      rows,
+    );
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 4800 },
+    });
+    const writes: ScrollToOptions[] = [];
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        writes.push(options);
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    };
+    const settled = vi.fn();
+
+    try {
+      transcript.scrollToOffset(420, settled);
+      renderRows(rows);
+      expect(settled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+
+      writes.length = 0;
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      container.scrollTop = 300;
+      container.dispatchEvent(new Event("scroll"));
+      for (let frame = 0; frame < 15; frame += 1) {
+        flushFrames();
+        renderRows(rows);
+      }
+
+      expect(container.scrollTop).toBe(300);
+      expect(writes.some((write) => write.top === 420)).toBe(false);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 });

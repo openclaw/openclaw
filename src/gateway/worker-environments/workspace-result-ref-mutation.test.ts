@@ -62,6 +62,7 @@ it("shares ref serialization and deferred retention between snapshots and result
   const worktree = await service.create({ repoRoot: root, name: "snapshot", baseRef: "HEAD" });
   const removed = await service.remove({ id: worktree.id, reason: "test" });
   const snapshotRef = expectDefined(removed.snapshotRef, "removed worktree snapshot");
+  const snapshotHead = await requireGit(root, ["rev-parse", `${snapshotRef}^{commit}`]);
   const linked = path.join(root, "linked");
   await requireGit(root, ["worktree", "add", "--detach", linked, "HEAD"]);
   const stagedResultRef = workerWorkspaceResultRef("queued-result");
@@ -120,7 +121,7 @@ it("shares ref serialization and deferred retention between snapshots and result
     await expect(hasWorkerWorkspaceResultRef({ root: linked, stagedResultRef })).resolves.toBe(
       true,
     );
-    expect(mutations).toEqual([["update-ref", "-d", snapshotRef]]);
+    expect(mutations).toEqual([["update-ref", "-d", snapshotRef, snapshotHead]]);
     expect(readRetainedRefs).not.toHaveBeenCalled();
     // A queued result writer must not adopt a later repository redirect.
     vi.stubEnv("GIT_COMMON_DIR", path.join(other, ".git"));

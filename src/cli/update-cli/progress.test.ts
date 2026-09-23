@@ -201,8 +201,11 @@ describe("update progress", () => {
         .mockReturnValueOnce(present ? captured : undefined)
         .mockReturnValue(later);
       try {
-        await printResult(result, { run: context });
+        const nextAction = "Update is not finished. Check progress: openclaw update status";
+        await printResult(result, { run: context }, { nextAction });
         const lines = log.mock.calls.flat();
+        expect(lines.at(-1)).toBe(nextAction);
+        expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
         expect(
           lines.filter((line) => typeof line === "string" && line.startsWith("Phase:")),
         ).toEqual(present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"]);
@@ -351,6 +354,7 @@ describe("update progress", () => {
       },
       {},
     );
+    expect(log.mock.calls.flat().join("\n")).toContain(`Distinct detail ${"y".repeat(40)}`);
     expect(log.mock.calls.flat().join("\n")).toContain("deadline exceeded");
     log.mockClear();
     presentation.progress.onStepComplete?.({

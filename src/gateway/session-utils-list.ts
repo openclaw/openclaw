@@ -17,6 +17,7 @@ import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js
 import {
   filterSessionCandidateEntries,
   filterSessionEntries,
+  projectSessionListCandidateOptions,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
@@ -162,16 +163,16 @@ function resolveSessionsListDefaultsAgentId(
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
 const sentinel = (key: string) => key === "global" || key === "unknown";
 
-// Retain one broad selection per resident owner; keyed reads never displace it.
+type SessionRowSelection = {
+  winners: Map<string, RecordRow>;
+  entries: SessionEntryPair[];
+};
+
+// Publications release the token and stale row graphs without waiting for another list.
+// Retain broad selections per topology scope; keyed reads never displace them.
 const sessionRowSelections = new WeakMap<
-  SessionRowProjection,
-  {
-    revision: number;
-    scope: ReturnType<SessionRowProjection["state"]["scope"]>;
-    activeOnly: boolean;
-    winners: Map<string, RecordRow>;
-    entries: SessionEntryPair[];
-  }
+  SessionRowProjection["state"]["revision"],
+  WeakMap<ReturnType<SessionRowProjection["state"]["scope"]>, Map<boolean, SessionRowSelection>>
 >();
 
 /** Preserve federation before caller visibility and activity filters. */
@@ -192,13 +193,10 @@ export function prepareSessionRowSelection(
   };
   const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
   const activeOnly = opts.activeOnly === true;
-  let selection = keyed ? undefined : sessionRowSelections.get(projection);
-  if (
-    !selection ||
-    selection.revision !== revision ||
-    selection.scope !== selectedScope ||
-    selection.activeOnly !== activeOnly
-  ) {
+  let selection = keyed
+    ? undefined
+    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  if (!selection) {
     const rows = projection
       .selectEntries({
         agentId: selectedScope.agentId,
@@ -244,9 +242,20 @@ export function prepareSessionRowSelection(
         entries.push([key, row.entry]);
       }
     }
-    selection = { revision, scope: selectedScope, activeOnly, winners, entries };
+    selection = { winners, entries };
     if (!keyed) {
-      sessionRowSelections.set(projection, selection);
+      const currentRevision = projection.state.revision;
+      let scopes = sessionRowSelections.get(currentRevision);
+      if (!scopes) {
+        scopes = new WeakMap();
+        sessionRowSelections.set(currentRevision, scopes);
+      }
+      let variants = scopes.get(selectedScope);
+      if (!variants) {
+        variants = new Map();
+        scopes.set(selectedScope, variants);
+      }
+      variants.set(activeOnly, selection);
     }
   }
   const { winners, entries } = selection;
@@ -293,8 +302,8 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
 
 // One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
 const sessionListCandidates = new WeakMap<
-  SessionRowProjection,
-  { revision: number; key: string; entries: SessionEntryPair[] }
+  SessionEntryPair[],
+  { key: string; entries: SessionEntryPair[] }
 >();
 
 /** Shared synchronous membership policy for list pages and full-roster transcript search. */
@@ -329,17 +338,17 @@ export function prepareProjectedSessionList(params: {
   let candidates: SessionEntryPair[] | undefined;
   // Person references resolve against the full visible roster before candidate filtering.
   if (!opts.spawnedBy && !opts.involvingProfileId) {
-    const { revision } = projection.state;
-    const { limit: _limit, offset: _offset, ...candidateOptions } = opts;
+    const candidateOptions = projectSessionListCandidateOptions(opts);
     const key = JSON.stringify([exactKey, candidateOptions]);
-    let cached = sessionListCandidates.get(projection);
-    if (cached?.revision !== revision || cached.key !== key) {
+    let cached = sessionListCandidates.get(prepared.entries);
+    if (cached?.key !== key) {
       cached = {
-        revision,
         key,
-        entries: runSynchronousWork(filterSessionCandidateEntries(prepared)),
+        entries: runSynchronousWork(
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
+        ),
       };
-      sessionListCandidates.set(projection, cached);
+      sessionListCandidates.set(prepared.entries, cached);
     }
     candidates = cached.entries;
   }
@@ -424,7 +433,9 @@ export async function listProjectedSessions(params: {
       page = selectPage();
       return page.selection.entries.flatMap(([key]) => {
         const target = page.prepared.getTarget(key);
-        return target ? [{ ...target, storePath: target.storeTarget.storePath }] : [];
+        return target
+          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
+          : [];
       });
     },
     () => {
@@ -441,7 +452,12 @@ export async function listProjectedSessions(params: {
         const sessions = selection.entries.flatMap(([key], index) => {
           const target = getTarget(key);
           const record =
-            target && projection.describe({ ...target, storePath: target.storeTarget.storePath });
+            target &&
+            projection.describe({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
           if (!record) {
             return [];
           }

@@ -111,7 +111,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
   }
 
-  protected refreshSessionPullRequests(options: { refresh?: boolean } = {}): boolean {
+  protected refreshSessionPullRequests(
+    options: { refresh?: boolean; automatic?: boolean } = {},
+  ): boolean {
     if (!this.presented) {
       sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
       return false;
@@ -144,7 +146,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         resolveChatAgentId(scope.state),
     );
     store.watch(this, [pullRequestKey], { foreground: true });
-    const refreshAdmitted = options.refresh === true && store.refresh(pullRequestKey);
+    const refreshAdmitted = options.refresh === true && store.refresh(pullRequestKey, options);
     const result = store.get(pullRequestKey);
     if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
       return refreshAdmitted;

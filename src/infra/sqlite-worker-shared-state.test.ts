@@ -3,8 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { normalizeSubagentRunState } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
 import { persistSubagentRunsToDiskAsyncOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -21,6 +23,7 @@ import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.j
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
+  inspectOpenClawStateDatabase,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
@@ -264,6 +267,24 @@ describe("canonical shared-state worker admission", () => {
       await runOpenClawStateWorkerOperation(captured, inspect, { existingOnly: true }),
     ).toBeUndefined();
     expect(inspect).not.toHaveBeenCalled();
+    expect(
+      await inspectOpenClawStateDatabase(captured, {
+        type: "database.generationMatches",
+        input: {
+          generation: {
+            database: {
+              birthtimeNs: 0n,
+              ctimeNs: 0n,
+              dev: 0n,
+              ino: 0n,
+              mtimeNs: 0n,
+              size: 0n,
+              sha256: "0".repeat(64),
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
 
@@ -464,15 +485,41 @@ it("commits captured registry rows without host SQL", async () => {
       ]),
     );
     const queued = createRun("queued");
+    const capturedTask = 'captured task with "quotes", \\slashes, and 🦞\n'.repeat(256);
+    queued.task = capturedTask;
+    queued.queuedLaunch = {
+      request: { sessionKey: queued.childSessionKey, task: queued.task },
+      timeoutMs: 100,
+      schedulerGroupKey: "synthetic-group",
+      maxConcurrent: 1,
+    };
+    const terminal = createRun("private-terminal");
+    terminal.completionTarget = "parent";
+    terminal.execution = { status: "terminal", endedAt: 200 };
+    const terminalReply = {
+      disposition: "visible" as const,
+      text: "[Mon 2026-09-21 12:00 UTC] [Mon 2026-09-21 12:00 UTC] captured reply",
+    };
+    terminal.completion = {
+      required: false,
+      resultText: "captured result 🦞\n".repeat(256),
+      terminalReply,
+    };
+    const expected = [queued, terminal].map((entry) =>
+      bindSubagentRunRecord(normalizeSubagentRunState(structuredClone(entry))),
+    );
     const capturedContext = captureOpenClawStateWorkerContext();
     const sql = observeMainThreadSql();
     try {
       const write = persistSubagentRunsToDiskAsyncOrThrow(
-        new Map([[queued.runId, queued]]),
-        [queued.runId, removed.runId],
+        new Map([queued, terminal].map((entry) => [entry.runId, entry])),
+        [queued.runId, terminal.runId, removed.runId],
         { context: capturedContext },
       );
       queued.task = "mutated after capture";
+      queued.queuedLaunch.request.task = "mutated descriptor";
+      terminal.completion.resultText = "mutated result";
+      terminalReply.text = "mutated reply";
       await write;
       sql.expectIdle();
     } finally {
@@ -480,9 +527,9 @@ it("commits captured registry rows without host SQL", async () => {
       await closeOpenClawStateDatabaseAsync();
     }
     const stored = loadSubagentRegistryFromSqlite();
-    expect([...stored.keys()].toSorted()).toEqual(["queued", "retained"]);
+    expect([...stored.keys()].toSorted()).toEqual(["private-terminal", "queued", "retained"]);
     expect(stored.get("queued")).toMatchObject({
-      task: "captured task",
+      task: capturedTask,
       execution: { status: "queued" },
       completion: queued.completion,
       delivery: queued.delivery,
@@ -491,6 +538,12 @@ it("commits captured registry rows without host SQL", async () => {
       path: capturedContext.admission.databasePath,
       env: capturedContext.environment,
     });
+    for (const row of expected) {
+      expect(
+        database.db.prepare("SELECT * FROM subagent_runs WHERE run_id = ?").get(row.run_id),
+      ).toMatchObject(row);
+    }
+    expect(expected[1]?.payload_json).toContain('"parentCompletion":');
     const calibration = observeMainThreadSql();
     try {
       database.db.exec("BEGIN EXCLUSIVE;");

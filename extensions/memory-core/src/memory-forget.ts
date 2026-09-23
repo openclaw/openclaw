@@ -548,12 +548,6 @@ async function forgetWorkspaceMemory(
           return false;
         }
         if (chunkIds.length > 0) {
-          if (indexPlan.ftsRows > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom("memory_index_chunks_fts").where("id", "in", chunkIds),
-            );
-          }
           if (indexPlan.hasVectorTable) {
             executeSqliteQuerySync(
               db,

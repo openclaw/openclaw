@@ -8,6 +8,7 @@ import {
   projectSessionBranchEntry,
   type SessionBranchTranscriptEntry,
 } from "./session-message-cut-content.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreeTipNodes,
@@ -29,7 +30,7 @@ export function readSessionBranchSummaries(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(["seq", "event_json"])
+        .select(["seq", transcriptEventNavigationSql().as("event_json")])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     );
@@ -45,7 +46,7 @@ export function readSessionBranchSummaries(
       (parameter) =>
         db
           .selectFrom("transcript_events")
-          .select("event_json")
+          .select(transcriptEventJsonSql(database.db).as("event_json"))
           .where("session_id", "=", sessionId)
           .where(
             "seq",

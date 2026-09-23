@@ -38,6 +38,16 @@ describe("parseCommand", () => {
 });
 
 describe("getSlashCommands", () => {
+  it.each([false, true])("exposes host-local Chrome setup in local=%s mode", (local) => {
+    const command = getSlashCommands({ local }).find((entry) => entry.name === "browser-setup");
+    expect(command?.description).toContain("TUI process host (not the Gateway)");
+    expect(command?.getArgumentCompletions?.("")).toEqual([
+      { value: "inspect", label: "inspect" },
+      { value: "install", label: "install" },
+      { value: "verify", label: "verify" },
+    ]);
+    expect(helpText({ local })).toContain("/browser-setup [inspect|install|verify]");
+  });
   beforeAll(() => {
     // Provider thinking policies are process-stable; warm the fallback before timing assertions.
     getSlashCommands({ provider: "minimax", model: "MiniMax-M3", thinkingLevels: [] });

@@ -693,7 +693,13 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
 describe("PR refresh wire ownership", () => {
   it.each([
     { name: "identical finals on separate frames", texts: ["Opened", "Opened"], expected: 1 },
-    { name: "distinct finals in the same run", texts: ["Opened", "Merged"], expected: 2 },
+    { name: "distinct finals in the same burst", texts: ["Opened", "Merged"], expected: 1 },
+    {
+      name: "distinct finals after the debounce interval",
+      texts: ["Opened", "Merged"],
+      spaced: true,
+      expected: 2,
+    },
     { name: "the first live final after history", texts: ["Opened"], history: true, expected: 1 },
     {
       name: "the first presented final after hidden delivery",
@@ -705,7 +711,7 @@ describe("PR refresh wire ownership", () => {
       name: "a stream announcement followed by its final",
       texts: ["Opened"],
       stream: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "a final whose queued refresh lost its last watch before sync",
@@ -718,13 +724,13 @@ describe("PR refresh wire ownership", () => {
       name: "reconnect between final deliveries",
       texts: ["Opened", "Opened"],
       reconnect: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "explicit history reset between finals",
       texts: ["Opened", "Opened"],
       reset: true,
-      expected: 2,
+      expected: 1,
     },
     {
       name: "ordinary history between final replays",
@@ -736,7 +742,7 @@ describe("PR refresh wire ownership", () => {
       name: "a genuine branch switch before the next final",
       texts: ["Opened", "Opened"],
       branchSwitch: true,
-      expected: 3,
+      expected: 1,
     },
   ])(
     "keeps subscription force scoped for $name",
@@ -752,7 +758,12 @@ describe("PR refresh wire ownership", () => {
       historyBetween,
       branchSwitch,
       loseWatchBeforeSync,
+      spaced,
     }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const sessions = makeChatHost().sessions;
       onTestFinished(() => sessions.dispose());
       const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
@@ -851,10 +862,14 @@ describe("PR refresh wire ownership", () => {
         if (index === 0 && loseWatchBeforeSync) {
           pane.presented = false;
         }
-        // Separate WebSocket frame deliveries let the store's microtask and
-        // subscribe acknowledgement finish before the next announcement arrives.
+        // Preserve separate WebSocket deliveries within the debounce window.
         await nextFrame();
+        if (spaced) {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
       }
+      await vi.advanceTimersByTimeAsync(5_000);
+      await nextFrame();
       const forces = request.mock.calls.filter(
         ([method, params]) =>
           method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&

@@ -23,6 +23,7 @@ export { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 // provide worker-task-server; bundled workers use that narrower entrypoint.
 export { serveWorkerTasks } from "../infra/worker-task-server.js";
 export type { WorkerTaskControl } from "../infra/worker-task-native-sections.js";
+export type { WorkerTaskResponse } from "../infra/worker-task-pool.js";
 export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 export {
   spawnTerminalPty,

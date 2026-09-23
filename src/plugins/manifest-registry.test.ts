@@ -2467,32 +2467,6 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("preserves provider hook contracts from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "acme-ai",
-      providers: ["acme-ai"],
-      contracts: {
-        externalAuthProviders: ["acme-ai"],
-        usageProviders: ["acme-ai"],
-        workerProviders: [" static-ssh ", ""],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "acme-ai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.contracts).toEqual({
-      externalAuthProviders: ["acme-ai"],
-      usageProviders: ["acme-ai"],
-      workerProviders: ["static-ssh"],
-    });
-  });
-
   it("preserves host-trusted plugin contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

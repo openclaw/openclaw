@@ -77,7 +77,7 @@ suite.define(() => {
             })
             .first();
         const showRow = row("Show task progress cards");
-        const collapseRow = row("Collapse task progress by default");
+        const collapseRow = row("Collapse task progress by default on desktop");
         const enabled = () =>
           showRow
             .locator("wa-switch")

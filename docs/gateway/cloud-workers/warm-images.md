@@ -51,9 +51,9 @@ Project preparation checks for a verified completed checkout and pristine seed b
 ### Retention policy
 
 Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
-use the **Retention policy** card in **Snapshots**. Changes take effect after a
-Gateway restart; they do not change worker lease lifetimes or the 128-profile
-capacity limit.
+use the **Retention policy** card in **Snapshots**. Saving reloads the Crabbox
+plugin without restarting the Gateway. Worker lease lifetimes and the 128-profile
+capacity limit stay unchanged.
 
 | Key            | Default | Accepted values                                                   |
 | -------------- | ------- | ----------------------------------------------------------------- |
@@ -122,7 +122,7 @@ cancels an unused automatic reserve, including one whose expiry has passed.
 
 Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
 `cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
-corresponding reserves and drains unused capacity while preserving active
+corresponding reserves and drains unused capacity without restarting the Gateway, preserving active
 sessions and image reuse. Preparing workers and workers awaiting confirmed
 cleanup count against the limits. Ready workers incur running-machine charges
 until the provider confirms deletion. After confirmed allocation cleanup, a
@@ -200,7 +200,7 @@ A profile with an active capture or retirement cannot roll back.
 
 The **Retention policy** card at the bottom edits the three plugin-owned keys
 above through the normal configuration patch flow. Saving validates their
-durations and generation count; restart the Gateway to apply the policy.
+durations and generation count, then reloads the Crabbox plugin to apply the policy.
 
 **Build snapshot** opens a profile and local repository picker when
 `environments.prepare` is available with `operator.admin`. The repository catalog

@@ -14,6 +14,173 @@ const emptySnapshot: StatusPluginHealthSnapshot = {
 };
 
 describe("plugin health status formatting", () => {
+  it("renders the exact detailed status when every health section is empty", () => {
+    expect(formatDetailedPluginHealth(emptySnapshot)).toBe(
+      ["🔌 Plugins: OK", "Loaded: 0", "Disabled: 0", "Full inventory: /plugins list"].join("\n"),
+    );
+  });
+
+  it("keeps mixed health sections, default text, and diagnostic order without changing input", () => {
+    const snapshot: StatusPluginHealthSnapshot = {
+      plugins: [
+        { id: "broken-default", status: "error", enabled: true },
+        {
+          id: "needs-default",
+          status: "loaded",
+          enabled: true,
+          dependencyStatus: { hasDependencies: true, requiredInstalled: false },
+        },
+      ],
+      diagnostics: [
+        { level: "warn", message: "warning first" },
+        { level: "error", pluginId: "diagnostic-plugin", message: "error second" },
+      ],
+      contextEngineQuarantines: [
+        { engineId: "engine-a", operation: "bootstrap", reason: "context failed", failedAt: 0 },
+      ],
+      runtimeToolQuarantines: [{ toolName: "tool-a", reason: "schema failed", failedAt: 0 }],
+      channelPluginFailures: [{ channelId: "channel-a", message: "setup failed" }],
+      compatibilityNotices: [
+        { pluginId: "compat-a", severity: "info", message: "compatibility active" },
+      ],
+    };
+    const original = structuredClone(snapshot);
+
+    expect(formatDetailedPluginHealth(snapshot)).toBe(
+      [
+        "⚠️ Plugins: 1 plugin error · 1 context engine quarantine · 1 runtime tool quarantine · 1 channel plugin failure · 1 dependency issue · 1 diagnostic error",
+        "Loaded: 1 (needs-default)",
+        "Disabled: 0",
+        "Errors: 1",
+        "- broken-default: failed to load",
+        "Context engine quarantines: 1",
+        "- engine-a during bootstrap: context failed",
+        "Runtime tool quarantines: 1",
+        "- tool-a: schema failed",
+        "Channel plugin failures: 1",
+        "- channel-a: setup failed",
+        "Dependency issues: 1",
+        "- needs-default: missing required dependencies",
+        "Diagnostics: 1 errors · 1 warnings",
+        "- WARN warning first",
+        "- ERROR diagnostic-plugin: error second",
+        "Compatibility notices: 1",
+        "- INFO compat-a: compatibility active",
+        "Full inventory: /plugins list",
+      ].join("\n"),
+    );
+    expect(snapshot).toEqual(original);
+  });
+
+  it("reports full counts but renders only the first eight sorted entries in each health section", () => {
+    const ids = Array.from({ length: 9 }, (_, index) => String(8 - index));
+    const snapshot: StatusPluginHealthSnapshot = {
+      plugins: [
+        ...ids.map((id) => ({
+          id: `error-${id}`,
+          status: "error" as const,
+          enabled: true,
+          error: `load ${id}`,
+        })),
+        ...ids.map((id) => ({
+          id: `dependency-${id}`,
+          enabled: true,
+          dependencyStatus: {
+            hasDependencies: true,
+            requiredInstalled: false,
+            missing: [`package-${id}`],
+          },
+        })),
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: ids.map((id) => ({
+        engineId: `engine-${id}`,
+        operation: "bootstrap",
+        reason: `context ${id}`,
+        failedAt: 0,
+      })),
+      runtimeToolQuarantines: ids.map((id) => ({
+        toolName: `tool-${id}`,
+        reason: `tool ${id}`,
+        failedAt: 0,
+      })),
+      channelPluginFailures: ids.map((id) => ({
+        channelId: `channel-${id}`,
+        message: `channel ${id}`,
+      })),
+      compatibilityNotices: ids.map((id) => ({
+        pluginId: `compat-${id}`,
+        severity: "warn" as const,
+        message: `compatibility ${id}`,
+      })),
+    };
+    const original = structuredClone(snapshot);
+
+    expect(formatDetailedPluginHealth(snapshot)).toBe(
+      [
+        "⚠️ Plugins: 9 plugin errors · 9 context engine quarantines · 9 runtime tool quarantines · 9 channel plugin failures · 9 dependency issues",
+        "Loaded: 0",
+        "Disabled: 0",
+        "Errors: 9",
+        "- error-0: load 0",
+        "- error-1: load 1",
+        "- error-2: load 2",
+        "- error-3: load 3",
+        "- error-4: load 4",
+        "- error-5: load 5",
+        "- error-6: load 6",
+        "- error-7: load 7",
+        "Context engine quarantines: 9",
+        "- engine-0 during bootstrap: context 0",
+        "- engine-1 during bootstrap: context 1",
+        "- engine-2 during bootstrap: context 2",
+        "- engine-3 during bootstrap: context 3",
+        "- engine-4 during bootstrap: context 4",
+        "- engine-5 during bootstrap: context 5",
+        "- engine-6 during bootstrap: context 6",
+        "- engine-7 during bootstrap: context 7",
+        "Runtime tool quarantines: 9",
+        "- tool-0: tool 0",
+        "- tool-1: tool 1",
+        "- tool-2: tool 2",
+        "- tool-3: tool 3",
+        "- tool-4: tool 4",
+        "- tool-5: tool 5",
+        "- tool-6: tool 6",
+        "- tool-7: tool 7",
+        "Channel plugin failures: 9",
+        "- channel-0: channel 0",
+        "- channel-1: channel 1",
+        "- channel-2: channel 2",
+        "- channel-3: channel 3",
+        "- channel-4: channel 4",
+        "- channel-5: channel 5",
+        "- channel-6: channel 6",
+        "- channel-7: channel 7",
+        "Dependency issues: 9",
+        "- dependency-0: missing package-0",
+        "- dependency-1: missing package-1",
+        "- dependency-2: missing package-2",
+        "- dependency-3: missing package-3",
+        "- dependency-4: missing package-4",
+        "- dependency-5: missing package-5",
+        "- dependency-6: missing package-6",
+        "- dependency-7: missing package-7",
+        "Compatibility notices: 9",
+        "- WARN compat-0: compatibility 0",
+        "- WARN compat-1: compatibility 1",
+        "- WARN compat-2: compatibility 2",
+        "- WARN compat-3: compatibility 3",
+        "- WARN compat-4: compatibility 4",
+        "- WARN compat-5: compatibility 5",
+        "- WARN compat-6: compatibility 6",
+        "- WARN compat-7: compatibility 7",
+        "Full inventory: /plugins list",
+      ].join("\n"),
+    );
+    expect(snapshot).toEqual(original);
+  });
+
   it("omits the compact line when there are no plugin health problems", () => {
     expect(formatCompactPluginHealthLine(emptySnapshot)).toBeUndefined();
   });

@@ -68,6 +68,8 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
+  /** Owner authority applies before dispatch; accepted responses still settle. */
+  assertOwnerCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -233,8 +235,9 @@ export async function codexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: unknown,
-  options: CodexControlRequestOptions = {},
+  inputOptions: CodexControlRequestOptions = {},
 ): Promise<unknown> {
+  const options = { ...inputOptions };
   try {
     options.controlObservation?.phase("prepare");
   } catch {
@@ -291,12 +294,17 @@ export async function codexControlRequest(
           response = await resumeCodexAppServerThread({
             client,
             request: { ...requestParams, threadId: requestParams.threadId },
-            requestResume: () => request({ method, requestParams }),
+            requestResume: () =>
+              request({ method, requestParams, assertCurrent: options.assertOwnerCurrent }),
             abandonClient: () => closeCodexStartupClientBestEffort(client),
           });
         } else {
           try {
-            response = await request({ method, requestParams });
+            response = await request({
+              method,
+              requestParams,
+              assertCurrent: options.assertOwnerCurrent,
+            });
           } catch (error) {
             if (
               nativeAuthFork &&
@@ -324,7 +332,19 @@ export async function codexControlRequest(
       },
     );
   }
-  return await requestCodexAppServerJson({ method, requestParams, ...controlRequestOptions });
+  return await requestCodexAppServerJson({
+    method,
+    requestParams,
+    ...controlRequestOptions,
+    ...(options.assertOwnerCurrent
+      ? {
+          assertCurrent: () => {
+            options.assertOwnerCurrent?.();
+            options.assertCurrent?.();
+          },
+        }
+      : {}),
+  });
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(

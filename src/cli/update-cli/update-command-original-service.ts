@@ -10,7 +10,10 @@ import {
   resolveServiceEntrypoint,
 } from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import {
+  hasGatewayServiceDefinitionOverrides,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
@@ -30,7 +33,7 @@ import {
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   OriginalManagedServiceRuntime,
   PreManagedServiceStop,
@@ -260,11 +263,7 @@ export async function observeOriginalManagedServiceRuntime(
     if (!state.command) {
       throw new Error("Original service definition is unavailable.");
     }
-    if (
-      state.command.managedOverrides ||
-      state.command.managedDefinition ||
-      state.command.reloadPending
-    ) {
+    if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
       throw new Error(
         "Original service has overrides that cannot be restored by the canonical writer.",
       );

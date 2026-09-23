@@ -20,7 +20,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
   failUpdateCommandRun,
@@ -316,13 +316,14 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   const step = { ...retained, stderrTail: retained.stderrTail };
-  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
-    step.stderrTail = [
-      step.stderrTail,
-      `Recovery transaction backup path: ${transaction.backupRoot}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  if (step.exitCode !== 0) {
+    const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
+    if (!step.advisory) {
+      step.warnings = [...(step.warnings ?? []), recoveryPath];
+    }
+    if (!step.stderrTail?.includes(transaction.backupRoot)) {
+      step.stderrTail = [step.stderrTail, recoveryPath].filter(Boolean).join("\n");
+    }
   }
   result.steps = [...result.steps, step];
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {

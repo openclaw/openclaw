@@ -197,6 +197,9 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  if (params.result.meta.agentMeta?.providerRefusal?.category === "misalignment") {
+    return null;
+  }
   if (
     params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
     params.result.meta.aborted ||

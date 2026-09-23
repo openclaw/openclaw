@@ -402,6 +402,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
@@ -427,6 +428,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    bootstrapUserProfileId: params.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,

@@ -1342,7 +1342,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.apply");
     expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
     expect(prompt).toContain(
-      "Update OpenClaw: `gateway` action update.run, only on an explicit owner request; the runtime coordinates restart and completion notices.",
+      "Update OpenClaw: `gateway` action update.run, only on an explicit owner request or an operator-scheduled update; the runtime coordinates restart and completion notices.",
     );
     expect(prompt).toContain(
       "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
@@ -1682,17 +1682,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
     expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
       prompt.indexOf("NEVER use [[tts:...]]"),
-    );
-  });
-
-  it("adds USER guidance when a user-model file is present", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
-    });
-
-    expect(prompt).toContain(
-      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   });
 

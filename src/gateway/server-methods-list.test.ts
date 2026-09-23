@@ -236,6 +236,10 @@ describe("listGatewayMethods", () => {
       "progressCard.refresh",
       "webSearch.status",
       "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -292,6 +296,10 @@ describe("listGatewayMethods", () => {
       "progressCard.refresh",
       "webSearch.status",
       "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
     ]);
   });
 
@@ -477,6 +485,10 @@ describe("listGatewayMethods", () => {
       "progressCard.refresh",
       "webSearch.status",
       "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

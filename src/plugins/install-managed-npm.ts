@@ -7,6 +7,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
@@ -607,7 +608,9 @@ export async function installPluginFromManagedNpmRoot(
         afterCopy: (stageDir) => copyManagedNpmProjectInputs({ npmRoot: targetNpmRoot, stageDir }),
         afterInstall: async (stageDir) => {
           try {
-            staged.result = await runManagedNpmInstall(stageDir);
+            staged.result = await withInstallActivity(logger, "dependencies", () =>
+              runManagedNpmInstall(stageDir),
+            );
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

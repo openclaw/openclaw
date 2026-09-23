@@ -131,6 +131,8 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
+      "dist/extensions/code-mode-quickjs/assets/encoding.so",
+      "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
@@ -314,22 +316,47 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
+  it.each([
+    { name: "package-relative source", dependency: "", local: false, missing: false },
+    { name: "hoisted dependency", dependency: "engine", local: false, missing: false },
+    {
+      name: "hoisted scoped dependency",
+      dependency: "@fixture/engine",
+      local: false,
+      missing: false,
+    },
+    {
+      name: "plugin-local dependency precedence",
+      dependency: "@fixture/engine",
+      local: true,
+      missing: false,
+    },
+    {
+      name: "missing asset in selected dependency",
+      dependency: "@fixture/engine",
+      local: true,
+      missing: true,
+    },
+  ])("stages $name during the same postbuild run", async ({ dependency, local, missing }) => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const source = "extensions/diffs/assets/viewer-runtime.js";
     const output = "assets/viewer-runtime.js";
+    const source = dependency ? `node_modules/${dependency}/private/runtime.js` : output;
+    const packageDir = path.join(rootDir, "extensions", "diffs");
     const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
     const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+    const contents = "export const viewer = true;\n";
+    const warn = vi.fn();
 
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),
       JSON.stringify({
         name: "@openclaw/diffs",
+        ...(dependency ? { dependencies: { [dependency]: "1.0.0" } } : {}),
         openclaw: {
           extensions: ["./index.ts"],
           build: {
-            staticAssets: [{ source: `./${output}`, output }],
+            staticAssets: [{ source: `./${source}`, output }],
           },
         },
       }),
@@ -340,7 +367,24 @@ describe("runtime postbuild static assets", () => {
       '{"id":"diffs"}\n',
       "utf8",
     );
-    await fs.writeFile(path.join(rootDir, source), "export const viewer = true;\n", "utf8");
+    if (dependency) {
+      for (const base of local ? [rootDir, packageDir] : [rootDir]) {
+        const dependencyDir = path.join(base, "node_modules", dependency);
+        await fs.mkdir(path.join(dependencyDir, "private"), { recursive: true });
+        await fs.writeFile(
+          path.join(dependencyDir, "package.json"),
+          JSON.stringify({ name: dependency, exports: { "./runtime": "./private/runtime.js" } }),
+        );
+        if (!(missing && base === packageDir)) {
+          await fs.writeFile(
+            path.join(dependencyDir, "private/runtime.js"),
+            local && base === rootDir ? "wrong ancestor version\n" : contents,
+          );
+        }
+      }
+    } else {
+      await fs.writeFile(path.join(packageDir, source), contents);
+    }
 
     writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
@@ -348,14 +392,19 @@ describe("runtime postbuild static assets", () => {
       repoRoot: rootDir,
       rootDir,
       timings: false,
+      warn,
     });
 
-    await expect(fs.readFile(path.join(rootDir, distAsset), "utf8")).resolves.toBe(
-      "export const viewer = true;\n",
-    );
-    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
-      "export const viewer = true;\n",
-    );
+    for (const asset of [distAsset, runtimeAsset]) {
+      if (missing) {
+        await expectPathMissing(path.join(rootDir, asset));
+      } else {
+        await expect(fs.readFile(path.join(rootDir, asset), "utf8")).resolves.toBe(contents);
+      }
+    }
+    if (missing) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("static asset not found"));
+    }
   });
 
   it("writes every phase beneath the cwd-only caller root", async () => {

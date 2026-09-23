@@ -68,6 +68,22 @@ const PACKAGE_BUILDER_NODE_SCRIPT = `node() {
 }
 export -f node`;
 
+const PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT = `docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}`;
+
 const PASSTHROUGH_TIMEOUT_SCRIPT = `#!/usr/bin/env bash
 case "$1" in
   --kill-after=1s)
@@ -1881,21 +1897,7 @@ ${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
+${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
 
 docker_e2e_build_or_reuse \\
   openclaw-test-image \\
@@ -1928,21 +1930,7 @@ export OPENCLAW_CURRENT_PACKAGE_TGZ
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
+${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
 
 docker_e2e_build_or_reuse \\
   openclaw-test-image \\
@@ -3111,9 +3099,11 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then',
-        "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
+        "  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
         "else",
         '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
+        '  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"',
+        '  export GEMINI_API_KEY="upgrade-survivor-gemini-key"',
         '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
         '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
         "fi",

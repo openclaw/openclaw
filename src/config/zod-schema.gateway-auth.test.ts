@@ -148,6 +148,24 @@ describe("gateway operator role config", () => {
     expect(result.success).toBe(true);
   });
 
+  test("accepts an access-policy plugin reference without plugin configuration", () => {
+    const result = OpenClawSchema.parse({
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { ...validRole, accessPolicyPlugin: " unavailable-access-policy " },
+          },
+        },
+      },
+    });
+
+    expect(result.gateway?.roles?.definitions.guest).toEqual({
+      ...validRole,
+      accessPolicyPlugin: "unavailable-access-policy",
+    });
+  });
+
   test.each([
     { name: "unknown session permission", role: { ...validRole, sessions: { others: "edit" } } },
     { name: "unknown sandbox policy", role: { ...validRole, sandbox: "optional" } },
@@ -155,6 +173,15 @@ describe("gateway operator role config", () => {
     { name: "resource wildcard expression", role: { ...validRole, agents: "agent:*" } },
     { name: "wildcard in an agent allowlist", role: { ...validRole, agents: ["*"] } },
     { name: "blank allowed agent", role: { ...validRole, agents: [" "] } },
+    { name: "blank access-policy plugin", role: { ...validRole, accessPolicyPlugin: " " } },
+    {
+      name: "multiple access-policy plugins",
+      role: { ...validRole, accessPolicyPlugin: ["first-policy", "second-policy"] },
+    },
+    {
+      name: "overlong access-policy plugin",
+      role: { ...validRole, accessPolicyPlugin: "a".repeat(129) },
+    },
     { name: "missing session policy", role: { agents: "*", scopes: ["operator.read"] } },
     { name: "freeform capability", role: { ...validRole, capability: "sessions.delete" } },
   ])("rejects $name", ({ role }) => {

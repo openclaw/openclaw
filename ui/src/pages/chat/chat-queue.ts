@@ -81,8 +81,11 @@ export function syncVisibleChatQueueProjection(
   chatOutboxOwner(host).syncHost(host, options);
 }
 
-export function subscribeChatOutboxProjection(host: ChatQueueScopedSessionHost): () => void {
-  return chatOutboxOwner(host).subscribe(host);
+export function subscribeChatOutboxProjection(
+  host: ChatQueueScopedSessionHost,
+  onDiscard?: (item: ChatQueueItem) => void,
+): () => void {
+  return chatOutboxOwner(host).subscribe(host, onDiscard);
 }
 
 export function enqueueChatMessage(
@@ -245,9 +248,13 @@ export function excludeComposerAttachments(
   return attachments.filter((attachment) => !retainedIds.has(attachment.id));
 }
 
-export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string) {
+export function removeQueuedMessage(
+  host: ChatQueueScopedSessionHost,
+  id: string,
+  options?: { discard?: boolean },
+) {
   const item = readQueuedMessageById(host, id);
-  const removed = item ? removeQueuedMessageWithoutReleasing(host, id) : null;
+  const removed = item ? chatOutboxOwner(host).remove(host, id, options) : null;
   if (removed) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }

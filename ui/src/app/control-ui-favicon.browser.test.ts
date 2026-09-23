@@ -13,6 +13,7 @@ import {
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 
 let faviconSvg: string;
 beforeAll(async () => {
@@ -27,6 +28,7 @@ describe("favicon presentation ownership", () => {
   let previousTheme: string | undefined;
   let previousThemeMode: string | undefined;
   let previousThemeMascot: string | undefined;
+  let previousBranding: ReturnType<typeof currentThemeBranding>;
   let svgIcon: HTMLLinkElement;
   let pngIcon: HTMLLinkElement;
   let originals: [[string, string], [string, string]];
@@ -39,8 +41,10 @@ describe("favicon presentation ownership", () => {
     previousTheme = document.documentElement.dataset.theme;
     previousThemeMode = document.documentElement.dataset.themeMode;
     previousThemeMascot = document.documentElement.dataset.themeMascot;
+    previousBranding = currentThemeBranding();
     document.documentElement.dataset.theme = "dark";
     document.documentElement.dataset.themeMode = "dark";
+    setCurrentThemeBranding({ mascot: "claw", critters: [] });
     document.documentElement.dataset.themeMascot = "claw";
     for (const [name, value] of [
       ["--warn", "rgb(210, 150, 60)"],
@@ -71,6 +75,7 @@ describe("favicon presentation ownership", () => {
   });
 
   afterEach(() => {
+    setCurrentThemeBranding({ mascot: "claw", critters: [] });
     document.documentElement.dataset.themeMascot = "claw";
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
@@ -98,6 +103,7 @@ describe("favicon presentation ownership", () => {
     } else {
       document.documentElement.dataset.themeMascot = previousThemeMascot;
     }
+    setCurrentThemeBranding(previousBranding);
     vi.restoreAllMocks();
   });
 
@@ -215,6 +221,7 @@ describe("favicon presentation ownership", () => {
       );
       await expectDot("rgb(20, 100, 180)");
       await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "none", critters: [] });
         document.documentElement.dataset.themeMascot = "none";
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(180, 20, 40)");
@@ -237,6 +244,7 @@ describe("favicon presentation ownership", () => {
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(160, 40, 60)");
       await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "claw", critters: [] });
         document.documentElement.dataset.themeMascot = "claw";
       });
       expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
@@ -250,12 +258,14 @@ describe("favicon presentation ownership", () => {
       publishRow({ status: "failed", hasActiveRun: false, activeRunIds: [] });
       expectOriginals();
       await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "none", critters: [] });
         document.documentElement.dataset.themeMascot = "none";
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(190, 30, 50)");
       expect(svgDocument().querySelector("circle")).toBeNull();
       expect(pngIcon.href).toBe(svgIcon.href);
       await changePresentation(() => {
+        setCurrentThemeBranding({ mascot: "claw", critters: [] });
         document.documentElement.dataset.themeMascot = "claw";
       });
       expectOriginals();

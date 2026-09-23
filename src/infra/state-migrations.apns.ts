@@ -12,13 +12,13 @@ import {
 import { readLegacyJsonObjectStream } from "./legacy-json-object-stream.js";
 import {
   apnsRegistrationFromRow,
-  apnsRegistrationToRow,
   isValidApnsNodeId,
   normalizeApnsEnvironment,
   normalizeApnsNodeId,
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {

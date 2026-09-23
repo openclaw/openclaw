@@ -73,7 +73,11 @@ export async function writeUpdateRunReportArtifact(params: {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const id = (!params.detached && z.uuid().safeParse(params.result.runId).data) || randomUUID();
-  const directory = params.detached ? os.tmpdir() : path.join(stateDir, "update-reports");
+  // Atomic writes enforce their parent mode; never apply private report permissions
+  // to the shared temporary root. Returned reports remain available to the operator.
+  const directory = params.detached
+    ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-"))
+    : path.join(stateDir, "update-reports");
   const outputPath = path.join(directory, `${id}.md`);
   const failurePath =
     classifyUpdateOutcome(params.result) === "failed"

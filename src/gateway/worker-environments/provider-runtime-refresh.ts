@@ -124,7 +124,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
       throw new Error("Worker runtime refresh returned a mismatched build receipt");
     }
-    const refreshed = store.refreshBootstrapReceipt({
+    const refreshed = await store.refreshBootstrapReceipt({
       environmentId: record.environmentId,
       ...(record.state === "attached"
         ? { expectedState: record.state, expectedPlacementGeneration: expectedPlacementGeneration! }
@@ -135,7 +135,8 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       bootstrapReceipt: { ...receipt, installKind: "bundle" },
       assertCurrent,
     });
-    ensurePendingCredential(refreshed, sessionId ?? null);
+    assertCurrent();
+    await ensurePendingCredential(refreshed, sessionId ?? null);
   };
 
   return refreshRuntime;

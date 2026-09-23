@@ -371,9 +371,10 @@ export default definePluginEntry({
                 plugins: declared as Record<string, never>,
               });
             },
-            mutate: async (update) => {
+            mutate: async (update, assertCurrent) => {
               const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
+                writeOptions: { assertCurrent },
                 mutate: (draft) => {
                   // Create the nested plugin config path on demand so codex
                   // plugin commands can enable/update Codex-managed plugins.

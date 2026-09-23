@@ -67,6 +67,7 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
@@ -279,7 +280,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) dashboardExpanded = false;
-  @property({ attribute: false }) routeFace: BoardFace = "chat";
+  @property({ attribute: false }) routeFace?: BoardFace;
   @property({ attribute: false }) onFaceChange?: (
     paneId: string,
     sessionKey: string,
@@ -309,19 +310,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) boardProvider?: BoardProvider;
 
   private publishedRunActivity: ChatPaneBase["runActivity"] = null;
-  protected readonly chatState = new ChatStateController<ChatPageHost>(this, () => {
-    const activity = this.runActivity;
-    if (
-      activity?.client === this.publishedRunActivity?.client &&
-      activity?.agentId === this.publishedRunActivity?.agentId &&
-      activity?.working === this.publishedRunActivity?.working &&
-      activity?.completion === this.publishedRunActivity?.completion
-    ) {
-      return;
-    }
-    this.publishedRunActivity = activity;
-    this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
-  });
+  protected readonly chatState = new ChatStateController<ChatPageHost>(
+    this,
+    () => {
+      const activity = this.runActivity;
+      if (
+        activity?.client === this.publishedRunActivity?.client &&
+        activity?.agentId === this.publishedRunActivity?.agentId &&
+        activity?.working === this.publishedRunActivity?.working &&
+        activity?.completion === this.publishedRunActivity?.completion
+      ) {
+        return;
+      }
+      this.publishedRunActivity = activity;
+      this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
+    },
+    (item) =>
+      getTranscriptState(this.presentationId).transcriptRenderContext.onAsyncQuestionDiscard?.(
+        item,
+      ),
+  );
 
   get runActivity() {
     const state = this.state;
@@ -581,7 +589,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       );
   }
 
-  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): boolean;
+  protected abstract refreshSessionPullRequests(options?: {
+    refresh?: boolean;
+    automatic?: boolean;
+  }): boolean;
   protected abstract commitSidebarLayout(
     layout: SidebarLayout,
     options?: Parameters<ChatPageHost["updateSidebarLayout"]>[1],

@@ -2,11 +2,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  createSessionSqliteMigrationRun,
-  updateMigrationManifestTarget,
-  writeSessionSqliteMigrationManifest,
-} from "../../commands/doctor-session-sqlite-migration-run.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -15,6 +10,12 @@ import {
   recordGatewayBootStart,
 } from "../../infra/gateway-boot-lifecycle.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
+import {
+  createSessionSqliteMigrationRun,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+} from "../../infra/session-sqlite-migration-manifest.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -433,6 +434,45 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  it.each([false, true])(
+    "prioritizes an active update over availability (finished=%s)",
+    async (finished) => {
+      vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+        root: "/fixture/openclaw",
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "9999.0.0" },
+      });
+      const run = createUpdateRun({ trigger: "cli" });
+      recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: "sample",
+            reason: "Plugin upgrade did not complete.",
+            command: "openclaw doctor --fix",
+          },
+        ],
+      });
+      recordUpdateRunPhase(run.runId, "validating");
+      if (finished) {
+        finishUpdateRun(run.runId, { status: "succeeded" });
+      }
+      await updateStatusCommand({});
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output.includes("available ·")).toBe(finished);
+      expect(output.includes("Update available")).toBe(finished);
+      expect(output.includes("Let the current update or repair finish")).toBe(!finished);
+      if (!finished) {
+        expect(output).toContain("in progress · validating");
+        expect(output.trim()).toMatch(/Check progress with openclaw update status\.$/);
+      }
+      await updateStatusCommand({ json: true });
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        availability: { available: true },
+      });
+    },
+  );
+
   it("keeps a real failure visible after a retained dry run", async () => {
     const failed = createUpdateRun({ trigger: "cli" });
     const failure = finishUpdateRun(failed.runId, {
@@ -625,14 +665,14 @@ describe("update status abandoned-run reporting", () => {
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
-          expect.stringContaining('Plugin "codex" state migration is pending:'),
+          expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished:'),
         ]);
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings[0]).toContain(
           pending.command,
         );
       } else {
         const output = runtime.log.mock.calls.flat().join("\n");
-        expect(output).toContain('Plugin "codex" state migration is pending:');
+        expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished:');
         expect(output).toContain(pending.command);
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -645,7 +685,7 @@ describe("update status abandoned-run reporting", () => {
         expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("migrationWarnings");
       } else {
         expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(
-          'Plugin "codex" state migration is pending:',
+          'Plugin "codex" data/settings upgrade is unfinished:',
         );
       }
       expect(getUpdateRun(run.runId)).toEqual(history);

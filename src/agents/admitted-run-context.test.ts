@@ -5,13 +5,22 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
-import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
+import {
+  rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
+import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../plugins/runtime/gateway-context-binding.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
   createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
+  getAdmittedRunSource,
   prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
   readPreparedRunOperatorAuthority,
@@ -91,6 +100,32 @@ describe("prepared run admission", () => {
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.operationalRunInstance)).toBe(true);
   });
+
+  it.each([false, true])(
+    "binds Gateway routing after freezing admission (audit=%s)",
+    async (audit) => {
+      const { runtime, ...admissionFacts } = facts;
+      const resolver = () => undefined;
+      const prepared = prepareAgentRunAdmission({
+        cfg: audit ? enabledConfig : {},
+        facts: admissionFacts,
+        operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+        onAdmitted: (context) => {
+          expect(Object.isFrozen(context)).toBe(true);
+          bindGatewayContextResolver(context, resolver);
+        },
+      });
+      try {
+        const admitted = await prepared.admit(runtime.kind);
+        expect(getGatewayContextResolver(admitted)).toBe(resolver);
+        expect(getGatewayContextResolver({ ...admitted })).toBeUndefined();
+        expect(clearGatewayContextResolver(admitted)).toBe(true);
+        expect(getGatewayContextResolver(admitted)).toBeUndefined();
+      } finally {
+        prepared.close();
+      }
+    },
+  );
 
   it("consumes disabled recovery evidence so a reused run id cannot inherit it", async () => {
     const token = createExecutionIdentityAdmissionToken(facts.runId);
@@ -258,6 +293,7 @@ describe("prepared run admission", () => {
       cfg: {},
       facts: { ...admissionFacts, runId: "run-lease" },
       operationalRunInstance: createOperationalRunInstanceRef("run-lease"),
+      admissionSource: "operator-schedule",
     });
     const admitted = await resolvePreparedRunAdmission({
       runId: "run-lease",
@@ -265,6 +301,8 @@ describe("prepared run admission", () => {
       preparedRunAdmission: prepared,
     });
     const first = getAdmittedRunDelegatedAuthority(admitted)!;
+    expect(getAdmittedRunSource(first)).toBe("operator-schedule");
+    expect(getAdmittedRunSource({ ...first })).toBeUndefined();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(true);
     await expect(
       resolvePreparedRunAdmission({
@@ -277,9 +315,70 @@ describe("prepared run admission", () => {
     prepared.close();
     expect(() => prepared.assertSourceCurrent()).not.toThrow();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(getAdmittedRunSource(first)).toBeUndefined();
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
   });
+
+  it.each([undefined, "operator-schedule"] as const)(
+    "keeps the original source %s when another admission reuses its live authority",
+    async (admissionSource) => {
+      const operationalRunInstance = createOperationalRunInstanceRef("source-binding");
+      const input = {
+        cfg: {},
+        facts: { ...facts, runId: "source-binding" },
+        operationalRunInstance,
+      };
+      const original = prepareAgentRunAdmission({ ...input, admissionSource });
+      const replacement = prepareAgentRunAdmission({
+        ...input,
+        admissionSource: admissionSource === undefined ? "operator-schedule" : "requester-schedule",
+      });
+      try {
+        const authority = getAdmittedRunDelegatedAuthority(await original.admit("embedded"));
+        expect(authority).toBeDefined();
+        expect(getAdmittedRunDelegatedAuthority(await replacement.admit("embedded"))).toBe(
+          authority,
+        );
+        expect(getAdmittedRunSource(authority)).toBe(admissionSource);
+      } finally {
+        replacement.close();
+        original.close();
+      }
+    },
+  );
+
+  it.each(["replacement", "rotation"] as const)(
+    "retires scheduler source after %s",
+    async (end) => {
+      const input = {
+        cfg: {},
+        facts: { ...facts, runId: "source-lifetime" },
+        admissionSource: "operator-schedule" as const,
+      };
+      const original = prepareAgentRunAdmission({
+        ...input,
+        operationalRunInstance: createOperationalRunInstanceRef("source-lifetime"),
+      });
+      const replacement = prepareAgentRunAdmission({
+        ...input,
+        operationalRunInstance: createOperationalRunInstanceRef("source-lifetime"),
+      });
+      try {
+        const authority = getAdmittedRunDelegatedAuthority(await original.admit("embedded"));
+        expect(getAdmittedRunSource(authority)).toBe("operator-schedule");
+        if (end === "replacement") {
+          await replacement.admit("embedded");
+        } else {
+          rotateAgentRunRegistryLifecycleGeneration();
+        }
+        expect(getAdmittedRunSource(authority)).toBeUndefined();
+      } finally {
+        replacement.close();
+        original.close();
+      }
+    },
+  );
 
   it("invalidates an admitted-run assertion on abort and outer close", async () => {
     const { runtime, ...admissionFacts } = facts;

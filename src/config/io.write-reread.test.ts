@@ -121,6 +121,7 @@ describe("writeConfigFile canonical reread", () => {
       expect(refresh).toHaveBeenCalledExactlyOnceWith({
         sourceConfig: persisted,
         preflightResult: { sourceConfig: persisted },
+        assertCurrent: expect.any(Function),
       });
       expect(
         warn.mock.calls.some(([line]) =>

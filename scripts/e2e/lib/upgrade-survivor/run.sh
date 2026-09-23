@@ -30,23 +30,16 @@ export OPENCLAW_NO_PROMPT=1
 export OPENCLAW_SKIP_PROVIDERS=1
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_DISABLE_BONJOUR=1
-LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
-LIVE_OPENAI_API_KEY=""
-case "$LIVE_OPENAI" in
-  0)
-    ;;
-  1)
-    if [ -z "${OPENAI_API_KEY:-}" ]; then
-      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY" >&2
-      exit 2
-    fi
-    LIVE_OPENAI_API_KEY="$OPENAI_API_KEY"
-    ;;
-  *)
-    echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI must be 0 or 1; got: $LIVE_OPENAI" >&2
-    exit 2
-    ;;
-esac
+LIVE_MODEL_ROWS="$(node scripts/e2e/lib/upgrade-survivor/live-models.mjs rows)"
+LIVE_ENABLED=0
+[ -z "$LIVE_MODEL_ROWS" ] || LIVE_ENABLED=1
+LIVE_OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+LIVE_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+LIVE_GEMINI_API_KEY="${GEMINI_API_KEY:-}"
+resolve_upgrade_survivor_paths
+mkdir -p "$ARTIFACT_ROOT"
+LIVE_MODELS_JSON="$ARTIFACT_ROOT/live-models.json"
+node scripts/e2e/lib/upgrade-survivor/live-models.mjs init "$LIVE_MODELS_JSON"
 export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
   export GATEWAY_AUTH_PASSWORD_REF="$(
@@ -54,9 +47,11 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
   )"
 fi
 if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then
-  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
 else
   export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
+  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"
+  export GEMINI_API_KEY="upgrade-survivor-gemini-key"
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
@@ -68,9 +63,7 @@ if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-vol
   export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 fi
 
-resolve_upgrade_survivor_paths
 STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
-mkdir -p "$ARTIFACT_ROOT"
 mkdir -p "$RUNTIME_ROOT"
 chmod 700 "$RUNTIME_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
@@ -123,6 +116,7 @@ baseline_spec=""
 baseline_version=""
 baseline_plugin_version=""
 baseline_plugin_tarball=""
+published_plugin_registry_args=()
 baseline_companion_availability=""
 baseline_version_expected="0"
 candidate_version=""
@@ -157,8 +151,6 @@ HEALTHZ_JSON="$ARTIFACT_ROOT/healthz.json"
 READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
 STATUS_JSON="$ARTIFACT_ROOT/status.json"
 STATUS_ERR="$ARTIFACT_ROOT/status.err"
-LIVE_OPENAI_JSON="$ARTIFACT_ROOT/live-openai.json"
-LIVE_OPENAI_ERR="$ARTIFACT_ROOT/live-openai.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
 BASELINE_SERVICE_INSTALL_JSON="$ARTIFACT_ROOT/baseline-service-install.json"
 BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
@@ -254,7 +246,7 @@ validate_update_restart_mode() {
       ;;
   esac
   if [ "$SCENARIO" = "workshop-doctor-recovery" ] && {
-    [ "$LIVE_OPENAI" != "0" ] || [ "$ROOT_MANAGED_VPS" != "0" ] ||
+    [ "$LIVE_ENABLED" != "0" ] || [ "$ROOT_MANAGED_VPS" != "0" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$CANDIDATE_KIND" != "tarball" ];
   }; then
     echo "workshop-doctor-recovery requires a candidate tarball, manual restart, and no live provider or managed VPS" >&2
@@ -302,6 +294,7 @@ write_summary() {
     SUMMARY_STATUS_SECONDS="$status_seconds" \
     SUMMARY_FAILURE_PHASE="$FAILURE_PHASE" \
     SUMMARY_CONFIG_COVERAGE="$CONFIG_COVERAGE_JSON" \
+    SUMMARY_LIVE_MODELS="$LIVE_MODELS_JSON" \
     SUMMARY_WATCH_BASELINE_CONNECT="$WATCH_BASELINE_CONNECT_JSON" \
     SUMMARY_WATCH_BASELINE_STATE="$WATCH_BASELINE_STATE_JSON" \
     SUMMARY_WATCH_CANDIDATE_CONNECT="$WATCH_CANDIDATE_CONNECT_JSON" \
@@ -377,6 +370,7 @@ const summary = {
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
   },
   config: readJsonOrNull(process.env.SUMMARY_CONFIG_COVERAGE),
+  liveModels: readJsonOrNull(process.env.SUMMARY_LIVE_MODELS),
   recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
     : undefined,
@@ -716,6 +710,13 @@ assert_prepublish_plugin_install() {
   if [ -n "$baseline_plugin_tarball" ] && [ "$baseline_plugin_version" = "$candidate_version" ]; then
     published_companion_tarball="$baseline_plugin_tarball"
   fi
+  local index
+  for ((index = 0; index < ${#published_plugin_registry_args[@]}; index += 3)); do
+    if [ "${published_plugin_registry_args[index]}" = "@openclaw/$plugin_id" ] &&
+      [ "${published_plugin_registry_args[index + 1]}" = "$candidate_version" ]; then
+      published_companion_tarball="${published_plugin_registry_args[index + 2]}"
+    fi
+  done
   # Verify the selected archive, including a retained published companion. An empty
   # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
@@ -849,6 +850,20 @@ NODE
 
   if [ "${#registry_args[@]}" -eq 0 ]; then
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
+  fi
+
+  if [ "$stage" = "candidate" ] && [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    local published_rows package_name package_version package_tarball
+    published_rows="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+      node scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs \
+      "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" "$fixture_root/published")" || return "$?"
+    published_plugin_registry_args=()
+    if [ -n "$published_rows" ]; then
+      while IFS=$'\t' read -r package_name package_version package_tarball; do
+        published_plugin_registry_args+=("$package_name" "$package_version" "$package_tarball")
+      done <<<"$published_rows"
+      registry_args+=("${published_plugin_registry_args[@]}")
+    fi
   fi
 
   if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "msteams-polls" ]; then
@@ -1739,7 +1754,7 @@ run_doctor() {
 }
 
 prepare_restart_inference() {
-  if [ "$LIVE_OPENAI" = "1" ]; then
+  if [ "$LIVE_ENABLED" = "1" ] && [[ "$LIVE_MODEL_ROWS" == *$'\topenai\t'* ]]; then
     export OPENAI_API_KEY="$LIVE_OPENAI_API_KEY"
     restart_inference="live-openai"
     return 0
@@ -2000,39 +2015,50 @@ check_gateway_status() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 
-run_live_openai() {
+run_live_models() {
   local marker="OPENCLAW_UPGRADE_SURVIVOR_LIVE_OK"
-  local model="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
-  local timeout_seconds
-  local status=0
+  local model provider key_env artifact timeout_seconds started ended turn_status failed=0
   timeout_seconds="$(
     openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
   )"
   stop_gateway
-  (
-    unset OPENCLAW_SKIP_PROVIDERS
-    export OPENAI_API_KEY="$LIVE_OPENAI_API_KEY"
-    openclaw_e2e_maybe_timeout "${timeout_seconds}s" \
-      openclaw agent \
-      --local \
-      --agent main \
-      --session-id upgrade-survivor-live-openai \
-      --model "$model" \
-      --message "Reply with exactly $marker and no other text." \
-      --thinking off \
-      --timeout "$timeout_seconds" \
-      --json
-  ) >"$LIVE_OPENAI_JSON" 2>"$LIVE_OPENAI_ERR" || status=$?
-  if [ "$status" -ne 0 ]; then
-    echo "live OpenAI survivor turn failed" >&2
-    openclaw_e2e_print_log "$LIVE_OPENAI_ERR" >&2
-    openclaw_e2e_print_log "$LIVE_OPENAI_JSON" >&2
-    return "$status"
-  fi
-  node --input-type=module - "$marker" "$LIVE_OPENAI_JSON" <<'NODE'
+  while IFS=$'\t' read -r model provider key_env artifact; do
+    turn_status=0
+    started="$(node -e 'process.stdout.write(String(Date.now()))')"
+    (
+      unset OPENCLAW_SKIP_PROVIDERS
+      case "$provider" in
+        openai) export OPENAI_API_KEY="$LIVE_OPENAI_API_KEY" ;;
+        anthropic) export ANTHROPIC_API_KEY="$LIVE_ANTHROPIC_API_KEY" ;;
+        google) export GEMINI_API_KEY="$LIVE_GEMINI_API_KEY" ;;
+      esac
+      openclaw_e2e_maybe_timeout "${timeout_seconds}s" \
+        openclaw agent \
+        --local \
+        --agent main \
+        --session-id "upgrade-survivor-$artifact" \
+        --model "$model" \
+        --message "Reply with exactly $marker and no other text." \
+        --timeout "$timeout_seconds" \
+        --json
+    ) >"$ARTIFACT_ROOT/$artifact.json" 2>"$ARTIFACT_ROOT/$artifact.err" || turn_status=$?
+    ended="$(node -e 'process.stdout.write(String(Date.now()))')"
+    if [ "$turn_status" -eq 0 ]; then
+      node --input-type=module - "$marker" "$ARTIFACT_ROOT/$artifact.json" <<'NODE' || turn_status=$?
 import { assertAgentReplyContainsMarker } from "./scripts/e2e/lib/agent-turn-output.mjs";
 assertAgentReplyContainsMarker(process.argv[2], process.argv[3]);
 NODE
+    fi
+    node scripts/e2e/lib/upgrade-survivor/live-models.mjs record \
+      "$LIVE_MODELS_JSON" "$artifact" "$turn_status" "$((ended - started))"
+    if [ "$turn_status" -ne 0 ]; then
+      echo "live survivor turn failed for $model (exit $turn_status)" >&2
+      openclaw_e2e_print_log "$ARTIFACT_ROOT/$artifact.err" >&2
+      openclaw_e2e_print_log "$ARTIFACT_ROOT/$artifact.json" >&2
+      [ "$failed" -ne 0 ] || failed="$turn_status"
+    fi
+  done <<<"$LIVE_MODEL_ROWS"
+  return "$failed"
 }
 
 prepare_worker_cell_package() {
@@ -2115,7 +2141,7 @@ validate_worker_cell() {
     return 0
   fi
   if [ "$BASELINE_RAW" != "openclaw@2026.9.4" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; then
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
     echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
     return 1
   fi
@@ -2472,8 +2498,10 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
     --url ws://127.0.0.1:18789 --out "$ARTIFACT_ROOT/volume-gateway-restarted.json"
   phase assert-restarted-survival assert_survival
 fi
-if [ "$LIVE_OPENAI" = "1" ]; then
-  phase live-openai run_live_openai
+if [ "$LIVE_ENABLED" = "1" ]; then
+  live_phase=live-models
+  [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ] || live_phase=live-openai
+  phase "$live_phase" run_live_models
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback

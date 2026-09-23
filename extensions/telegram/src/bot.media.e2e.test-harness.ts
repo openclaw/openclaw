@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
@@ -143,6 +144,7 @@ export const telegramMediaHarnessSendMessageSpy = apiStub.sendMessage;
 const throttlerSpy = vi.fn(() => "throttler");
 const defaultRuntimeConfig = (() =>
   ({
+    messages: { inbound: { debounceMs: 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
@@ -155,7 +157,7 @@ function installTopicNameRuntimeForTest(): void {
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
     },
-    channel: {},
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as TelegramRuntime);
 }
 

@@ -38,10 +38,10 @@ import {
   getActiveAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  type DeviceIdentity,
-} from "../../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateDeviceIdentityAsync,
+} from "../../infra/device-identity-async.js";
+import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -331,12 +331,12 @@ function stripNodeInvokeTurnSource(params: unknown): unknown {
   return invoke ? omitNodeInvokeTurnSource(invoke) : params;
 }
 
-function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
+async function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
   callParams: unknown;
   opts: GatewayCallOptions;
   approvalRuntimeToken: string | undefined;
-}): DeviceIdentity | undefined {
+}): Promise<DeviceIdentity | undefined> {
   const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
   const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
   if (!isApprovalRuntimeMethod && !isNodeApprovalReplay) {
@@ -357,13 +357,13 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     if (isNodeApprovalReplay) {
       // Replay must reuse the identity present when the approval was registered.
       // Creating one here could turn a device-less record into a different identity.
-      const identity = loadDeviceIdentityIfPresent();
+      const identity = await loadDeviceIdentityIfPresentAsync();
       if (!identity) {
         throw new Error("device identity is not persisted");
       }
       return identity;
     }
-    const identity = loadOrCreateDeviceIdentity();
+    const identity = await loadOrCreateDeviceIdentityAsync();
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {
@@ -676,7 +676,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           signal: extra?.signal,
           expectFinal: extra?.expectFinal,
           assertDispatchCurrent: dispatchAuthority?.assertCurrent,
-          scopes,
+          ...(Array.isArray(extra?.scopes) ? { scopes } : {}),
         },
         runtimeIdentity,
       ),
@@ -689,7 +689,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
+  const deviceIdentity = await resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
     callParams,
     opts,

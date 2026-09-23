@@ -156,6 +156,91 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     });
   });
 
+  it("does not preflight a duration-bearing video attachment as audio", async () => {
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/PXL_2024.mp4",
+            content_type: "video/mp4",
+            filename: "PXL_2024.mp4",
+            duration_secs: 11.26,
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      hasAudioAttachment: false,
+      hasTypedText: false,
+    });
+  });
+
+  it("does not preflight a duration-bearing image attachment as audio", async () => {
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/photo.png",
+            content_type: "image/png",
+            filename: "photo.png",
+            duration_secs: 0.5,
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      hasAudioAttachment: false,
+      hasTypedText: false,
+    });
+  });
+
+  it("still preflights a waveform-bearing voice note with a definitive video MIME", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("waveform over video mime transcript");
+
+    await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            content_type: "video/ogg",
+            filename: "voice",
+            duration_secs: 1.5,
+            waveform: "AAAA",
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: {
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            contentType: "audio/ogg",
+          },
+        ],
+      },
+      cfg,
+      agentDir: undefined,
+    });
+  });
+
   it("ignores URL-less audio attachments", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: {

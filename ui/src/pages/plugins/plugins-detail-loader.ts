@@ -2,25 +2,20 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
-import {
-  loadPluginDiscoveryDetail,
-  type PluginCatalogItem,
-  type PluginDiscoveryDetailResult,
-} from "../../lib/plugins/index.ts";
+import { loadPluginDiscoveryDetail, type PluginCatalogItem } from "../../lib/plugins/index.ts";
 import type { PluginsPageDetail } from "./plugins-page-model.ts";
 
 /** Local inspection owns availability; optional metadata never delays the installed controls. */
 export async function loadInstalledPluginDetail(params: {
   plugin: PluginCatalogItem;
-  detail: PluginsPageDetail;
   client: GatewayBrowserClient;
-  catalog?: PluginDiscoveryDetailResult;
+  initial: PluginsPageDetail;
   includeTools: boolean;
   isCurrent: () => boolean;
   onChange: (detail: PluginsPageDetail) => void;
 }): Promise<void> {
   const { plugin, client } = params;
-  let detail = params.detail;
+  let detail = params.initial;
   const publish = (next: PluginsPageDetail) => {
     if (!params.isCurrent()) {
       return;
@@ -38,7 +33,13 @@ export async function loadInstalledPluginDetail(params: {
     if (!params.isCurrent()) {
       return;
     }
-    publish({ pluginId: plugin.id, inspection, error: null });
+    publish({
+      ...detail,
+      inspection,
+      tools: undefined,
+      catalog: inspection.catalog ?? detail.catalog,
+      catalogLoading: Boolean(plugin.catalogId && !inspection.catalog && !detail.catalog),
+    });
     void tools.then((catalog) => {
       if (!catalog) {
         return;
@@ -56,10 +57,6 @@ export async function loadInstalledPluginDetail(params: {
       }
       publish({ ...detail, tools: [...toolDetails.values()] });
     });
-    if (params.catalog?.plugin.local.pluginId === plugin.id) {
-      publish({ ...detail, inspection: { ...inspection, catalog: params.catalog } });
-      return;
-    }
     if (!plugin.catalogId) {
       return;
     }
@@ -70,9 +67,10 @@ export async function loadInstalledPluginDetail(params: {
         undefined,
         plugin.version,
       );
-      publish({ ...detail, inspection: { ...inspection, catalog } });
+      publish({ ...detail, catalog, catalogLoading: false });
     } catch {
-      // Remote enrichment is optional; local capabilities and controls are already visible.
+      // Remote enrichment is optional; settle its placeholder without hiding local controls.
+      publish({ ...detail, catalogLoading: false });
     }
   } catch (error) {
     publish({ ...detail, error: formatUiError(error) });

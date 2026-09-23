@@ -13,6 +13,7 @@ import {
 } from "../../../tasks/task-runtime.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -164,6 +165,15 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../../../context-engine/registry.js", () => ({
+  resolveContextEngine: vi.fn(async () => noopContextEngine),
+}));
+vi.mock("../../runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+});
+
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "subagent_ended",
@@ -201,11 +211,6 @@ describe("subagent registry steer restarts", () => {
       delete sessionStore[key];
     }
     lifecycleHandler = undefined;
-    mod.testing.setDepsForTest({
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      resolveContextEngine: async () => noopContextEngine,
-    });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     runSubagentEndedHookMock.mockReset();
@@ -349,7 +354,7 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    mod.testing.setDepsForTest();
+    await settleSubagentRegistryPersistenceWork();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
     runSubagentEndedHookMock.mockReset();

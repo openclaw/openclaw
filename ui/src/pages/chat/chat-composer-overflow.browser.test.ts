@@ -1,16 +1,18 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { renderChatGoal } from "./components/chat-composer-goal.ts";
+import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
+import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 
@@ -50,7 +52,84 @@ describe("composer overflow presentation", () => {
     container.remove();
     styles.remove();
     resetChatComposerState();
+    clearGoalElapsedTimers();
   });
+
+  it.each([390, 2048])(
+    "keeps skill labels and dependency notes inside scrollable menu rows at %ipx",
+    async (width) => {
+      await page.viewport(width, 1000);
+      container.className = "";
+      container.style.cssText = `position: fixed; bottom: 24px; left: 16px; width: ${Math.min(width - 32, 760)}px`;
+      const props = createComposerProps({
+        onRequestUpdate: () => render(renderChatComposer(props), container),
+        capabilityMenu: {
+          basePath: "",
+          skills: [
+            "apple-notes",
+            "apple-reminders",
+            "bear-notes",
+            "A skill with a long descriptive name that wraps across multiple lines",
+            ...Array.from({ length: 12 }, (_, index) => `fixture-skill-${index}`),
+          ].map((name) => ({
+            key: name,
+            name,
+            enabled: false,
+            baseEnabled: false,
+            missingDeps: true,
+          })),
+          skillsLoading: false,
+          skillsError: false,
+          mcpServers: [],
+          toolsEffectiveResult: null,
+          toolsEffectiveLoading: false,
+          toolsEffectiveError: false,
+          toolAccessMutationBlockedReason: null,
+          webSearchBaseEnabled: true,
+          mutationBlockedReason: null,
+          canAdmin: true,
+          adminBlockedReason: null,
+          onLoadSkills: vi.fn(),
+          onPatchToolOverrides: vi.fn(),
+          onNavigate: vi.fn(),
+        },
+      });
+      render(renderChatComposer(props), container);
+      await page
+        .elementLocator(
+          container.querySelector<HTMLElement>('.agent-chat__attach-menu > [slot="trigger"]')!,
+        )
+        .click();
+      await page
+        .elementLocator(container.querySelector<HTMLElement>('[value="open-skills"]')!)
+        .click();
+      await afterLayout();
+      const dropdown = container.querySelector<HTMLElement>(".agent-chat__capability-menu")!;
+      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+      const rows = [...dropdown.querySelectorAll<HTMLElement>('[value^="skill:"]')];
+      expect(rows).toHaveLength(16);
+
+      for (const row of rows) {
+        const box = row.getBoundingClientRect();
+        const label = row
+          .querySelector<HTMLElement>(".agent-chat__capability-menu-label")!
+          .getBoundingClientRect();
+        expect(label.top).toBeGreaterThanOrEqual(box.top);
+        expect(label.bottom).toBeLessThanOrEqual(box.bottom);
+        expect(label.left).toBeGreaterThanOrEqual(box.left);
+        expect(label.right).toBeLessThanOrEqual(box.right);
+      }
+      const name = rows[1]!.querySelector<HTMLElement>(
+        ".agent-chat__capability-menu-label > span",
+      )!;
+      expect(name.getBoundingClientRect().height).toBeLessThan(
+        2 * Number.parseFloat(getComputedStyle(name).lineHeight),
+      );
+      expect(menu.scrollWidth).toBeLessThanOrEqual(menu.clientWidth);
+      expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+    },
+  );
 
   function drawAttachments(count: number) {
     return render(renderAttachmentPreview({ attachments: attachments.slice(0, count) }), container);
@@ -254,18 +333,14 @@ describe("composer overflow presentation", () => {
 
   it("restores full mention names after narrowing and reconnecting the composer", async () => {
     container.className = "";
-    const part = render(
-      renderChatComposer(
-        createComposerProps({
-          draft: "@Jordan Rivera @Morgan Williams",
-          mentions: [
-            { profileId: "jordan", start: 0, end: 14 },
-            { profileId: "morgan", start: 15, end: 31 },
-          ],
-        }),
-      ),
-      container,
-    );
+    const props = createComposerProps({
+      draft: "@Jordan Rivera @Morgan Williams",
+      mentions: [
+        { profileId: "jordan", start: 0, end: 14 },
+        { profileId: "morgan", start: 15, end: 31 },
+      ],
+    });
+    const part = render(renderChatComposer(props), container);
     const strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
@@ -275,6 +350,25 @@ describe("composer overflow presentation", () => {
     for (const avatar of strip.querySelectorAll<HTMLElement>('[role="img"]')) {
       expect(avatar.getBoundingClientRect().width).toBe(16);
       expect(avatar.getBoundingClientRect().height).toBe(16);
+    }
+    await document.fonts.ready;
+    await afterLayout();
+    const mutations = vi.fn();
+    const observer = new MutationObserver(mutations);
+    observer.observe(strip.querySelector(".composer-context-strip__people")!, {
+      subtree: true,
+      attributes: true,
+      // Avatar fallback classes can refresh independently of recipient sizing.
+      attributeFilter: ["hidden", "style"],
+      childList: true,
+      characterData: true,
+    });
+    try {
+      render(renderChatComposer({ ...props, draft: props.draft + " please review" }), container);
+      await afterLayout();
+      expect(mutations).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
     }
     container.style.width = "300px";
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
@@ -288,6 +382,19 @@ describe("composer overflow presentation", () => {
     part.setConnected(true);
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     expect(more.hidden).toBe(true);
+    const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();
+    const draft = "@Jordan Rivera @" + longName;
+    render(
+      renderChatComposer({
+        ...props,
+        draft,
+        mentions: [props.mentions![0]!, { profileId: "morgan", start: 15, end: draft.length }],
+      }),
+      container,
+    );
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
+    expect(more.hidden).toBe(false);
+    expect(more.title).toBe("@" + longName);
   });
 
   async function expectEdges(
@@ -309,6 +416,74 @@ describe("composer overflow presentation", () => {
       });
     expect(getComputedStyle(element).maskImage === "none").toBe(!scrollable);
   }
+
+  it.each([
+    { viewport: 1200, width: 760 },
+    { viewport: 390, width: 342 },
+  ])(
+    "ellipsizes empty focused and blurred composers at $viewport px without clipping drafts",
+    async ({ viewport, width }) => {
+      await page.viewport(viewport, 800);
+      container.style.width = `${width}px`;
+      const props = createComposerProps({
+        assistantName: "A deliberately long assistant name ".repeat(8),
+        onDraftChange: (draft) => {
+          props.draft = draft;
+          draw();
+        },
+      });
+      const draw = () => render(renderChatComposer(props), container);
+      draw();
+      const textarea = container.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox > textarea",
+      )!;
+      const placeholder = container.querySelector<HTMLElement>(
+        ".agent-chat__composer-placeholder",
+      )!;
+      const control = page.elementLocator(textarea);
+      await afterLayout();
+
+      expect(placeholder).not.toBeNull();
+      expect(placeholder.textContent).toBe(textarea.placeholder);
+      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+      expect(textarea.getAttribute("aria-label")).toBeTruthy();
+      for (const focused of [false, true]) {
+        if (focused) {
+          await control.click();
+        } else {
+          textarea.blur();
+        }
+        await afterLayout();
+        expect(document.activeElement === textarea).toBe(focused);
+        expect(placeholder.checkVisibility()).toBe(true);
+        expect(placeholder.scrollWidth).toBeGreaterThan(placeholder.clientWidth);
+        expect(getComputedStyle(placeholder).textOverflow).toBe("ellipsis");
+        expect(getComputedStyle(placeholder).overflowX).toBe("hidden");
+        expect(getComputedStyle(textarea, "::placeholder").color).toBe("rgba(0, 0, 0, 0)");
+        expect(placeholder.getBoundingClientRect().right).toBeLessThanOrEqual(
+          textarea.getBoundingClientRect().right + 1,
+        );
+      }
+
+      const emptyHeight = textarea.clientHeight;
+      const draft =
+        "A typed line that wraps within the available composer width. ".repeat(8) +
+        "\nA second editable line.";
+      await control.fill(draft);
+      await afterLayout();
+      expect(textarea.value).toBe(draft);
+      expect(props.draft).toBe(draft);
+      expect(placeholder.checkVisibility()).toBe(false);
+      expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
+      expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
+
+      await control.fill("");
+      await afterLayout();
+      expect(document.activeElement).toBe(textarea);
+      expect(placeholder.checkVisibility()).toBe(true);
+      expect(textarea.clientHeight).toBe(emptyHeight);
+    },
+  );
 
   it("updates retained attachment edges when files are appended, scrolled, and removed", async () => {
     drawAttachments(1);
@@ -359,6 +534,100 @@ describe("composer overflow presentation", () => {
     container.style.width = "760px";
     await expectEdges(element, false);
   });
+
+  it.each([
+    [320, "active"],
+    [390, "paused"],
+    [560, "blocked"],
+  ] as const)(
+    "aligns the expanded %s px %s header and keeps controls above the objective",
+    async (width, status) => {
+      await page.viewport(width, 800);
+      styles.textContent += queueStyles;
+      container.className = "agent-chat__composer-shell";
+      container.style.width = `${width - 32}px`;
+      const state = getChatComposerState("mobile-actions");
+      const goal: SessionGoal = {
+        schemaVersion: 1,
+        id: "mobile-actions",
+        objective: "Verify the deployment and summarize its health checks.\n".repeat(12),
+        status,
+        lastStatusNote: "Review the deployment results before continuing.",
+        createdAt: 1000,
+        updatedAt: 61000,
+        tokenStart: 0,
+        tokensUsed: 1500,
+        continuationTurns: 0,
+      };
+      const onGoalAction = vi.fn();
+      const onGoalEdit = vi.fn();
+      const draw = () =>
+        render(
+          html`<div class="agent-chat__goal-float">
+            ${renderChatGoal(state, goal, {
+              canAct: true,
+              onGoalAction,
+              onGoalEdit,
+              requestUpdate: draw,
+            })}
+          </div>`,
+          container,
+        );
+      draw();
+      const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
+      expect(getComputedStyle(commands).display).toBe("none");
+      await page.getByRole("button", { name: "Show goal details", exact: true }).click();
+      await afterLayout();
+      const objective = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
+      const commandBox = commands.getBoundingClientRect();
+      expect(commandBox.height).toBeGreaterThan(0);
+      expect(commandBox.bottom).toBeLessThanOrEqual(objective.getBoundingClientRect().top);
+      const centers = [
+        ".agent-chat__goal-icon svg",
+        ".agent-chat__goal-label",
+        ".agent-chat__goal-expand svg",
+      ].map((selector) => {
+        const box = container.querySelector(selector)!.getBoundingClientRect();
+        return box.top + box.height / 2;
+      });
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+      const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
+      for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
+        const box = button.getBoundingClientRect();
+        expect(box.left).toBeGreaterThanOrEqual(cardBox.left);
+        expect(box.right).toBeLessThanOrEqual(cardBox.right);
+        expect(box.height).toBeGreaterThanOrEqual(24);
+        expect(box.height).toBeLessThanOrEqual(30);
+        expect(
+          button.contains(
+            document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+          ),
+        ).toBe(true);
+        await page.elementLocator(button).click();
+      }
+      expect(onGoalEdit).toHaveBeenCalledWith(goal);
+      expect(onGoalAction.mock.calls).toEqual([
+        [goal.id, status === "active" ? "pause" : "resume"],
+        [goal.id, "clear"],
+      ]);
+      await userEvent.tab({ shift: true });
+      expect(document.activeElement).toBe(
+        commands.querySelector(
+          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
+        ),
+      );
+      await userEvent.keyboard("{Enter}");
+      expect(onGoalAction).toHaveBeenLastCalledWith(
+        goal.id,
+        status === "active" ? "pause" : "resume",
+      );
+      objective.scrollTop = objective.scrollHeight;
+      await afterLayout();
+      expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
+      await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
+      expect(getComputedStyle(commands).display).toBe("none");
+    },
+  );
 
   it("preserves expanded mobile goal edges as its objective changes and scrolls", async () => {
     await page.viewport(480, 800);

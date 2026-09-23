@@ -84,6 +84,7 @@ describe("acpx plugin", () => {
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
+      getAllowedAgents: expect.any(Function),
       openKeyedStore: expect.any(Function),
     });
     const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {

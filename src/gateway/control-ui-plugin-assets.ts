@@ -362,7 +362,11 @@ export async function handleControlUiPluginAssetRequest(
   const cookieAuth = authorizeControlUiPluginCookieRequest(req, {
     requestPath: pathname,
     authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
+    res,
   });
+  if (res.writableEnded || res.destroyed) {
+    return true;
+  }
   if (cookieAuth) {
     const grant = cookieAuth.requestAuth.controlUiPluginGrants?.find(
       (candidate) =>
