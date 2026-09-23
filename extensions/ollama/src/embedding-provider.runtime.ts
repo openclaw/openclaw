@@ -8,7 +8,6 @@ import {
   type MemorySearchDeadlineControl,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -39,7 +38,16 @@ import { resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = EmbeddingProvider;
 
-type MemoryCoreAcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
+type MemoryCoreAcquireLocalService = (
+  target: {
+    providerId: string;
+    baseUrl: string;
+    headers?: HeadersInit;
+    /** Reports managed-companion readiness waits; request work stays outside. */
+    onReadinessWait?: (waiting: boolean) => void;
+  },
+  signal?: AbortSignal | null,
+) => Promise<{ release: () => void } | undefined>;
 
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;
