@@ -209,18 +209,29 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = showComposerInput
-    ? renderChatVoiceStatus({
-        status:
-          props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-            ? "error"
-            : props.realtimeTalkStatus,
-        detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
-        onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-        onDismissError:
-          props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-            ? undefined
-            : props.onDismissRealtimeTalkError,
-      })
+    ? html`
+        ${renderChatVoiceStatus({
+          status:
+            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
+              ? "error"
+              : props.realtimeTalkStatus,
+          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
+          onDismissError:
+            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
+              ? undefined
+              : props.onDismissRealtimeTalkError,
+        })}
+        ${
+          props.realtimeTalkInputNotice
+            ? renderChatVoiceStatus({
+                status: "error",
+                detail: props.realtimeTalkInputNotice,
+                onDismissError: props.onDismissRealtimeTalkInputNotice,
+              })
+            : nothing
+        }
+      `
     : nothing;
   const offlineText = props.offline
     ? props.queuedOutboxCount

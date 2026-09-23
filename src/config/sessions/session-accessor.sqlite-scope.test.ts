@@ -15,6 +15,7 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { observeSessionArchivePruning } from "./session-history-archive-pruning-diagnostics.js";
 import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -27,9 +28,7 @@ async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSession
       logging.setLoggerOverride({ level: "warn", file: logPath });
       const operation = diagnostics?.artifactPreparation
         ? "session.lifecycle.artifacts-prepare"
-        : diagnostics?.archivePruning
-          ? "session.history.archive-prune"
-          : "session.transcript.batch";
+        : "session.transcript.batch";
       try {
         await expect(
           runExclusiveSqliteSessionWrite(
@@ -155,8 +154,6 @@ test("artifact preparation file logs retain numeric phases without payload field
 test("archive pruning file logs whitelist partial stage observations", async () => {
   const archivePruning = {
     trigger: "initial" as const,
-    admissionMs: 1200.4,
-    asyncAdmissions: 1,
     checkpointCalls: 2,
     checkpointIncomplete: 1,
     checkpointMs: 20.6,
@@ -165,13 +162,39 @@ test("archive pruning file logs whitelist partial stage observations", async () 
     archiveName: "synthetic-private-archive",
     content: "synthetic-private-transcript",
   };
-  const record = await readFailedWriterLog(new Error("synthetic pruning failure"), {
-    archivePruning,
-  });
+  const record = await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
+    async (state) => {
+      const logPath = state.path("archive-pruning.log");
+      logging.setLoggerOverride({ level: "warn", file: logPath });
+      const failure = new Error("synthetic pruning failure");
+      let clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      try {
+        await expect(
+          observeSessionArchivePruning(archivePruning, async () => {
+            clock = 1200.4;
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+        await logging.flushLogger();
+        const content = await fs.readFile(logPath, "utf8");
+        const parsed: unknown = JSON.parse(content.trim());
+        assert.ok(isRecord(parsed));
+        assert.ok(isRecord(parsed["2"]));
+        expect(parsed["1"]).toBe("SQLite session archive pruning failed");
+        expect(parsed["2"]).toHaveProperty("elapsedMs", 1200);
+        expect(parsed["2"]).not.toHaveProperty("queueWaitMs");
+        expect(parsed["2"]).not.toHaveProperty("writerExecutionMs");
+        return { content, details: parsed["2"] };
+      } finally {
+        await logging.flushLogger();
+        logging.resetLogger();
+      }
+    },
+  );
   expect(record.details.archivePruning).toEqual({
     trigger: "initial",
-    admissionMs: 1200,
-    asyncAdmissions: 1,
     checkpointCalls: 2,
     checkpointIncomplete: 1,
     checkpointMs: 21,
