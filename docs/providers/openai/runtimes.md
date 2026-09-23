@@ -127,7 +127,10 @@ turns and input receipts before accepting completion. It does not resubmit the
 user's message. Native token usage is best effort; unavailable usage currently
 appears as zero in OpenClaw's usage totals.
 
-This MVP supports text and native hosted-workspace commands. Apps, connectors,
+New Agents API sessions enable built-in web search in live mode. Sessions
+created before web search was enabled need `/new` or `/reset` to pick it up.
+
+This MVP supports text, built-in web search, and native hosted-workspace commands. Apps, connectors,
 OpenClaw dynamic tools, file transfer, image generation, custom context engines,
 and self-hosted executors are outside its scope. Admitted turns are marked
 unsafe for replay because hosted commands may already have run. OpenClaw can

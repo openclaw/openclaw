@@ -1,5 +1,6 @@
 // Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { DetachedTaskAssignmentUnsupportedError } from "./detached-task-runtime-contract.js";
 import type {
   DetachedRunningTaskCreateParams,
   DetachedTaskRecoveryAttemptParams,
@@ -9,6 +10,7 @@ import type {
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
   CreatedDetachedTaskRun,
+  DetachedTaskAssignmentTransition,
 } from "./detached-task-runtime-contract.js";
 import {
   captureDetachedTaskRuntimeOwner,
@@ -26,6 +28,7 @@ import {
   setDetachedTaskDeliveryStatusByRunIdCore,
   startTaskRunByRunIdCore,
 } from "./task-executor.js";
+import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
 
@@ -74,6 +77,26 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
 
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
   return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
+}
+
+/** Exact settlement stays with the registered runtime; unsupported owners never fall through. */
+export function transitionTaskAssignment(params: DetachedTaskAssignmentTransition): TaskRecord[] {
+  const owner = captureDetachedTaskRuntimeOwner();
+  const assertCurrent = () => {
+    owner.assertCurrent();
+    params.assertCurrent();
+  };
+  assertCurrent();
+  if (!owner.runtime) {
+    return transitionTaskRecordsByRunNative(params.transition, {
+      expectedTask: params.expectedTask,
+      assertCurrent,
+    });
+  }
+  if (!owner.runtime.transitionTaskAssignment) {
+    throw new DetachedTaskAssignmentUnsupportedError();
+  }
+  return owner.runtime.transitionTaskAssignment({ ...params, assertCurrent });
 }
 
 export function createQueuedTaskRun(
