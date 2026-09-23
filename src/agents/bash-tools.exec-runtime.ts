@@ -897,7 +897,7 @@ export async function runExecProcess({
     assertCurrent();
     assertHostPolicyCurrent?.();
     const grant = opts.secretEgressBindings
-      ? registerSecretEgressProxyProcess(opts.secretEgressBindings)
+      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
       : undefined;
     secretEgressGrant = grant;
     try {
