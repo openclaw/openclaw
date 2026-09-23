@@ -1,41 +1,56 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 
-const FORWARDABLE_HEADER_VALUE = /^[\t\x20-\x7e]*$/;
+const ASCII_HEADER_VALUE = /^[\t\x20-\x7e]*$/;
+const DISPOSITION_PARAM = /;\s*([^\s=;]+)\s*=\s*("(?:[^"\\]|\\.)*"|[^;]*)/g;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
  * Makes upstream response headers safe to hand to `ServerResponse.writeHead`.
  *
- * Node exposes received header bytes as latin1 strings. Writing non-ASCII values
- * back is order-dependent: once Content-Length is stored, Node revalidates a later
- * value as UTF-8 and throws ERR_INVALID_CHAR. Forward ASCII only; filenames keep
- * their exact name through RFC 6266 `filename*`.
+ * Node exposes received header bytes as latin1 strings and forwards them as-is,
+ * except Content-Disposition: once Content-Length is stored, Node revalidates it
+ * as UTF-8 and throws ERR_INVALID_CHAR for non-ASCII filename bytes. Only that
+ * header is rewritten; RFC 6266 `filename*` keeps the exact name.
  */
 export function toForwardableResponseHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
-  const forwardable: OutgoingHttpHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined) {
-      continue;
-    }
-    forwardable[name] = Array.isArray(value)
-      ? value.map((entry) => toForwardableHeaderValue(name, entry))
-      : toForwardableHeaderValue(name, value);
+  const disposition = headers["content-disposition"];
+  if (disposition === undefined || ASCII_HEADER_VALUE.test(disposition)) {
+    return headers;
   }
-  return forwardable;
+  return { ...headers, "content-disposition": toAsciiContentDisposition(disposition) };
 }
 
-function toForwardableHeaderValue(name: string, value: string): string {
-  if (FORWARDABLE_HEADER_VALUE.test(value)) {
-    return value;
-  }
+function toAsciiContentDisposition(value: string): string {
   const text = decodeReceivedHeaderValue(value);
-  if (name === "content-disposition") {
-    const disposition = encodeContentDisposition(text);
-    if (disposition) {
-      return disposition;
+  const type = text.split(";", 1)[0]?.trim() ?? "";
+  if (!ASCII_HEADER_VALUE.test(type) || !type) {
+    return toAsciiFallback(text);
+  }
+  const params: string[] = [];
+  let filename: string | undefined;
+  let extendedFilename: string | undefined;
+  for (const [, rawName = "", rawValue = ""] of text.matchAll(DISPOSITION_PARAM)) {
+    const name = rawName.toLowerCase();
+    const paramValue = rawValue.trim();
+    if (name === "filename") {
+      filename = unquote(paramValue);
+    } else if (name === "filename*" && ASCII_HEADER_VALUE.test(paramValue)) {
+      // An upstream RFC 8187 value is authoritative; keep it verbatim.
+      extendedFilename = paramValue;
+    } else if (ASCII_HEADER_VALUE.test(paramValue)) {
+      params.push(`${rawName}=${paramValue}`);
     }
   }
-  return toAsciiFallback(text);
+  if (filename !== undefined) {
+    params.push(`filename="${toAsciiFallback(filename).replace(/[%"\\]/g, "_")}"`);
+    extendedFilename ??= ASCII_HEADER_VALUE.test(filename)
+      ? undefined
+      : `UTF-8''${encodeRfc8187(filename)}`;
+  }
+  if (extendedFilename !== undefined) {
+    params.push(`filename*=${extendedFilename}`);
+  }
+  return [type, ...params].join("; ");
 }
 
 /** Recovers UTF-8 text from latin1-decoded wire bytes, keeping other values as received. */
@@ -52,25 +67,20 @@ function decodeReceivedHeaderValue(value: string): string {
   }
 }
 
-function encodeContentDisposition(value: string): string | undefined {
-  const type = value.split(";", 1)[0]?.trim();
-  const match = /;\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]*))/i.exec(value);
-  if (!type || !FORWARDABLE_HEADER_VALUE.test(type) || !match) {
-    return undefined;
-  }
-  const filename = (match[1]?.replace(/\\(.)/g, "$1") ?? match[2] ?? "").trim();
-  if (!filename) {
-    return undefined;
-  }
-  const fallback = toAsciiFallback(filename).replace(/[%"\\]/g, "_");
+function unquote(value: string): string {
+  return value.startsWith('"') && value.endsWith('"') && value.length >= 2
+    ? value.slice(1, -1).replace(/\\(.)/g, "$1")
+    : value;
+}
+
+function encodeRfc8187(value: string): string {
   // encodeURIComponent throws on lone surrogates.
-  const extended = encodeURIComponent(filename.replace(/\p{Surrogate}/gu, "�")).replace(
+  return encodeURIComponent(value.replace(/\p{Surrogate}/gu, "\uFFFD")).replace(
     /['()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
-  return `${type}; filename="${fallback}"; filename*=UTF-8''${extended}`;
 }
 
 function toAsciiFallback(value: string): string {
-  return Array.from(value, (char) => (FORWARDABLE_HEADER_VALUE.test(char) ? char : "_")).join("");
+  return Array.from(value, (char) => (ASCII_HEADER_VALUE.test(char) ? char : "_")).join("");
 }
