@@ -230,8 +230,20 @@ Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer
 Command Reactions skips comments without `/` only when using its default command
 list; any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
 including commands without slashes. Auto response skips Bot-authored issue
-comments that Barnacle already ignores. Other issue and PR events retain their
-existing admission rules, including meaningful automation-authored updates.
+comments that Barnacle already ignores and targets whose author association
+already exempts them. Its edit admission retains title, body, and PR-base changes.
+PR context checks omit the policy's known bot and privileged-author exemptions.
+Labeler retains title/base PR edits and skips issue edits that leave the title
+unchanged. These decisions happen before checkout and runner allocation.
+
+Auto response, Labeler, PR context checks, and ClawSweeper acquire concurrency
+slots only after job admission. Skipped events cannot replace useful pending
+work. Labeler uses separate groups for each PR and issue, with manual backfills
+serialized separately; PR context checks cancel superseded checks on the same PR.
+ClawSweeper retains its existing per-item cancellation rules and all label/comment
+intake, skipping only explicitly empty metadata edits. Security Review omits PR
+prose-only edits while retaining base/permission changes, head changes, and
+approval revocations; its per-head review serialization remains non-canceling.
 
 ### Dependency Audit
 

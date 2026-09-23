@@ -5,6 +5,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
@@ -39,7 +40,6 @@ import {
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveUpdateRoot,
-  tryResolveInvocationCwd,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
 } from "./shared.js";
@@ -82,7 +82,7 @@ export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
 ): Promise<void> {
-  const invocationCwd = tryResolveInvocationCwd();
+  const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {

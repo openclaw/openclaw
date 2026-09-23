@@ -21,16 +21,18 @@ import {
   type SessionEntryReplacementCommit,
   type SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-state.js";
+import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-async function withReplacementWorker<T>(
+export async function withSessionEntryWorker<T>(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string | undefined,
   assertCurrent: () => void,
   run: (
     execution: OpenClawAgentDatabaseExecution,
     source: AgentDatabaseRequestExecutionSource,
+    context: SessionEntryCommitContext,
   ) => Promise<T>,
   onCommit?: (
     admission: SqliteWorkerOperationAdmission,
@@ -50,6 +52,14 @@ async function withReplacementWorker<T>(
         }
       : {},
   );
+  let assertNativeCurrent: (() => void) | undefined;
+  const context: SessionEntryCommitContext = {
+    env: Object.freeze({ ...(options.env ?? process.env) }),
+    assertCurrent() {
+      execution.assertCurrent();
+      assertNativeCurrent?.();
+    },
+  };
   const assertHeld = () => {
     execution.assertCurrent();
     assertCurrent();
@@ -57,6 +67,7 @@ async function withReplacementWorker<T>(
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent: assertHeld,
     createAdmission(binding) {
+      assertNativeCurrent = () => binding.assertCurrent();
       return (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
@@ -73,7 +84,7 @@ async function withReplacementWorker<T>(
     },
   };
   try {
-    return await runOpenClawAgentWorkerWrite(options, () => run(execution, source));
+    return await runOpenClawAgentWorkerWrite(options, () => run(execution, source, context));
   } finally {
     await execution.release();
   }
@@ -83,8 +94,30 @@ export function prepareSessionEntryReplacementDatabase(
   options: ReplacementDatabaseOptions,
   assertCurrent: () => void,
 ): Promise<void> {
-  return withReplacementWorker(options, undefined, assertCurrent, (execution, source) =>
+  return withSessionEntryWorker(options, undefined, assertCurrent, (execution, source) =>
     execution.prepare(source),
+  );
+}
+
+export async function initializeSessionTranscriptInWorker(
+  options: ReplacementDatabaseOptions,
+  databaseIdentity: string,
+  input: { sessionKey: string; sessionId: string; cwd?: string },
+  assertCurrent: () => void,
+): Promise<void> {
+  await withSessionEntryWorker(
+    options,
+    databaseIdentity,
+    assertCurrent,
+    async (execution, source) => {
+      const initialized = await execution.runExisting(source, async (worker) => {
+        await worker.execute({ type: "session.transcript.initialize", input });
+        return true;
+      });
+      if (!initialized) {
+        throw new Error("Session database disappeared before transcript initialization");
+      }
+    },
   );
 }
 
@@ -93,6 +126,11 @@ export async function commitSessionEntryReplacementsInWorker(
   databaseIdentity: string,
   input: SessionEntryReplacementCommit,
   assertCurrent: () => void,
+  lifecycle: {
+    identityAgentId: string;
+    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+    onLifecycleCommitted?: () => void;
+  },
 ) {
   const publication = retainSessionEntryWorkerPublication({
     agentId: options.agentId,
@@ -103,57 +141,70 @@ export async function commitSessionEntryReplacementsInWorker(
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
-  try {
-    return await withReplacementWorker(
-      options,
-      databaseIdentity,
-      assertCurrent,
-      async (execution, source) => {
-        const result = await execution.runExisting(source, (worker) =>
-          worker.execute({ type: "session.entries.replace", input }),
-        );
-        if (!result) {
-          throw new Error("Session database disappeared before replacement");
-        }
-        committed = result;
-        return result;
-      },
-      (admission, retained, facts) => {
-        if (
-          !isRecord(facts) ||
-          !isRecord(facts.publication) ||
-          facts.publication.kind !== "session-entry-replacements" ||
-          !Array.isArray(facts.publication.changedKeys) ||
-          !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
-          !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
-          !facts.publication.membershipInvalidatedKeys.every(
-            (key): key is string => typeof key === "string",
-          )
-        ) {
-          throw new Error("Session replacement commit omitted its publication keys");
-        }
-        admitted = { admission, retained };
-        publication.begin(
-          facts.publication.changedKeys,
-          facts.publication.membershipInvalidatedKeys,
-        );
-      },
-    );
-  } finally {
-    if (admitted) {
-      const settlement = await admitted.retained.settled;
-      const facts = admitted.admission.committed?.facts;
-      let receipt: SessionEntryReplacementPublication | undefined;
-      if (isRecord(facts) && facts.kind === "session-entry-replacements") {
-        // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
-        receipt = facts as SessionEntryReplacementPublication;
-      } else if (committed) {
-        receipt = prepareSessionEntryReplacementPublication(committed);
-      }
-      const published = publication.settle(receipt, settlement.kind === "unknown");
-      if (published) {
-        publishCommittedSessionIdentity(options.agentId, published.previous, published.current);
-      }
+  const settle = async () => {
+    if (!admitted) {
+      return;
     }
-  }
+    const settlement = await admitted.retained.settled;
+    const facts = admitted.admission.committed?.facts;
+    let receipt: SessionEntryReplacementPublication | undefined;
+    if (isRecord(facts) && facts.kind === "session-entry-replacements") {
+      // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
+      receipt = facts as SessionEntryReplacementPublication;
+    } else if (committed) {
+      receipt = prepareSessionEntryReplacementPublication(committed);
+    }
+    if (receipt) {
+      lifecycle.onLifecycleCommitted?.();
+    }
+    const published = publication.settle(receipt, settlement.kind === "unknown");
+    if (published) {
+      publishCommittedSessionIdentity(
+        lifecycle.identityAgentId,
+        published.previous,
+        published.current,
+      );
+    }
+  };
+  return await withSessionEntryWorker(
+    options,
+    databaseIdentity,
+    assertCurrent,
+    (execution, source, context) =>
+      execution
+        .runExisting(source, async (worker) => {
+          try {
+            committed = await worker.execute({ type: "session.entries.replace", input });
+          } finally {
+            // Retain the executing broker scope and FIFO writer through publication settlement.
+            // Close joins this callback; a delayed result cannot borrow a successor owner.
+            await settle();
+          }
+          await lifecycle.afterCommitted?.(context);
+          return committed;
+        })
+        .then((result) => {
+          if (!result) {
+            throw new Error("Session database disappeared before replacement");
+          }
+          return result;
+        }),
+    (admission, retained, facts) => {
+      if (
+        !isRecord(facts) ||
+        !isRecord(facts.publication) ||
+        facts.publication.kind !== "session-entry-replacements" ||
+        !Array.isArray(facts.publication.changedKeys) ||
+        !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
+        !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
+        !facts.publication.membershipInvalidatedKeys.every(
+          (key): key is string => typeof key === "string",
+        )
+      ) {
+        throw new Error("Session replacement commit omitted its publication keys");
+      }
+      admitted = { admission, retained };
+      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+    },
+  );
 }

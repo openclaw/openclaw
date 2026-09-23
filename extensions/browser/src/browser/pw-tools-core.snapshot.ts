@@ -413,9 +413,12 @@ export async function resizeViewportViaPlaywright(
     signal: opts.signal,
     run: opts.assertCurrent
       ? async () => {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
           opts.signal?.throwIfAborted();
-          await setViewportSizeOnPage(page, state, viewport);
+          await setViewportSizeOnPage(page, state, viewport, opts.assertCurrent);
         }
       : () => setViewportSizeOnPage(page, state, viewport),
   });
@@ -433,7 +436,10 @@ export async function closePageViaPlaywright(opts: InteractionTargetOptions): Pr
     assertBrowserDashboardTabCanClose(targetId);
   }
   if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
+    const assertion = assertInteractionCurrent(opts);
+    if (assertion) {
+      await assertion;
+    }
   }
   if (isConnectionScopedPage(page)) {
     const browser = page.context().browser();

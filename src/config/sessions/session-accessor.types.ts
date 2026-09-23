@@ -828,6 +828,12 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
 
+/** Original physical writer custody; captured facts are not a new admission. */
+export type SessionEntryCommitContext = {
+  readonly env: NodeJS.ProcessEnv;
+  assertCurrent: () => void;
+};
+
 export type SessionEntryCreateWithTranscriptOptions = {
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
@@ -841,6 +847,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
   /** Non-throwing notification after the entry's outer COMMIT, before publication or cleanup. */
   onLifecycleCommitted?: (entry: SessionEntry) => void;
+  /** Best-effort bookkeeping after publication, still under the original writer. */
+  afterCommitted?: (entry: SessionEntry, context: SessionEntryCommitContext) => Promise<void>;
   /** Resolves a trusted owner after entry projection; the assignment commits with a new entry. */
   resolveOwnerAssignment?: () => SessionOwnerAssignment | undefined;
 };

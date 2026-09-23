@@ -50,6 +50,7 @@ import {
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
+  deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
@@ -547,6 +548,7 @@ function prepareChatSessionAbort(
               agentId: entry.agentId ?? params.agentId,
               text,
               abortOrigin: params.abortOrigin,
+              resolveTerminalProducer: entry.resolveTerminalProducer,
               session: params.session,
             }),
           ]
@@ -591,6 +593,13 @@ function prepareChatSessionAbort(
         runId,
         sessionKey,
         stopReason: params.stopReason,
+        onAbortCommitted: () => {
+          recordRun(runId);
+          deferAbortedPartialPersistence(
+            snapshots.find((snapshot) => snapshot.runId === runId),
+            params.context,
+          );
+        },
       });
       if (res.aborted) {
         recordRun(runId);

@@ -31,6 +31,7 @@ export function evaluateReleasePublishGates(input: {
   releaseTag: string;
   npmDistTag: string;
   stableSoakWaiver?: string;
+  laneWaiver?: string;
   consumer: ReleasePublishConsumer;
   expectedSha?: string;
   expectedReleaseProfile?: string;
@@ -131,6 +132,25 @@ export function evaluateReleasePublishGates(input: {
       "Rerun the product performance child and reseal Full Release Validation before publication.",
     );
   }
+  // Evidence sealed under an operator lane waiver publishes only with an
+  // explicit acknowledgement; the waived lanes travel into the receipt.
+  const laneWaiver = scalar(field(field(manifest, "validationInputs"), "laneWaiver")).trim();
+  if (laneWaiver) {
+    const advisory = field(manifest, "advisoryJobs");
+    const waived = (Array.isArray(advisory) ? advisory : [])
+      .filter((job) => field(job, "reason") === "lane_waiver")
+      .map((job) => `${scalar(field(job, "child"))} ${scalar(field(job, "job"))}`);
+    const acknowledged = Boolean(input.laneWaiver?.trim());
+    gates.push({
+      id: `${consumer}.lane-waiver`,
+      status: acknowledged ? "WARN" : "FAIL",
+      message: acknowledged
+        ? `Operator lane waiver: ${laneWaiver}; waived lanes (${waived.length}): ${waived.join(", ") || "none"}`
+        : `Full Release Validation evidence was sealed under an operator lane waiver (${laneWaiver}); pass lane_waiver=<reason> to acknowledge it.`,
+      remediation:
+        "Acknowledge the waiver with lane_waiver=<reason> or reseal Full Release Validation without it.",
+    });
+  }
   return gates;
 }
 
@@ -227,6 +247,7 @@ function main() {
     releaseTag: env.RELEASE_TAG ?? "",
     npmDistTag: env.RELEASE_NPM_DIST_TAG ?? "",
     stableSoakWaiver: env.STABLE_SOAK_WAIVER,
+    laneWaiver: env.LANE_WAIVER,
     expectedSha: env.EXPECTED_SHA,
     expectedReleaseProfile: env.EXPECTED_RELEASE_PROFILE,
   });
@@ -251,7 +272,11 @@ function main() {
         `stable_soak_waiver=${JSON.stringify(env.STABLE_SOAK_WAIVER)}\n`,
       );
     }
-    if (consumer !== "stable-closeout" && gate.id.endsWith(".soak") && env.GITHUB_STEP_SUMMARY) {
+    if (
+      consumer !== "stable-closeout" &&
+      (gate.id.endsWith(".soak") || gate.id.endsWith(".lane-waiver")) &&
+      env.GITHUB_STEP_SUMMARY
+    ) {
       appendFileSync(env.GITHUB_STEP_SUMMARY, `- ${gate.message}\n`);
     }
   }
