@@ -582,7 +582,7 @@ export async function deliverFinalAnswerText(
       bindPendingFinalDelivery,
     });
   }
-  if (result.kind === "preview-finalized-partial") {
+  if (result.kind === "preview-finalized-partial" && !result.confirmedFinalContent) {
     turn.previewLifecycle.observeFailure(result.deliveryResult);
   } else {
     await observeFinalDelivery(turn, result.deliveryResult, finalPayload.isError === true);

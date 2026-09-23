@@ -41,7 +41,12 @@ export type LaneDeliveryResult = (
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
-  | { kind: "preview-finalized-partial"; delivery: LanePreviewFinalizedDelivery; error: unknown }
+  | {
+      kind: "preview-finalized-partial";
+      delivery: LanePreviewFinalizedDelivery;
+      error: unknown;
+      confirmedFinalContent?: true;
+    }
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" }
 ) & { deliveryResult: LivePreviewDeliveryResult };
 
@@ -408,7 +413,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
     } catch (error) {
       promptContextSequence.invalidate();
-      return { kind: "preview-finalized-partial", delivery, deliveryResult, error };
+      return {
+        kind: "preview-finalized-partial",
+        delivery,
+        deliveryResult,
+        error,
+        confirmedFinalContent:
+          !buttonAttachmentError && !followedByDurablePayload ? true : undefined,
+      };
     }
     return buttonAttachmentError
       ? {

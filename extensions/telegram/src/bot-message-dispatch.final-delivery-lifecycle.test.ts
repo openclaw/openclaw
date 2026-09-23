@@ -17,6 +17,7 @@ import {
   dispatchWithContext,
   editMessageTelegram,
   emitToolStart,
+  telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
 import type { DispatchReplyWithBufferedBlockDispatcherArgs } from "./bot-message-dispatch.test-harness.js";
 import type * as DeliveryRepliesModule from "./bot/delivery.replies.js";
@@ -314,6 +315,55 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       expect(replyResolver).toHaveBeenCalledOnce();
       expect(status.setError).toHaveBeenCalledOnce();
       expect(status.setDone).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a confirmed streamed answer when prompt-context recording fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+      const status = createStatusReactionController();
+      const preview = "Answer in progress while checking the completed result";
+      const final = "Complete answer already accepted by Telegram";
+      const contextFailure = new Error("prompt context recording failed");
+      const recordContext = vi.fn(async () => {
+        throw contextFailure;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.replyOptions?.onAssistantMessageStart?.();
+        await params.replyOptions?.onPartialReply?.({ text: preview });
+        await createTelegramDraftStream.mock.results[0]?.value?.flush();
+        expect([...messages.values()]).toEqual([preview]);
+        return dispatchThroughSharedOwner({
+          ...params,
+          replyResolver: async () => ({ text: final }),
+        });
+      });
+
+      const result = await dispatchWithContext({
+        bot,
+        cfg: { channels: { telegram: { botToken: "synthetic-test-token" } } },
+        context: progressContext(status),
+        streamMode: "partial",
+        telegramCfg: { streaming: { mode: "partial" } },
+        telegramDeps: {
+          ...telegramDepsForTest,
+          recordOutboundMessageForPromptContext: recordContext,
+        },
+        retryDispatchErrors: true,
+        suppressFailureFallback: true,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(result).toEqual({ kind: "completed" });
+      expect([...messages.values()]).toEqual([final]);
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(recordContext).toHaveBeenCalledWith(
+        expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
+      );
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
