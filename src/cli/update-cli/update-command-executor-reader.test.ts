@@ -468,6 +468,11 @@ describe("invocation-scoped update ownership reader", () => {
         expect(failure).toBeUndefined();
         return;
       }
+      if (refusal === undefined) {
+        // Fixture assertions inside executor settlement must keep their original
+        // diagnostic instead of becoming a misleading missing-fence assertion.
+        throw failure;
+      }
       expect(failure).toBeInstanceOf(Error);
       expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
       expect(before).toBeDefined();
