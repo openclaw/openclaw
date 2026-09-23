@@ -280,6 +280,14 @@ timer ends before terminal persistence. Worktree run admission, task creation an
 progress, and the remaining native cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 
+Native cron receipt guards read deletion authority through their transaction's
+admitted connection. Other synchronous current-authority readers may reuse that
+same thread's coordinated write transaction, including its pending lifecycle rows;
+ordinary discovery reads retain committed-state isolation. This avoids preparing
+a child-process snapshot while holding the shared-state write coordinator. Agent
+database admission refusals remain with their in-memory admission owner. Schemas,
+retention, configuration, and update behavior are unchanged.
+
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact
