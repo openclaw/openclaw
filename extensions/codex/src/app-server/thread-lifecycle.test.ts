@@ -57,6 +57,7 @@ import {
   disabledMcpServerStatus,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
@@ -6028,6 +6029,7 @@ describe("restricted same-thread continuation with mock transport", () => {
       runId: "run-2",
       sourceReplyDeliveryMode: "message_tool_only" as const,
     };
+    let starts = 0;
     const respond = vi.fn(async (method: string) => {
       if (method === "config/read") {
         return { config: {}, origins: {}, layers: [] };
@@ -6035,7 +6037,12 @@ describe("restricted same-thread continuation with mock transport", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
-      if (method === "thread/start" || method === "thread/resume") {
+      if (method === "thread/start") {
+        return threadStartResult(
+          ++starts === 1 ? "thread-restricted-same" : "thread-restricted-legacy-transient",
+        );
+      }
+      if (method === "thread/resume") {
         return threadStartResult("thread-restricted-same");
       }
       if (method === "mcpServerStatus/list") {
@@ -6110,16 +6117,76 @@ describe("restricted same-thread continuation with mock transport", () => {
         patch: { restrictedThreadConfigFingerprint: undefined },
       }),
     ).toBe(true);
-    await expect(startOrResumeThread({ ...common, params: secondAttempt })).rejects.toThrow(
-      /restricted|attestation/,
-    );
+    const legacy = await startOrResumeThread({ ...common, params: secondAttempt });
+    expect(legacy).toMatchObject({
+      threadId: "thread-restricted-legacy-transient",
+      lifecycle: { action: "started" },
+    });
     expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
-      1,
+      2,
     );
     expect(
       fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
     ).toHaveLength(1);
     expect(testCodexAppServerBindingStore.read(identity)?.threadId).toBe("thread-restricted-same");
+  });
+
+  it("reuses a loaded restricted incognito thread after validating its fingerprint", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const firstAttempt = createThreadLifecycleParams(
+      path.join(tempDir, "session.jsonl"),
+      workspaceDir,
+    );
+    firstAttempt.sessionKey = "agent:main:internal-session-effects:incognito-restricted-resume";
+    firstAttempt.pluginHarnessToolPolicyRestricted = true;
+    firstAttempt.sourceReplyDeliveryMode = "automatic";
+    const secondAttempt = { ...firstAttempt, prompt: "separate incognito turn", runId: "run-2" };
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-restricted-incognito");
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const common = {
+      client: fixture.client,
+      signal: new AbortController().signal,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+    };
+
+    const first = await startOrResumeThread({ ...common, params: firstAttempt });
+    await fixture.endTurn("thread-restricted-incognito");
+    await retainCodexAppServerBindingSubscription(fixture.client, first.threadId, {
+      configFingerprint: first.liveThreadConfigFingerprint,
+      ephemeralPolicy: first.liveThreadEphemeralPolicy,
+    });
+    const second = await startOrResumeThread({ ...common, params: secondAttempt });
+
+    expect(second).toMatchObject({
+      threadId: "thread-restricted-incognito",
+      lifecycle: { action: "resumed" },
+    });
+    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
+      1,
+    );
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(0);
   });
 
   it("keeps the upstream transient start for an unrestricted binding", async () => {

@@ -111,6 +111,7 @@ export async function startOrResumeThread(
     const strictRestrictedContinuation = Boolean(
       initialBoundThreadId &&
       binding?.nativeToolPolicyRestricted === true &&
+      binding.restrictedThreadConfigFingerprint !== undefined &&
       params.nativeCodeModeEnabled === false &&
       !(params.webSearchAllowed === false && params.persistentWebSearchAllowed === false) &&
       !ringZeroActive,
@@ -259,7 +260,7 @@ export async function startOrResumeThread(
       if (!current?.threadId) {
         return;
       }
-      if (strictRestrictedContinuation) {
+      if (strictRestrictedContinuation && !incognito) {
         throw new Error(
           "Codex restricted continuation cannot replace its native binding; no thread was started",
         );
@@ -516,8 +517,13 @@ export async function startOrResumeThread(
         "starting a native-tool-restricted turn",
         expectedOwnership,
       );
-      if (binding.nativeToolPolicyRestricted !== true) {
-        // Preserve upstream transient behavior for unrestricted bindings.
+      if (
+        binding.nativeToolPolicyRestricted !== true ||
+        !binding.restrictedThreadConfigFingerprint
+      ) {
+        // Preserve upstream transient behavior for unrestricted and legacy
+        // restricted bindings. Legacy bindings cannot prove their creation
+        // policy, so they must not be upgraded into same-thread reuse.
         embeddedAgentLog.debug(
           "codex app-server native tool surface disabled for turn; starting transient thread",
           { threadId: binding.threadId },
@@ -525,11 +531,7 @@ export async function startOrResumeThread(
         preserveExistingBinding = true;
         binding = undefined;
       } else {
-        if (
-          !restrictedToolSurface ||
-          !binding.restrictedThreadConfigFingerprint ||
-          transientDelegationRestriction
-        ) {
+        if (!restrictedToolSurface || transientDelegationRestriction) {
           throw new Error(
             "Codex restricted continuation lacks an attested compatible native thread; no thread was started",
           );
@@ -677,16 +679,13 @@ export async function startOrResumeThread(
         }
       } else {
         const requestContext = await prepareRequestContext();
-        const warmReuse: Awaited<ReturnType<typeof tryReuseCodexLiveThread>> =
-          restrictedResumeCandidate
-            ? { kind: "resume" }
-            : await tryReuseCodexLiveThread({
-                ...requestContext,
-                params,
-                binding,
-                clientId,
-                buildLoadedPluginThreadConfig,
-              });
+        const warmReuse = await tryReuseCodexLiveThread({
+          ...requestContext,
+          params,
+          binding,
+          clientId,
+          buildLoadedPluginThreadConfig,
+        });
         if (warmReuse.kind === "ready") {
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
