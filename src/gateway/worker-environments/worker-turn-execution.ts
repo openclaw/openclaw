@@ -3,8 +3,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
-import { loadManifestModelCatalog } from "../../agents/model-catalog.js";
-import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
+import {
+  loadManifestModelCatalog,
+  overlayConfiguredModelCatalog,
+} from "../../agents/model-catalog.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -180,9 +182,14 @@ export async function executeWorkerTurn(
     model: modelRef.model,
     catalog:
       turn.thinkLevel === "ultra"
-        ? turn.config?.models?.mode === "replace"
-          ? buildConfiguredModelCatalog({ cfg: turn.config, workspaceDir: turn.workspaceDir })
-          : loadManifestModelCatalog({ config: turn.config ?? {}, workspaceDir: turn.workspaceDir })
+        ? overlayConfiguredModelCatalog({
+            catalog: loadManifestModelCatalog({
+              config: turn.config ?? {},
+              workspaceDir: turn.workspaceDir,
+            }),
+            config: turn.config ?? {},
+            workspaceDir: turn.workspaceDir,
+          })
         : undefined,
     agentRuntime: "openclaw",
     level: turn.thinkLevel,

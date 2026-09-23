@@ -119,10 +119,9 @@ import { selectContextEngineForTranscriptHost } from "../harness/context-engine-
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
-import { loadManifestModelCatalog } from "../model-catalog.js";
+import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
-import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import {
   prepareRootedExecutionCapability,
@@ -1077,9 +1076,11 @@ async function prepareCliRunContextWithinReadFence(
   // so the selected (or default) option must apply after it or a 200k session
   // would auto-compact against a 1M budget.
   const modelCatalog = params.config
-    ? params.config.models?.mode === "replace"
-      ? buildConfiguredModelCatalog({ cfg: params.config, workspaceDir })
-      : prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir })
+    ? overlayConfiguredModelCatalog({
+        catalog: prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir }),
+        config: params.config,
+        workspaceDir,
+      })
     : [];
   const { selectableContextEntry, providerThinkingLevel } = resolveCliCatalogCapabilities({
     catalog: modelCatalog,

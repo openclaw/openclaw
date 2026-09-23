@@ -91,29 +91,57 @@ export function registerCliThinkingPreparationTests({
     },
   );
 
-  it("lowers Ultra through logical CLI catalog identity without context-window options", async () => {
+  it.each(
+    ([undefined, "merge", "replace"] as const).flatMap((mode) => [
+      { mode, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
+      { mode, reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
+    ]),
+  )("honors configured CLI Ultra effort $expected in mode $mode", async (testCase) => {
     const prepareExecution = vi.fn(async () => undefined);
     setBackend({ prepareExecution });
+    const manifestEntry = {
+      id: "claude-sonnet-4-5",
+      name: "Claude Sonnet 4.5",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      reasoning: true,
+    };
     setCliRunnerPrepareTestDeps({
-      loadManifestModelCatalog: vi.fn(() => [
-        {
-          id: "claude-sonnet-4-5",
-          name: "Claude Sonnet 4.5",
-          provider: "anthropic",
-          reasoning: true,
-          thinkingLevelMap: { high: null },
-        },
-      ]),
+      loadManifestModelCatalog: vi.fn(() => [manifestEntry]),
     });
     const context = await getFixture().prepare({
       provider: "claude-cli",
       model: "claude-sonnet-4-5",
-      config: {},
+      config: {
+        models: {
+          mode: testCase.mode,
+          providers: {
+            anthropic: {
+              baseUrl: "https://example.invalid/v1",
+              api: "anthropic-messages",
+              models: [
+                {
+                  id: manifestEntry.id,
+                  name: manifestEntry.name,
+                  reasoning: testCase.reasoning,
+                  thinkingLevelMap: testCase.thinkingLevelMap,
+                  input: ["text"],
+                  contextWindow: 8192,
+                  maxTokens: 2048,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
       thinkLevel: "ultra",
     });
-    expect(context.providerThinkingLevel).toBe("medium");
+    expect(context.providerThinkingLevel).toBe(testCase.expected);
     expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ thinkingLevel: "medium" }),
+      expect.objectContaining({ thinkingLevel: testCase.expected }),
     );
+    expect(manifestEntry.reasoning).toBe(true);
+    expect(manifestEntry).not.toHaveProperty("thinkingLevelMap");
   });
 }
