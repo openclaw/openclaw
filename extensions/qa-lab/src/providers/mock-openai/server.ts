@@ -31,6 +31,7 @@ import {
   type StreamEvent,
   resolveProviderVariant,
   type MockOpenAiRequestSnapshot,
+  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
@@ -2225,22 +2226,13 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       toolOutput: extractToolOutput(input),
       model,
       providerVariant: resolveProviderVariant(model),
+      codeModeExecSurface:
+        resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies Omit<
-      MockOpenAiRequestSnapshotInput,
-      | "outcome"
-      | "errorCode"
-      | "plannedToolCallId"
-      | "plannedToolItemId"
-      | "plannedToolName"
-      | "plannedWireToolName"
-      | "plannedToolArgs"
-      | "toolOutputCallId"
-      | "toolOutputStructuredError"
-    >;
+    } satisfies MockOpenAiRequestSnapshotBase;
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||

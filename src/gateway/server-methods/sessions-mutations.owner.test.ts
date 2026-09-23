@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -15,11 +16,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -35,6 +37,10 @@ import {
 } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationTestClient as client,
+  createSessionMutationTestContext as context,
+} from "./sessions-mutations.owner.test-support.js";
 import { registerSessionSandboxMutationTests } from "./sessions-mutations.sandbox.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type {
@@ -47,47 +53,10 @@ import type {
 
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
 });
-
-function client(profileId?: string): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-    ...(profileId
-      ? {
-          authenticatedUserId: `${profileId}@example.com`,
-          authenticatedUserProfile: {
-            profileId,
-            displayName: profileId,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        }
-      : {}),
-  };
-}
-
-function context(cfg: OpenClawConfig) {
-  return {
-    trackExecution: trackAsyncWork,
-    getRuntimeConfig: () => cfg,
-    getSessionEventSubscriberConnIds: () => new Set(["observer"]),
-    broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-  } as unknown as GatewayRequestContext;
-}
 
 async function invoke(params: {
   cfg: OpenClawConfig;
@@ -181,7 +150,7 @@ describe("sessions.patch", () => {
     });
   });
 
-  it("rechecks dashboard tool authority inside the actual session write transaction", async () => {
+  it("rechecks dashboard tool authority at the actual session commit admission", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:dashboard-authority";
       const scope = { agentId: "main", env: state.env, sessionKey };
@@ -191,10 +160,25 @@ describe("sessions.patch", () => {
         boardPresentation: "split",
       });
       const before = loadSessionEntry(scope);
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const requestContext = context({});
       let revoked = false;
-      let rejectedInsideTransaction = false;
+      let reachedCommitAdmission = false;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-replacements"
+            ) {
+              reachedCommitAdmission = true;
+              revoked = true;
+            }
+            admit(request, grant);
+          }, attachment),
+      );
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await expect(
         withGatewayToolCallerIdentity(
@@ -203,19 +187,13 @@ describe("sessions.patch", () => {
             sessionKey,
             operationalRunInstance: { instanceId: "dashboard-instance", runId: "dashboard-run" },
             gatewayContextResolver: () => requestContext,
-            receiptAuthority: () => {
-              if (database.db.isTransaction) {
-                rejectedInsideTransaction = true;
-                revoked = true;
-              }
-              return !revoked;
-            },
+            receiptAuthority: () => !revoked,
           },
           () =>
             tool.execute("save", { action: "set_default_presentation", presentation: "expanded" }),
         ),
       ).rejects.toThrow(/authority.*no longer active/i);
-      expect(rejectedInsideTransaction).toBe(true);
+      expect(reachedCommitAdmission).toBe(true);
       expect(loadSessionEntry(scope)).toEqual(before);
       expect(requestContext.broadcastToConnIds).not.toHaveBeenCalled();
     });

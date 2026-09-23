@@ -331,6 +331,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             const nextSessionEntry = { ...sessionEntry };
             clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
             sessionEntry = await persistAgentSession({
+              agentId: sessionAgentId,
               sessionStore,
               sessionKey,
               storePath,

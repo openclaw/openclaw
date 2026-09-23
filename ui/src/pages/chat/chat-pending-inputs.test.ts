@@ -900,7 +900,9 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("keeps unconsumed input in order without a generic queue notice", () => {
+  it("keeps unconsumed input after persisted history without a generic queue notice", () => {
+    // Custody accepted at 100 is not in the transcript, so it floors after the
+    // reply persisted at 150 instead of interleaving by acceptance time.
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
@@ -917,13 +919,12 @@ describe("server-owned pending input display", () => {
     });
 
     expect(items).toMatchObject([
-      { kind: "group", role: "assistant", messages: [{ message: earlier }] },
+      { kind: "group", role: "assistant", messages: [{ message: earlier }, { message: later }] },
       {
         kind: "group",
         role: "user",
         messages: [{ message: { content: "Keep my accepted input" } }],
       },
-      { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);
   });
 

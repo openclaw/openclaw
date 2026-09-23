@@ -50,13 +50,15 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-63 plugins
+64 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
 - **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
+
+- **[agentsapi](/plugins/reference/agentsapi)** (`@openclaw/agentsapi`) - included in OpenClaw. OpenAI Agents API harness and hosted sessions.
 
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
@@ -346,7 +348,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[twitch](/plugins/reference/twitch)** (`@openclaw/twitch`) - npm or ClawHub: `clawhub:@openclaw/twitch`. OpenClaw Twitch channel plugin for chat and moderation workflows.
 
-- **[typesafe](/plugins/reference/typesafe)** (`@openclaw/typesafe`) - npm or ClawHub: `clawhub:@openclaw/typesafe`. Optional typed evaluations, not a conversational model provider.
+- **[typesafe](/plugins/reference/typesafe)** (`@openclaw/typesafe`) - npm or ClawHub: `clawhub:@openclaw/typesafe`. Typed decision provider for hosted Jev and local System One models.
 
 - **[venice](/plugins/reference/venice)** (`@openclaw/venice-provider`) - npm or ClawHub: `clawhub:@openclaw/venice-provider`. Adds Venice model provider support to OpenClaw.
 

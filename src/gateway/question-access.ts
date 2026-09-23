@@ -16,6 +16,7 @@ export function canSelectQuestion(
   client: GatewayClient | null,
 ): boolean {
   return (
-    !usesOwnRunQuestionAccess(client) || manager.getOwnRunAccess(id)?.canSelect(client) === true
+    !usesOwnRunQuestionAccess(client) ||
+    manager.observe(id)?.sessionAccess?.canSelect(client) === true
   );
 }

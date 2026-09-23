@@ -87,6 +87,7 @@ import { resolveSessionPatchModelSelection } from "./server-methods/sessions-pat
 import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
+  isSessionStatusModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
@@ -519,12 +520,15 @@ function* projectSessionPatchSteps(
     yield* loadPreparedModelCatalogForPatch();
   }
   if ("model" in patch) {
+    const statusModelPatch = isSessionStatusModelPatchOrigin();
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
         : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
       : undefined;
-    delete next.modelFallback;
+    if (!statusModelPatch) {
+      delete next.modelFallback;
+    }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
@@ -549,7 +553,8 @@ function* projectSessionPatchSteps(
         agentId: sessionAgentId,
         catalog,
         raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
+        defaultProvider:
+          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
@@ -625,14 +630,14 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
-        explicitDefaultSelection: raw === null,
+        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: raw !== null,
+        markLiveSwitchPending: statusModelPatch || raw !== null,
       });
-      if (raw === null) {
+      if (raw === null && !statusModelPatch) {
         delete next.liveModelSwitchPending;
       }
     }

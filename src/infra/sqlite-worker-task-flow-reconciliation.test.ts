@@ -29,7 +29,10 @@ import {
   getTaskById,
   listTaskRecords,
 } from "../tasks/task-registry.js";
-import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../tasks/task-registry.store.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
@@ -230,15 +233,21 @@ describe("registered task flow reconciliation", () => {
     const releaseSecondReceipt = createDeferredCore();
     let mutations = 0;
     let readHeld = false;
+    const taskStore = getTaskRegistryStore();
+    const read = taskStore.loadMutationSnapshotAsync.bind(taskStore);
+    vi.spyOn(taskStore, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+      const snapshot = await read(...args);
+      if (!readHeld) {
+        readHeld = true;
+        firstRead.resolve();
+        await releaseFirstRead.promise;
+      }
+      return snapshot;
+    });
     observeTaskWorkerReplies((type) => {
       if (type === "flows.runTask" && ++mutations === 2) {
         secondReceipt.resolve();
         return releaseSecondReceipt.promise;
-      }
-      if (type === "tasks.mutationSnapshot" && !readHeld) {
-        readHeld = true;
-        firstRead.resolve();
-        return releaseFirstRead.promise;
       }
       return undefined;
     });

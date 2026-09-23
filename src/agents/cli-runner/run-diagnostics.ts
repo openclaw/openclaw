@@ -24,11 +24,20 @@ type ClaudeCliRunPhase = DiagnosticHarnessRunErrorEvent["phase"];
 
 export type ClaudeCliRunDiagnosticLifecycle = {
   setPhase: (phase: ClaudeCliRunPhase) => void;
+  /**
+   * Publishes the execution owner that preparation resolved from the session.
+   * Run/harness events emitted after this call attribute to that owner so the
+   * spans agree with model-call spans built from the prepared params; events
+   * emitted before it carry the caller's requester identity, and an absent
+   * owner keeps that admission-time identity.
+   */
+  setExecutionOwner: (agentId: string | undefined) => void;
 };
 
 type ClaudeCliRunDiagnosticParams = Pick<
   RunCliAgentParams,
   | "abortSignal"
+  | "agentId"
   | "messageChannel"
   | "messageProvider"
   | "model"
@@ -43,6 +52,7 @@ function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticT
   const channel = params.messageChannel ?? params.messageProvider;
   return {
     runId: params.runId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     provider: params.modelProvider ?? "anthropic",
@@ -107,6 +117,22 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   const runBase = diagnosticBase(params, runTrace);
   const startedAt = Date.now();
   let phase: ClaudeCliRunPhase = "prepare";
+  const lifecycle: ClaudeCliRunDiagnosticLifecycle = {
+    setPhase: (nextPhase) => {
+      phase = nextPhase;
+    },
+    setExecutionOwner: (agentId) => {
+      if (!agentId) {
+        return;
+      }
+      // The caller's agentId can name a distinct runtime-policy requester;
+      // preparation is the authoritative producer of the execution-owner fact,
+      // so once it publishes the resolved owner every later run/harness event
+      // must report it instead of the admission-time requester.
+      harnessBase.agentId = agentId;
+      runBase.agentId = agentId;
+    },
+  };
 
   emitTrustedDiagnosticEvent({
     type: "harness.run.started",
@@ -118,13 +144,7 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   });
 
   try {
-    const result = await runWithDiagnosticTraceContext(runTrace, () =>
-      run({
-        setPhase: (nextPhase) => {
-          phase = nextPhase;
-        },
-      }),
-    );
+    const result = await runWithDiagnosticTraceContext(runTrace, () => run(lifecycle));
     const runOutcome = resultRunOutcome(result);
     const resultErrorMessage = result.meta.error?.message;
     const runErrorMessage = runOutcome === "error" ? resultErrorMessage : undefined;

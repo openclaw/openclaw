@@ -69,6 +69,19 @@ const provider: VoiceCallProvider = {
   getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
+function createRealtimeHandler(
+  buildTwiMLPayload: RealtimeCallHandler["buildTwiMLPayload"],
+): RealtimeCallHandler {
+  return {
+    buildTwiMLPayload,
+    close: async () => {},
+    getStreamPathPattern: () => "/voice/stream/realtime",
+    handleWebSocketUpgrade: () => {},
+    registerToolHandler: () => {},
+    setPublicUrl: () => {},
+  } as unknown as RealtimeCallHandler;
+}
+
 type TwilioProviderTestDouble = VoiceCallProvider &
   Pick<
     TwilioProvider,
@@ -1179,14 +1192,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       const buildTwiMLPayload = vi.fn(
         () => firstOwner.promise as unknown as ReturnType<RealtimeCallHandler["buildTwiMLPayload"]>,
       );
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1624,14 +1630,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1680,14 +1679,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         },
       });
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1742,14 +1734,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         },
       });
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1799,14 +1784,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1864,14 +1842,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1924,14 +1895,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1977,14 +1941,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();

@@ -110,7 +110,7 @@ export type RegisterTelegramHandlerParams = {
 export type TelegramInboundDisposition =
   | { kind: "ignored" }
   | { kind: "recorded" }
-  | { kind: "buffered"; buffer: "text-fragment" | "media-group" | "debounce" }
+  | { kind: "buffered"; buffer: "media-group" | "debounce" }
   | { kind: "processed" };
 
 export interface TelegramInboundPipeline {

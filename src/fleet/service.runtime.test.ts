@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -26,10 +26,13 @@ describe("fleet service", () => {
 
   const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-service-" });
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     root = await tempRoot.setup();
     setFleetSuiteRoot(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  });
+
+  beforeEach(() => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
@@ -37,9 +40,17 @@ describe("fleet service", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
+    // Keep the database workers warm while resetting each case's records and cell files.
+    for (const cell of await listFleetCells(env)) {
+      await deleteFleetCell(env, cell.tenantId);
+    }
+    await fs.rm(path.join(root, "fleet"), { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    vi.unstubAllGlobals();
     await tempRoot.cleanup();
   });
 

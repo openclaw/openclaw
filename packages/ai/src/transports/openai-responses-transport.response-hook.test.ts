@@ -215,6 +215,30 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it.each([
+  { id: "gpt-6-sol", api: "azure-openai-responses" },
+  { id: "gpt-6-luna", api: "azure-openai-responses" },
+  { id: "gpt-6-sol", api: "openclaw-azure-openai-responses-transport" },
+  { id: "gpt-6-luna", api: "openclaw-azure-openai-responses-transport" },
+] as const)("preserves $id sampling on the managed $api route", async ({ id, api }) => {
+  let requestBody: unknown;
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    requestBody = await new Request(input, init).json();
+    return Response.json({ error: { message: "captured" } }, { status: 400 });
+  });
+  configureAiTransportHost({ buildModelFetch: () => fetchMock });
+
+  const stream = createManagedFixtureStream(
+    managedAzureStream,
+    { ...azureModel, id, api },
+    { temperature: 0.5, topP: 0.8 },
+  );
+
+  expect((await stream.result()).stopReason).toBe("error");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(requestBody).toMatchObject({ model: id, temperature: 0.5, top_p: 0.8 });
+});
+
 describe.each([
   {
     name: "OpenAI",

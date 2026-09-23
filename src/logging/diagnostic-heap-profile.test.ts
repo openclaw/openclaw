@@ -2,6 +2,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const native = vi.hoisted(() => ({ post: vi.fn(), disconnect: vi.fn(), wait: vi.fn() }));
@@ -265,12 +268,27 @@ describe("diagnostic heap profile owner", () => {
         }
       }
       const root = fileURLToPath(new URL("../../", import.meta.url));
+      const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.heap);
+      const workloadUrl = new URL("./diagnostic-heap-profile.test-helpers.ts", import.meta.url)
+        .href;
+      const preparedWorkloadUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.workload);
       const source = `
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { url } from 'node:inspector/promises';
-import { captureDiagnosticHeapProfile } from ${JSON.stringify(new URL("./diagnostic-heap-profile.ts", import.meta.url).href)};
-import { allocateHeapProfileWorkload } from ${JSON.stringify(new URL("./diagnostic-heap-profile.test-helpers.ts", import.meta.url).href)};
+import { captureDiagnosticHeapProfile } from ${JSON.stringify(ownerUrl.href)};
+// Preserve the workload's real source location for the owner's attribution policy.
+if (${JSON.stringify(preparedWorkloadUrl.href)} !== ${JSON.stringify(workloadUrl)}) {
+  registerHooks({ load(url, context, nextLoad) {
+    if (url === ${JSON.stringify(workloadUrl)}) {
+      return { format: 'module', source: readFileSync(new URL(${JSON.stringify(preparedWorkloadUrl.href)}), 'utf8'), shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  }});
+}
+const { allocateHeapProfileWorkload } = await import(${JSON.stringify(workloadUrl)});
 assert.equal(url(), undefined);
 const pending = captureDiagnosticHeapProfile({ durationMs: 250, samplingIntervalBytes: 4096, signal: new AbortController().signal, hasAuthority: () => true });
 const retained = [];
@@ -307,8 +325,7 @@ assert.ok(retained.length > 0);
 `;
       const result = await runNodeScript(
         [
-          "--import",
-          fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+          ...resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           source,

@@ -36,7 +36,7 @@ import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
@@ -101,7 +101,7 @@ export async function resolveEmbeddedModelSelection(params: {
     ...params.modelManifestContext,
   });
   const configuredDefaultAuthProfileId = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(params.cfg, params.sessionAgentId) ?? "",
+    resolveNativeModelPrimary(params.cfg, params.sessionAgentId) ?? "",
   ).profile;
   const { provider: defaultProvider, model: defaultModel } = configuredDefaultRef;
   let provider = defaultProvider;
@@ -197,6 +197,7 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     if (entryUpdated) {
       sessionEntry = await persistAgentSession({
+        agentId: params.sessionAgentId,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -592,6 +593,7 @@ export async function resolveEmbeddedModelSelection(params: {
     };
     sessionEntry =
       (await persistAgentSession({
+        agentId: params.sessionAgentId,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

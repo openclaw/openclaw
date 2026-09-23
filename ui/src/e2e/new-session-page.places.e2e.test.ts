@@ -6,6 +6,7 @@ import {
   captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -471,7 +472,7 @@ suite.define(() => {
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
         "New worktree",
       );
-      await checkoutSelect.getByLabel("From", { exact: true }).waitFor();
+      await checkoutBaseRefInput(checkoutSelect).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
       await checkoutSelect
         .getByText("Creates a branch from the session title in a separate checkout.", {
@@ -599,7 +600,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await captureProjectUiProof(suite, page, "project-selected.png", {
         surface: checkout.locator('wa-popup [part="popup"]'),
-        content: [checkout.getByLabel("From", { exact: true })],
+        content: [checkoutBaseRefInput(checkout)],
       });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");

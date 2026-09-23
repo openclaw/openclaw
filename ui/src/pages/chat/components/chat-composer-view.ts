@@ -290,10 +290,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           {
             gatewayScope: props.gatewayScope,
             sessionIdentity: props.progressCardIdentity,
-            activeRunId: props.runId,
+            cardLifetime: props.progressCardLifetime,
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
-            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
           },
           props.connected && canCompose ? props.progressCardRefresh : undefined,
         )}
@@ -492,9 +491,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         ? slashMenuListboxId
                         : undefined,
                     )}
-                    aria-expanded=${ifDefined(
+                    aria-haspopup=${ifDefined(
                       slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "true"
+                        ? "listbox"
                         : undefined,
                     )}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}

@@ -27,6 +27,7 @@ export type GatewayCpuUsageSnapshot = {
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
+  activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
 };
 

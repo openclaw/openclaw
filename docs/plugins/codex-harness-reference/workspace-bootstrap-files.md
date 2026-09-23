@@ -75,7 +75,11 @@ the Gateway's HTTP(S) proxy and TLS configuration. Native login, token refresh,
 backend routing, and approval-reviewer checks stay native-owned. It rejects oversized
 prepared context instead of truncating it (256 KiB maximum); model request bodies
 and WebSocket frames are bounded at 32 MiB. Reduce bootstrap/skills budgets or
-attached context when those limits are exceeded.
+attached context when those limits are exceeded. The relay validates each native request
+and its current parent registration before forwarding. Requests that need no
+parent-local instructions keep their native JSON bytes, including existing zstd
+compression on HTTP. Requests with parent-local instructions still receive the
+same bounded instruction injection.
 
 Custom commands, Desktop attachments, external Unix/WebSocket connections,
 non-OpenAI native providers, custom upstream endpoints, unsupported native account

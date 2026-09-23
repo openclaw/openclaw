@@ -226,7 +226,9 @@ describe("Search settings", () => {
     const fixture = await mount();
     expect(fixture.element.querySelector(".page-title")?.textContent).toBe("Search");
     expect(fixture.element.textContent).toContain("Configured");
-    expect(fixture.element.textContent).toContain("Not tested");
+    expect(
+      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
+    ).toContainEqual(expect.stringContaining("Not tested"));
     select(fixture.element, "Search provider", "searxng");
     await fixture.settle();
     expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
@@ -243,7 +245,9 @@ describe("Search settings", () => {
     ]);
     button(fixture.element, "Test search").click();
     await fixture.settle();
-    expect(fixture.element.textContent).toContain("Search succeeded");
+    expect(
+      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
+    ).toContainEqual(expect.stringContaining("Search succeeded"));
     expect(fixture.element.querySelector('a[href="https://example.com/docs"]')?.textContent).toBe(
       "Documentation",
     );
@@ -406,7 +410,11 @@ describe("Search settings", () => {
       fixture.setTestResponse(old.promise);
       button(fixture.element, "Test search").click();
       await fixture.element.updateComplete;
-      expect(fixture.element.textContent).toContain("Searching…");
+      expect(
+        [...fixture.element.querySelectorAll('[role="status"]')].map(
+          (region) => region.textContent,
+        ),
+      ).toContainEqual(expect.stringContaining("Searching…"));
       if (change === "agent") {
         fixture.setResult({
           ...ready,

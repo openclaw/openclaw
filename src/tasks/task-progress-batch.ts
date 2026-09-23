@@ -6,8 +6,11 @@ import {
 } from "../infra/agent-run-registry.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { readTaskBackingInstance, type TaskBackingRead } from "./task-backing-authority.js";
-import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
-import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { shouldAutoDeliverTaskStateChange } from "./task-notification-policy.js";
+import {
+  canDeliverToRequesterOrigin,
+  resolveTaskDeliveryOwner,
+} from "./task-notification-routing.js";
 import { taskProgressBatches } from "./task-registry-state.js";
 import type { TaskProgressBatch, TaskProgressMember } from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";

@@ -229,9 +229,14 @@ until their dependent enforcement changes land.
 
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.
-Bind both results to that exact SHA; either generated-locale drift blocks
-dispatch. Keep target execution outside the trusted dispatch helper—do not
-execute an arbitrary target checkout as helper code.
+Bind both results to that exact SHA. Report generated-locale drift as a warning
+and continue dispatch; source changes and the serialized locale-refresh workflows
+can temporarily leave generated output behind. Do not require regeneration before
+starting validation. FRV's normal-CI child retains the strict `control-ui-i18n`
+and `native-i18n` jobs and reports their actual results in the run summary;
+a failed locale job still fails validation. PR-side checks and release-prep and
+publication gates stay unchanged. Keep target execution outside the trusted
+dispatch helper—do not execute an arbitrary target checkout as helper code.
 
 Before expensive full validation, also run `pnpm ui:build` on the same frozen
 trusted target with its frozen dependencies in approved isolation, outside the

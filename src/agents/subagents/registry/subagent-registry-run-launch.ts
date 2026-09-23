@@ -161,7 +161,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const bindRegistrationReservation = () => {
       bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
         if (this.options.runs.get(entry.runId) === entry) {
-          emitSessionLifecycleEvent({ sessionKey: entry.childSessionKey, reason: "run-capacity" });
+          emitSessionLifecycleEvent({
+            sessionKey: entry.childSessionKey,
+            reason: "run-capacity",
+            scope: "runtime",
+          });
         }
       });
     };

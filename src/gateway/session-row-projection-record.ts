@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionAcpMeta,
+} from "../config/sessions/types.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -14,6 +18,10 @@ import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+  acpMeta: SessionAcpMeta | null;
+};
 
 export type SessionRowStore = {
   target: SessionStoreTarget;
@@ -30,6 +38,8 @@ export type Row = {
   agentId: string;
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
+  /** Accepted under retained database custody; presentation consumes the whole snapshot. */
+  pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Current committed sharing facts remain usable while display materialization is dirty. */
   sharingEntry?: SessionEntry;
   entry?: SessionEntry;
@@ -122,6 +132,7 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
+      row.pendingDatabaseFacts = undefined;
       dirty.add(identity(row));
     }
   }
@@ -144,6 +155,7 @@ export function renewGeneration(row: Row): Row {
     ...row,
     entry: undefined,
     storedEntry: undefined,
+    pendingDatabaseFacts: undefined,
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
@@ -158,7 +170,39 @@ export function hasEntry(row: Row | undefined): row is EntryRow {
   return Boolean(row?.entry);
 }
 export function ready(row: Row | undefined): row is MaterializedRow {
-  return Boolean(row?.entry && row.materialized);
+  // Acquisition can advance metadata before rendering, including after pending facts expire.
+  return Boolean(row?.entry && row.materialized?.source.entry === row.entry);
+}
+
+export function publishTranscriptFields(
+  row: MaterializedRow,
+  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+): boolean {
+  // Same-generation metadata may change while transcript work is awaiting publication.
+  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+    cfg,
+    agentId: row.agentId,
+    sessionId: row.entry.sessionId,
+    sessionKey: row.key,
+    storePath: row.storeTarget.storePath,
+    entry: row.entry,
+    selectedModel: row.materialized.source.selectedModel,
+    projectedAgentRuns: context.projectedAgentRuns!,
+    active: false,
+    activeModel: fields.fallbackModel ?? null,
+  });
+  if (
+    row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.fallbackModel, fallbackModel)
+  ) {
+    return false;
+  }
+  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
+  row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
+  row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  return true;
 }
 
 export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[] {
@@ -332,6 +376,7 @@ export function dematerialize(row: Row): Row {
     materialized: undefined,
     materializedSequence: undefined,
     facts: undefined,
+    pendingDatabaseFacts: undefined,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
     fallbackModel: undefined,
@@ -408,6 +453,7 @@ export function acquireSessionRowEntry(params: {
   let next: Row = {
     ...row,
     storedEntry,
+    pendingDatabaseFacts: undefined,
     entry,
     sharingEntry: entry,
     // Selection metadata survives archive dematerialization and refreshes with the entry.

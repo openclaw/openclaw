@@ -12,7 +12,7 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { scrollState } from "./scroll-state.ts";
 import {
   composerDisclosure,
-  type ComposerProgressRunLifecycle,
+  type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
@@ -358,7 +358,7 @@ export function renderSessionProgressCard(
   endedAt?: number,
   hasActiveRun = true,
   collapseComposerByDefault = false,
-  composerRunLifecycle?: ComposerProgressRunLifecycle,
+  composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
 ) {
   if (!card) {
@@ -466,10 +466,9 @@ export function renderSessionProgressCard(
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
       ${composerDisclosure(
-        composerRunLifecycle?.sessionIdentity ?? card.sessionKey,
-        !complete && !collapseComposerByDefault,
-        collapseComposerByDefault,
-        composerRunLifecycle,
+        composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
+        !collapseComposerByDefault,
+        composerDisclosureContext,
       )}
     >
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
