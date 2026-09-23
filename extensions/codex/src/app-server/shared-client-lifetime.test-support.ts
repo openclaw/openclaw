@@ -54,6 +54,7 @@ export function registerSharedClientLifetimeTests(redirectNextStartToWebSocket: 
       return task;
     });
     const taskRuntime: AgentHarnessTaskRuntime = {
+      assertTaskAssignmentSupported: vi.fn(),
       createRunningTaskRun: createTask,
       tryCreateRunningTaskRun: createTask,
       recordTaskRunProgressByRunId: vi.fn(() => []),

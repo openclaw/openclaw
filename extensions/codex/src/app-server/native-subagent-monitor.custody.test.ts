@@ -60,6 +60,36 @@ function createCustody() {
 afterEach(() => vi.useRealTimers());
 
 describe("native assignment completion custody", () => {
+  it("rechecks the cached runtime before registration and releases rejected custody", async () => {
+    const runtime = createRuntime();
+    const first = createCustody();
+    const rejected = createCustody();
+    runtime.captureAgentHarnessCompletionCustody
+      .mockReturnValueOnce(first.root)
+      .mockReturnValueOnce(rejected.root);
+    const monitor = new CodexNativeSubagentMonitor(createClient() as never, runtime, {
+      recoveryPollDelaysMs: [],
+    });
+    try {
+      const parent = registerParent(monitor);
+      const failure = new Error("captured task runtime retired");
+      runtime.assertTaskAssignmentSupported.mockImplementationOnce(() => {
+        throw failure;
+      });
+      expect(() => registerParent(monitor)).toThrow(failure);
+      expect(runtime.createAgentHarnessTaskRuntime).toHaveBeenCalledOnce();
+      expect(runtime.assertTaskAssignmentSupported).toHaveBeenCalledTimes(2);
+      expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+      expect(first.live()).toHaveLength(1);
+      expect(rejected.live()).toHaveLength(0);
+      await parent.unregister();
+      expect(first.live()).toHaveLength(0);
+    } finally {
+      monitor.dispose();
+    }
+  });
+
   it.each(["delivered", "retry", "closed", "exhausted"] as const)(
     "retains the exact overlapping owner through parent yield and releases on %s",
     async (ending) => {

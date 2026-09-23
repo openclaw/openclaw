@@ -69,6 +69,9 @@ export class CodexNativeSubagentAdmissionCustody {
         ),
       };
     }
+    // Cached parents retain their original adapter; a new registration must not
+    // accept native work after that owner retires or lacks exact settlement.
+    state.taskRuntime.assertTaskAssignmentSupported();
     state.mirror ??= new CodexNativeSubagentTaskMirror(
       {
         parentThreadId: state.parentThreadId,

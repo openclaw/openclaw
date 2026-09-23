@@ -193,6 +193,7 @@ export function createRuntime() {
     return [task];
   };
   const taskRuntime = {
+    assertTaskAssignmentSupported: vi.fn(),
     createRunningTaskRun,
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
     recordTaskRunProgressByRunId:

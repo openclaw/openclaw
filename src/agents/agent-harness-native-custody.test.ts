@@ -181,7 +181,7 @@ describe("native task event custody", () => {
       const root = tryBeginGatewayRootWorkAdmission("test:assignment-parent")!;
       let retired = false;
       try {
-        const parent = await root.run(
+        const pendingParent = root.run(
           async () =>
             await withGatewayToolCallerIdentity(
               {
@@ -212,6 +212,17 @@ describe("native task event custody", () => {
               },
             ),
         );
+        if (ordering === "unsupported") {
+          await expect(pendingParent).rejects.toThrow("Upgrade the custom task runtime adapter");
+          await notifications.settle();
+          expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.size).toBe(0);
+          expect(deliver).not.toHaveBeenCalled();
+          expect(activity).not.toHaveBeenCalled();
+          root.release();
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+          return;
+        }
+        const parent = await pendingParent;
         await notifications.settle();
         stopPublication();
         const original =
@@ -257,7 +268,7 @@ describe("native task event custody", () => {
           // The requester and Gateway remain live; only the admitted runtime owner retires.
           setDetachedTaskLifecycleRuntime({ ...getDetachedTaskLifecycleRuntime() });
           expect(getGatewayContextLifetime(resolver).signal.aborted).toBe(false);
-        } else if (ordering !== "published" && ordering !== "unsupported") {
+        } else if (ordering !== "published") {
           updateTask(
             original.taskId,
             ordering === "metadata"
@@ -266,12 +277,7 @@ describe("native task event custody", () => {
           );
         }
         const replacement = loadTaskRegistryStateFromSqliteReadOnly().tasks.get(original.taskId)!;
-        if (
-          ordering !== "metadata" &&
-          ordering !== "revoked" &&
-          ordering !== "unsupported" &&
-          ordering !== "runtime-retired"
-        ) {
+        if (ordering !== "metadata" && ordering !== "revoked" && ordering !== "runtime-retired") {
           expect(replacement.createdAt).toBe(original.createdAt - 1);
         }
         const schedule =
@@ -313,11 +319,7 @@ describe("native task event custody", () => {
         } else {
           expect(deliver).toHaveBeenCalledTimes(ordering === "retry" ? 1 : 0);
           expect(current).toEqual(replacement);
-          if (ordering === "unsupported") {
-            expect(warning).toHaveBeenCalledWith(
-              expect.stringContaining("must implement transitionTaskAssignment"),
-            );
-          } else if (ordering === "runtime-retired") {
+          if (ordering === "runtime-retired") {
             expect(warning).toHaveBeenCalledWith(expect.stringContaining("runtime owner changed"));
           }
         }

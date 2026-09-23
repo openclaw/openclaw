@@ -305,15 +305,19 @@ If a successful exact transition normalizes the creation timestamp, advance the
 receipt only from that transition's returned record. Carry the successor through
 later mutations, events, and delivery; never adopt it from a fresh task lookup.
 
+Before admitting exact-assignment work, call the scoped task runtime's
+`assertTaskAssignmentSupported()` on each registration, including reused runtimes.
+This checks the original runtime owner without rebinding it to a replacement.
 Custom detached runtimes must implement the optional `transitionTaskAssignment`
 operation for these guarded mutations. Check its `expectedTask` against the current
 record and call `assertCurrent()` immediately before persistence. An adapter without
 this operation receives an explicit unsupported-operation error before effects;
 legacy calls without `expectedTask` keep their existing behavior. Core never bypasses
 the registered adapter to perform the write.
-Native monitors log the adapter requirement and release that completion owner
-without scheduling retries or marking a successor task failed. The persisted task
-remains available for recovery after the adapter supports exact transitions.
+Native monitors reject registration before submitting a turn when the adapter
+lacks this operation. Upgrade the custom adapter to support exact transitions;
+existing persisted tasks remain available for recovery. Rejected registrations
+release their completion custody without starting child work or scheduling retries.
 
 Bind `createAgentHarnessTaskEventSink(...)` with that receipt as soon as the task row
 exists. It routes activity only to that exact task and keeps accepted persistence

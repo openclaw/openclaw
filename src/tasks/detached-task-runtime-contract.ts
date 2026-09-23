@@ -177,7 +177,7 @@ export type DetachedTaskAssignmentTransition = {
 export class DetachedTaskAssignmentUnsupportedError extends Error {
   constructor() {
     super(
-      "Detached task runtime must implement transitionTaskAssignment to settle an exact task assignment.",
+      "Detached task runtime must implement transitionTaskAssignment before accepting exact-assignment work. Upgrade the custom task runtime adapter.",
     );
     this.name = "DetachedTaskAssignmentUnsupportedError";
   }

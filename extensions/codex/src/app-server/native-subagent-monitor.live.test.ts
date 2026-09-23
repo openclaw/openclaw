@@ -46,6 +46,7 @@ function createDeliveryRecorder(
 ) {
   const deliveries: RecordedDelivery[] = [];
   const taskRuntime = {
+    assertTaskAssignmentSupported() {},
     tryCreateRunningTaskRun: (params: AgentHarnessScopedCreateRunningTaskRunParams) => {
       const existing = taskRecords.find((task) => task.runId === params.runId);
       if (existing) {

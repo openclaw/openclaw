@@ -35,6 +35,7 @@ import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "../tasks/agent-harness-task-runtime-scope.js";
+import { DetachedTaskAssignmentUnsupportedError } from "../tasks/detached-task-runtime-contract.js";
 import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
 import {
   createRunningTaskRun,
@@ -147,6 +148,8 @@ export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
 
 /** Scoped task runtime that prevents callers from mutating tasks outside their harness scope. */
 export type AgentHarnessTaskRuntime = {
+  /** Check the captured runtime before accepting work that requires exact settlement. */
+  assertTaskAssignmentSupported(): void;
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
   tryCreateRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord | null;
   recordTaskRunProgressByRunId(params: AgentHarnessScopedRecordTaskRunProgressParams): TaskRecord[];
@@ -219,6 +222,12 @@ export function createAgentHarnessTaskRuntime(
     });
   };
   return {
+    assertTaskAssignmentSupported() {
+      runtimeOwner.assertCurrent();
+      if (runtimeOwner.runtime && !runtimeOwner.runtime.transitionTaskAssignment) {
+        throw new DetachedTaskAssignmentUnsupportedError();
+      }
+    },
     createRunningTaskRun(taskParams) {
       const task = tryCreateRunningTaskRun(taskParams);
       if (!task) {
