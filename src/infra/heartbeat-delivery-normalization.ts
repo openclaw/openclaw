@@ -190,8 +190,8 @@ export function classifyHeartbeatAgentOutcome(params: {
       mediaUrls: undefined,
     });
   const shouldSkipMain =
-    // The structured notification decision also covers failure warnings and media.
-    heartbeatToolResponse?.notify === false ||
+    // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
+    (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
     (normalized.shouldSkip &&
       !normalized.hasMedia &&
       (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
