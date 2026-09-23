@@ -66,6 +66,7 @@ export type CreateGatewaySessionResult =
 
 export type CreateGatewaySessionParams = {
   cfg: OpenClawConfig;
+  operatorAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   key?: string;
   agentId?: string;
   label?: string;

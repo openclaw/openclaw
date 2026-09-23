@@ -22,8 +22,11 @@ import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
+import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
@@ -209,12 +212,21 @@ export function createCodexNativeHookRelay(params: {
     owner: CodexNativeProcessAuthority;
     client: () => CodexAppServerClient;
   };
+  nativeModelAdmission?: {
+    client: () => CodexAppServerClient;
+    threadId: () => string | undefined;
+    tools?: CodexNativeModelInputTools;
+    readQualification: (threadId: string) => CodexInferenceThreadQualification | undefined;
+  };
   assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const modelInputTools: CodexNativeModelInputTools = params.nativeModelAdmission?.tools ?? [
+    "multi_agent_v1send_input",
+  ];
   const directChildClaims = new Map<string, symbol>();
   const pendingDirectChildAdmissions = new Map<
     string,
@@ -268,31 +280,75 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
-    executionAdmission: params.nativeProcessAuthority
-      ? {
-          toolNames: ["exec"],
-          admit: (invocation, assertAdmissionCurrent) => {
-            const payload = invocation.rawPayload;
-            const rootThreadId =
-              isJsonObject(payload) && typeof payload.session_id === "string"
-                ? payload.session_id.trim()
-                : undefined;
-            const childThreadId = readCodexNativeChildThreadId(payload);
-            const threadId = childThreadId ?? rootThreadId;
-            if (!threadId || !invocation.turnId || !invocation.toolUseId) {
-              throw new Error(
-                "Codex native process admission requires exact thread, turn, and tool identities",
+    executionAdmission:
+      params.nativeProcessAuthority || params.nativeModelAdmission
+        ? {
+            toolNames: [
+              ...(params.nativeProcessAuthority ? ["exec"] : []),
+              ...(params.nativeModelAdmission ? modelInputTools : []),
+            ],
+            admit: async (invocation, assertAdmissionCurrent, preparation) => {
+              const payload = invocation.rawPayload;
+              if (
+                params.nativeModelAdmission &&
+                invocation.toolName &&
+                modelInputTools.includes(invocation.toolName)
+              ) {
+                const admission = params.nativeModelAdmission;
+                const input = isJsonObject(payload) ? payload.tool_input : undefined;
+                const targetThreadId =
+                  isJsonObject(input) && typeof input.target === "string"
+                    ? input.target.trim()
+                    : undefined;
+                const threadId = readCodexNativeChildThreadId(payload) ?? admission?.threadId();
+                if (
+                  !admission ||
+                  !threadId ||
+                  !targetThreadId ||
+                  !invocation.turnId ||
+                  !invocation.toolUseId
+                ) {
+                  throw new Error(
+                    "Codex native input requires exact sender, receiver, turn, and tool identities",
+                  );
+                }
+                assertAdmissionCurrent();
+                const request = {
+                  client: admission.client(),
+                  threadId,
+                  turnId: invocation.turnId,
+                  itemId: invocation.toolUseId,
+                };
+                await codexNativeSubagentMonitorRuntime.prepareModelInput({
+                  ...request,
+                  target: targetThreadId,
+                  readQualification: admission.readQualification,
+                  signal: preparation.signal,
+                  assertCurrent: preparation.assertCurrent,
+                });
+                assertAdmissionCurrent();
+                return;
+              }
+              const rootThreadId =
+                isJsonObject(payload) && typeof payload.session_id === "string"
+                  ? payload.session_id.trim()
+                  : undefined;
+              const childThreadId = readCodexNativeChildThreadId(payload);
+              const threadId = childThreadId ?? rootThreadId;
+              if (!threadId || !invocation.turnId || !invocation.toolUseId) {
+                throw new Error(
+                  "Codex native process admission requires exact thread, turn, and tool identities",
+                );
+              }
+              params.nativeProcessAuthority!.owner.admit(
+                params.nativeProcessAuthority!.client(),
+                { threadId, turnId: invocation.turnId, itemId: invocation.toolUseId },
+                assertAdmissionCurrent,
+                childThreadId ? rootThreadId : undefined,
               );
-            }
-            params.nativeProcessAuthority!.owner.admit(
-              params.nativeProcessAuthority!.client(),
-              { threadId, turnId: invocation.turnId, itemId: invocation.toolUseId },
-              assertAdmissionCurrent,
-              childThreadId ? rootThreadId : undefined,
-            );
-          },
-        }
-      : undefined,
+            },
+          }
+        : undefined,
     approvalHost: params.hostCapabilities,
     assertActive: () => {
       params.hostCapabilities.assertActive();

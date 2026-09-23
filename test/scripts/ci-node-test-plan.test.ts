@@ -28,7 +28,6 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-  RELEASE_ONLY_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
@@ -102,7 +101,11 @@ import {
 import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
-import { listMatchedTestFiles, listTestFiles } from "./ci-node-test-plan.test-support.js";
+import {
+  expectRuntimeReleaseInventory,
+  listMatchedTestFiles,
+  listTestFiles,
+} from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -4114,6 +4117,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .filter(
           (shard) =>
             shard.shardName === "core-runtime-config" ||
+            shard.shardName === "agentic-cli" ||
             shard.includePatterns?.some(isReleaseOnlyRuntimeTestFile),
         )
         .map((shard) => shard.shardName);
@@ -4126,56 +4130,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           includeReleaseOnlyRuntimeTests: false,
           changedPaths: ["src/config/state-startup-corpus.test-support.ts"],
         });
-        const files = (plan: CompactNodeTestShard[]) =>
-          plan.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []));
-        const beforeFiles = files(before);
-        const afterFiles = files(after);
-        const fullCommandTimingParents = new Set(
-          before.flatMap((shard) =>
-            shard.groups
-              .filter((group) => group.configs.includes("test/vitest/vitest.commands.config.ts"))
-              .map((group) => {
-                const key = group.timing_key ?? group.shard_name;
-                return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
-              }),
-          ),
-        );
-        expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
-          RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-            (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
-          ).toSorted(),
-        );
-        expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
-        expect(afterFiles).toContain("src/config/config-startup-corpus.test.ts");
-        for (const owner of reducedOwners) {
-          const owns = (group: { shard_name: string }) =>
-            group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
-          const reduced = after.flatMap((shard) => shard.groups).filter(owns);
-          const retainedFiles = before
-            .flatMap((shard) => shard.groups)
-            .filter(owns)
-            .flatMap((group) => group.includePatterns ?? [])
-            .filter((file) => !isReleaseOnlyRuntimeTestFile(file));
-          expect(reduced.flatMap((group) => group.includePatterns ?? []).toSorted(), owner).toEqual(
-            retainedFiles.toSorted(),
-          );
-          if (retainedFiles.length === 0) {
-            expect(reduced, owner).toEqual([]);
-          }
-          for (const group of reduced) {
-            const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
-            const timingParent =
-              parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
-            expect(fullCommandTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(
-              false,
-            );
-            expect(timingParent.replace(/#file-parallel-(?:2|8)$/u, "")).toBe(
-              owner === "agentic-control-plane-agent-chat"
-                ? `changed-${owner}-parallel-native-serial${parseCompactSplitTimingKey(timingKey) ? "-stripes" : ""}`
-                : `changed-${owner}`,
-            );
-          }
-        }
+        expectRuntimeReleaseInventory({ before, after, reducedOwners, compactMode });
       }
     },
   );

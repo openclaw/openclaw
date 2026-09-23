@@ -20,6 +20,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { reportLimitViolations, type LimitViolation } from "../lib/check-limits.mts";
 import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import { readGatewayResources } from "../lib/gateway-bench-profile.ts";
 import {
@@ -2645,11 +2646,23 @@ function assertProcessResourceCeiling(
   if (!Number.isFinite(aggregateRssMiB) || aggregateRssMiB <= 0) {
     throw new Error(`${label} aggregate RSS sample was invalid: ${String(aggregateRssMiB)} MiB`);
   }
+  const violations: LimitViolation[] = [];
   if (sample.rssMiB > maxRssMiB) {
-    throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
+    violations.push({
+      file: "scripts/e2e/kitchen-sink-rpc-walk.mts",
+      title: "Kitchen sink process RSS budget",
+      message: `${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`,
+    });
   }
   if (aggregateRssMiB > maxRssMiB) {
-    throw new Error(`${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`);
+    violations.push({
+      file: "scripts/e2e/kitchen-sink-rpc-walk.mts",
+      title: "Kitchen sink aggregate RSS budget",
+      message: `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`,
+    });
+  }
+  if (reportLimitViolations(violations)) {
+    throw new Error(violations.map(({ message }) => message).join("\n"));
   }
 }
 

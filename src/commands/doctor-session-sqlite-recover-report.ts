@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import {
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
@@ -134,7 +135,16 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     })),
   );
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
-  if (report.totals.issues === 0) {
+  if (
+    report.totals.issues === 0 &&
+    restore.restoredFiles.length === 0 &&
+    report.totals.importedEntries === 0 &&
+    report.totals.archivedTranscriptFiles === 0 &&
+    report.totals.archivedUnreferencedJsonlFiles === 0 &&
+    !failedRun.targets.some((target) =>
+      target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
+    )
+  ) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
       runId: failedRun.manifest.runId,
@@ -142,7 +152,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     return report;
   }
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason: "doctor recover completed with remaining issues",
+    reason:
+      report.totals.issues > 0
+        ? "doctor recover completed with remaining issues"
+        : "doctor recover completed without remaining issues",
     recoveryTargets: report.targets,
     trustedTargets,
   });

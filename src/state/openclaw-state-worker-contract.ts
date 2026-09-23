@@ -7,7 +7,7 @@ import type {
   SandboxRegistryWrite,
 } from "../agents/sandbox/registry.kernel.js";
 import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
@@ -93,7 +93,8 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = SessionStateWorkerOperations &
+export type OpenClawStateWorkerOperations = WorktreeRegistryReadOperations &
+  SessionStateWorkerOperations &
   McpOAuthReadOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
@@ -199,8 +200,6 @@ export type OpenClawStateWorkerOperations = SessionStateWorkerOperations &
     };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
-    "worktrees.list": { input: undefined; output: ManagedWorktreeRecord[] };
-    "worktrees.liveIds": { input: undefined; output: string[] };
     "projects.resolve": { input: { id: string }; output: ProjectRegistryRecord | undefined };
     "projects.insert": {
       input: { project: ProjectRegistryInsert; lease: OpenClawStateLeaseIdentity };

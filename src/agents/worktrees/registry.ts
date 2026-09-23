@@ -31,6 +31,11 @@ import type {
 } from "./types.js";
 
 export { WorktreeRemovalContentionError } from "./run-lease-owner.js";
+export {
+  getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedPaths,
+  getRegistryWorktreeProvisionedState,
+} from "./registry-read.js";
 
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;
@@ -79,37 +84,6 @@ function recordToRow(
     run_end_cleanup_json:
       record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
   };
-}
-
-function parseProvisionedData(
-  raw: string | null,
-): Array<string | ProvisionedFileState> | undefined {
-  if (raw === null) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    return parsed.every(
-      (entry) =>
-        typeof entry === "string" ||
-        (typeof entry === "object" &&
-          entry !== null &&
-          typeof (entry as ProvisionedFileState).path === "string" &&
-          ((entry as ProvisionedFileState).mode === null ||
-            (Number.isInteger((entry as ProvisionedFileState).mode) &&
-              (entry as ProvisionedFileState).mode! >= 0 &&
-              (entry as ProvisionedFileState).mode! <= 0o7777)) &&
-          Number.isInteger((entry as ProvisionedFileState).chunks) &&
-          (entry as ProvisionedFileState).chunks >= 0),
-    )
-      ? (parsed as Array<string | ProvisionedFileState>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
@@ -172,21 +146,6 @@ export function getRegistryWorktree(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function getRegistryWorktreeProvisionedPaths(
-  env: NodeJS.ProcessEnv,
-  id: string,
-): string[] | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select("provisioned_paths_json")
-    .where("id", "=", id);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return parseProvisionedData(row?.provisioned_paths_json ?? null)?.map((entry) =>
-    typeof entry === "string" ? entry : entry.path,
-  );
-}
-
 export function discardLegacyRegistryWorktrees(
   env: NodeJS.ProcessEnv,
   worktreeIds: readonly string[],
@@ -243,22 +202,6 @@ export function rewriteRegistryWorktreePathsForMigration(
   );
 }
 
-export function getRegistryWorktreeProvisionedState(
-  env: NodeJS.ProcessEnv,
-  id: string,
-): ProvisionedFileState[] | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select("provisioned_paths_json")
-    .where("id", "=", id);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  const data = row ? parseProvisionedData(row.provisioned_paths_json) : undefined;
-  return data?.every((entry): entry is ProvisionedFileState => typeof entry !== "string")
-    ? data
-    : undefined;
-}
-
 export function clearRegistryWorktreeProvisionedChunks(
   env: NodeJS.ProcessEnv,
   worktreeId: string,
@@ -299,20 +242,6 @@ export function insertRegistryWorktreeProvisionedChunk(
     },
     { env },
   );
-}
-
-export function getRegistryWorktreeProvisionedChunk(
-  env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; path: string; chunkIndex: number },
-): Uint8Array | undefined {
-  const db = dbFor(env);
-  const query = kyselyProvisionedFor(db)
-    .selectFrom("worktree_provisioned_file_chunks")
-    .select("data")
-    .where("worktree_id", "=", params.worktreeId)
-    .where("path", "=", params.path)
-    .where("chunk_index", "=", params.chunkIndex);
-  return executeSqliteQuerySync(db, query).rows[0]?.data;
 }
 
 export function findLiveRegistryWorktreeByPath(

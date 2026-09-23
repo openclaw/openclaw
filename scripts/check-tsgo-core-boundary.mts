@@ -2,6 +2,7 @@
 
 // Enforces core tsgo project boundaries and sparse-checkout safety.
 import path from "node:path";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
@@ -119,9 +120,13 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
       .map(normalizeFilePath)
       .filter((file) => testRootPattern.test(file)),
   }));
-  for (const warning of findOversizedTsgoCoreTestShards({ shards: shardRoots })) {
-    console.warn(`[tsgo-core-boundary] warning: ${warning}`);
-  }
+  const oversized = reportLimitViolations(
+    findOversizedTsgoCoreTestShards({ shards: shardRoots }).map((message) => ({
+      file: canonicalCoreTestConfig,
+      title: "Core test shard root budget",
+      message,
+    })),
+  );
   const shardViolations = findTsgoCoreTestShardViolations({
     canonicalRoots,
     shards: shardRoots,
@@ -150,6 +155,9 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
       console.error(`- ${violation}`);
     }
     throw new Error("Core test graph ownership validation failed");
+  }
+  if (oversized) {
+    throw new Error("Core test shard root budget exceeded");
   }
 
   const violations: string[] = [];

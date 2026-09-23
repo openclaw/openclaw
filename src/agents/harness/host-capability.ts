@@ -65,7 +65,8 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import { retainHarnessSource } from "./host-source-authority.js";
+import { bindHarnessModelExecution, retainHarnessSource } from "./host-source-authority.js";
+import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 import { bindHarnessReplyMedia } from "./reply-media.js";
@@ -180,6 +181,7 @@ export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
   requiredNodeCommands?: readonly string[];
+  nativeModelPolicySupport?: "exact";
 }): {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
@@ -195,6 +197,7 @@ export function createAgentHarnessHostCapabilities(params: {
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
+  const nativeModelPolicySupported = params.nativeModelPolicySupport === "exact";
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
   if (!delegatedAuthority) {
@@ -467,11 +470,17 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
+  const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
+    nativeModelPolicySupported
+      ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
+      : undefined;
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
-    retainSourceAuthority: () => retainHarnessSource(attempt.admittedRunContext, assertActive),
+    ...(bindModelExecution ? { bindModelExecution } : {}),
+    retainSourceAuthority: () =>
+      retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
       assertActive();
       const data = emitAgentRunOutputTokens({
@@ -493,17 +502,7 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(prepareReplyMedia ? { prepareReplyMedia } : {}),
     ...(trajectoryRecorder
       ? {
-          trajectory: Object.freeze({
-            recordEvent: (type: string, data?: Record<string, unknown>) => {
-              assertActive();
-              trajectoryRecorder.recordEvent(type, data);
-            },
-            flush: async () => {
-              assertActive();
-              await trajectoryRecorder.flush();
-              assertActive();
-            },
-          }),
+          trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
         }
       : {}),
     preparedEnvironment: () => {

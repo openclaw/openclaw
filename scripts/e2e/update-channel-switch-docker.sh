@@ -62,8 +62,7 @@ mkdir -p "$git_root"
 # Build the fake git install from the packed package contents, not the checkout.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
-# The package-derived fixture can carry patchedDependencies whose targets are
-# absent from the trimmed tarball install; that should not block update preflight.
+# Validate the package-derived fixture and prepare its generated build metadata.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
@@ -105,10 +104,6 @@ done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
   --mode fallback
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-  node scripts/e2e/lib/package-compat.mjs "$package_version"
-)"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
 export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
 OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
@@ -190,21 +185,18 @@ assert_package_dry_run() {
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
 dev_channel_args=(--channel dev)
-# Legacy package acceptance permits missing channel persistence; keep its explicit switch.
-if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
-  echo "==> package dry-run channel and one-off tag precedence"
-  openclaw config set update.channel dev
-  assert_package_dry_run git dev stored
-  assert_package_dry_run git dev explicit --channel dev
-  assert_package_dry_run git dev explicit --channel dev --tag beta
-  assert_package_dry_run package dev stored --tag beta
-  assert_package_dry_run package stable explicit --channel stable
-  # 7.33 reports a stored dev channel as a package update even though an
-  # explicit --channel dev selects Git. Keep the explicit selector for the
-  # destructive admission and actual switch probes on that frozen contract.
-  if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
-    dev_channel_args=()
-  fi
+echo "==> package dry-run channel and one-off tag precedence"
+openclaw config set update.channel dev
+assert_package_dry_run git dev stored
+assert_package_dry_run git dev explicit --channel dev
+assert_package_dry_run git dev explicit --channel dev --tag beta
+assert_package_dry_run package dev stored --tag beta
+assert_package_dry_run package stable explicit --channel stable
+# 7.33 reports a stored dev channel as a package update even though an
+# explicit --channel dev selects Git. Keep the explicit selector for the
+# destructive admission and actual switch probes on that frozen contract.
+if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
+  dev_channel_args=()
 fi
 
 echo "==> ordinary untracked files still block Git admission"
@@ -218,7 +210,6 @@ set -e
 node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-exit \
   "$dirty_status" \
-  "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" \
   "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
 # The payload assertion proves the update was rejected and no checkout state changed.
 UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
@@ -240,11 +231,7 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel 
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then
-  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
-else
-  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
-fi
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
 
 echo "==> git -> package stable channel"
 set +e
