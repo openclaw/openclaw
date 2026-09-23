@@ -92,6 +92,8 @@ describe("registered harness input attachment preparation", () => {
     "mime-denied",
     "hardlink",
     "metadata-budget",
+    "note-budget",
+    "no-budget",
   ])("prepares saved input only for eligible registered harness execution: %s", async (mode) => {
     const root = trajectoryTempDirs.make("harness-input-attachment-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -104,7 +106,8 @@ describe("registered harness input attachment preparation", () => {
     if (mode === "hardlink") {
       await fs.link(filePath, path.join(root, "other.csv"));
     }
-    const media = [{ path: "media://inbound/inventory.csv", contentType: "text/csv" }];
+    const mediaRef = "media://inbound/inventory.csv";
+    const media = [{ path: mediaRef, contentType: "text/csv" }];
     const prompt = "Compute from the saved media://inbound/inventory.csv attachment.";
     const config: OpenClawConfig = {
       tools: {
@@ -147,15 +150,18 @@ describe("registered harness input attachment preparation", () => {
       expect(prepare).toBeTypeOf("function");
       const preparation = prepare?.({
         placement: "local-host",
-        maxChars: mode === "metadata-budget" ? 80 : 60_000,
+        maxChars:
+          mode === "no-budget"
+            ? 0
+            : mode === "metadata-budget"
+              ? 80
+              : mode === "note-budget"
+                ? JSON.stringify([{ reference: mediaRef, path: filePath }]).length
+                : 60_000,
         assertCurrent: () => {},
       });
       if (mode === "binding-during-open") {
         await expect(preparation).rejects.toThrow("Workspace access changed");
-        return makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" });
-      }
-      if (mode === "metadata-budget") {
-        await expect(preparation).rejects.toThrow("Attachment paths exceed the input budget");
         return makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" });
       }
       const note = await preparation;

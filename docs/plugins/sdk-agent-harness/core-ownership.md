@@ -44,8 +44,9 @@ The host returns an execution-only note with verified readable document paths,
 using the admitted input and its captured media and tool policy. It retains the
 originals even when native image projection clears the ordinary media field.
 For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
-Path metadata must fit the supplied native input budget; excessive input fails
-with a request to send fewer attachments.
+Path metadata must fit the supplied native input budget. When the complete note
+cannot fit, the host omits it and preserves the original request and inline
+attachment context.
 Append the note to the current native input without rewriting OpenClaw's
 canonical prompt, transcript, or media references. This separation does not imply
 that a harness discards its native input after the turn: Codex retains it in its

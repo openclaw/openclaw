@@ -111,9 +111,8 @@ export async function prepareLocalWorkspaceAttachments(params: {
       ].join("\n")
     : undefined;
   if (metadataChars > maxChars || (note && note.length > maxChars)) {
-    throw new Error(
-      "Attachment paths exceed the input budget. Send fewer attachments in one message.",
-    );
+    // Optional path metadata must not prevent the admitted request from running.
+    return undefined;
   }
   return note;
 }
