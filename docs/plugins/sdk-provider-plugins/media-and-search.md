@@ -156,6 +156,9 @@ plugins](/plugins/sdk-provider-plugins) guide.
     still belong in `resolveModelCapabilities` and `generateVideo`; reuse
     the same capability constant for both paths when possible.
 
+    The following [private-local helpers](/plugins/sdk-subpaths#compatibility-and-private-local-helpers)
+    are supported only for bundled and separately published official plugins.
+
     For asynchronous provider jobs, `pollProviderOperation` from
     `openclaw/plugin-sdk/provider-http` shares the bounded polling loop while
     the plugin supplies its request, completion/failure checks, and wait function.
