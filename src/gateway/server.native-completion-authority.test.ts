@@ -212,7 +212,7 @@ describe("native completion final-effect authority", () => {
   registerAgentSessionLoopTestLifecycle();
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["live", "operator-revoked", "requester-replaced"] as const)(
+  it.for(["live", "operator-revoked", "requester-replaced"] as const)(
     "revalidates %s authority at real Gateway input staging",
     async (change, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
@@ -286,7 +286,7 @@ describe("native completion final-effect authority", () => {
     },
   );
 
-  it.each([
+  it.for([
     { boundary: "recorder", change: "live" },
     { boundary: "recorder", change: "operator-revoked" },
     { boundary: "recorder", change: "requester-replaced" },
