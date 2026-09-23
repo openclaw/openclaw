@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
   createAdmittedRunOperatorAuthority,
@@ -120,10 +121,24 @@ export function captureGatewayOperatorRunAuthority(params: {
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
-  if (!client || actor?.kind !== "operator") {
+  // Shared-secret owner sessions keep system role semantics, but still have an
+  // authenticated user subject. Capture only the real, handshake-attested ingress:
+  // an autonomous/synthetic system caller must not acquire the owner profile.
+  const authenticatedOwner =
+    client?.internal?.authenticatedOperator === true &&
+    (actor === undefined || actor.kind === "system") &&
+    client.connect.role === "operator" &&
+    Boolean(client.connId) &&
+    !client.invalidated &&
+    !client.connectionSignal?.aborted &&
+    !client.internal.syntheticClient &&
+    !client.internal.agentRuntimeIdentity &&
+    !client.internal.agentToolCaller &&
+    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+  if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;
   }
-  const profileId = actor.profileId;
+  const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
   let aliasRevision = readUserProfileAliasRevision();
   if (params.hasCurrentClientAuthority?.() === false) {
     throw new Error("Gateway caller authority is no longer active.");

@@ -179,22 +179,26 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             }
             <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
           </div>
-          <button
-            type="button"
-            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
-            title=${props.disabledBanner.disabledReason ?? nothing}
-            @click=${props.disabledBanner.onAction}
-          >
-            ${
-              props.disabledBanner.busy
-                ? html`<span class="btn__spinner" aria-hidden="true"></span>${
-                      props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
-                    }`
-                : props.disabledBanner.actionLabel
-            }
-          </button>
+          ${
+            props.disabledBanner.onAction
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+                  ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+                  aria-busy=${props.disabledBanner.busy ? "true" : "false"}
+                  title=${props.disabledBanner.disabledReason ?? nothing}
+                  @click=${props.disabledBanner.onAction}
+                >
+                  ${
+                    props.disabledBanner.busy
+                      ? html`<span class="btn__spinner" aria-hidden="true"></span>${
+                            props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
+                          }`
+                      : props.disabledBanner.actionLabel
+                  }
+                </button>`
+              : nothing
+          }
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
               ? renderChatAbortAction(runControlsProps)
@@ -306,7 +310,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
           },
-          props.connected && canCompose ? props.progressCardRefresh : undefined,
+          props.connected && props.canSend ? props.progressCardRefresh : undefined,
         )}
       </div>`
     : props.progressCardInitialLoading
@@ -322,9 +326,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     offline: props.offline,
     canAbort: showAbortableUi,
     onQueueRetry:
-      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueRetry : undefined,
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueRetry
+        : undefined,
     onQueueSteer:
-      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueSteer : undefined,
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueSteer
+        : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
@@ -341,7 +349,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
-          canAct: props.connected && canCompose && !props.goalRecovery,
+          canAct: props.connected && props.canSend && !props.goalRecovery,
           onGoalAction: props.onGoalAction,
           onGoalEdit: props.onGoalSubmit ? (goal) => goalComposer.begin(goal) : undefined,
           requestUpdate,

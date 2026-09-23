@@ -4,12 +4,16 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import * as sessions from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
+import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
+import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import { sessionRewindHandlers } from "./server-methods/sessions-rewind.js";
+import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import * as workspace from "./server-methods/workspace-files.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
@@ -46,6 +50,198 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it.each([false, true])(
+    "binds describe and message subscriptions to visible rows (roles=%s)",
+    async (roles) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const reader = roleClient("view", "row-reader");
+        reader.connect.scopes = ["operator.sessions.read"];
+        const owner = roleClient("view", "row-owner");
+        const cfg = roles ? rolePolicyConfig() : {};
+        await state.writeConfig(cfg);
+        const subscribers = createSessionMessageSubscriberRegistry();
+        const context = await createHistoryReadContext({
+          getRuntimeConfig: () => cfg,
+          subscribeSessionMessageEvents: subscribers.subscribe,
+        });
+        const rows = [
+          { name: "own-draft", own: true, visibility: "draft", visible: true },
+          { name: "shared", own: false, visibility: "shared", visible: true },
+          { name: "foreign-draft", own: false, visibility: "draft", visible: false },
+          { name: "incognito", own: true, visibility: "shared", visible: false },
+          { name: "missing", own: false, visibility: "shared", visible: false },
+        ] as const;
+        for (const row of rows) {
+          const sessionKey = `agent:main:read-${row.name}`;
+          if (row.name !== "missing") {
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: row.name,
+                updatedAt: 1,
+                visibility: row.visibility,
+                ...(row.name === "incognito" ? { incognito: true } : {}),
+                createdActor: {
+                  type: "human",
+                  source: "profile",
+                  id: (row.own ? reader : owner).authenticatedUserProfile!.profileId,
+                },
+              },
+            );
+          }
+          for (const method of ["sessions.describe", "sessions.messages.subscribe"] as const) {
+            const client = { ...reader, connId: `${method}-${row.name}` };
+            const respond = vi.fn();
+            await handleGatewayRequest({
+              req: {
+                type: "req",
+                id: client.connId,
+                method,
+                params: { key: sessionKey, agentId: "main" },
+              },
+              client,
+              context,
+              respond,
+              isWebchatConnect: () => false,
+              extraHandlers: { ...sessionReadHandlers, ...sessionSubscriptionHandlers },
+            });
+            if (method === "sessions.describe") {
+              expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+                session: row.visible ? expect.objectContaining({ key: sessionKey }) : null,
+              });
+            } else if (row.visible) {
+              expect(respond).toHaveBeenCalledExactlyOnceWith(
+                true,
+                { subscribed: true, key: sessionKey },
+                undefined,
+              );
+            } else {
+              expect(respond).toHaveBeenCalledExactlyOnceWith(
+                false,
+                undefined,
+                expect.objectContaining({
+                  code: "INVALID_REQUEST",
+                  message: expect.stringContaining("was not found"),
+                }),
+              );
+            }
+            expect(subscribers.get(sessionKey).has(client.connId)).toBe(
+              method === "sessions.messages.subscribe" && row.visible,
+            );
+          }
+        }
+        reader.connect.scopes = ["operator.read"];
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "broad-describe",
+            method: "sessions.describe",
+            params: { key: "agent:main:read-foreign-draft" },
+          },
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionReadHandlers,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+          session: roles ? null : expect.objectContaining({ key: "agent:main:read-foreign-draft" }),
+        });
+      });
+    },
+  );
+
+  it.each(["current", "source", "generation"] as const)(
+    "keeps the original %s through message subscription preparation",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const client = {
+          ...roleClient("view", "subscription-reader"),
+          connId: "subscription-reader",
+        };
+        client.connect.scopes = ["operator.sessions.read"];
+        const cfg = rolePolicyConfig();
+        const entry = {
+          sessionId: "original",
+          lifecycleRevision: "original",
+          updatedAt: 1,
+          visibility: "shared" as const,
+        };
+        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        const subscribers = createSessionMessageSubscriberRegistry();
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => cfg,
+          subscribeSessionMessageEvents: subscribers.subscribe,
+        });
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const respond = vi.fn();
+        let current = true;
+        const request = handleGatewayRequest({
+          req: {
+            type: "req",
+            id: change,
+            method: "sessions.messages.subscribe",
+            params: { key, agentId: "main" },
+          },
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: () => current,
+          extraHandlers: createLazyCoreHandlers({
+            methods: ["sessions.messages.subscribe"],
+            loadHandlers: async () => {
+              entered.resolve();
+              await release.promise;
+              return sessionSubscriptionHandlers;
+            },
+          }),
+        });
+        const outcome = Promise.allSettled([request]);
+        try {
+          await Promise.race([entered.promise, request]);
+          expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
+          if (change === "source") {
+            current = false;
+          }
+          if (change === "generation") {
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { ...entry, lifecycleRevision: "replacement", sessionId: "replacement" },
+            );
+          }
+        } finally {
+          release.resolve();
+          await outcome;
+        }
+        if (change === "source") {
+          expect(await outcome).toMatchObject([
+            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+          if (change === "current") {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              { subscribed: true, key },
+              undefined,
+            );
+          } else {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "INVALID_REQUEST" }),
+            );
+          }
+        }
+        expect(subscribers.get(key).has(client.connId)).toBe(change === "current");
+      });
+    },
+  );
+
   it.each(["chat.metadata", "chat.startup"] as const)(
     "%s hides foreign draft metadata and rechecks held shared reads",
     async (method) => {
@@ -220,6 +416,7 @@ describe("narrow session read owners", () => {
       reader.connect.scopes = ["operator.sessions.read"];
       const owner = roleClient("view", "scoped-owner");
       const cfg = rolePolicyConfig();
+      cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const io = prepareRead(method, async () => {});
       const request = async () => {

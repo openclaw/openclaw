@@ -4303,6 +4303,19 @@ setImmediate(() => {
           );
           continue;
         }
+        if (step.with?.path === "full-release-flake-intent") {
+          expect(file).toBe(".github/workflows/full-release-validation.yml");
+          expect(jobId).toBe("automatic_flake_retry");
+          expect(step.uses).toBe(CACHE_SAVE_V5);
+          expect(step.with).toEqual({
+            path: "full-release-flake-intent",
+            key: "full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}",
+          });
+          expect(step.if).toBe(
+            "${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}",
+          );
+          continue;
+        }
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",

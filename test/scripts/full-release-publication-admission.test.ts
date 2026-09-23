@@ -15,7 +15,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, vi, type TestContext } from "vitest";
 import { parse } from "yaml";
 import {
   normalizePublicationIntent,
@@ -28,13 +28,19 @@ import {
   type PublicationSourceFact,
 } from "../../scripts/full-release-publication-contract.mjs";
 import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context.mjs";
+import { getProcessStartTime, isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
+import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { preparedScriptWrapperPreload } from "./prepared-script-wrapper.test-support.js";
 
-const temps = useAutoCleanupTempDirTracker(afterEach);
+const publicationIt = createCommandTest();
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 let toolingTemplate: { loose: string; packed: string };
 const repo = resolve(".");
@@ -95,6 +101,8 @@ const toolingPaths = [
   "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
   "scripts/full-release-publication-contract.mjs",
+  "scripts/full-release-flake-policy.mjs",
+  "scripts/full-release-flake-retry.mjs",
   "scripts/full-release-publication-admission.mts",
   "scripts/full-release-candidate-contract.mjs",
   "scripts/full-release-validation-state.mjs",
@@ -205,7 +213,7 @@ describe("publication dispatch transport", () => {
     validationPurpose: "publish",
     publicationSelection: selection,
   };
-  it.each<{
+  publicationIt.concurrent.for<{
     name: string;
     value: unknown;
     pass?: boolean;
@@ -260,133 +268,149 @@ describe("publication dispatch transport", () => {
     { name: "malformed JSON", value: "{", error: "JSON at position 1" },
   ])(
     "decodes $name before identity effects in the real workflow bodies",
-    ({ name, value, pass, identityFailure, error, extra }) => {
-      const root = temps.make("openclaw-publication-transport-");
-      for (const file of [
-        "scripts/full-release-publication-contract.mjs",
-        "scripts/clawhub-prepared-artifact.mjs",
-        "scripts/clawhub-parent-authorization.mjs",
-        "scripts/plugin-publication-artifact.mjs",
-        "scripts/release-tooling-identity.mjs",
-        "scripts/lib/actions-artifact-archive.mjs",
-        "scripts/lib/arg-utils.runtime.mjs",
-        "scripts/lib/bounded-response.mjs",
-        "scripts/lib/record-shared.mjs",
-        "scripts/lib/canonical-json.mjs",
-        "scripts/lib/npm-core-release-packages.json",
-        "scripts/lib/npm-publish-plan.mjs",
-        "scripts/lib/release-version.mjs",
-      ]) {
-        const destination = join(root, "workflow", file);
-        mkdirSync(dirname(destination), { recursive: true });
-        cpSync(join(repo, file), destination);
-      }
-      const bin = join(root, "bin");
-      mkdirSync(bin);
-      const calls = join(root, "calls.jsonl");
-      writeFileSync(
-        join(bin, "gh"),
-        `#!${process.execPath}
+    async (
+      { name, value, pass, identityFailure, error, extra },
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const root = processFixture.createTempDir("openclaw-publication-transport-");
+        for (const file of [
+          "scripts/full-release-publication-contract.mjs",
+          "scripts/full-release-flake-policy.mjs",
+          "scripts/clawhub-prepared-artifact.mjs",
+          "scripts/clawhub-parent-authorization.mjs",
+          "scripts/plugin-publication-artifact.mjs",
+          "scripts/release-tooling-identity.mjs",
+          "scripts/lib/actions-artifact-archive.mjs",
+          "scripts/lib/arg-utils.runtime.mjs",
+          "scripts/lib/bounded-response.mjs",
+          "scripts/lib/record-shared.mjs",
+          "scripts/lib/canonical-json.mjs",
+          "scripts/lib/npm-core-release-packages.json",
+          "scripts/lib/npm-publish-plan.mjs",
+          "scripts/lib/release-version.mjs",
+        ]) {
+          const destination = join(root, "workflow", file);
+          mkdirSync(dirname(destination), { recursive: true });
+          cpSync(join(repo, file), destination);
+        }
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        const calls = join(root, "calls.jsonl");
+        writeFileSync(
+          join(bin, "gh"),
+          `#!${process.execPath}
 const args = process.argv.slice(2);
 require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 if (JSON.stringify(args) !== ${JSON.stringify(
-          JSON.stringify([
-            "api",
-            `repos/openclaw/openclaw/compare/${identity.sha}...main`,
-            "--method",
-            "GET",
-            "--jq",
-            "{status}",
-          ]),
-        )}) process.exit(91);
+            JSON.stringify([
+              "api",
+              `repos/openclaw/openclaw/compare/${identity.sha}...main`,
+              "--method",
+              "GET",
+              "--jq",
+              "{status}",
+            ]),
+          )}) process.exit(91);
 console.log('{"status":"identical"}');
 `,
-        { mode: 0o755 },
-      );
-      const steps: Record<string, { outputs: Record<string, string> }> = {};
-      const inputs = {
-        trusted_workflow_json: typeof value === "string" ? value : JSON.stringify(value),
-        ...extra,
-      };
-      const resolveTarget = expectDefined(workflow.jobs.resolve_target, "resolve_target job");
-      const decoderIndex = resolveTarget.steps.findIndex(
-        (step) => step.id === "publication_dispatch",
-      );
-      const identityIndex = resolveTarget.steps.findIndex((step) => step.id === "tooling_identity");
-      expect(decoderIndex).toBeGreaterThan(0);
-      expect(identityIndex).toBe(decoderIndex + 1);
-      expect(identityIndex).toBeLessThan(
-        resolveTarget.steps.findIndex((step) => step.id === "resolve"),
-      );
-      let status = 0;
-      let stderr = "";
-      const completed: string[] = [];
-      for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
-        const output = join(root, `${step.id}.out`);
-        const env: Record<string, string> = {
-          PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
-          HOME: root,
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_OUTPUT: output,
+          { mode: 0o755 },
+        );
+        const steps: Record<string, { outputs: Record<string, string> }> = {};
+        const inputs = {
+          trusted_workflow_json: typeof value === "string" ? value : JSON.stringify(value),
+          ...extra,
         };
-        const context = {
-          inputs,
-          steps,
-          toJSON: JSON.stringify,
-          github: { token: "", ref: identity.fullRef, ref_name: identity.ref, sha: identity.sha },
-          env: { RELEASE_ISOLATION_TOOLING_CONTRACT: "2" },
-        };
-        for (const [key, raw] of Object.entries(step.env ?? {})) {
-          env[key] = raw.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_match, expression: string) =>
-            String(evaluate(expression, context)),
+        const resolveTarget = expectDefined(workflow.jobs.resolve_target, "resolve_target job");
+        const decoderIndex = resolveTarget.steps.findIndex(
+          (step) => step.id === "publication_dispatch",
+        );
+        const identityIndex = resolveTarget.steps.findIndex(
+          (step) => step.id === "tooling_identity",
+        );
+        check(decoderIndex).toBeGreaterThan(0);
+        check(identityIndex).toBe(decoderIndex + 1);
+        check(identityIndex).toBeLessThan(
+          resolveTarget.steps.findIndex((step) => step.id === "resolve"),
+        );
+        let status = 0;
+        let stderr = "";
+        const completed: string[] = [];
+        for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
+          const output = join(root, `${step.id}.out`);
+          const env: Record<string, string> = {
+            PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
+            HOME: root,
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            GITHUB_OUTPUT: output,
+          };
+          const context = {
+            inputs,
+            steps,
+            toJSON: JSON.stringify,
+            github: { token: "", ref: identity.fullRef, ref_name: identity.ref, sha: identity.sha },
+            env: { RELEASE_ISOLATION_TOOLING_CONTRACT: "2" },
+          };
+          for (const [key, raw] of Object.entries(step.env ?? {})) {
+            env[key] = raw.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_match, expression: string) =>
+              String(evaluate(expression, context)),
+            );
+          }
+          const result = await processFixture.run(
+            "bash",
+            ["-c", expectDefined(step.run, "transport command")],
+            {
+              cwd: root,
+              env,
+              encoding: "utf8",
+              timeout: 10_000,
+            },
           );
+          if (result.error !== undefined) {
+            throw result.error instanceof Error
+              ? result.error
+              : new Error("Unexpected publication command failure", { cause: result.error });
+          }
+          status = result.status ?? 1;
+          stderr += result.stderr;
+          if (status !== 0) {
+            break;
+          }
+          completed.push(step.id!);
+          const outputs = Object.fromEntries(
+            readFileSync(output, "utf8")
+              .trimEnd()
+              .split("\n")
+              .map((line) => {
+                const separator = line.indexOf("=");
+                return [line.slice(0, separator), line.slice(separator + 1)];
+              }),
+          );
+          steps[step.id!] = { outputs };
         }
-        const result = spawnSync("bash", ["-c", expectDefined(step.run, "transport command")], {
-          cwd: root,
-          env,
-          encoding: "utf8",
-          timeout: 10_000,
-        });
-        status = result.status ?? 1;
-        stderr += result.stderr;
-        if (status !== 0) {
-          break;
+        if (pass) {
+          check(status, stderr).toBe(0);
+          check(
+            JSON.parse(expectDefined(steps.tooling_identity?.outputs.json, "resolved identity")),
+          ).toEqual(identity);
+          check(completed).toEqual(["publication_dispatch", "tooling_identity"]);
+          const forwarded = expectDefined(
+            steps.publication_dispatch?.outputs.trusted_workflow_json,
+            "identity transport",
+          );
+          check(forwarded ? JSON.parse(forwarded) : null).toEqual(
+            name === "direct identity inference" ? null : identity,
+          );
+          check(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+        } else {
+          check(status, stderr).toBe(1);
+          check(stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+          check(stderr).toContain(expectDefined(error, "expected rejection reason"));
+          check(completed).toEqual(identityFailure ? ["publication_dispatch"] : []);
+          check(existsSync(calls)).toBe(false);
+          check(steps.tooling_identity).toBeUndefined();
         }
-        completed.push(step.id!);
-        const outputs = Object.fromEntries(
-          readFileSync(output, "utf8")
-            .trimEnd()
-            .split("\n")
-            .map((line) => {
-              const separator = line.indexOf("=");
-              return [line.slice(0, separator), line.slice(separator + 1)];
-            }),
-        );
-        steps[step.id!] = { outputs };
-      }
-      if (pass) {
-        expect(status, stderr).toBe(0);
-        expect(
-          JSON.parse(expectDefined(steps.tooling_identity?.outputs.json, "resolved identity")),
-        ).toEqual(identity);
-        expect(completed).toEqual(["publication_dispatch", "tooling_identity"]);
-        const forwarded = expectDefined(
-          steps.publication_dispatch?.outputs.trusted_workflow_json,
-          "identity transport",
-        );
-        expect(forwarded ? JSON.parse(forwarded) : null).toEqual(
-          name === "direct identity inference" ? null : identity,
-        );
-        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
-      } else {
-        expect(status, stderr).toBe(1);
-        expect(stderr).not.toContain("ERR_MODULE_NOT_FOUND");
-        expect(stderr).toContain(expectDefined(error, "expected rejection reason"));
-        expect(completed).toEqual(identityFailure ? ["publication_dispatch"] : []);
-        expect(existsSync(calls)).toBe(false);
-        expect(steps.tooling_identity).toBeUndefined();
-      }
-    },
+      }),
   );
 });
 
@@ -402,7 +426,9 @@ function evaluate(expression: string, context: Record<string, unknown>) {
   }) as unknown;
 }
 
-function fixture(
+async function fixture(
+  processFixture: CommandFixture,
+  check: TestContext["expect"],
   options: {
     version?: string;
     targetContextRef?: string;
@@ -458,11 +484,12 @@ function fixture(
       | "platform-helper"
       | "platform-helper-object"
       | "worker-import"
+      | "flake-policy-import"
       | "worker-object"
       | "unselected";
   } = {},
 ) {
-  const root = temps.make("frv-publication-admission-");
+  const root = processFixture.createTempDir("frv-publication-admission-");
   const tooling = join(root, "workflow");
   let target = join(root, "target");
   const temporary = join(root, "tmp");
@@ -557,6 +584,38 @@ function fixture(
     : toolingTemplate.packed;
   cpSync(template, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   const registryCalls = join(root, "registry-calls.jsonl");
+  await processFixture.lifetime.acquire(async () => ({
+    cleanup: async () => {
+      if (!existsSync(registryCalls)) {
+        return;
+      }
+      for (const line of readFileSync(registryCalls, "utf8").split("\n").filter(Boolean)) {
+        const entry = JSON.parse(line) as {
+          kind?: string;
+          pid?: number;
+          startTicks?: string | null;
+        };
+        if (entry.kind !== "worker-boundary") {
+          continue;
+        }
+        if (typeof entry.pid !== "number" || !Number.isInteger(entry.pid) || entry.pid <= 0) {
+          throw new Error("Publication fixture worker identity is unavailable");
+        }
+        if (isPidDefinitelyDead(entry.pid)) {
+          continue;
+        }
+        const currentStart = getProcessStartTime(entry.pid);
+        if (
+          entry.startTicks != null &&
+          currentStart !== null &&
+          String(currentStart) !== entry.startTicks
+        ) {
+          continue;
+        }
+        throw new Error("Publication fixture worker closure is unverified");
+      }
+    },
+  }));
   {
     // This is committed trusted fixture code, not a candidate preload or a
     // production injection flag. Every attempted public read stays in memory.
@@ -769,7 +828,7 @@ globalThis.fetch = async (input, init = {}) => {
     git(tooling, "checkout", "-qb", toolingRef, base);
     write(tooling, "alpha-only.txt", "alpha-only\n");
     toolingSha = commit(tooling);
-    expect(
+    check(
       spawnSync("git", ["merge-base", "--is-ancestor", toolingSha, "main"], {
         cwd: tooling,
       }).status,
@@ -813,6 +872,10 @@ globalThis.fetch = async (input, init = {}) => {
       readFileSync(join(tooling, "src/infra/clawhub-retry.ts"), "utf8") +
         "\n// changed worker import\n",
     );
+  }
+  if (options.fault === "flake-policy-import") {
+    const path = "scripts/full-release-flake-policy.mjs";
+    write(tooling, path, readFileSync(join(tooling, path), "utf8") + "\n// changed retry policy\n");
   }
   if (options.fault === "dirty-candidate") {
     write(target, "extensions/demo-plugin/package.json", "not JSON");
@@ -888,7 +951,7 @@ process.stdout.write(${JSON.stringify(
   };
   // These commands start after the existing target-identity owner; retain its
   // real version/context contract without claiming to exercise remote ancestry.
-  expect(resolveReleaseContextIdentity(inputs.target_context_ref, version)).not.toBeNull();
+  check(resolveReleaseContextIdentity(inputs.target_context_ref, version)).not.toBeNull();
   const steps: Record<string, { outputs: Record<string, string>; outcome: string }> = {
     resolve: { outputs: { sha: targetSha }, outcome: "success" },
     release_inputs: {
@@ -935,8 +998,8 @@ process.stdout.write(${JSON.stringify(
   const resolveTarget = expectDefined(workflow.jobs.resolve_target, "resolve_target job");
   const start = resolveTarget.steps.findIndex((step) => step.id === "release_inputs") + 1;
   const end = resolveTarget.steps.findIndex((step) => step.name === "Summarize target");
-  expect(start).toBeGreaterThan(0);
-  expect(end).toBeGreaterThan(start);
+  check(start).toBeGreaterThan(0);
+  check(end).toBeGreaterThan(start);
   for (const step of [
     expectDefined(
       resolveTarget.steps.find((candidate) => candidate.id === "publication_dispatch"),
@@ -967,8 +1030,8 @@ process.stdout.write(${JSON.stringify(
       continue;
     }
     if (step.name === "Upload immutable publication observations") {
-      expect(step.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
-      expect(step.with).toEqual({
+      check(step.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+      check(step.with).toEqual({
         name: "full-release-publication-observations-${{ github.run_id }}-${{ github.run_attempt }}",
         path: "${{ runner.temp }}/publication-observations.json",
         "if-no-files-found": "error",
@@ -1009,8 +1072,8 @@ process.stdout.write(${JSON.stringify(
     if (step.name === "Provision trusted admission parser") {
       // Installation is a separate prerequisite proof; this fixture exercises its
       // actual selection predicate and the producer's verified runtime consumer.
-      expect(step["working-directory"]).toBe("workflow");
-      expect(step.run.trim()).toBe(
+      check(step["working-directory"]).toBe("workflow");
+      check(step.run.trim()).toBe(
         "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
       );
       if (options.fault === "yaml") {
@@ -1104,12 +1167,26 @@ globalThis.Date = class extends OriginalDate {
       }
     }
     effects.push(step.name);
-    const result = spawnSync("bash", ["-c", step.run], {
-      cwd: step["working-directory"] ? join(root, step["working-directory"]) : root,
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+    const result =
+      options.registry === "parent-interrupt"
+        ? spawnSync("bash", ["-c", step.run], {
+            cwd: step["working-directory"] ? join(root, step["working-directory"]) : root,
+            env,
+            encoding: "utf8",
+            timeout: 30_000,
+          })
+        : await processFixture.run("bash", ["-c", step.run], {
+            cwd: step["working-directory"] ? join(root, step["working-directory"]) : root,
+            env,
+            encoding: "utf8",
+            timeout: 30_000,
+          });
+    if (result.error !== undefined && !(result.error instanceof Error)) {
+      throw new Error("Unexpected publication command failure", { cause: result.error });
+    }
+    if (options.registry !== "parent-interrupt" && result.error) {
+      throw result.error;
+    }
     status = result.status ?? 1;
     stderr += result.stderr;
     if (result.error) {
@@ -1138,9 +1215,9 @@ globalThis.Date = class extends OriginalDate {
     }
   }
   if (!options.sameSha) {
-    expect(existsSync(join(target, "node_modules"))).toBe(false);
+    check(existsSync(join(target, "node_modules"))).toBe(false);
   }
-  expect(existsSync(forbidden), stderr).toBe(false);
+  check(existsSync(forbidden), stderr).toBe(false);
   if (options.registry === "parent-interrupt") {
     const deadline = Date.now() + 5000;
     while (
@@ -1163,10 +1240,10 @@ globalThis.Date = class extends OriginalDate {
       : undefined;
   const observationPath = join(temporary, "publication-observations.json");
   const observationText = existsSync(observationPath) ? readFileSync(observationPath, "utf8") : "";
-  expect(observationText).not.toContain(root);
-  expect(observationText).not.toContain("openclaw-publication-source-");
-  expect(observationText).not.toContain("publication-parent-env-canary");
-  expect(observationText).not.toContain('"packageDir"');
+  check(observationText).not.toContain(root);
+  check(observationText).not.toContain("openclaw-publication-source-");
+  check(observationText).not.toContain("publication-parent-env-canary");
+  check(observationText).not.toContain('"packageDir"');
   const registryTrace = existsSync(registryCalls)
     ? readFileSync(registryCalls, "utf8")
         .trim()
@@ -1198,7 +1275,7 @@ globalThis.Date = class extends OriginalDate {
   const workerBoundary = registryTrace.find((entry) => entry.kind === "worker-boundary");
   let scratchCleanedByOwner = true;
   if (options.registry === "parent-interrupt" && workerBoundary) {
-    expect(registryTrace).toContainEqual(
+    check(registryTrace).toContainEqual(
       expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
     );
     const proc = `/proc/${workerBoundary.pid}/stat`;
@@ -1219,18 +1296,18 @@ globalThis.Date = class extends OriginalDate {
     while (live() && Date.now() < deadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
-    expect(live()).toBe(false);
+    check(live()).toBe(false);
     const snapshot = expectDefined(workerBoundary.snapshot, "owned worker snapshot");
     scratchCleanedByOwner = !existsSync(snapshot);
     if (!scratchCleanedByOwner) {
       const scratch = dirname(snapshot);
-      expect(workerBoundary.home).toBe(join(scratch, "worker-home"));
-      expect(scratch).toContain("openclaw-publication-source-");
+      check(workerBoundary.home).toBe(join(scratch, "worker-home"));
+      check(scratch).toContain("openclaw-publication-source-");
       rmSync(scratch, { recursive: true, force: true });
     }
   }
   if (workerBoundary) {
-    expect(workerBoundary).toMatchObject({
+    check(workerBoundary).toMatchObject({
       executable: nodeExecutable,
       args: ["--import", pathToFileURL(join(tooling, "scripts/tsx.mjs")).href],
       cwd: tooling,
@@ -1254,10 +1331,10 @@ globalThis.Date = class extends OriginalDate {
       workerBoundary.temporary,
       workerBoundary.cache,
     ]) {
-      expect(existsSync(expectDefined(path, "worker isolated path"))).toBe(false);
+      check(existsSync(expectDefined(path, "worker isolated path"))).toBe(false);
     }
-    expect(stderr).not.toContain("publication-parent-env-canary");
-    expect(stderr).not.toContain(root);
+    check(stderr).not.toContain("publication-parent-env-canary");
+    check(stderr).not.toContain(root);
   }
   return {
     status,
@@ -1279,7 +1356,7 @@ globalThis.Date = class extends OriginalDate {
     firstHopJobs: options.registry
       ? ["normal_ci", "prepare_npm_package", "docker_runtime_assets_preflight"].filter((id) => {
           const job = expectDefined(workflow.jobs[id], "first-hop job");
-          expect([job.needs].flat()).toContain("resolve_target");
+          check([job.needs].flat()).toContain("resolve_target");
           return evaluate(expectDefined(job.if, "first-hop condition"), {
             ...context,
             needs: {
@@ -1308,33 +1385,41 @@ globalThis.Date = class extends OriginalDate {
 }
 
 describe("FRV required registry admission", () => {
-  it.each([undefined, "failure", "wrong-descriptor", "late-admission"] as const)(
+  publicationIt.concurrent.for([
+    undefined,
+    "failure",
+    "wrong-descriptor",
+    "late-admission",
+  ] as const)(
     "binds actual post-upload admission without rewriting uploaded observations: %s",
-    (uploadFault) => {
-      const result = fixture({ registry: "healthy", uploadFault });
-      expect(result.uploadedObservations).toBe(result.observationText);
-      expect(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
-        result.effects.indexOf("Finalize publication admission"),
-      );
-      if (uploadFault) {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toMatch(/upload|freshness/u);
-        expect(result.publicationAdmission).toBeUndefined();
-        expect(result.firstHopJobs).toEqual([]);
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        const admission = result.publicationAdmission.publicationAdmission;
-        expect(admission.observations).toEqual(result.observations);
-        expect(admission.binding.status).toBe("admitted-for-validation");
-        expect(admission.binding.artifact.name).toBe("full-release-publication-observations-123-1");
-        expect(Date.parse(admission.binding.admittedAt)).toBeGreaterThanOrEqual(
-          Date.parse(result.observations.collectionCompletedAt),
+    async (uploadFault, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { registry: "healthy", uploadFault });
+        check(result.uploadedObservations).toBe(result.observationText);
+        check(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
+          result.effects.indexOf("Finalize publication admission"),
         );
-        expect(result.firstHopJobs).toEqual(["normal_ci"]);
-      }
-    },
+        if (uploadFault) {
+          check(result.status).not.toBe(0);
+          check(result.stderr).toMatch(/upload|freshness/u);
+          check(result.publicationAdmission).toBeUndefined();
+          check(result.firstHopJobs).toEqual([]);
+        } else {
+          check(result.status, result.stderr).toBe(0);
+          const admission = result.publicationAdmission.publicationAdmission;
+          check(admission.observations).toEqual(result.observations);
+          check(admission.binding.status).toBe("admitted-for-validation");
+          check(admission.binding.artifact.name).toBe(
+            "full-release-publication-observations-123-1",
+          );
+          check(Date.parse(admission.binding.admittedAt)).toBeGreaterThanOrEqual(
+            Date.parse(result.observations.collectionCompletedAt),
+          );
+          check(result.firstHopJobs).toEqual(["normal_ci"]);
+        }
+      }),
   );
-  it.each([
+  publicationIt.concurrent.for([
     ["healthy", "normal", "2026.9.9", "latest", ["normal_ci", "prepare_npm_package"]],
     ["npm-empty-history", "normal", "2026.9.9", "latest", []],
     ["npm-error", "normal", "2026.9.9", "latest", []],
@@ -1342,61 +1427,69 @@ describe("FRV required registry admission", () => {
     ["npm-error", "alpha", "2026.9.9-alpha.1", "alpha", []],
   ] as const)(
     "keeps selected fanout closed for %s through %s",
-    (registry, route, version, npmDistTag, expectedJobs) => {
-      const result = fixture({
-        registry,
-        rerunGroup: "all",
-        version,
-        targetContextRef: version.includes("-alpha.") ? `v${version}` : "release/2026.9.9",
-        selection: { ...selection, route, npmDistTag },
-      });
-      expect(result.targetSha).not.toBe(result.toolingSha);
-      expect(result.effects).toContain("Provision trusted admission parser");
-      expect(result.effects).toContain("Admit publication source");
-      expect(result.registryCalls).toContainEqual({ kind: "runtime", worker: true, inherited: [] });
-      const actualRequests = result.registryCalls.filter((entry) => entry.kind === "request");
-      expect(actualRequests.length).toBeGreaterThan(0);
-      if (registry === "healthy") {
-        expect(actualRequests).toEqual(
-          expect.arrayContaining([
-            { kind: "request", origin: "https://registry.npmjs.org", path: "/openclaw" },
-            {
-              kind: "request",
-              origin: "https://registry.npmjs.org",
-              path: "/%40openclaw%2Fdemo-plugin",
-            },
-            {
-              kind: "request",
-              origin: "https://clawhub.ai",
-              path: "/api/v1/packages/%40openclaw%2Fdemo-plugin",
-            },
-            {
-              kind: "request",
-              origin: "https://clawhub.ai",
-              path: "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
-            },
-            {
-              kind: "request",
-              origin: "https://clawhub.ai",
-              path: `/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/${version}`,
-            },
-          ]),
-        );
-        expect(actualRequests).toHaveLength(5);
-        expect(result.observations).toMatchObject({
-          sourceDigest: result.fact?.digest,
-          pendingAuthority: [],
+    { timeout: 30_000 },
+    async (
+      [registry, route, version, npmDistTag, expectedJobs],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry,
+          rerunGroup: "all",
+          version,
+          targetContextRef: version.includes("-alpha.") ? `v${version}` : "release/2026.9.9",
+          selection: { ...selection, route, npmDistTag },
         });
-      }
-      expect(result.firstHopJobs, result.stderr).toEqual(expectedJobs);
-      expect(result.status, result.stderr).toBe(registry === "healthy" ? 0 : 1);
-    },
-    30_000,
+        check(result.targetSha).not.toBe(result.toolingSha);
+        check(result.effects).toContain("Provision trusted admission parser");
+        check(result.effects).toContain("Admit publication source");
+        check(result.registryCalls).toContainEqual({
+          kind: "runtime",
+          worker: true,
+          inherited: [],
+        });
+        const actualRequests = result.registryCalls.filter((entry) => entry.kind === "request");
+        check(actualRequests.length).toBeGreaterThan(0);
+        if (registry === "healthy") {
+          check(actualRequests).toEqual(
+            expect.arrayContaining([
+              { kind: "request", origin: "https://registry.npmjs.org", path: "/openclaw" },
+              {
+                kind: "request",
+                origin: "https://registry.npmjs.org",
+                path: "/%40openclaw%2Fdemo-plugin",
+              },
+              {
+                kind: "request",
+                origin: "https://clawhub.ai",
+                path: "/api/v1/packages/%40openclaw%2Fdemo-plugin",
+              },
+              {
+                kind: "request",
+                origin: "https://clawhub.ai",
+                path: "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
+              },
+              {
+                kind: "request",
+                origin: "https://clawhub.ai",
+                path: `/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/${version}`,
+              },
+            ]),
+          );
+          check(actualRequests).toHaveLength(5);
+          check(result.observations).toMatchObject({
+            sourceDigest: result.fact?.digest,
+            pendingAuthority: [],
+          });
+        }
+        check(result.firstHopJobs, result.stderr).toEqual(expectedJobs);
+        check(result.status, result.stderr).toBe(registry === "healthy" ? 0 : 1);
+      }),
   );
 });
 
 describe("FRV observation worker boundary", () => {
-  it.each([
+  publicationIt.concurrent.for([
     [
       "beta plugin",
       "2026.9.9-beta.1",
@@ -1530,125 +1623,142 @@ describe("FRV observation worker boundary", () => {
     ],
   ] as const)(
     "matches npm bootstrap writer ownership for %s",
-    (_label, version, pluginVersion, route, npmDistTag, absentNpmPackage, registry, admitted) => {
-      const result = fixture({
-        version,
-        pluginVersion,
-        npmOnlyPlugin: _label === "prepared npm-only beta plugin",
-        registry,
-        absentNpmPackage,
-        includeCorePackage: absentNpmPackage === "@openclaw/gateway-client",
-        targetContextRef:
-          route === "extended-stable"
-            ? `extended-stable/${version}`
-            : route === "alpha"
-              ? `v${version}`
-              : "release/2026.9.9",
-        rerunGroup: "all",
-        selection: { ...selection, route, npmDistTag },
-      });
-      expect(result.effects).toContain("Admit publication source");
-      expect(result.registryCalls).toContainEqual({
-        kind: "request",
-        origin: "https://registry.npmjs.org",
-        path: `/${encodeURIComponent(absentNpmPackage)}`,
-      });
-      expect(result.firstHopJobs, result.stderr).toEqual(
-        admitted ? ["normal_ci", "prepare_npm_package"] : [],
-      );
-      expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
-      if (admitted) {
-        expect(result.observations.pendingAuthority).toEqual([
-          {
-            registry: "npm",
-            name: absentNpmPackage,
-            action: "owner-preparation-and-access",
-            status: "unresolved",
-          },
-        ]);
-        expect(result.observations.npm).toContainEqual(
-          expect.objectContaining({
-            name: absentNpmPackage,
-            version: pluginVersion,
-            outcome: "observed",
-            state: expect.objectContaining({
-              packageExists: false,
-              hasVersionHistory: false,
-              selectedVersionExists: false,
+    { timeout: 30_000 },
+    async (
+      [_label, version, pluginVersion, route, npmDistTag, absentNpmPackage, registry, admitted],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          version,
+          pluginVersion,
+          npmOnlyPlugin: _label === "prepared npm-only beta plugin",
+          registry,
+          absentNpmPackage,
+          includeCorePackage: absentNpmPackage === "@openclaw/gateway-client",
+          targetContextRef:
+            route === "extended-stable"
+              ? `extended-stable/${version}`
+              : route === "alpha"
+                ? `v${version}`
+                : "release/2026.9.9",
+          rerunGroup: "all",
+          selection: { ...selection, route, npmDistTag },
+        });
+        check(result.effects).toContain("Admit publication source");
+        check(result.registryCalls).toContainEqual({
+          kind: "request",
+          origin: "https://registry.npmjs.org",
+          path: `/${encodeURIComponent(absentNpmPackage)}`,
+        });
+        check(result.firstHopJobs, result.stderr).toEqual(
+          admitted ? ["normal_ci", "prepare_npm_package"] : [],
+        );
+        check(result.status, result.stderr).toBe(admitted ? 0 : 1);
+        if (admitted) {
+          check(result.observations.pendingAuthority).toEqual([
+            {
+              registry: "npm",
+              name: absentNpmPackage,
+              action: "owner-preparation-and-access",
+              status: "unresolved",
+            },
+          ]);
+          check(result.observations.npm).toContainEqual(
+            expect.objectContaining({
+              name: absentNpmPackage,
+              version: pluginVersion,
+              outcome: "observed",
+              state: expect.objectContaining({
+                packageExists: false,
+                hasVersionHistory: false,
+                selectedVersionExists: false,
+              }),
             }),
-          }),
+          );
+          check(result.observations).not.toHaveProperty("admittedAt");
+        } else {
+          check(result.observations).toBeUndefined();
+          check(result.stderr).toContain(
+            registry === "npm-empty-history" ? "http-200" : "unsupported-bootstrap",
+          );
+        }
+      }),
+  );
+
+  publicationIt.concurrent(
+    "keeps required observations when only advisories exhaust the aggregate byte budget",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry: "advisory-budget",
+          advisoryCount: 20,
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(
+          result.observations.npm.filter((entry: { required: boolean }) => entry.required),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "openclaw", outcome: "observed" }),
+            expect.objectContaining({ name: "@openclaw/demo-plugin", outcome: "observed" }),
+          ]),
         );
-        expect(result.observations).not.toHaveProperty("admittedAt");
-      } else {
-        expect(result.observations).toBeUndefined();
-        expect(result.stderr).toContain(
-          registry === "npm-empty-history" ? "http-200" : "unsupported-bootstrap",
+        check(result.observations.npm).toHaveLength(22);
+        check(result.observations.plans.npm.warnings.length).toBeGreaterThan(0);
+        const abortAt = result.registryCalls.findIndex((entry) => entry.kind === "advisory-abort");
+        check(abortAt).toBeGreaterThan(0);
+        check(
+          result.registryCalls.slice(abortAt + 1).filter((entry) => entry.kind === "request"),
+        ).toEqual([]);
+        check(
+          result.registryCalls.filter((entry) => entry.path?.startsWith("/advisory-")).length,
+        ).toBeLessThan(20);
+        check(result.registryCalls).toContainEqual(
+          expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
         );
-      }
-    },
+      }),
     30_000,
   );
 
-  it("keeps required observations when only advisories exhaust the aggregate byte budget", () => {
-    const result = fixture({ registry: "advisory-budget", advisoryCount: 20 });
-    expect(result.status, result.stderr).toBe(0);
-    expect(
-      result.observations.npm.filter((entry: { required: boolean }) => entry.required),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "openclaw", outcome: "observed" }),
-        expect.objectContaining({ name: "@openclaw/demo-plugin", outcome: "observed" }),
-      ]),
-    );
-    expect(result.observations.npm).toHaveLength(22);
-    expect(result.observations.plans.npm.warnings.length).toBeGreaterThan(0);
-    const abortAt = result.registryCalls.findIndex((entry) => entry.kind === "advisory-abort");
-    expect(abortAt).toBeGreaterThan(0);
-    expect(
-      result.registryCalls.slice(abortAt + 1).filter((entry) => entry.kind === "request"),
-    ).toEqual([]);
-    expect(
-      result.registryCalls.filter((entry) => entry.path?.startsWith("/advisory-")).length,
-    ).toBeLessThan(20);
-    expect(result.registryCalls).toContainEqual(
-      expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-    );
-  }, 30_000);
-
-  it.runIf(process.platform === "linux").each(["SIGINT", "SIGTERM"] as const)(
+  publicationIt.runIf(process.platform === "linux").for(["SIGINT", "SIGTERM"] as const)(
     "forwards parent-only termination %s and joins the worker before snapshot cleanup",
-    (parentSignal) => {
-      const result = fixture({ registry: "parent-interrupt", parentSignal });
-      expect(result.registryCalls).not.toContainEqual({ kind: "fixture-termination" });
-      expect(result.registryCalls).toContainEqual({ kind: "worker-termination" });
-      expect(result.scratchCleanedByOwner).toBe(true);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.observations).toBeUndefined();
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (parentSignal, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry: "parent-interrupt",
+          parentSignal,
+        });
+        check(result.registryCalls).not.toContainEqual({ kind: "fixture-termination" });
+        check(result.registryCalls).toContainEqual({ kind: "worker-termination" });
+        check(result.scratchCleanedByOwner).toBe(true);
+        check(result.status, result.stderr).toBe(1);
+        check(result.observations).toBeUndefined();
+      }),
   );
 
-  it.each(["required-budget", "advisory-deadline"] as const)(
+  publicationIt.concurrent.for(["required-budget", "advisory-deadline"] as const)(
     "keeps %s fatal rather than downgrading it to a latest warning",
-    (registry) => {
-      const result = fixture({
-        registry,
-        ...(registry === "required-budget" ? { pluginCount: 20 } : { latestDependency: true }),
-      });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(
-        registry === "required-budget" ? "response-too-large" : "cancelled-or-timeout",
-      );
-      expect(result.observations).toBeUndefined();
-      expect(result.firstHopJobs).toEqual([]);
-      expect(result.registryCalls).toContainEqual(
-        expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-      );
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (registry, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry,
+          ...(registry === "required-budget" ? { pluginCount: 20 } : { latestDependency: true }),
+        });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain(
+          registry === "required-budget" ? "response-too-large" : "cancelled-or-timeout",
+        );
+        check(result.observations).toBeUndefined();
+        check(result.firstHopJobs).toEqual([]);
+        check(result.registryCalls).toContainEqual(
+          expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
+        );
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for([
     ["npm-absent", "normal", true, "npm", "owner-preparation-and-access"],
     ["npm-absent", "prepared", true, "npm", "owner-preparation-and-access"],
     ["clawhub-absent", "normal", true, "clawhub", "bootstrap-and-owner-access"],
@@ -1657,108 +1767,156 @@ describe("FRV observation worker boundary", () => {
     ["missing-trust", "prepared", false, "clawhub", ""],
   ] as const)(
     "distinguishes %s on %s without claiming downstream authority",
-    (registry, route, admitted, registryName, action) => {
-      const result = fixture({ registry, selection: { ...selection, route } });
-      expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
-      expect(result.registryCalls).toContainEqual({ kind: "runtime", worker: true, inherited: [] });
-      if (admitted) {
-        expect(result.observations.pendingAuthority).toContainEqual({
-          registry: registryName,
-          name: "@openclaw/demo-plugin",
-          action,
-          status: "unresolved",
+    { timeout: 30_000 },
+    async (
+      [registry, route, admitted, registryName, action],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry,
+          selection: { ...selection, route },
         });
-        expect(result.observations).not.toHaveProperty("admittedAt");
-      } else {
-        expect(result.observations).toBeUndefined();
-        expect(result.firstHopJobs).toEqual([]);
-      }
-    },
-    30_000,
+        check(result.status, result.stderr).toBe(admitted ? 0 : 1);
+        check(result.registryCalls).toContainEqual({
+          kind: "runtime",
+          worker: true,
+          inherited: [],
+        });
+        if (admitted) {
+          check(result.observations.pendingAuthority).toContainEqual({
+            registry: registryName,
+            name: "@openclaw/demo-plugin",
+            action,
+            status: "unresolved",
+          });
+          check(result.observations).not.toHaveProperty("admittedAt");
+        } else {
+          check(result.observations).toBeUndefined();
+          check(result.firstHopJobs).toEqual([]);
+        }
+      }),
   );
 
-  it.each(["concurrency", "advisory-error"] as const)(
+  publicationIt.concurrent.for(["concurrency", "advisory-error"] as const)(
     "shares required/advisory reads across both planners with %s",
-    (registry) => {
-      const count = registry === "concurrency" ? 10 : 1;
-      const result = fixture({ registry, pluginCount: count, latestDependency: true });
-      expect(result.status, result.stderr).toBe(0);
-      const reads = result.registryCalls.filter((entry) => entry.kind === "request");
-      expect(reads).toHaveLength(4 * count + 2);
-      expect(reads.filter((entry) => entry.path === "/demo-runtime")).toHaveLength(1);
-      const settlement = result.registryCalls.find(
-        (entry) => entry.kind === "settled" && entry.worker,
-      );
-      expect(settlement).toMatchObject({ active: 0 });
-      expect(settlement?.maximumActive).toBeLessThanOrEqual(8);
-      if (registry === "concurrency") {
-        expect(settlement?.maximumActive).toBe(8);
-      }
-      expect(result.observations.plans.npm.all).toHaveLength(count);
-      expect(result.observations.plans.clawhub.all).toHaveLength(count);
-      expect(result.observations.plans.npm.warnings).toHaveLength(count);
-      expect(result.observations.plans.clawhub.warnings).toHaveLength(count);
-      if (registry === "advisory-error") {
-        expect(result.observations.npm).toContainEqual(
+    { timeout: 30_000 },
+    async (registry, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const count = registry === "concurrency" ? 10 : 1;
+        const result = await fixture(processFixture, check, {
+          registry,
+          pluginCount: count,
+          latestDependency: true,
+        });
+        check(result.status, result.stderr).toBe(0);
+        const reads = result.registryCalls.filter((entry) => entry.kind === "request");
+        check(reads).toHaveLength(4 * count + 2);
+        check(reads.filter((entry) => entry.path === "/demo-runtime")).toHaveLength(1);
+        const settlement = result.registryCalls.find(
+          (entry) => entry.kind === "settled" && entry.worker,
+        );
+        check(settlement).toMatchObject({ active: 0 });
+        check(settlement?.maximumActive).toBeLessThanOrEqual(8);
+        if (registry === "concurrency") {
+          check(settlement?.maximumActive).toBe(8);
+        }
+        check(result.observations.plans.npm.all).toHaveLength(count);
+        check(result.observations.plans.clawhub.all).toHaveLength(count);
+        check(result.observations.plans.npm.warnings).toHaveLength(count);
+        check(result.observations.plans.clawhub.warnings).toHaveLength(count);
+        if (registry === "advisory-error") {
+          check(result.observations.npm).toContainEqual(
+            expect.objectContaining({
+              name: "demo-runtime",
+              required: false,
+              outcome: "unavailable",
+              error: "http-403",
+            }),
+          );
+        }
+      }),
+  );
+
+  publicationIt.concurrent(
+    "aborts and drains a pending peer body after a required failure",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { registry: "abort-peer" });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("required npm observation http-403");
+        check(result.registryCalls).toContainEqual({ kind: "body-cancelled" });
+        check(result.registryCalls).toContainEqual(
           expect.objectContaining({
-            name: "demo-runtime",
-            required: false,
-            outcome: "unavailable",
-            error: "http-403",
+            kind: "settled",
+            active: 0,
+            worker: true,
           }),
         );
-      }
-    },
-    30_000,
-  );
-
-  it("aborts and drains a pending peer body after a required failure", () => {
-    const result = fixture({ registry: "abort-peer" });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("required npm observation http-403");
-    expect(result.registryCalls).toContainEqual({ kind: "body-cancelled" });
-    expect(result.registryCalls).toContainEqual(
-      expect.objectContaining({
-        kind: "settled",
-        active: 0,
-        worker: true,
+        check(result.firstHopJobs).toEqual([]);
+        check(result.observations).toBeUndefined();
       }),
-    );
-    expect(result.firstHopJobs).toEqual([]);
-    expect(result.observations).toBeUndefined();
-  }, 30_000);
-
-  it("keeps advisory warning volume from blocking validation", () => {
-    const result = fixture({ registry: "advisory-error", pluginCount: 80, latestDependency: true });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.observations.plans.npm.warnings).toHaveLength(80);
-    expect(result.observations.plans.clawhub.warnings).toHaveLength(80);
-    expect(result.registryCalls.filter((entry) => entry.path === "/demo-runtime")).toHaveLength(1);
-  }, 30_000);
-
-  it.each(["worker-object", "worker-import", "candidate-object", "yaml"] as const)(
-    "rejects %s before any public read",
-    (fault) => {
-      const result = fixture({ registry: "healthy", fault });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
-      expect(result.firstHopJobs).toEqual([]);
-      expect(result.observations).toBeUndefined();
-    },
     30_000,
   );
 
-  it("uses the existing parser-false runtime for a same-SHA worker", () => {
-    const result = fixture({ registry: "healthy", sameSha: true });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.targetSha).toBe(result.toolingSha);
-    expect(result.registryCalls.filter((entry) => entry.kind === "request")).toHaveLength(5);
-    expect(result.registryCalls).toContainEqual({ kind: "runtime", worker: true, inherited: [] });
-  }, 30_000);
+  publicationIt.concurrent(
+    "keeps advisory warning volume from blocking validation",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          registry: "advisory-error",
+          pluginCount: 80,
+          latestDependency: true,
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.observations.plans.npm.warnings).toHaveLength(80);
+        check(result.observations.plans.clawhub.warnings).toHaveLength(80);
+        check(result.registryCalls.filter((entry) => entry.path === "/demo-runtime")).toHaveLength(
+          1,
+        );
+      }),
+    30_000,
+  );
+
+  publicationIt.concurrent.for([
+    "worker-object",
+    "worker-import",
+    "flake-policy-import",
+    "candidate-object",
+    "yaml",
+  ] as const)(
+    "rejects %s before any public read",
+    { timeout: 30_000 },
+    async (fault, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { registry: "healthy", fault });
+        check(result.status, result.stderr).toBe(1);
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
+        check(result.firstHopJobs).toEqual([]);
+        check(result.observations).toBeUndefined();
+      }),
+  );
+
+  publicationIt.concurrent(
+    "uses the existing parser-false runtime for a same-SHA worker",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { registry: "healthy", sameSha: true });
+        check(result.status, result.stderr).toBe(0);
+        check(result.targetSha).toBe(result.toolingSha);
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toHaveLength(5);
+        check(result.registryCalls).toContainEqual({
+          kind: "runtime",
+          worker: true,
+          inherited: [],
+        });
+      }),
+    30_000,
+  );
 });
 
 describe("FRV publication source admission", () => {
-  it.each([
+  publicationIt.concurrent.for([
     ["size-missing", "invalid publication source object-size response"],
     ["size-wrong-oid", "invalid publication source object-size response"],
     ["size-unterminated", "invalid publication source object-size response"],
@@ -1768,21 +1926,22 @@ describe("FRV publication source admission", () => {
     ["size-limit-before-truncated", "metadata exceeds byte limit"],
   ] as const)(
     "rejects %s before packing or registry reads",
-    (fault, error) => {
-      const result = fixture({ fault, registry: "healthy" });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(error);
-      expect(result.fact).toBeUndefined();
-      expect(
-        result.registryCalls.filter((entry) => entry.kind === "object-size-batch"),
-      ).toHaveLength(1);
-      expect(result.registryCalls.filter((entry) => entry.kind === "source-pack")).toEqual([]);
-      expect(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
-      expect(result.firstHopJobs).toEqual([]);
-    },
-    30_000,
+    { timeout: 30_000 },
+    async ([fault, error], { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { fault, registry: "healthy" });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain(error);
+        check(result.fact).toBeUndefined();
+        check(
+          result.registryCalls.filter((entry) => entry.kind === "object-size-batch"),
+        ).toHaveLength(1);
+        check(result.registryCalls.filter((entry) => entry.kind === "source-pack")).toEqual([]);
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
+        check(result.firstHopJobs).toEqual([]);
+      }),
   );
-  it.each([
+  publicationIt.concurrent.for([
     ["2026.9.9", "normal", false],
     ["2026.9.9-1", "normal", false],
     ["2026.9.9", "prepared", false],
@@ -1791,33 +1950,42 @@ describe("FRV publication source admission", () => {
     ["2026.9.9-1", "prepared", true],
   ] as const)(
     "preserves beta-first %s publication through %s with Windows=%s",
-    (version, route, windows) => {
-      const result = fixture({
-        version,
-        targetContextRef: `v${version}`,
-        selection: { ...(windows ? windowsSelection : selection), route, npmDistTag: "beta" },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact).toMatchObject({
-        status: "source-admitted",
-        publicationSelection: { route, npmDistTag: "beta" },
-        projection: { version },
-      });
-      const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
-      expect(platforms).toContainEqual({
-        id: "linux",
-        source: ".github/workflows/linux-app-release-request.yml",
-      });
-      if (windows) {
-        expect(platforms).toContainEqual(expect.objectContaining({ id: "windows" }));
-      } else {
-        expect(platforms).not.toContainEqual(expect.objectContaining({ id: "windows" }));
-      }
-    },
-    30_000,
+    { timeout: 30_000 },
+    async ([version, route, windows], { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          version,
+          targetContextRef: `v${version}`,
+          selection: { ...(windows ? windowsSelection : selection), route, npmDistTag: "beta" },
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact).toMatchObject({
+          status: "source-admitted",
+          publicationSelection: { route, npmDistTag: "beta" },
+          projection: { version },
+        });
+        const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
+        check(platforms).toContainEqual({
+          id: "linux",
+          source: ".github/workflows/linux-app-release-request.yml",
+        });
+        if (windows) {
+          check(platforms).toContainEqual(expect.objectContaining({ id: "windows" }));
+        } else {
+          check(platforms).not.toContainEqual(expect.objectContaining({ id: "windows" }));
+        }
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for<
+    [
+      toolingFullRef: string,
+      version: string,
+      route: string,
+      npmDistTag: string,
+      targetContextRef: string,
+    ]
+  >([
     ["refs/heads/release/2026.9.9", "2026.9.9", "normal", "beta", "release/2026.9.9"],
     [
       "refs/heads/extended-stable/2026.8.33",
@@ -1828,165 +1996,191 @@ describe("FRV publication source admission", () => {
     ],
   ])(
     "admits canonical branch inventory through actual divergent %s tooling",
-    (toolingFullRef, version, route, npmDistTag, targetContextRef) => {
-      const result = fixture({
-        toolingFullRef,
-        version,
-        targetContextRef,
-        selection: { ...selection, route, npmDistTag },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.targetSha).not.toBe(result.toolingSha);
-      expect(result.fact).toMatchObject({
-        status: "source-admitted",
-        tooling: { ref: toolingFullRef, sha: result.toolingSha },
-        projection: { version },
-      });
-      expect(result.requests).toEqual([
-        [
-          "api",
-          `repos/openclaw/openclaw/git/ref/${toolingFullRef.slice("refs/".length)}`,
-          "--method",
-          "GET",
-        ],
-        ["api", "repos/openclaw/openclaw/actions/artifacts/456"],
-      ]);
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (
+      [toolingFullRef, version, route, npmDistTag, targetContextRef],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          toolingFullRef,
+          version,
+          targetContextRef,
+          selection: { ...selection, route, npmDistTag },
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.targetSha).not.toBe(result.toolingSha);
+        check(result.fact).toMatchObject({
+          status: "source-admitted",
+          tooling: { ref: toolingFullRef, sha: result.toolingSha },
+          projection: { version },
+        });
+        check(result.requests).toEqual([
+          [
+            "api",
+            `repos/openclaw/openclaw/git/ref/${toolingFullRef.slice("refs/".length)}`,
+            "--method",
+            "GET",
+          ],
+          ["api", "repos/openclaw/openclaw/actions/artifacts/456"],
+        ]);
+      }),
   );
 
-  it("admits alpha inventory through actual divergent Tideclaw tooling", () => {
-    const toolingFullRef = "refs/heads/tideclaw/alpha/2026-09-13-1200Z";
-    const result = fixture({
-      toolingFullRef,
-      version: "2026.9.9-alpha.1",
-      targetContextRef: "v2026.9.9-alpha.1",
-      selection: { ...selection, route: "alpha", npmDistTag: "alpha" },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.targetSha).not.toBe(result.toolingSha);
-    expect(result.fact).toMatchObject({
-      status: "source-admitted",
-      candidateSha: result.targetSha,
-      tooling: { ref: toolingFullRef, sha: result.toolingSha },
-      projection: { version: "2026.9.9-alpha.1" },
-    });
-    const publisher = parse(
-      readFileSync(join(repo, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
-    ) as Workflow;
-    expect(
-      evaluate(expectDefined(publisher.jobs.publish_docker?.if, "Docker predicate"), {
-        inputs: {
-          tag: "v2026.9.9-alpha.1",
-          publish_openclaw_npm: true,
-          publish_docker_only: false,
-        },
-        needs: { publish: { result: "success" }, verify_core_npm_registry: { result: "success" } },
-      }),
-    ).toBe(false);
-    expect(
-      evaluate(expectDefined(publisher.jobs.publish_vcr?.if, "VCR predicate"), {
-        needs: { publish_docker: { result: "skipped" } },
-      }),
-    ).toBe(false);
-    expect(result.fact?.projection?.platforms).toEqual([]);
-    expect(result.requests).toEqual([
-      [
-        "api",
-        "repos/openclaw/openclaw/git/ref/heads/tideclaw/alpha/2026-09-13-1200Z",
-        "--method",
-        "GET",
-      ],
-      ["api", "repos/openclaw/openclaw/actions/artifacts/456"],
-    ]);
-  }, 30_000);
-
-  it("rejects a committed publisher metadata defect before successful root resolution", () => {
-    const result = fixture({ fault: "readme" });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("README.md must exist");
-    for (const id of [
-      "normal_ci",
-      "prepare_npm_package",
-      "prepare_docker_release",
-      "docker_runtime_assets_preflight",
-    ]) {
-      const job = expectDefined(workflow.jobs[id], `${id} job`);
-      expect([job.needs].flat()).toContain("resolve_target");
-      expect(
-        evaluate(job.if ?? "", {
-          github: { run_attempt: 1 },
-          inputs: { rerun_group: "all" },
-          needs: {
-            resolve_target: {
-              result: result.status === 0 ? "success" : "failure",
-              outputs: {
-                candidate_required: "true",
-                target_version:
-                  id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
-              },
+  publicationIt.concurrent(
+    "admits alpha inventory through actual divergent Tideclaw tooling",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const toolingFullRef = "refs/heads/tideclaw/alpha/2026-09-13-1200Z";
+        const result = await fixture(processFixture, check, {
+          toolingFullRef,
+          version: "2026.9.9-alpha.1",
+          targetContextRef: "v2026.9.9-alpha.1",
+          selection: { ...selection, route: "alpha", npmDistTag: "alpha" },
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.targetSha).not.toBe(result.toolingSha);
+        check(result.fact).toMatchObject({
+          status: "source-admitted",
+          candidateSha: result.targetSha,
+          tooling: { ref: toolingFullRef, sha: result.toolingSha },
+          projection: { version: "2026.9.9-alpha.1" },
+        });
+        const publisher = parse(
+          readFileSync(join(repo, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+        ) as Workflow;
+        check(
+          evaluate(expectDefined(publisher.jobs.publish_docker?.if, "Docker predicate"), {
+            inputs: {
+              tag: "v2026.9.9-alpha.1",
+              publish_openclaw_npm: true,
+              publish_docker_only: false,
             },
-            plugin_compatibility_readiness: { result: "success" },
-            evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
-          },
-        }),
-      ).toBe(false);
-    }
-  }, 30_000);
+            needs: {
+              publish: { result: "success" },
+              verify_core_npm_registry: { result: "success" },
+            },
+          }),
+        ).toBe(false);
+        check(
+          evaluate(expectDefined(publisher.jobs.publish_vcr?.if, "VCR predicate"), {
+            needs: { publish_docker: { result: "skipped" } },
+          }),
+        ).toBe(false);
+        check(result.fact?.projection?.platforms).toEqual([]);
+        check(result.requests).toEqual([
+          [
+            "api",
+            "repos/openclaw/openclaw/git/ref/heads/tideclaw/alpha/2026-09-13-1200Z",
+            "--method",
+            "GET",
+          ],
+          ["api", "repos/openclaw/openclaw/actions/artifacts/456"],
+        ]);
+      }),
+    30_000,
+  );
 
-  it.each([false, true])(
+  publicationIt.concurrent(
+    "rejects a committed publisher metadata defect before successful root resolution",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { fault: "readme" });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("README.md must exist");
+        for (const id of [
+          "normal_ci",
+          "prepare_npm_package",
+          "prepare_docker_release",
+          "docker_runtime_assets_preflight",
+        ]) {
+          const job = expectDefined(workflow.jobs[id], `${id} job`);
+          check([job.needs].flat()).toContain("resolve_target");
+          check(
+            evaluate(job.if ?? "", {
+              github: { run_attempt: 1 },
+              inputs: { rerun_group: "all" },
+              needs: {
+                resolve_target: {
+                  result: result.status === 0 ? "success" : "failure",
+                  outputs: {
+                    candidate_required: "true",
+                    target_version:
+                      id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
+                  },
+                },
+                plugin_compatibility_readiness: { result: "success" },
+                evidence_reuse: { result: "skipped", outputs: { reuse: "false" } },
+              },
+            }),
+          ).toBe(false);
+        }
+      }),
+    30_000,
+  );
+
+  publicationIt.concurrent.for([false, true])(
     "admits complete committed inventory with same SHA=%s",
-    (sameSha) => {
-      const result = fixture({ sameSha, fault: sameSha ? undefined : "dirty-candidate" });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact).toMatchObject({
-        status: "source-admitted",
-        candidateSha: result.targetSha,
-        tooling: { sha: result.toolingSha },
-        coverage: { rerun_group: "ci", release_profile: "beta", run_release_soak: "false" },
-      });
-      expect(result.fact?.projection?.packages).toEqual(
-        expect.arrayContaining([
-          { name: "openclaw", version: "2026.9.9", targets: ["npm"] },
-          { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
-        ]),
-      );
-      expect(result.fact?.projection?.platforms).toEqual(
-        expect.arrayContaining([
-          { id: "docker", source: ".github/workflows/docker-release.yml" },
-          { id: "linux", source: ".github/workflows/linux-app-release-request.yml" },
-          { id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" },
-        ]),
-      );
-      expect(result.effects).toContain("Provision trusted admission parser");
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (sameSha, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          sameSha,
+          fault: sameSha ? undefined : "dirty-candidate",
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact).toMatchObject({
+          status: "source-admitted",
+          candidateSha: result.targetSha,
+          tooling: { sha: result.toolingSha },
+          coverage: { rerun_group: "ci", release_profile: "beta", run_release_soak: "false" },
+        });
+        check(result.fact?.projection?.packages).toEqual(
+          expect.arrayContaining([
+            { name: "openclaw", version: "2026.9.9", targets: ["npm"] },
+            { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
+          ]),
+        );
+        check(result.fact?.projection?.platforms).toEqual(
+          expect.arrayContaining([
+            { id: "docker", source: ".github/workflows/docker-release.yml" },
+            { id: "linux", source: ".github/workflows/linux-app-release-request.yml" },
+            { id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" },
+          ]),
+        );
+        check(result.effects).toContain("Provision trusted admission parser");
+      }),
   );
 
-  it.each(["diagnostic", "main-qualification", "postpublish-confidence"])(
+  publicationIt.concurrent.for(["diagnostic", "main-qualification", "postpublish-confidence"])(
     "retains %s without publication bootstrap or added installation",
-    (purpose) => {
-      const result = fixture({ purpose, selection: null, fault: "readme" });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact).toMatchObject({
-        status: "not-applicable",
-        validationPurpose: purpose,
-        inventoryDigest: null,
-        projection: null,
-      });
-      expect(result.effects).not.toContain("Provision trusted admission parser");
-      expect(result.effects).not.toContain("Acquire publication source metadata");
-      expect(result.publicationAdmission).toMatchObject({
-        publicationAdmissionContract: "1",
-        publicationAdmission: null,
-      });
-      expect(result.observations).toBeUndefined();
-      expect(result.registryCalls).toEqual([]);
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (purpose, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          purpose,
+          selection: null,
+          fault: "readme",
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact).toMatchObject({
+          status: "not-applicable",
+          validationPurpose: purpose,
+          inventoryDigest: null,
+          projection: null,
+        });
+        check(result.effects).not.toContain("Provision trusted admission parser");
+        check(result.effects).not.toContain("Acquire publication source metadata");
+        check(result.publicationAdmission).toMatchObject({
+          publicationAdmissionContract: "1",
+          publicationAdmission: null,
+        });
+        check(result.observations).toBeUndefined();
+        check(result.registryCalls).toEqual([]);
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for([
     "candidate-object",
     "tooling-object",
     "bootstrap",
@@ -1998,16 +2192,17 @@ describe("FRV publication source admission", () => {
     "platform-helper-object",
   ] as const)(
     "fails closed for %s without selected execution or registry access",
-    (fault) => {
-      const result = fixture({ fault });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.fact).toBeUndefined();
-      expect(result.stderr).not.toContain("MODULE_NOT_FOUND");
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (fault, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { fault });
+        check(result.status, result.stderr).toBe(1);
+        check(result.fact).toBeUndefined();
+        check(result.stderr).not.toContain("MODULE_NOT_FOUND");
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for([
     ["2026.9.9-alpha.1", "alpha", "alpha", "v2026.9.9-alpha.1", false],
     ["2026.9.9-beta.1", "normal", "beta", "release/2026.9.9", false],
     ["2026.9.9", "normal", "latest", "release/2026.9.9", true],
@@ -2015,185 +2210,214 @@ describe("FRV publication source admission", () => {
     ["2026.9.9-1", "normal", "beta", "v2026.9.9-1", true],
   ] as const)(
     "matches actual Windows publication selection for %s through %s to %s",
-    (version, route, npmDistTag, targetContextRef, expected) => {
-      const publisher = parse(
-        readFileSync(join(repo, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
-      ) as Workflow;
-      const enabled = evaluate(
-        expectDefined(publisher.jobs.publish_windows?.if, "Windows predicate"),
-        {
-          inputs: {
-            tag: `v${version}`,
-            npm_dist_tag: npmDistTag,
-            windows_node_tag: windowsSelection.windowsNodeTag,
-            windows_node_installer_digests: JSON.stringify(
-              windowsSelection.windowsNodeInstallerDigests,
-            ),
+    { timeout: 30_000 },
+    async (
+      [version, route, npmDistTag, targetContextRef, expected],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const publisher = parse(
+          readFileSync(join(repo, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+        ) as Workflow;
+        const enabled = evaluate(
+          expectDefined(publisher.jobs.publish_windows?.if, "Windows predicate"),
+          {
+            inputs: {
+              tag: `v${version}`,
+              npm_dist_tag: npmDistTag,
+              windows_node_tag: windowsSelection.windowsNodeTag,
+              windows_node_installer_digests: JSON.stringify(
+                windowsSelection.windowsNodeInstallerDigests,
+              ),
+            },
+            needs: { finalize_github_release: { result: "success" } },
           },
-          needs: { finalize_github_release: { result: "success" } },
-        },
-      );
-      expect(enabled).toBe(expected);
-      const result = fixture({
-        version,
-        targetContextRef,
-        selection: { ...windowsSelection, route, npmDistTag },
-      });
-      if (!enabled) {
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("Windows assets require a stable publication");
-        if (route === "alpha") {
-          expect(result.effects).not.toContain("Provision trusted admission parser");
-        } else {
-          expect(result.effects).toContain("Admit publication source");
+        );
+        check(enabled).toBe(expected);
+        const result = await fixture(processFixture, check, {
+          version,
+          targetContextRef,
+          selection: { ...windowsSelection, route, npmDistTag },
+        });
+        if (!enabled) {
+          check(result.status, result.stderr).toBe(1);
+          check(result.stderr).toContain("Windows assets require a stable publication");
+          if (route === "alpha") {
+            check(result.effects).not.toContain("Provision trusted admission parser");
+          } else {
+            check(result.effects).toContain("Admit publication source");
+          }
+          check(result.fact).toBeUndefined();
+          return;
         }
-        expect(result.fact).toBeUndefined();
-        return;
-      }
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact?.projection?.platforms).toContainEqual({
-        id: "windows",
-        source: ".github/workflows/windows-node-release.yml",
-      });
-    },
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact?.projection?.platforms).toContainEqual({
+          id: "windows",
+          source: ".github/workflows/windows-node-release.yml",
+        });
+      }),
+  );
+
+  publicationIt.concurrent(
+    "verifies the full inventory before projecting selected plugins",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          fault: "unselected",
+          selection: {
+            ...selection,
+            publishOpenclawNpm: false,
+            pluginPublishScope: "selected",
+            plugins: ["@openclaw/demo-plugin"],
+          },
+        });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("README.md must exist");
+      }),
     30_000,
   );
 
-  it("verifies the full inventory before projecting selected plugins", () => {
-    const result = fixture({
-      fault: "unselected",
-      selection: {
-        ...selection,
-        publishOpenclawNpm: false,
-        pluginPublishScope: "selected",
-        plugins: ["@openclaw/demo-plugin"],
-      },
-    });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("README.md must exist");
-  }, 30_000);
-
-  it.each(["absent-helper", "dormant-helper"] as const)(
+  publicationIt.concurrent.for(["absent-helper", "dormant-helper"] as const)(
     "preserves inline platform tooling with %s",
-    (legacyPlatforms) => {
-      const result = fixture({ legacyPlatforms, selection: windowsSelection });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact?.projection?.platforms).toEqual([
-        { id: "android", source: ".github/workflows/android-release.yml" },
-        { id: "docker", source: ".github/workflows/docker-release.yml" },
-        { id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" },
-        { id: "windows", source: ".github/workflows/windows-node-release.yml" },
-      ]);
-    },
+    { timeout: 30_000 },
+    async (legacyPlatforms, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          legacyPlatforms,
+          selection: windowsSelection,
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact?.projection?.platforms).toEqual([
+          { id: "android", source: ".github/workflows/android-release.yml" },
+          { id: "docker", source: ".github/workflows/docker-release.yml" },
+          { id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" },
+          { id: "windows", source: ".github/workflows/windows-node-release.yml" },
+        ]);
+      }),
+  );
+
+  publicationIt.concurrent(
+    "rejects unknown selected packages rather than turning them into an empty publication",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          selection: {
+            ...selection,
+            publishOpenclawNpm: false,
+            pluginPublishScope: "selected",
+            plugins: ["@openclaw/unknown"],
+          },
+        });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toMatch(/unknown|not found|not publishable/iu);
+      }),
     30_000,
   );
 
-  it("rejects unknown selected packages rather than turning them into an empty publication", () => {
-    const result = fixture({
-      selection: {
-        ...selection,
-        publishOpenclawNpm: false,
-        pluginPublishScope: "selected",
-        plugins: ["@openclaw/unknown"],
-      },
-    });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toMatch(/unknown|not found|not publishable/iu);
-  }, 30_000);
-
-  it.each(["normal", "alpha"])(
+  publicationIt.concurrent.for(["normal", "alpha"])(
     "rejects %s core plus selected plugins before provisioning",
-    (route) => {
-      const result = fixture({
-        selection: {
-          ...selection,
-          route,
-          npmDistTag: route === "alpha" ? "alpha" : "latest",
-          pluginPublishScope: "selected",
-          plugins: ["@openclaw/demo-plugin"],
-        },
-      });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("core publication requires all-publishable plugins");
-      expect(result.effects).not.toContain("Provision trusted admission parser");
-      expect(result.fact).toBeUndefined();
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (route, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          selection: {
+            ...selection,
+            route,
+            npmDistTag: route === "alpha" ? "alpha" : "latest",
+            pluginPublishScope: "selected",
+            plugins: ["@openclaw/demo-plugin"],
+          },
+        });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("core publication requires all-publishable plugins");
+        check(result.effects).not.toContain("Provision trusted admission parser");
+        check(result.fact).toBeUndefined();
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for([
     ["2026.9.9-beta.1", "normal", "beta", "release/2026.9.9"],
     ["2026.9.9", "prepared", "latest", "release/2026.9.9"],
     ["2026.9.9-alpha.1", "alpha", "alpha", "v2026.9.9-alpha.1"],
     ["2026.8.33", "extended-stable", "extended-stable", "extended-stable/2026.8.33"],
   ])(
     "admits %s through the existing %s source policy",
-    (version, route, npmDistTag, targetContextRef) => {
-      const result = fixture({
-        version,
-        targetContextRef,
-        selection: { ...selection, route, npmDistTag },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.fact?.projection?.version).toBe(version);
-      expect(result.fact?.targetContextRef).toBe(targetContextRef);
-      const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
-      if (version === "2026.9.9") {
-        expect(platforms).toContainEqual({
-          id: "linux",
-          source: ".github/workflows/linux-app-release-request.yml",
+    { timeout: 30_000 },
+    async (
+      [version, route, npmDistTag, targetContextRef],
+      { command: processFixture, expect: check },
+    ) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          version,
+          targetContextRef,
+          selection: { ...selection, route, npmDistTag },
         });
-      } else {
-        expect(platforms).not.toContainEqual(expect.objectContaining({ id: "linux" }));
-      }
-      if (route === "extended-stable") {
-        expect(result.fact?.projection?.packages).toEqual(
-          expect.arrayContaining([{ name: "@openclaw/demo-plugin", version, targets: ["npm"] }]),
-        );
-      }
-    },
-    30_000,
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact?.projection?.version).toBe(version);
+        check(result.fact?.targetContextRef).toBe(targetContextRef);
+        const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
+        if (version === "2026.9.9") {
+          check(platforms).toContainEqual({
+            id: "linux",
+            source: ".github/workflows/linux-app-release-request.yml",
+          });
+        } else {
+          check(platforms).not.toContainEqual(expect.objectContaining({ id: "linux" }));
+        }
+        if (route === "extended-stable") {
+          check(result.fact?.projection?.packages).toEqual(
+            expect.arrayContaining([{ name: "@openclaw/demo-plugin", version, targets: ["npm"] }]),
+          );
+        }
+      }),
   );
 
-  it.each([
+  publicationIt.concurrent.for([
     ["2026.9.9-beta.1", "latest", "release/2026.9.9"],
     ["2026.9.9-alpha.1", "beta", "v2026.9.9-alpha.1"],
     ["2026.8.33", "beta", "extended-stable/2026.8.33"],
   ])(
     "rejects incompatible committed %s publication to %s",
-    (version, npmDistTag, targetContextRef) => {
-      const result = fixture({
-        version,
-        targetContextRef,
-        selection: { ...selection, npmDistTag },
-      });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("publication selection does not match");
-      expect(result.fact).toBeUndefined();
-    },
+    { timeout: 30_000 },
+    async ([version, npmDistTag, targetContextRef], { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          version,
+          targetContextRef,
+          selection: { ...selection, npmDistTag },
+        });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("publication selection does not match");
+        check(result.fact).toBeUndefined();
+      }),
+  );
+
+  publicationIt.concurrent(
+    "projects a selected plugin without claiming core publication or changing focused coverage",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          selection: {
+            ...selection,
+            publishOpenclawNpm: false,
+            pluginPublishScope: "selected",
+            plugins: ["@openclaw/demo-plugin"],
+          },
+        });
+        check(result.status, result.stderr).toBe(0);
+        check(result.fact?.projection?.packages).toEqual([
+          { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
+        ]);
+        check(result.fact?.projection?.platforms).not.toContainEqual(
+          expect.objectContaining({ id: "linux" }),
+        );
+        check(result.fact?.coverage.rerun_group).toBe("ci");
+      }),
     30_000,
   );
 
-  it("projects a selected plugin without claiming core publication or changing focused coverage", () => {
-    const result = fixture({
-      selection: {
-        ...selection,
-        publishOpenclawNpm: false,
-        pluginPublishScope: "selected",
-        plugins: ["@openclaw/demo-plugin"],
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.fact?.projection?.packages).toEqual([
-      { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
-    ]);
-    expect(result.fact?.projection?.platforms).not.toContainEqual(
-      expect.objectContaining({ id: "linux" }),
-    );
-    expect(result.fact?.coverage.rerun_group).toBe("ci");
-  }, 30_000);
-
-  it.each([
+  publicationIt.concurrent.for([
     { version: "2026.9.9", pin: "2026.9.9", core: true, selected: true },
     { version: "2026.9.9-1", pin: "2026.9.9", core: true, selected: true },
     { version: "2026.9.9", pin: "2026.8.1", core: true, selected: false },
@@ -2204,66 +2428,68 @@ describe("FRV publication source admission", () => {
     { version: "2026.8.33", pin: "2026.8.33", core: true, selected: false },
   ])(
     "projects Android from committed $version pin=$pin core=$core without qualification",
-    ({ version, pin, core, selected }) => {
-      const npmDistTag = version.includes("-alpha.")
-        ? "alpha"
-        : version.includes("-beta.")
-          ? "beta"
-          : version === "2026.8.33"
-            ? "extended-stable"
-            : "latest";
-      const result = fixture({
-        version,
-        targetContextRef:
-          npmDistTag === "alpha"
-            ? `v${version}`
-            : npmDistTag === "extended-stable"
-              ? `extended-stable/${version}`
-              : `release/${version.replace(/-beta\.[0-9]+$/u, "")}`,
-        androidPin: pin,
-        fault: "dirty-android-pin",
-        selection: {
-          ...selection,
-          npmDistTag,
-          publishOpenclawNpm: core,
-          route: ["alpha", "extended-stable"].includes(npmDistTag) ? npmDistTag : "normal",
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
-      if (selected) {
-        expect(platforms).toContainEqual({
-          id: "android",
-          source: ".github/workflows/android-release.yml",
+    { timeout: 30_000 },
+    async ({ version, pin, core, selected }, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const npmDistTag = version.includes("-alpha.")
+          ? "alpha"
+          : version.includes("-beta.")
+            ? "beta"
+            : version === "2026.8.33"
+              ? "extended-stable"
+              : "latest";
+        const result = await fixture(processFixture, check, {
+          version,
+          targetContextRef:
+            npmDistTag === "alpha"
+              ? `v${version}`
+              : npmDistTag === "extended-stable"
+                ? `extended-stable/${version}`
+                : `release/${version.replace(/-beta\.[0-9]+$/u, "")}`,
+          androidPin: pin,
+          fault: "dirty-android-pin",
+          selection: {
+            ...selection,
+            npmDistTag,
+            publishOpenclawNpm: core,
+            route: ["alpha", "extended-stable"].includes(npmDistTag) ? npmDistTag : "normal",
+          },
         });
-      } else {
-        expect(platforms).not.toContainEqual(expect.objectContaining({ id: "android" }));
-      }
-      if (npmDistTag !== "extended-stable") {
-        for (const id of ["docker", "vcr"]) {
-          if (core && npmDistTag !== "alpha") {
-            expect(platforms).toContainEqual(expect.objectContaining({ id }));
-          } else {
-            expect(platforms).not.toContainEqual(expect.objectContaining({ id }));
+        check(result.status, result.stderr).toBe(0);
+        const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
+        if (selected) {
+          check(platforms).toContainEqual({
+            id: "android",
+            source: ".github/workflows/android-release.yml",
+          });
+        } else {
+          check(platforms).not.toContainEqual(expect.objectContaining({ id: "android" }));
+        }
+        if (npmDistTag !== "extended-stable") {
+          for (const id of ["docker", "vcr"]) {
+            if (core && npmDistTag !== "alpha") {
+              check(platforms).toContainEqual(expect.objectContaining({ id }));
+            } else {
+              check(platforms).not.toContainEqual(expect.objectContaining({ id }));
+            }
           }
         }
-      }
-    },
-    30_000,
+      }),
   );
 
-  it.each(["v2026.9.9", "2026.9.9\nextra=value"])(
+  publicationIt.concurrent.for(["v2026.9.9", "2026.9.9\nextra=value"])(
     "rejects an invalid committed Android pin %j before admitting its source",
-    (androidPin) => {
-      const result = fixture({ androidPin });
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("must pin an exact YYYY.M.PATCH Android version");
-      expect(result.fact).toBeUndefined();
-    },
-    30_000,
+    { timeout: 30_000 },
+    async (androidPin, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, { androidPin });
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("must pin an exact YYYY.M.PATCH Android version");
+        check(result.fact).toBeUndefined();
+      }),
   );
 
-  it("keeps every expensive first-hop consumer behind successful resolution", () => {
+  publicationIt("keeps every expensive first-hop consumer behind successful resolution", () => {
     for (const id of [
       "normal_ci",
       "prepare_npm_package",
@@ -2297,26 +2523,35 @@ describe("FRV publication source admission", () => {
 });
 
 describe("publication source intent and durable binding", () => {
-  it.each([
+  publicationIt.concurrent.for([
     "scripts/full-release-publication-contract.mjs",
     "scripts/full-release-publication-admission.mts",
-  ])("imports %s from stdin without entering its CLI", (path) => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", "--input-type=module", "-"],
-      {
-        cwd: repo,
-        input: `await import(${JSON.stringify(pathToFileURL(join(repo, path)).href)}); process.stdout.write("imported\\n");`,
-        env: { PATH: process.env.PATH },
-        encoding: "utf8",
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("imported\n");
-    expect(result.stderr).toBe("");
-  });
+  ])(
+    "imports %s from stdin without entering its CLI",
+    async (path, { command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await processFixture.run(
+          process.execPath,
+          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-"],
+          {
+            cwd: repo,
+            input: `await import(${JSON.stringify(pathToFileURL(join(repo, path)).href)}); process.stdout.write("imported\\n");`,
+            env: { PATH: process.env.PATH },
+            encoding: "utf8",
+          },
+        );
+        if (result.error !== undefined) {
+          throw result.error instanceof Error
+            ? result.error
+            : new Error("Unexpected publication command failure", { cause: result.error });
+        }
+        check(result.status, result.stderr).toBe(0);
+        check(result.stdout).toBe("imported\n");
+        check(result.stderr).toBe("");
+      }),
+  );
 
-  it.each([
+  publicationIt.each([
     ["vbad", false],
     ["latest", false],
     ["v0.5", false],
@@ -2335,7 +2570,7 @@ describe("publication source intent and durable binding", () => {
     }
   });
 
-  it.each([
+  publicationIt.each([
     ["", ""],
     ["unknown", ""],
     ["publish", ""],
@@ -2347,7 +2582,7 @@ describe("publication source intent and durable binding", () => {
     expect(() => normalizePublicationIntent(purpose, value)).toThrow();
   });
 
-  it("keeps canonical reusable intent free of per-parent identities", () => {
+  publicationIt("keeps canonical reusable intent free of per-parent identities", () => {
     expect(
       publicationIntentInputs(normalizePublicationIntent("publish", JSON.stringify(selection))),
     ).toEqual({
@@ -2356,166 +2591,172 @@ describe("publication source intent and durable binding", () => {
     });
   });
 
-  it("requires exact workflow capability and rejects missing or relabeled new evidence", () => {
-    expect(publicationSourceContract('env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n')).toBe(
-      "1",
-    );
-    expect(
-      publicationSourceContract('env:\n  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"\n'),
-    ).toBeUndefined();
-    expect(() =>
-      publicationSourceContract('env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "2"\n'),
-    ).toThrow();
-    const request = publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        trusted_workflow_json: JSON.stringify({
-          trustedWorkflow: null,
-          validationPurpose: "diagnostic",
-          publicationSelection: null,
+  publicationIt(
+    "requires exact workflow capability and rejects missing or relabeled new evidence",
+    () => {
+      expect(
+        publicationSourceContract('env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n'),
+      ).toBe("1");
+      expect(
+        publicationSourceContract('env:\n  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"\n'),
+      ).toBeUndefined();
+      expect(() =>
+        publicationSourceContract('env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "2"\n'),
+      ).toThrow();
+      const request = publicationSourceRequest({
+        PUBLICATION_INPUTS_JSON: JSON.stringify({
+          trusted_workflow_json: JSON.stringify({
+            trustedWorkflow: null,
+            validationPurpose: "diagnostic",
+            publicationSelection: null,
+          }),
+          ref: "main",
+          release_profile: "full",
         }),
-        ref: "main",
-        release_profile: "full",
-      }),
-      PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: "a".repeat(40) }),
-      PUBLICATION_TARGET_SHA: "b".repeat(40),
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: "a".repeat(40),
-      GITHUB_RUN_ID: "123",
-      GITHUB_RUN_ATTEMPT: "1",
-    });
-    const source = createPublicationSourceFact(request, null, null);
-    expect(
-      validatePublicationSourceBinding({ sourceAdmissionContract: "1", sourceAdmission: source }),
-    ).toEqual(source);
-    expect(source.coverage.extension_test_exclude_patterns_json).toBe("[]");
-    const historicalRequest = structuredClone(request);
-    delete historicalRequest.coverage.extension_test_exclude_patterns_json;
-    const historical = createPublicationSourceFact(historicalRequest, null, null);
-    const historicalBytes = publicationSourceJson(historical);
-    expect(
-      validatePublicationSourceBinding({
-        sourceAdmissionContract: "1",
-        sourceAdmission: historical,
-      }),
-    ).toBe(historical);
-    expect(publicationSourceJson(historical)).toBe(historicalBytes);
-    expect(() =>
-      validatePublicationSourceBinding({
-        sourceAdmissionContract: "1",
-        sourceAdmission: historical,
-        validationInputs: {
-          ...publicationIntentInputs(historical),
-          targetContextRef: "main",
-          extensionTestExcludePatternsJson:
-            '["extensions/codex/src/app-server/run-attempt.test.ts"]',
-        },
-      }),
-    ).toThrow("coverage extensionTestExcludePatternsJson differs");
-    expect(() => validatePublicationSourceBinding({}, { sourceAdmissionContract: "1" })).toThrow(
-      "contract missing",
-    );
-    expect(() => validatePublicationSourceBinding({ sourceAdmissionContract: "1" })).toThrow();
-    expect(() => validatePublicationSourceBinding({ sourceAdmission: source })).toThrow(
-      "workflow contract",
-    );
-    expect(() =>
-      validatePublicationSourceBinding({
-        sourceAdmissionContract: "1",
-        sourceAdmission: { ...source, validationPurpose: "publish" },
-      }),
-    ).toThrow();
-    expect(() =>
-      validatePublicationSourceBinding({
-        sourceAdmissionContract: "1",
-        sourceAdmission: source,
-        targetSha: "c".repeat(40),
-      }),
-    ).toThrow("targetSha mismatch");
-    expect(() =>
-      validatePublicationSourceBinding(
-        {
-          sourceAdmissionContract: "1",
-          sourceAdmission: source,
-        },
-        { targetContextRef: "release/2026.9.9" },
-      ),
-    ).toThrow("targetContextRef mismatch");
-    expect(() =>
-      validatePublicationSourceBinding({
-        sourceAdmissionContract: "1",
-        sourceAdmission: source,
-        trustedWorkflow: {
-          fullRef: `refs/tags/release-publish/${"a".repeat(12)}-123`,
+        PUBLICATION_TOOLING_JSON: JSON.stringify({
+          fullRef: "refs/heads/main",
           sha: "a".repeat(40),
-        },
-      }),
-    ).toThrow("trustedWorkflowFullRef mismatch");
-    const admitted = createPublicationSourceFact(
-      {
-        ...request,
-        ...normalizePublicationIntent("publish", JSON.stringify(selection)),
-      },
-      { packages: [], platforms: [] },
-      {
-        version: "2026.9.9",
-        packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-        platforms: [],
-      },
-    );
-    const mutations = [
-      (value: Record<string, any>) => {
-        delete value.projection.packages[0].version;
-      },
-      (value: Record<string, any>) => {
-        value.projection.packages[0].version = "invalid";
-      },
-      (value: Record<string, any>) => {
-        value.projection.packages[0].targets = [];
-      },
-      (value: Record<string, any>) => {
-        value.projection.packages[0].targets = ["other"];
-      },
-      (value: Record<string, any>) => {
-        value.projection.packages[0].extra = true;
-      },
-      (value: Record<string, any>) => {
-        value.projection.platforms = [{ id: "docker" }];
-      },
-      (value: Record<string, any>) => {
-        delete value.coverage.rerun_group;
-      },
-    ];
-    for (const mutate of mutations) {
-      const changed = structuredClone(admitted);
-      mutate(changed);
-      const { digest: _digest, ...content } = changed;
-      changed.digest = createHash("sha256").update(publicationSourceJson(content)).digest("hex");
+        }),
+        PUBLICATION_TARGET_SHA: "b".repeat(40),
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: "a".repeat(40),
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+      });
+      const source = createPublicationSourceFact(request, null, null);
+      expect(
+        validatePublicationSourceBinding({ sourceAdmissionContract: "1", sourceAdmission: source }),
+      ).toEqual(source);
+      expect(source.coverage.extension_test_exclude_patterns_json).toBe("[]");
+      const historicalRequest = structuredClone(request);
+      delete historicalRequest.coverage.extension_test_exclude_patterns_json;
+      const historical = createPublicationSourceFact(historicalRequest, null, null);
+      const historicalBytes = publicationSourceJson(historical);
+      expect(
+        validatePublicationSourceBinding({
+          sourceAdmissionContract: "1",
+          sourceAdmission: historical,
+        }),
+      ).toBe(historical);
+      expect(publicationSourceJson(historical)).toBe(historicalBytes);
       expect(() =>
         validatePublicationSourceBinding({
           sourceAdmissionContract: "1",
-          sourceAdmission: changed,
+          sourceAdmission: historical,
+          validationInputs: {
+            ...publicationIntentInputs(historical),
+            targetContextRef: "main",
+            extensionTestExcludePatternsJson:
+              '["extensions/codex/src/app-server/run-attempt.test.ts"]',
+          },
+        }),
+      ).toThrow("coverage extensionTestExcludePatternsJson differs");
+      expect(() => validatePublicationSourceBinding({}, { sourceAdmissionContract: "1" })).toThrow(
+        "contract missing",
+      );
+      expect(() => validatePublicationSourceBinding({ sourceAdmissionContract: "1" })).toThrow();
+      expect(() => validatePublicationSourceBinding({ sourceAdmission: source })).toThrow(
+        "workflow contract",
+      );
+      expect(() =>
+        validatePublicationSourceBinding({
+          sourceAdmissionContract: "1",
+          sourceAdmission: { ...source, validationPurpose: "publish" },
         }),
       ).toThrow();
-    }
-    for (const version of ["2026.9.9-alpha.1", "2026.9.9-beta.1", "2026.8.33", "2026.8.33-1"]) {
-      const changed = structuredClone(admitted);
-      changed.publicationSelection = normalizePublicationIntent(
-        "publish",
-        JSON.stringify(windowsSelection),
-      ).publicationSelection;
-      changed.projection!.version = version;
-      changed.projection!.platforms = [
-        { id: "windows", source: ".github/workflows/windows-node-release.yml" },
-      ];
-      const { digest: _digest, ...content } = changed;
-      changed.digest = createHash("sha256").update(publicationSourceJson(content)).digest("hex");
       expect(() =>
         validatePublicationSourceBinding({
           sourceAdmissionContract: "1",
-          sourceAdmission: changed,
+          sourceAdmission: source,
+          targetSha: "c".repeat(40),
         }),
-      ).toThrow("Windows assets require a stable publication");
-    }
-  });
+      ).toThrow("targetSha mismatch");
+      expect(() =>
+        validatePublicationSourceBinding(
+          {
+            sourceAdmissionContract: "1",
+            sourceAdmission: source,
+          },
+          { targetContextRef: "release/2026.9.9" },
+        ),
+      ).toThrow("targetContextRef mismatch");
+      expect(() =>
+        validatePublicationSourceBinding({
+          sourceAdmissionContract: "1",
+          sourceAdmission: source,
+          trustedWorkflow: {
+            fullRef: `refs/tags/release-publish/${"a".repeat(12)}-123`,
+            sha: "a".repeat(40),
+          },
+        }),
+      ).toThrow("trustedWorkflowFullRef mismatch");
+      const admitted = createPublicationSourceFact(
+        {
+          ...request,
+          ...normalizePublicationIntent("publish", JSON.stringify(selection)),
+        },
+        { packages: [], platforms: [] },
+        {
+          version: "2026.9.9",
+          packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+          platforms: [],
+        },
+      );
+      const mutations = [
+        (value: Record<string, any>) => {
+          delete value.projection.packages[0].version;
+        },
+        (value: Record<string, any>) => {
+          value.projection.packages[0].version = "invalid";
+        },
+        (value: Record<string, any>) => {
+          value.projection.packages[0].targets = [];
+        },
+        (value: Record<string, any>) => {
+          value.projection.packages[0].targets = ["other"];
+        },
+        (value: Record<string, any>) => {
+          value.projection.packages[0].extra = true;
+        },
+        (value: Record<string, any>) => {
+          value.projection.platforms = [{ id: "docker" }];
+        },
+        (value: Record<string, any>) => {
+          delete value.coverage.rerun_group;
+        },
+      ];
+      for (const mutate of mutations) {
+        const changed = structuredClone(admitted);
+        mutate(changed);
+        const { digest: _digest, ...content } = changed;
+        changed.digest = createHash("sha256").update(publicationSourceJson(content)).digest("hex");
+        expect(() =>
+          validatePublicationSourceBinding({
+            sourceAdmissionContract: "1",
+            sourceAdmission: changed,
+          }),
+        ).toThrow();
+      }
+      for (const version of ["2026.9.9-alpha.1", "2026.9.9-beta.1", "2026.8.33", "2026.8.33-1"]) {
+        const changed = structuredClone(admitted);
+        changed.publicationSelection = normalizePublicationIntent(
+          "publish",
+          JSON.stringify(windowsSelection),
+        ).publicationSelection;
+        changed.projection!.version = version;
+        changed.projection!.platforms = [
+          { id: "windows", source: ".github/workflows/windows-node-release.yml" },
+        ];
+        const { digest: _digest, ...content } = changed;
+        changed.digest = createHash("sha256").update(publicationSourceJson(content)).digest("hex");
+        expect(() =>
+          validatePublicationSourceBinding({
+            sourceAdmissionContract: "1",
+            sourceAdmission: changed,
+          }),
+        ).toThrow("Windows assets require a stable publication");
+      }
+    },
+  );
 });

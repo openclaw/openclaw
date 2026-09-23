@@ -24,7 +24,8 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Starts a sub-agent run on the global `subagent` lane. Ordinary one-shot runs
+Starts a sub-agent run on the spawning session's sub-agent queue, with
+[per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
 use `deliver: false` and return through an announce step; collectors, quiet
 runs, and direct thread replies use the
 [completion paths](/tools/subagents/slash-command#spawn-behavior).

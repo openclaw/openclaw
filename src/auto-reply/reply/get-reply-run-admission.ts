@@ -586,8 +586,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
       queueMode: activeRunQueueMode,
-      sessionKey,
-      sessionId: sessionIdFinal,
       interruptActiveRun: async () => {
         if (activeRunInterruptTarget) {
           return (

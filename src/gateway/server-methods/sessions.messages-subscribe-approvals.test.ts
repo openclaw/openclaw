@@ -54,7 +54,7 @@ function createContext(params: {
   mainKey?: string;
   agents?: Array<{ id: string; default?: boolean }>;
 }) {
-  const rollbackSubscription = vi.fn();
+  const rollbackSubscription = Object.assign(vi.fn(), { commit: vi.fn() });
   const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
   const listSessionPendingApprovals = vi.fn(async () => {
     if (params.replayError) {
@@ -407,11 +407,11 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
 
     expect(listSessionPendingApprovals).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents.mock.calls[0]?.slice(0, 2)).toEqual([
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-    ]);
+      { provisional: true },
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       { subscribed: true, key: "agent:main:child" },
@@ -432,6 +432,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:work",
+      { provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(
       true,

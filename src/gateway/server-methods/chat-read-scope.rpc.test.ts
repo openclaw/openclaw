@@ -63,6 +63,11 @@ describe("registered chat read scope", () => {
     async (testCase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = rolePolicyConfig();
+        if (testCase.actor === "admin") {
+          expectDefined(cfg.gateway?.roles?.definitions.write, "admin role definition").scopes = [
+            "operator.admin",
+          ];
+        }
         await state.writeConfig(cfg);
         const owner = roleClient("write", "synthetic-owner");
         const client =

@@ -220,6 +220,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
+    sessionScope: true,
   });
   const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
@@ -284,6 +285,8 @@ export function renderApplicationShell(host: ShellViewHost) {
             value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
             uiHints: runtimeConfig.configUiHints,
             identityAvailable: Boolean(gatewaySnapshot.selfUser),
+            multipleProfiles:
+              gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
             basePath: context.basePath,
             canAdmin: operatorAccess.canAdmin,
             nativeDeviceSettings: context.nativeDeviceSettings,

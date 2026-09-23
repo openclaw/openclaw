@@ -6201,8 +6201,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
-  it("prepares the sticker provider runtime in extension fallback", () => {
-    const target = "extensions/telegram/src/sticker-cache.selection.test.ts";
+  it.each([
+    "extensions/telegram/src/sticker-cache.selection.test.ts",
+    "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+  ])("prepares the provider runtime in extension fallback for %s", (target) => {
     const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
       (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
     );

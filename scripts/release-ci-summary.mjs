@@ -12,6 +12,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
+  normalizeKnownFlakyJobs,
+  validateReleaseFlakeRecords,
+} from "./full-release-flake-policy.mjs";
+import { verifyReleaseFlakeRetryRecords } from "./full-release-flake-retry.mjs";
+import {
   publicationAdmissionContract,
   publicationObservationJson,
   publicationSourceContract,
@@ -1241,6 +1246,13 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  const knownFlakyJobs = normalizeKnownFlakyJobs(value.knownFlakyJobs ?? []);
+  if (
+    JSON.stringify(knownFlakyJobs) !==
+    JSON.stringify(normalizeKnownFlakyJobs(validationInputs?.knownFlakyJobsJson || []))
+  ) {
+    throw new Error("release manifest known flaky jobs differ from validation inputs");
+  }
   const sourceAdmission = validatePublicationSourceBinding(value, expected);
   const publicationAdmission = validatePublicationAdmissionBinding(value, expected);
   normalizeReleaseTelegramWaiver({
@@ -1381,6 +1393,9 @@ export function validateParentManifest(value, expected) {
   }
   return {
     advisoryJobs,
+    ...(value.knownFlakyJobs !== undefined
+      ? { knownFlakyJobs, automaticRetries: value.automaticRetries }
+      : {}),
     ...(value.publicationAdmissionContract !== undefined
       ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
       : {}),
@@ -2636,7 +2651,21 @@ export async function validateReleaseRunEvidence(
     trustedWorkflowFullRef,
     trustedWorkflowSha,
   );
-  const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
+  const rawClient = client ?? createReleaseEvidenceClient(normalizedRepository);
+  const attemptJobs = new Map();
+  const evidenceClient = {
+    ...rawClient,
+    getRunAttemptJobs(childRunId, runAttempt, options) {
+      const key = `${childRunId}:${runAttempt}:${options?.requireComplete === true}`;
+      if (!attemptJobs.has(key)) {
+        attemptJobs.set(
+          key,
+          Promise.resolve(rawClient.getRunAttemptJobs(childRunId, runAttempt, options)),
+        );
+      }
+      return attemptJobs.get(key);
+    },
+  };
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
@@ -2845,6 +2874,48 @@ export async function validateReleaseRunEvidence(
     : undefined;
   validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  if (
+    JSON.stringify(rootEvidence.manifest.knownFlakyJobs ?? []) !==
+    JSON.stringify(executionPlan?.knownFlakyJobs ?? [])
+  ) {
+    throw new Error("release manifest known flaky jobs differ from the immutable plan");
+  }
+  if (executionPlan) {
+    if (
+      executionPlan.knownFlakyJobs !== undefined &&
+      !Array.isArray(rootEvidence.manifest.automaticRetries)
+    ) {
+      throw new Error("release manifest omitted automatic retry receipts");
+    }
+    const retries = validateReleaseFlakeRecords(
+      rootEvidence.manifest.automaticRetries ?? [],
+      executionPlan,
+      Object.fromEntries(
+        Object.entries(rootEvidence.manifest.childEvidence ?? {}).map(([key, child]) => [
+          key,
+          { ...child, runAttempt: child.effectiveRunAttempt },
+        ]),
+      ),
+    );
+    if (
+      retries.some(
+        (record) => !["observed", "not-attempted", "rejected"].includes(record.outcome),
+      ) ||
+      (executionPlan.knownFlakyJobs ?? []).some(
+        (selector) => !retries.some((record) => record.child === selector.split(":", 1)[0]),
+      )
+    ) {
+      throw new Error("release manifest contains an unresolved automatic retry");
+    }
+  }
+  if (executionPlan && (executionPlan.knownFlakyJobs?.length ?? 0) > 0) {
+    await verifyReleaseFlakeRetryRecords(executionPlan, rootEvidence.manifest.automaticRetries, {
+      getRun: (childRunId) => evidenceClient.getRun(childRunId),
+      getAttempt: (childRunId, runAttempt) => evidenceClient.getRunAttempt(childRunId, runAttempt),
+      getJobs: (childRunId, runAttempt) => evidenceClient.getRunAttemptJobs(childRunId, runAttempt),
+      getLog: (jobId) => evidenceClient.getJobLog(jobId),
+    });
+  }
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );

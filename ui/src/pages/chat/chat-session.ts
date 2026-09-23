@@ -12,6 +12,7 @@ import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.t
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRuntimePinned } from "../../lib/model-runtime-choice.ts";
+import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
@@ -28,6 +29,7 @@ import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
@@ -55,6 +57,7 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatThinkingLevel: string | null;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
   requestUpdate?: () => void;
 };
 
@@ -150,6 +153,17 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
+function readChatSettingsTargetRow(host: ChatModelSettingsHost, sessionKey: string) {
+  return host.sessionsResult?.sessions.find((row) =>
+    uiSessionRowMatchesSelectedChat(
+      host,
+      row.key,
+      sessionKey,
+      row.agentId ?? host.sessionsResultAgentId,
+    ),
+  );
+}
+
 function captureChatSettingsTarget(
   host: ChatModelSettingsHost,
   sessionKey: string,
@@ -163,7 +177,12 @@ function captureChatSettingsTarget(
     agentId && activeRow?.sessionId ? { agentId, sessionId: activeRow.sessionId } : undefined;
   const matches = (row: GatewaySessionRow) =>
     target &&
-    areUiSessionKeysEquivalent(row.key, sessionKey) &&
+    uiSessionRowMatchesSelectedChat(
+      host,
+      row.key,
+      sessionKey,
+      row.agentId ?? host.sessionsResultAgentId,
+    ) &&
     row.sessionId === target.sessionId &&
     (row.agentId === undefined || row.agentId === target.agentId);
   const isCurrent = () =>
@@ -193,14 +212,23 @@ async function applyChatSetting(
   setting: string,
   synchronize?: () => void,
 ): Promise<boolean> {
+  const canDispatch = () =>
+    captured.isCurrent() &&
+    readSessionMethodScopeAccess(host.hello?.auth, {
+      method: "sessions.patch",
+      params: { key: sessionKey, ...patch },
+      sessionScope: true,
+      session: captured.row(),
+    }).allowed;
   setChatError(host, null, true);
   try {
-    if (!captured.isCurrent()) {
+    if (!canDispatch()) {
       return false;
     }
     const pending = patchChatSessionSettings(host, sessionKey, patch, {
       ...captured.agentParams,
       expectedSessionId: captured.target?.sessionId,
+      canDispatch,
       reconcile: async () => refreshCurrentChatSessionList(host),
     });
     synchronize?.();
@@ -223,9 +251,7 @@ export function switchChatFastMode(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, targetSessionKey),
-  );
+  const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
   const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
@@ -253,9 +279,7 @@ function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: 
   const sessions = host.sessions;
   const selectedSessionKey = host.sessionKey;
   const agentScope = scopedAgentParamsForSession(host, targetSessionKey);
-  const activeRow = host.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, targetSessionKey),
-  );
+  const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
   let expectedSessionId = activeRow?.sessionId;
   const ownsSelection = (sessionId = expectedSessionId) =>
     !owner.signal.aborted &&
@@ -266,9 +290,7 @@ function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: 
     host.sessions === sessions &&
     host.sessionKey === selectedSessionKey &&
     scopedAgentParamsForSession(host, targetSessionKey).agentId === agentScope.agentId &&
-    host.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, targetSessionKey),
-    )?.sessionId === sessionId;
+    readChatSettingsTargetRow(host, targetSessionKey)?.sessionId === sessionId;
   return {
     owner,
     ownsSelection,
@@ -390,9 +412,7 @@ export function captureChatNativeRuntimeRecovery(
       undefined,
       selection,
       () => {
-        const row = host.sessionsResult?.sessions.find((candidate) =>
-          areUiSessionKeysEquivalent(candidate.key, targetSessionKey),
-        );
+        const row = readChatSettingsTargetRow(host, targetSessionKey);
         if (unbound) {
           return Boolean(
             modelValue &&
@@ -418,10 +438,7 @@ export function captureChatNativeRuntimeRecovery(
     if (!recovered) {
       return undefined;
     }
-    const readRow = () =>
-      host.sessionsResult?.sessions.find((row) =>
-        areUiSessionKeysEquivalent(row.key, targetSessionKey),
-      );
+    const readRow = () => readChatSettingsTargetRow(host, targetSessionKey);
     const confirmed = readRow();
     const confirmedModel = confirmed?.model;
     const confirmedProvider = confirmed?.modelProvider;
@@ -447,9 +464,7 @@ export async function switchChatModel(
   if (!host.client || !host.connected) {
     return false;
   }
-  const activeRow = host.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, targetSessionKey),
-  );
+  const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
   if (activeRow?.modelSelectionLocked === true) {
     return false;
   }
@@ -479,6 +494,21 @@ export async function switchChatModel(
   const ownsModelOverride = () =>
     !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
     resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
+  const patch: SessionPatch = {
+    model: nextModel || null,
+    ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
+  };
+  const canDispatch = () =>
+    ownsSelection() &&
+    readSessionMethodScopeAccess(host.hello?.auth, {
+      method: "sessions.patch",
+      params: { key: targetSessionKey, ...patch },
+      sessionScope: true,
+      session: readChatSettingsTargetRow(host, targetSessionKey),
+    }).allowed;
+  if (!canDispatch()) {
+    return false;
+  }
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
@@ -490,21 +520,15 @@ export async function switchChatModel(
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const patched = await patchChatSessionSettings(
-        host,
-        targetSessionKey,
-        {
-          model: nextModel || null,
-          ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
+      const patched = await patchChatSessionSettings(host, targetSessionKey, patch, {
+        ...agentScope,
+        expectedSessionId: selection.expectedSessionId,
+        ownsModelOverride,
+        canDispatch,
+        reconcile: async () => {
+          await refreshCurrentChatSessionList(host);
         },
-        {
-          ...agentScope,
-          ownsModelOverride,
-          reconcile: async () => {
-            await refreshCurrentChatSessionList(host);
-          },
-        },
-      );
+      });
       if (!patched) {
         return false;
       }
@@ -551,9 +575,7 @@ export function switchChatThinkingLevel(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, targetSessionKey),
-  );
+  const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
   const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
@@ -588,9 +610,7 @@ export function switchChatContextWindow(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, targetSessionKey),
-  );
+  const activeRow = readChatSettingsTargetRow(host, targetSessionKey);
   const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const next = nextContextWindow.trim() || undefined;
   if ((activeRow?.contextWindow ?? "") === (next ?? "")) {
