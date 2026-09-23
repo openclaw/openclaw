@@ -6410,7 +6410,11 @@ describe("ci workflow guards", () => {
 
   it.each(
     (["pull_request", "push", "workflow_dispatch"] as const).flatMap((eventName) =>
-      ["ui/src/i18n/locales/de.ts", "src/wizard/i18n/locales/zh-CN.ts"].map((changedPath) => ({
+      [
+        "ui/src/i18n/locales/de.ts",
+        "src/wizard/i18n/locales/zh-CN.ts",
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      ].map((changedPath) => ({
         eventName,
         changedPath,
       })),
@@ -6451,6 +6455,9 @@ describe("ci workflow guards", () => {
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.run_control_ui_i18n).toBe(String(runUiVerification));
       expect(manifest.outputs.run_node).toBe(String(eventName !== "pull_request"));
+      expect(manifest.outputs.run_check).toBe(
+        String(eventName !== "pull_request" || changedPath.endsWith(".ts")),
+      );
       expect(manifest.outputs.run_ui_tests).toBe(
         String(eventName !== "pull_request" && runUiVerification),
       );

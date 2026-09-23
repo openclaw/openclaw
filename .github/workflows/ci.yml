@@ -1591,10 +1591,13 @@ jobs:
           const runNodeFastOnly =
             runNode && !toolingOwnerChange && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
+          const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
+            changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
+          ));
           // Plain PR leaves share the local consumer selector. Empty means the
           // existing full owners stay scheduled, including unsupported targets.
           let changedCoreTestPaths;
-          if (eventName === "pull_request" && runNodeFull && !frozenTarget && changedPaths &&
+          if (eventName === "pull_request" && runCheck && !frozenTarget && changedPaths &&
             existsSync("scripts/changed-lanes.mts") &&
             [
               ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
@@ -2128,7 +2131,7 @@ jobs:
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: runNodeCoreDist,
-            run_check: runNodeFull,
+            run_check: runCheck,
             startup_corpus_node_revision: startupCorpusNodeRevision,
             startup_corpus_test_files_json: startupCorpusTestFiles ? JSON.stringify(startupCorpusTestFiles) : "",
             changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
