@@ -23,6 +23,16 @@ function chatResponse(content = "Grounded answer", citations?: string[]) {
   return { choices: [{ message: { content } }], ...(citations ? { citations } : {}) };
 }
 
+function agentResponse(content: string, citations: string[] = []) {
+  return {
+    status: "completed",
+    output: [
+      { type: "search_results", results: citations.map((url) => ({ url })) },
+      { type: "message", content: [{ type: "output_text", text: content }] },
+    ],
+  };
+}
+
 const request = (): { url: string; init: RequestInit; signal?: AbortSignal } => {
   const call = endpointMock.mock.calls[0];
   assert(call, "Expected an endpoint request");
@@ -67,6 +77,23 @@ function createTool(structured: boolean, apiKey = directKey, cacheTtlMinutes?: n
   const tool = createPerplexityWebSearchProvider().createTool({
     config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
     searchConfig: { cacheTtlMinutes },
+  });
+  assert(tool, "Expected tool definition");
+  return tool;
+}
+
+function createChatTool() {
+  const tool = createPerplexityWebSearchProvider().createTool({
+    config: {
+      plugins: {
+        entries: {
+          perplexity: {
+            config: { webSearch: { apiKey: openRouterPerplexityApiKey, baseUrl: routerUrl } },
+          },
+        },
+      },
+    },
+    searchConfig: {},
   });
   assert(tool, "Expected tool definition");
   return tool;
@@ -142,9 +169,10 @@ it.each([true, false])("isolates cached credentials (native=%s)", async (structu
     const account = new Headers(params.init.headers)
       .get("authorization")
       ?.slice("Bearer perplexity-".length);
+    assert(account, "Expected Perplexity bearer account");
     const body = structured
       ? { results: [{ title: account, url: `https://example.com/${account}` }] }
-      : chatResponse(account, [`https://example.com/${account}`]);
+      : agentResponse(account, [`https://example.com/${account}`]);
     return run(Response.json(body));
   });
   const accountA = createTool(structured, "perplexity-account-a");
@@ -175,7 +203,7 @@ it.each([
   mockResponse(response);
   mockResponse(chatResponse("  Recovered grounded answer  ", ["https://example.test/recovered"]));
 
-  const tool = createTool(false);
+  const tool = createChatTool();
   const args = { query: `perplexity empty answer ${name}` };
   await expect(tool.execute(args)).rejects.toThrow(
     "Perplexity search returned no final answer. Retry the query or choose another search provider.",
@@ -186,6 +214,49 @@ it.each([
   expect(recovered.citations).toEqual(["https://example.test/recovered"]);
 });
 
+it.each([
+  { name: "missing output", response: { status: "completed" } },
+  { name: "whitespace content", response: agentResponse(" \n ") },
+])("rejects and does not cache Agent API $name", async ({ name, response }) => {
+  mockResponse(response);
+  mockResponse(agentResponse("  Recovered grounded answer  ", ["https://example.test/recovered"]));
+
+  const tool = createTool(false);
+  const args = { query: `perplexity Agent API empty answer ${name}` };
+  await expect(tool.execute(args)).rejects.toThrow(
+    "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+  );
+
+  const recovered = await tool.execute(args);
+  expect(recovered.content).toContain("  Recovered grounded answer  ");
+  expect(recovered.citations).toEqual(["https://example.test/recovered"]);
+  expect(endpointMock).toHaveBeenCalledTimes(2);
+});
+
+it.each(["failed", "incomplete", "in_progress", "queued", "cancelled", undefined])(
+  "rejects and does not cache Agent API status %s",
+  async (status) => {
+    mockResponse({
+      ...agentResponse("Do not accept this text"),
+      status,
+      ...(status === "failed" ? { error: { message: "agent execution failed" } } : {}),
+    });
+    mockResponse(agentResponse("Recovered grounded answer"));
+
+    const tool = createTool(false);
+    const args = { query: `perplexity Agent API status ${status ?? "missing"}` };
+    await expect(tool.execute(args)).rejects.toThrow(
+      status === "failed"
+        ? 'Perplexity Agent API returned status "failed": agent execution failed.'
+        : `Perplexity Agent API returned status ${JSON.stringify(status ?? "missing")}.`,
+    );
+    await expect(tool.execute(args)).resolves.toMatchObject({
+      content: expect.stringContaining("Recovered grounded answer"),
+    });
+    expect(endpointMock).toHaveBeenCalledTimes(2);
+  },
+);
+
 it.each([false, true])("maps filters and caches count (native=%s)", async (structured) => {
   const annotation = {
     type: "url_citation",
@@ -193,7 +264,7 @@ it.each([false, true])("maps filters and caches count (native=%s)", async (struc
   };
   const response = structured
     ? searchResponse("first", "second")
-    : { choices: [{ message: { content: "Grounded answer", annotations: [annotation] } }] };
+    : agentResponse("Grounded answer", [annotation.url_citation.url]);
   mockResponse(response);
   if (structured) {
     mockResponse(response);
@@ -271,9 +342,10 @@ it.each`
   ${"native environment source ahead of key prefix"}     | ${openRouterPerplexityApiKey} | ${"env"}       | ${perplexityApiKeyEnv} | ${`${directUrl}/search`}                        | ${undefined}             | ${undefined}
   ${"OpenRouter environment source ahead of key prefix"} | ${directKey}                  | ${"env"}       | ${openRouterApiKeyEnv} | ${`${routerUrl}/chat/completions`}              | ${defaultModel}          | ${undefined}
   ${"resolved OpenRouter SecretRef"}                     | ${openRouterPerplexityApiKey} | ${"secretRef"} | ${undefined}           | ${`${routerUrl}/chat/completions`}              | ${defaultModel}          | ${undefined}
-  ${"explicit direct base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/chat/completions`}              | ${"sonar-pro"}           | ${{ baseUrl: ` ${directUrl}/ ` }}
+  ${"explicit direct base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/v1/agent`}                      | ${"sonar-pro"}           | ${{ baseUrl: ` ${directUrl}/ ` }}
   ${"explicit remote base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${"https://search.example/v1/chat/completions"} | ${defaultModel}          | ${{ baseUrl: "https://search.example/v1/" }}
-  ${"explicit model"}                                    | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/chat/completions`}              | ${"sonar-reasoning-pro"} | ${{ model: " perplexity/sonar-reasoning-pro " }}
+  ${"explicit legacy model"}                             | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/v1/agent`}                      | ${"sonar-reasoning-pro"} | ${{ model: " sonar-reasoning-pro " }}
+  ${"explicit model"}                                    | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/v1/agent`}                      | ${"perplexity/sonar"}    | ${{ model: " perplexity/sonar " }}
   ${"blank overrides"}                                   | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${undefined}             | ${{ baseUrl: " ", model: " " }}
 `(
   "routes $name consistently through metadata, schema and execution",
@@ -298,8 +370,10 @@ it.each`
           config,
           resolvedCredential: { value: key, source, fallbackEnvVar },
         });
-        const chat = model !== undefined;
-        expect(metadata?.perplexityTransport).toBe(chat ? "chat_completions" : "search_api");
+        const agent = url.endsWith("/agent");
+        const chat = model !== undefined && !agent;
+        const transport = agent ? "agent_api" : chat ? "chat_completions" : "search_api";
+        expect(metadata?.perplexityTransport).toBe(transport);
         if (source === "secretRef") {
           provider.setConfiguredCredentialValue?.(config, key);
         }
@@ -309,25 +383,85 @@ it.each`
         });
         assert(tool, "Expected Perplexity tool");
         const schema = expect(tool.parameters);
-        (chat ? schema.not : schema).toHaveProperty("properties.country");
-        mockResponse(chat ? chatResponse() : { results: [] });
+        (chat || agent ? schema.not : schema).toHaveProperty("properties.country");
+        mockResponse(
+          agent ? agentResponse("Grounded answer") : chat ? chatResponse() : { results: [] },
+        );
         const query = `routing ${name}`;
         await expect(tool.execute({ query })).resolves.toMatchObject(
-          chat
+          agent || chat
             ? { content: expect.stringContaining("Grounded answer") }
             : { count: 0, results: [] },
         );
         expect(request().url).toBe(url);
         expect(new Headers(request().init.headers).get("authorization")).toBe(`Bearer ${key}`);
         expect(requestBody()).toEqual(
-          chat
-            ? { model, messages: [{ role: "user", content: query }] }
-            : { query, max_results: 5 },
+          agent
+            ? model === "perplexity/sonar"
+              ? {
+                  model,
+                  input: query,
+                  instructions:
+                    "You must use the web_search tool before answering. Answer only from source-grounded search results.",
+                  tool_choice: { type: "web_search" },
+                  tools: [{ type: "web_search" }],
+                }
+              : {
+                  effort: model === "sonar-reasoning-pro" ? "medium" : "low",
+                  input: query,
+                }
+            : chat
+              ? { model, messages: [{ role: "user", content: query }] }
+              : { query, max_results: 5 },
         );
       },
     );
   },
 );
+
+it("maps direct freshness into the Agent API web-search tool", async () => {
+  mockResponse(agentResponse("Fresh grounded answer"));
+
+  await createTool(false).execute({ query: "recent OpenClaw news", freshness: "week" });
+
+  expect(request().url).toBe(`${directUrl}/v1/agent`);
+  expect(requestBody()).toEqual({
+    effort: "low",
+    input: "recent OpenClaw news",
+    tools: [{ type: "web_search", filters: { search_recency_filter: "week" } }],
+  });
+});
+
+it("routes explicit Agent API models with grounded-search instructions", async () => {
+  const tool = createPerplexityWebSearchProvider().createTool({
+    config: {
+      plugins: {
+        entries: {
+          perplexity: {
+            config: {
+              webSearch: { apiKey: directKey, model: "openai/gpt-5.4-mini" },
+            },
+          },
+        },
+      },
+    },
+    searchConfig: {},
+  });
+  assert(tool, "Expected tool definition");
+  mockResponse(agentResponse("Grounded answer"));
+
+  await tool.execute({ query: "agent model routing" });
+
+  expect(request().url).toBe(`${directUrl}/v1/agent`);
+  expect(requestBody()).toEqual({
+    model: "openai/gpt-5.4-mini",
+    input: "agent model routing",
+    tools: [{ type: "web_search" }],
+    instructions:
+      "You must use the web_search tool before answering. Answer only from source-grounded search results.",
+    tool_choice: { type: "web_search" },
+  });
+});
 
 it.each<[boolean, Record<string, unknown>, string]>([
   [false, { country: "US", max_tokens: 0 }, "max_tokens must be a positive integer."],

@@ -14,9 +14,9 @@ Perplexity `baseUrl` / `model` overrides use the Agent API, while
 base URL keeps the OpenAI-compatible chat-completions path. Both return one
 AI-synthesized answer with citations instead of structured Search API rows.
 
-Legacy direct Sonar model names map to the replacement Agent API presets:
+Legacy direct Sonar model names map to the replacement Agent API effort levels:
 
-| Sonar model           | Agent API preset |
+| Sonar model           | Agent API effort |
 | --------------------- | ---------------- |
 | `sonar`               | `fast`           |
 | `sonar-pro`           | `low`            |
@@ -119,7 +119,7 @@ through Agent API instead of structured Search API rows:
         config: {
           webSearch: {
             apiKey: "pplx-...",
-            model: "sonar-pro", // maps to Agent API preset "low"
+            model: "sonar-pro", // maps to Agent API effort "low"
           },
         },
       },

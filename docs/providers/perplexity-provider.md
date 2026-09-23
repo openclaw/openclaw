@@ -75,9 +75,11 @@ The plugin resolves transport in this order:
 
 A configured key with any other prefix also uses the native Search API. Setting
 a model or direct Perplexity base URL switches native credentials to Agent API;
-the legacy Sonar model names map to the corresponding Agent API presets. The
-OpenRouter/chat-completions path defaults to `perplexity/sonar-pro`; override it
-with `plugins.entries.perplexity.config.webSearch.model`.
+the legacy Sonar model names map to the corresponding Agent API effort levels.
+Explicit Anthropic Agent API models receive the required 4096-token output
+limit. The OpenRouter/chat-completions path defaults to
+`perplexity/sonar-pro`; override it with
+`plugins.entries.perplexity.config.webSearch.model`.
 
 ## Native API filtering
 

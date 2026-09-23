@@ -56,6 +56,11 @@ type PerplexitySearchResponse = {
 };
 
 type PerplexityAgentResponse = {
+  error?: {
+    code?: string;
+    message?: string;
+    type?: string;
+  };
   output?: Array<{
     type?: string;
     results?: Array<{ url?: string }>;
@@ -69,6 +74,7 @@ type PerplexityAgentResponse = {
       }>;
     }>;
   }>;
+  status?: "completed" | "failed" | "incomplete" | "in_progress" | "queued" | "cancelled";
 };
 
 type PerplexitySearchApiResponse = {
@@ -159,6 +165,13 @@ function extractPerplexityAgentResult(data: PerplexityAgentResponse): {
   content: string;
   citations: string[];
 } {
+  if (data.status !== "completed") {
+    const detail = normalizeOptionalString(data.error?.message);
+    const status = normalizeOptionalString(data.status) ?? "missing";
+    throw new Error(
+      `Perplexity Agent API returned status ${JSON.stringify(status)}${detail ? `: ${detail}` : ""}. Retry the query or choose another search provider.`,
+    );
+  }
   const content: string[] = [];
   const citations: string[] = [];
   for (const output of data.output ?? []) {
@@ -197,19 +210,21 @@ function extractPerplexityAgentResult(data: PerplexityAgentResponse): {
 
 function resolvePerplexityAgentSelection(
   model: string,
-): { preset: "fast" | "low" | "medium" | "high" } | { model: string } {
-  const normalized = model.replace(/^perplexity\//u, "");
-  switch (normalized) {
+): { effort: "fast" | "low" | "medium" | "high" } | { model: string } {
+  switch (model) {
     case "sonar":
-      return { preset: "fast" };
+      return { effort: "fast" };
     case "sonar-pro":
-      return { preset: "low" };
+    case "perplexity/sonar-pro":
+      return { effort: "low" };
     case "sonar-reasoning-pro":
-      return { preset: "medium" };
+    case "perplexity/sonar-reasoning-pro":
+      return { effort: "medium" };
     case "sonar-deep-research":
-      return { preset: "high" };
+    case "perplexity/sonar-deep-research":
+      return { effort: "high" };
     default:
-      return { model: normalized };
+      return { model };
   }
 }
 
@@ -354,10 +369,19 @@ async function runPerplexityAgentSearch(params: {
   signal?: AbortSignal;
   freshness?: string;
 }): Promise<{ content: string; citations: string[] }> {
+  const selection = resolvePerplexityAgentSelection(params.model);
   const body: Record<string, unknown> = {
-    ...resolvePerplexityAgentSelection(params.model),
+    ...selection,
     input: params.query,
   };
+  if ("model" in selection && selection.model.startsWith("anthropic/")) {
+    body.max_output_tokens = 4096;
+  }
+  if ("model" in selection) {
+    body.instructions =
+      "You must use the web_search tool before answering. Answer only from source-grounded search results.";
+    body.tool_choice = { type: "web_search" };
+  }
   if (params.freshness || "model" in body) {
     body.tools = [
       {
@@ -561,7 +585,7 @@ export async function executePerplexitySearch(
             timeoutSeconds,
             signal,
             freshness,
-        });
+          });
   const resultFields = Array.isArray(result)
     ? { results: result }
     : {
