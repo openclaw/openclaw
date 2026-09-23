@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
-vi.mock("node:net", { spy: true });
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  // Keep native socket and stream prototypes intact across shared-worker files.
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
 
 const mocks = vi.hoisted(() => ({
   ensureLocalNpmShim: vi.fn(),

@@ -61,34 +61,36 @@ function loseFirstCronMutationReply(
     }
     return originalPost.call(this, request, transferList);
   });
-  const on = vi
-    .spyOn(MessagePort.prototype, "on")
-    .mockImplementation(function (this: MessagePort, event, listener) {
-      if (event !== "message") {
-        return originalOn.call(this, event, listener);
-      }
-      return originalOn.call(this, event, function (this: MessagePort, ...args: unknown[]) {
-        const message = args[0];
-        const reply = isRecord(message) && message.type === "result" ? message.reply : undefined;
-        if (
-          !dropped &&
-          target &&
-          isRecord(reply) &&
-          reply.id === target.requestId &&
-          reply.ok === true &&
-          reply.value instanceof Uint8Array
-        ) {
-          const result: unknown = deserialize(reply.value);
-          if (isRecord(result) && result.nonce === target.nonce) {
-            // Withhold only the successful reply; real commit receipts and native settlement still flow.
-            dropped = true;
-            stopped = target.worker.terminate();
-            return;
-          }
+  const on = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
+    this: MessagePort,
+    event,
+    listener,
+  ) {
+    if (event !== "message") {
+      return originalOn.call(this, event, listener);
+    }
+    return originalOn.call(this, event, function (this: MessagePort, ...args: unknown[]) {
+      const message = args[0];
+      const reply = isRecord(message) && message.type === "result" ? message.reply : undefined;
+      if (
+        !dropped &&
+        target &&
+        isRecord(reply) &&
+        reply.id === target.requestId &&
+        reply.ok === true &&
+        reply.value instanceof Uint8Array
+      ) {
+        const result: unknown = deserialize(reply.value);
+        if (isRecord(result) && result.nonce === target.nonce) {
+          // Withhold only the successful reply; real commit receipts and native settlement still flow.
+          dropped = true;
+          stopped = target.worker.terminate();
+          return;
         }
-        Reflect.apply(listener, this, args);
-      });
+      }
+      Reflect.apply(listener, this, args);
     });
+  });
   return {
     attempts,
     wasDropped: () => dropped,
@@ -242,15 +244,17 @@ it("rolls schedule maintenance back when process ownership changes before commit
   let activated = false;
   // oxlint-disable-next-line typescript/unbound-method -- The private port remains the receiver.
   const originalPost = MessagePort.prototype.postMessage;
-  const post = vi
-    .spyOn(MessagePort.prototype, "postMessage")
-    .mockImplementation(function (this: MessagePort, value, transferList) {
-      if (isRecord(value) && Array.isArray(value.ownership)) {
-        markCronJobActive(job.id);
-        activated = true;
-      }
-      return originalPost.call(this, value, transferList);
-    });
+  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+    this: MessagePort,
+    value,
+    transferList,
+  ) {
+    if (isRecord(value) && Array.isArray(value.ownership)) {
+      markCronJobActive(job.id);
+      activated = true;
+    }
+    return originalPost.call(this, value, transferList);
+  });
   try {
     await expect(recomputeUnownedCronSchedules(state)).rejects.toThrow(
       "Cron schedule ownership changed before commit",

@@ -167,19 +167,20 @@ lines.once("line", line => {
         kill(signal);
       });
     });
-    vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-      async function (this: NodeWorkerLaunchStore, params) {
-        expect(adapter?.pid).toBe(params.worker.pid);
-        return await this.finish({
-          launchId: params.launchId,
-          planHash: params.planHash,
-          supervisor: params.supervisor,
-          worker: null,
-          state: "completed",
-          resultJson: '{"status":"completed"}',
-        });
-      },
-    );
+    vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
+      this: NodeWorkerLaunchStore,
+      params,
+    ) {
+      expect(adapter?.pid).toBe(params.worker.pid);
+      return await this.finish({
+        launchId: params.launchId,
+        planHash: params.planHash,
+        supervisor: params.supervisor,
+        worker: null,
+        state: "completed",
+        resultJson: '{"status":"completed"}',
+      });
+    });
 
     try {
       expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
@@ -295,16 +296,18 @@ lines.once("line", line => {
         "markRunning",
       )?.value as NodeWorkerLaunchStore["markRunning"];
       let stopping: Promise<unknown> | undefined;
-      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-        async function (this: NodeWorkerLaunchStore, params, authority) {
-          const receipt = await originalMarkRunning.call(this, params, authority);
-          stopping =
-            operation === "cancel"
-              ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
-              : supervisor.close();
-          return receipt;
-        },
-      );
+      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
+        this: NodeWorkerLaunchStore,
+        params,
+        authority,
+      ) {
+        const receipt = await originalMarkRunning.call(this, params, authority);
+        stopping =
+          operation === "cancel"
+            ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
+            : supervisor.close();
+        return receipt;
+      });
 
       await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       await stopping;

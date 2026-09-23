@@ -387,26 +387,7 @@ export async function runServiceStop(params: {
       return;
     }
   }
-  if (!loaded) {
-    if (params.stopWhenNotLoaded) {
-      try {
-        await params.service.stop({
-          env: process.env,
-          stdout,
-          disable: params.opts?.disable,
-          onMutation: gatewayStopAudit,
-        });
-      } catch (err) {
-        fail(`${params.serviceNoun} stop failed: ${String(err)}`);
-        return;
-      }
-      emit({
-        ok: true,
-        result: "stopped",
-        service: buildDaemonServiceSnapshot(params.service, false),
-      });
-      return;
-    }
+  if (!loaded && !params.stopWhenNotLoaded) {
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
@@ -443,12 +424,14 @@ export async function runServiceStop(params: {
     return;
   }
 
-  const finalLoaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-    inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
-  });
+  const finalLoaded = loaded
+    ? await resolveServiceLoadedOrFail({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        fail,
+        inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
+      })
+    : false;
   if (finalLoaded === null) {
     return;
   }

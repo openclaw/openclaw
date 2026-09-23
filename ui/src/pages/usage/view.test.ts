@@ -228,16 +228,16 @@ describe("renderUsage", () => {
 
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });

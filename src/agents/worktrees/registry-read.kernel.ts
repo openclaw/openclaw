@@ -87,6 +87,18 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
   };
 }
 
+export function getRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  id: string,
+): ManagedWorktreeRecord | undefined {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select(WORKTREE_RECORD_COLUMNS)
+    .where("id", "=", id);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
 export function listRegistryWorktreesInDatabase(db: DatabaseSync): ManagedWorktreeRecord[] {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")

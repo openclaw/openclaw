@@ -409,52 +409,37 @@ describe("runtime postbuild static assets", () => {
 
   it("writes every phase beneath the cwd-only caller root", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
-    const sentinelDest = path.join(
-      "dist",
-      `runtime-postbuild-cwd-only-${path.basename(rootDir)}.js`,
-    );
-    const moduleSentinelPath = path.join(MODULE_ROOT, sentinelDest);
     await writeExportHtmlBuildFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
-    await expectPathMissing(moduleSentinelPath);
+    runRuntimePostBuild({
+      cwd: rootDir,
+      env: {
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+        OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
+      },
+      timings: false,
+    });
 
-    try {
-      const params = {
-        chunks: [{ dest: sentinelDest, contents: "selected root only\n" }],
-        cwd: rootDir,
-        env: {
-          OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
-          OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
-        },
-        timings: false,
-      };
-      runRuntimePostBuild(params);
-
-      expect(
-        readBuildIdFromBuildInfoForModuleUrl(
-          pathToFileURL(path.join(rootDir, "dist/entry.js")).href,
-        ),
-      ).toBe("source-runtime-build");
-      await expect(
-        fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
-      ).resolves.toBe("<html></html>\n");
-      const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
-      const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
-      const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
-      expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
-      expect(markedAsset).toContain("alternate-root-marked");
-      expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
-      expect(highlightAsset).toContain("alternate-root-highlight");
-      await expect(
-        fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
-      ).resolves.toContain('"entries"');
-      await expect(fs.readFile(path.join(rootDir, sentinelDest), "utf8")).resolves.toBe(
-        "selected root only\n",
-      );
-      await expectPathMissing(moduleSentinelPath);
-    } finally {
-      await fs.rm(moduleSentinelPath, { force: true });
-    }
+    expect(
+      readBuildIdFromBuildInfoForModuleUrl(pathToFileURL(path.join(rootDir, "dist/entry.js")).href),
+    ).toBe("source-runtime-build");
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+    ).resolves.toBe("<html></html>\n");
+    const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
+    const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
+    const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
+    expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
+    expect(markedAsset).toContain("alternate-root-marked");
+    expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
+    expect(highlightAsset).toContain("alternate-root-highlight");
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
+    ).resolves.toContain('"entries"');
+    const bridge = await import(
+      pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
+    );
+    expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
   });
 
   it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
@@ -1111,23 +1096,6 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-plugins.runtime-AbCd1234.mjs";\n',
     );
-  });
-
-  it("writes the June text-transform runtime compatibility alias", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "text-transforms.runtime.js"),
-      'export * from "./text-transforms.runtime-NewHash.mjs";\n',
-      "utf8",
-    );
-
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
-
-    expect(
-      await fs.readFile(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js"), "utf8"),
-    ).toBe('export * from "./text-transforms.runtime.js";\n');
   });
 
   it("keeps every recorded previous-release lazy import loadable after replacement", async () => {

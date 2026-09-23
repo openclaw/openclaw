@@ -1064,6 +1064,12 @@ describe("subagent registry seam flow", () => {
     async (status) => {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
+      const announceEntered = createDeferred();
+      mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
+        announceEntered.resolve();
+        return "delivered";
+      });
+      const settleRootWork = observeRootWork();
       try {
         const startedAt = Date.now() - 2_000;
         const endedAt = Date.now() - 1_000;
@@ -1102,14 +1108,14 @@ describe("subagent registry seam flow", () => {
 
         hydrateAndActivateRegistry();
 
-        await waitForFast(() => {
-          expect(findRequesterRun(runId)).toMatchObject({
-            execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-            delivery: { status: "delivered" },
-          });
-          expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
+        await announceEntered.promise;
+        await settleRootWork(true);
+        expect(findRequesterRun(runId)).toMatchObject({
+          execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+          delivery: { status: "delivered" },
         });
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
         expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             childRunId: runId,
@@ -1118,6 +1124,7 @@ describe("subagent registry seam flow", () => {
         );
         expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
       } finally {
+        await settleRootWork();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }

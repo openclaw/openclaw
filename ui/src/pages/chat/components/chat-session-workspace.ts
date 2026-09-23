@@ -17,7 +17,6 @@ import {
   loadSessionWorkspace,
   openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
-  requestWorkspaceUpdate,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
@@ -197,7 +196,7 @@ async function loadArtifactSidebarContent(
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    requestWorkspaceUpdate(state);
+    state.requestUpdate?.();
   }
 }
 
@@ -375,7 +374,7 @@ function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
     loadSessionWorkspace(state, workspace);
   }
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspaceDock) {
@@ -387,7 +386,7 @@ function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspac
     }
     patchSettings({ chatWorkspaceDock: dock });
   }
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -401,7 +400,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 function openArtifact(
@@ -515,7 +514,7 @@ export function createSessionWorkspaceProps(
     browserSearch: workspace.browserSearch,
     onSetFilter: (filter) => {
       workspace.filter = filter;
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
     },
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
@@ -537,7 +536,7 @@ export function createSessionWorkspaceProps(
     },
     onSearch: (search) => {
       workspace.browserSearch = search;
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;
