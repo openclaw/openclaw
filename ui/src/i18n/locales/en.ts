@@ -2819,7 +2819,7 @@ export const en: TranslationMap & {
       profileUnavailable: "Your identity profile could not be loaded.",
       unidentified:
         "This connection has no personal profile; sign in through Cloudflare Access, Tailscale Serve, or a trusted proxy to set a name and avatar.",
-      writeRequired: "Profile editing requires operator.write access.",
+      writeRequired: "Your current access does not allow profile editing.",
       avatar: "Avatar",
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
       chooseAvatar: "Choose image",

@@ -29,6 +29,7 @@ export function createConnectedContext(
   const baseContext = {
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
+      connect: vi.fn(),
       get snapshot() {
         return snapshot;
       },
