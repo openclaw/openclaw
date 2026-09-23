@@ -5,6 +5,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
+import type { ChannelProgressDraftLine } from "./progress-draft-lines.js";
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
@@ -132,7 +133,7 @@ export function sanitizeProgressStatusText(text: string): string {
   return redactToolPayloadText(cleaned);
 }
 
-export function normalizeCommentaryProgressText(text: string): string {
+function normalizeCommentaryProgressText(text: string): string {
   const cleaned = sanitizeProgressStatusText(text);
   if (!cleaned) {
     return "";
@@ -209,7 +210,7 @@ function hasReasoningProgressTagOutsideCode(text: string): boolean {
  * workspace"), so a snapshot that continues the open line reuses its id and
  * updates in place; anything else starts a new line.
  */
-export function resolveCommentaryLineId(commentary: {
+function resolveCommentaryLineId(commentary: {
   itemId?: string;
   normalized: string;
   bareNormalized: string;
@@ -232,6 +233,57 @@ export function resolveCommentaryLineId(commentary: {
     return commentary.lastIdLessCommentaryId;
   }
   return `commentary:${commentary.normalized}`;
+}
+
+export function stripLaneItalics(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^_(.*)_$/su, "$1"))
+    .join("\n");
+}
+
+/** Owns cumulative, id-less commentary identity independently of bounded history. */
+export function createCommentaryProgressAccumulator(params: { prefix: string; italics: boolean }) {
+  let lastIdLessCommentaryId: string | undefined;
+  let lastIdLessCommentaryBare = "";
+  return {
+    reset() {
+      lastIdLessCommentaryId = undefined;
+      lastIdLessCommentaryBare = "";
+    },
+    prepare(
+      text?: string,
+      options?: { itemId?: string; complete?: boolean },
+    ): ChannelProgressDraftLine | undefined {
+      const itemId = options?.itemId?.trim();
+      if (!text && !itemId) {
+        return undefined;
+      }
+      const normalized = normalizeCommentaryProgressText(text ?? "");
+      // Cumulative snapshots compare bare text, independently of lane styling.
+      const bareNormalized = stripLaneItalics(normalized);
+      const id = resolveCommentaryLineId({
+        itemId,
+        normalized,
+        bareNormalized,
+        lastIdLessCommentaryId,
+        lastIdLessCommentaryBare,
+      });
+      if (normalized && !itemId) {
+        lastIdLessCommentaryId = id;
+        lastIdLessCommentaryBare = bareNormalized;
+      }
+      return {
+        id,
+        // Empty text is a retraction; the channel prefix must not revive it.
+        text: normalized ? `${params.prefix}${params.italics ? normalized : bareNormalized}` : "",
+        kind: "item",
+        label: "Commentary",
+        prefix: false,
+        ...(options?.complete !== undefined ? { complete: options.complete } : {}),
+      };
+    },
+  };
 }
 
 export function createReasoningProgressAccumulator() {

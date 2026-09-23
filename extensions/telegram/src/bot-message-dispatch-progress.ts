@@ -108,6 +108,7 @@ export function createProgressState(
           richMessages: config.telegramCfg.richMessages === true,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
+          commentaryProgressEnabled: progressCompositor.commentaryProgressEnabled,
         }),
       );
       if (options.flush) {

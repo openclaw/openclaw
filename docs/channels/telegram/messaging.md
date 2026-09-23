@@ -65,7 +65,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message in `partial` and `block` modes (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those lines: `status` (default, tool label only) or `raw` (explicit command text)
     - completed assistant preambles update the status headline by default; a new preamble keeps the previous readable status until it finishes
-    - `streaming.progress.commentary` (default: `false`) shows those preambles as interleaved commentary rows instead of a headline; commentary remains visible beside plan steps
+    - `streaming.progress.commentary` (default: `false`) also shows those completed preambles in a bounded commentary history beneath the headline; commentary remains visible beside plan steps
     - successful background-process polls and internal waits stay out of the progress log; failures still follow the selected tool-progress policy, and `/verbose` retains diagnostic summaries
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 

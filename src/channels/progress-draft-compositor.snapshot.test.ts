@@ -140,6 +140,43 @@ describe("progress draft snapshot continuation", () => {
     },
   );
 
+  it("prepares paired preambles without a publisher and retains the headline beyond history", async () => {
+    vi.useFakeTimers();
+    const progress = createProgress({
+      update: undefined,
+      initialSnapshot: { lines: [], statusHeadline: "Previous owner" },
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true, toolProgress: true, maxLines: 1 },
+        },
+      },
+    });
+    await progress.pushItemEvent({
+      kind: "preamble",
+      phase: "end",
+      itemId: "child-note",
+      progressText: "Child: checking sources",
+    });
+    expect(progress.getSnapshot()).toEqual({
+      statusHeadline: "Child: checking sources",
+      lines: [expect.objectContaining({ id: "commentary:child-note", complete: true })],
+    });
+    await progress.pushToolProgress({
+      id: "child-tool",
+      kind: "tool",
+      text: "Read sources",
+      label: "Read",
+    });
+    expect(progress.getSnapshot()).toEqual({
+      statusHeadline: "Child: checking sources",
+      lines: [expect.objectContaining({ id: "child-tool" })],
+    });
+    expect(progress.hasStarted).toBe(false);
+    expect(progress.isVisible).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("applies privacy, quiet failures, approval priority and bounds to transferred lines", async () => {
     const parent = createProgress();
     await parent.pushPlanProgress([{ step: "Parent checklist", status: "in_progress" }]);

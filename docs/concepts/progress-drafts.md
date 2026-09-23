@@ -60,12 +60,12 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                     |
-| --------------- | --------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler. |
-| Label           | Optional starter/status line such as `Working`.                             |
-| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval requests.       |
-| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`. |
+| Part            | Purpose                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| Status headline | The latest completed model preamble on shared progress drafts; Discord adds a utility filler. |
+| Label           | Optional starter/status line such as `Working`.                                               |
+| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval requests.                         |
+| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`.                   |
 
 The status headline sits above the progress lines. With
 `progress.toolProgress: true`, tool rows remain visible underneath it.
@@ -177,6 +177,9 @@ Set it to `true` for the rolling tool log. Successful background-process polls
 and internal waits do not add routine rows. Failed calls still follow the
 selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
+Slack's compact style with `toolProgress: false` is narrower: it shows preambles
+and actionable approval requests, without reasoning, plans, or tool rows.
+
 Native subagent spawn and activity events follow the same policy. They start
 the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
 row for each worker. Messages to workers get separate entries because sending a
@@ -283,18 +286,22 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-With the commentary lane enabled, preambles render only as those interleaved
-💬 lines; the status headline below stays out of the way so the lane keeps its
-documented shape.
+With the commentary lane enabled, the latest completed preamble can supply the
+status headline while the same item also stays in the interleaved commentary
+history. The two positions are intentional: the bounded line history can scroll
+under the configured `maxLines` budget while the current status remains visible.
 
 ### Status headline
 
-On Discord and Telegram in progress mode, the model's typed pre-tool preamble
-becomes the draft's status headline whenever it is available. Other
-progress-mode channels keep their existing status behavior. The headline is on
-by default and does not bypass the normal activity gate for short turns;
-enabling `streaming.progress.commentary` hands preambles to the interleaved
-commentary lane instead.
+Channels using the shared progress compositor — Discord, Matrix, Mattermost,
+Microsoft Teams, Slack, and Telegram — use the model's completed typed pre-tool
+preamble as the progress draft's status headline. While a new preamble is still
+streaming, the previous readable headline and history remain visible; incomplete
+fragments do not create or update the draft. The headline is on by default and
+does not bypass the normal activity gate for short turns.
+Where the channel supports `streaming.progress.commentary`, that setting controls
+only whether the same preambles also appear in the bounded interleaved commentary
+history. Matrix and Mattermost do not expose this optional setting.
 
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary

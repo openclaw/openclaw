@@ -4251,7 +4251,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       itemId: "queued-preamble",
       progressText: "Checking the followup",
     });
-    expectLastDraftUpdateText(draftStream, "_Checking the followup_");
+    expectLastDraftUpdateText(draftStream, "Checking the followup\n\n_Checking the followup_");
     const clearCallsBeforeSettlement = draftStream.clear.mock.calls.length;
 
     await capturedReplyOptions?.onQueuedFollowupSettled?.();
@@ -4600,7 +4600,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           run: async () => {
             checkpoint();
             expect(postedMessageId).toBe("171234.567");
-            expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
+            expect(draftUpdateTexts(draftStream)).toEqual([
+              "I will check the result.\n\n_I will check the result._",
+            ]);
           },
         },
         {
@@ -4616,8 +4618,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
             checkpoint();
             // A human reply can rotate the preview at this point. Keeping the
             // last complete preamble prevents an abandoned word fragment.
-            expectLastDraftUpdateText(draftStream, "_I will check the result._");
-            expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
+            expectLastDraftUpdateText(
+              draftStream,
+              "I will check the result.\n\n_I will check the result._",
+            );
+            expect(draftUpdateTexts(draftStream)).toEqual([
+              "I will check the result.\n\n_I will check the result._",
+            ]);
             expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
               allowNewMessage: true,
             });
@@ -4652,7 +4659,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       // Assert the intermediate observations ran; the final text alone cannot
       // prove that Slack never received a first-token notification.
       expect(checkpoint).toHaveBeenCalledTimes(4);
-      expectLastDraftUpdateText(draftStream, "_The result is ready._");
+      expectLastDraftUpdateText(draftStream, "The result is ready.\n\n_The result is ready._");
       expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
         allowNewMessage: true,
       });
@@ -4661,7 +4668,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     },
   );
 
-  it("keeps only the latest Slack commentary when tool progress is disabled", async () => {
+  it("keeps the latest Slack commentary as both headline and bounded history", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
@@ -4704,7 +4711,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBe(true);
     expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expectLastDraftUpdateText(draftStream, "_Preparing the smallest fix_");
+    expectLastDraftUpdateText(
+      draftStream,
+      "Preparing the smallest fix\n\n_Preparing the smallest fix_",
+    );
     expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
 
     const updateCount = draftStream.update.mock.calls.length;
@@ -4718,50 +4728,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(updateCount);
   });
 
-  it("preserves Markdown in Slack commentary drafts for the outbound renderer", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedSlackStreamingMode = "progress";
-    mockedSlackDraftMode = "status_final";
-    mockedDispatchSequence = [];
-    mockedReplyOptionEvents = [
-      {
-        kind: "item",
-        itemKind: "preamble",
-        itemId: "preamble-1",
-        progressText: "I’m using the `monorepo` skill on Linux x86_64.",
-      },
-    ];
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: {
-          streaming: {
-            mode: "progress",
-            progress: { label: false, commentary: true, toolProgress: false },
-          },
-        },
-      }),
-    );
-
-    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86_64._");
-  });
-
-  it("renders italic draft commentary with inline code and neutralized mentions", async () => {
-    const { normalizeSlackOutboundText } =
-      await vi.importActual<typeof import("../../format.js")>("../../format.js");
-    const { formatSlackProgressDraftLine } = await import("./dispatch-progress-card.js");
-    normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
-    try {
-      expect(
-        formatSlackProgressDraftLine("_Check *x* with `src/one.ts` for <@U123> & <!channel>_"),
-      ).toBe("_Check x with `src/one.ts` for &lt;@U123&gt; &amp; &lt;!channel&gt;_");
-    } finally {
-      normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
-    }
-  });
-
-  it("escapes Slack mentions and renders commentary without losing outer italics or inline code", async () => {
+  it.each([
+    {
+      name: "preserves Markdown for the outbound renderer",
+      normalize: false,
+      text: "I’m using the `monorepo` skill on Linux x86_64.",
+      expected:
+        "I’m using the `monorepo` skill on Linux x86_64.\n\n_I’m using the `monorepo` skill on Linux x86_64._",
+    },
+    {
+      name: "escapes mentions while preserving outer italics and inline code",
+      normalize: true,
+      text: "checking <@U123> in <#C123> and <!channel> with *urgent* _context_ `src/one.ts`",
+      expected:
+        "checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with *urgent* _context_ `src/one.ts`\n\n_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
+    },
+  ])("Slack commentary $name", async ({ text, expected, normalize }) => {
     const { normalizeSlackOutboundText } =
       await vi.importActual<typeof import("../../format.js")>("../../format.js");
     const draftStream = createDraftStreamStub();
@@ -4770,17 +4752,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
-      {
-        kind: "item",
-        itemKind: "preamble",
-        itemId: "preamble-1",
-        progressText:
-          "checking <@U123> in <#C123> and <!channel> with *urgent* _context_ `src/one.ts`",
-      },
+      { kind: "item", itemKind: "preamble", itemId: "preamble-1", progressText: text },
     ];
 
     await normalizeSlackOutboundTextMock.withImplementation(
-      normalizeSlackOutboundText,
+      normalize ? normalizeSlackOutboundText : (value: string) => value.trim(),
       async () => {
         await dispatchPreparedSlackMessage(
           createPreparedSlackMessage({
@@ -4795,10 +4771,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
     );
 
-    expectLastDraftUpdateText(
-      draftStream,
-      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
-    );
+    expectLastDraftUpdateText(draftStream, expected);
+  });
+
+  it("renders italic draft commentary with inline code and neutralized mentions", async () => {
+    const { normalizeSlackOutboundText } =
+      await vi.importActual<typeof import("../../format.js")>("../../format.js");
+    const { formatSlackProgressDraftLine } = await import("./dispatch-progress-card.js");
+    normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
+    try {
+      expect(
+        formatSlackProgressDraftLine("_Check *x* with `src/one.ts` for <@U123> & <!channel>_"),
+      ).toBe("_Check x with `src/one.ts` for &lt;@U123&gt; &amp; &lt;!channel&gt;_");
+    } finally {
+      normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
+    }
   });
 
   it("keeps the full latest preamble in the card and posts the final answer separately", async () => {
@@ -4844,8 +4831,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftUpdateTexts(draftStream)).toContain(`_${firstPreamble}_`);
-    expectLastDraftUpdateText(draftStream, `_${latestPreamble}_`);
+    expect(draftUpdateTexts(draftStream)).toContain(`${firstPreamble}\n\n_${firstPreamble}_`);
+    expectLastDraftUpdateText(draftStream, `${latestPreamble}\n\n_${latestPreamble}_`);
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "progress final edit", {
       channelId: "C123",
@@ -4912,7 +4899,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       ).toBe(true);
       expect(draftUpdateTexts(draftStream)).toEqual(
         ["Checking the current Slack behavior.", "The fix is ready; I’m checking the result."].map(
-          (text) => (commentary ? `_${text}_` : text),
+          (text) => (commentary ? `${text}\n\n_${text}_` : text),
         ),
       );
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
@@ -5055,7 +5042,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({ eventScope }),
     );
-    expectLastDraftUpdateText(draftStream, "_Using the scoped listener client_");
+    expectLastDraftUpdateText(
+      draftStream,
+      "Using the scoped listener client\n\n_Using the scoped listener client_",
+    );
   });
 
   it("renders the latest Slack preamble as the status headline by default", async () => {

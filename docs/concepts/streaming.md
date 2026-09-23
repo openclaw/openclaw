@@ -294,11 +294,13 @@ Slack-only:
 ### Slack
 
 - Compact progress with `streaming.progress.toolProgress: false` preserves
-  the latest model preamble. With `commentary: true`, `label: false`, and
-  `maxLines: 1`, it is one italicized, temporary message without reasoning,
+  the latest completed model preamble as the headline. With `commentary: true`,
+  the same text also appears in the bounded italicized history below it;
+  `maxLines` limits that history without removing the headline. The temporary
+  message has no reasoning,
   tool icons, command failures, plans, or file-edit counters. The first post
   waits for a complete preamble so its Slack notification is readable; later
-  preambles edit that message. Actionable approval requests remain visible.
+  completed preambles edit that message. Actionable approval requests remain visible.
   The final answer is a new reply, and only after Slack confirms delivery is
   the preview deleted. Successful silent turns also remove their preview;
   explicit message-tool posts remain durable.
@@ -412,8 +414,9 @@ Progress-mode drafts (`streaming.progress.*`) have these per-channel settings:
 | `streaming.progress.label`        | `"auto"`      | Draft title; a custom string, or `false` to hide it            |
 | `streaming.progress.labels`       | built-in pool | Candidate labels used when `label: "auto"`                     |
 
-Slack always renders progress mode as its fixed session-card layout; these
-limits still bound the activity rows and plan text inside that card.
+Slack uses a card layout by default; these limits bound its activity rows and
+plan text. With `progress.style: "compact"`, they bound the plain-text draft's
+history instead.
 
 ### Commentary progress lane
 
@@ -422,9 +425,11 @@ in the draft:
 
 - **`streaming.progress.commentary`** - render the model's pre-tool
   **commentary** (a short "I'll check... then..." narration) interleaved with
-  tool lines in the progress draft. On Discord and Telegram in progress mode,
-  the same preamble supplies the status headline even when this optional lane
-  is off; other channels keep their existing progress behavior. See
+  tool lines in the progress draft. Channels using the shared progress compositor
+  — Discord, Matrix, Mattermost, Microsoft Teams, Slack, and Telegram — use the
+  same completed preamble as the status headline. On channels that expose the
+  optional commentary setting, enabling it also retains the preamble in bounded
+  interleaved history; Matrix and Mattermost do not expose this setting. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
 
 ```json
