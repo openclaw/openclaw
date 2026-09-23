@@ -129,6 +129,30 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "historical-eviction-candidates") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const { readHistoricalSessionIdsInDatabase } =
+          await import("./session-history-eviction-candidates.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, request.kind, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) =>
+                runSqliteDeferredTransactionSync(database.db, () =>
+                  readHistoricalSessionIdsInDatabase({ ...request, database }),
+                ),
+              { ...request.database, env: request.env },
+            );
+            if (!result.found) {
+              throw new Error(`SQLite history eviction cannot read its database: ${result.reason}`);
+            }
+            return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
+          })),
+        };
+      }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
           await import("./session-history-archive-pruning.worker.js");
