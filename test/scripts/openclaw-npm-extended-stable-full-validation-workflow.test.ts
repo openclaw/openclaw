@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -7,7 +9,7 @@ const fullValidationPath = ".github/workflows/full-release-validation.yml";
 const releaseChecksPath = ".github/workflows/openclaw-release-checks.yml";
 
 type Step = { env?: Record<string, string>; name?: string; run?: string };
-type Job = { steps?: Step[] };
+type Job = { outputs?: Record<string, string>; steps?: Step[] };
 type Workflow = { jobs?: Record<string, Job> };
 
 function workflow(path: string): Workflow {
@@ -47,7 +49,72 @@ function runReleaseChecksTrustedRefGuard(workflowRef: string): ReturnType<typeof
   });
 }
 
+function resolveLaneWaiver(rawWaiver: string, targetVersion: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-frv-lane-waiver-"));
+  const target = join(root, "target");
+  const output = join(root, "output");
+  mkdirSync(target);
+  writeFileSync(join(target, "package.json"), JSON.stringify({ version: targetVersion }));
+  try {
+    const step = workflowStep(
+      fullValidationPath,
+      "resolve_target",
+      "Resolve applicable lane waiver",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        REPOSITORY_LANE_WAIVER: rawWaiver,
+      },
+    });
+    return { output: readFileSync(output, "utf8"), result };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function outputValue(output: string): string {
+  if (output === "value=\n") {
+    return "";
+  }
+  const match = /^value<<(\S+)\n([\s\S]*)\n\1\n$/u.exec(output);
+  if (!match) {
+    throw new Error(`Invalid GitHub output: ${JSON.stringify(output)}`);
+  }
+  const value = match[2];
+  if (value === undefined) {
+    throw new Error(`Missing GitHub output value: ${JSON.stringify(output)}`);
+  }
+  return value;
+}
+
 describe("extended-stable Full Release Validation workflow", () => {
+  it("ignores a lane waiver owned by another release", () => {
+    const unrelated = resolveLaneWaiver("2026.9.6 ship now", "2026.8.33");
+    expect(unrelated.result.status, unrelated.result.stderr).toBe(0);
+    expect(outputValue(unrelated.output)).toBe("");
+    expect(unrelated.result.stdout).toContain("Lane waiver not applicable");
+
+    const matching = resolveLaneWaiver("2026.8.33 ship now", "2026.8.33");
+    expect(matching.result.status, matching.result.stderr).toBe(0);
+    expect(outputValue(matching.output)).toBe("2026.8.33 ship now");
+
+    const multiline = resolveLaneWaiver(
+      "2026.8.33 ship now\napproved by release owner",
+      "2026.8.33",
+    );
+    expect(multiline.result.status, multiline.result.stderr).toBe(0);
+    expect(outputValue(multiline.output)).toBe("2026.8.33 ship now\napproved by release owner");
+
+    const source = readFileSync(fullValidationPath, "utf8");
+    const resolveTarget = workflow(fullValidationPath).jobs?.resolve_target;
+    expect(resolveTarget?.outputs?.lane_waiver).toBe("${{ steps.lane_waiver.outputs.value }}");
+    expect(source.match(/vars\.OPENCLAW_FRV_LANE_WAIVER/gu)).toHaveLength(2);
+  });
+
   it("passes frozen target context to both plugin prerelease phases", () => {
     const phases = [
       {

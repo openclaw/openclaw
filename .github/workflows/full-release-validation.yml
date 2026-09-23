@@ -196,6 +196,7 @@ jobs:
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
       target_version: ${{ steps.release_inputs.outputs.target_version }}
+      lane_waiver: ${{ steps.lane_waiver.outputs.value }}
       coverage_policy: ${{ steps.release_inputs.outputs.coverage_policy }}
       ci_release_scope: ${{ steps.release_inputs.outputs.ci_release_scope }}
       skip_package_telegram_e2e: ${{ steps.release_inputs.outputs.skip_package_telegram_e2e }}
@@ -461,6 +462,33 @@ jobs:
           echo 'required=false' >> "$GITHUB_OUTPUT"
           echo '::warning::Frozen target predates the plugin compatibility release gate; skipping target-owned compatibility readiness.'
 
+      - name: Resolve applicable lane waiver
+        id: lane_waiver
+        env:
+          REPOSITORY_LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+        run: |
+          set -euo pipefail
+          target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          lane_waiver=""
+          if [[ "$REPOSITORY_LANE_WAIVER" == "$target_version" || "$REPOSITORY_LANE_WAIVER" == "$target_version "* ]]; then
+            lane_waiver="$REPOSITORY_LANE_WAIVER"
+          elif [[ -n "${REPOSITORY_LANE_WAIVER// }" ]]; then
+            echo "::notice title=Lane waiver not applicable::Ignoring OPENCLAW_FRV_LANE_WAIVER for ${target_version}; it names another release."
+          fi
+          if [[ -z "$lane_waiver" ]]; then
+            echo 'value=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          delimiter="openclaw-lane-waiver-$(node -e "process.stdout.write(require('node:crypto').randomUUID())")"
+          while grep -Fqx "$delimiter" <<< "$lane_waiver"; do
+            delimiter="openclaw-lane-waiver-$(node -e "process.stdout.write(require('node:crypto').randomUUID())")"
+          done
+          {
+            printf 'value<<%s\n' "$delimiter"
+            printf '%s\n' "$lane_waiver"
+            printf '%s\n' "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Validate release inputs
         id: release_inputs
         env:
@@ -469,7 +497,7 @@ jobs:
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ steps.lane_waiver.outputs.value }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
@@ -489,12 +517,6 @@ jobs:
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
           target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
-          # The lane waiver rides on a repository variable (workflow_dispatch caps inputs at 25);
-          # it must name this exact target version so a stale value fails closed.
-          if [[ -n "${LANE_WAIVER// }" && "${LANE_WAIVER}" != "${target_version} "* && "${LANE_WAIVER}" != "${target_version}" ]]; then
-            echo "OPENCLAW_FRV_LANE_WAIVER must start with the target version ${target_version}: ${LANE_WAIVER}" >&2
-            exit 1
-          fi
           if [[ -n "${TELEGRAM_WAIVER:-}" ]]; then
             waived_channels="$(
             TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
@@ -815,7 +837,7 @@ jobs:
           COVERAGE_POLICY: ${{ steps.release_inputs.outputs.coverage_policy }}
           CI_RELEASE_SCOPE: ${{ steps.release_inputs.outputs.ci_release_scope }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ steps.lane_waiver.outputs.value }}
           WAIVED_INTEGRATION_CHANNELS: ${{ steps.release_inputs.outputs.waived_integration_channels }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -1038,7 +1060,7 @@ jobs:
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
@@ -1989,7 +2011,7 @@ jobs:
           COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           KNOWN_FLAKY_JOBS_JSON: ${{ needs.resolve_target.outputs.known_flaky_jobs_json || '[]' }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -2343,7 +2365,7 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           FULL_RELEASE_STATE_MODE: decision
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
@@ -2426,7 +2448,7 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           FULL_RELEASE_STATE_MODE: drain
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
@@ -2578,7 +2600,7 @@ jobs:
         env:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
@@ -2706,7 +2728,7 @@ jobs:
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
+          LANE_WAIVER: ${{ needs.resolve_target.outputs.lane_waiver }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
