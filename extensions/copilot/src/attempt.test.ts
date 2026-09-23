@@ -3057,6 +3057,7 @@ describe("runCopilotAttempt", () => {
         createdAt: 0,
       };
       const runtime: AgentHarnessTaskRuntime = {
+        assertTaskAssignmentSupported: () => undefined,
         createRunningTaskRun: () => task,
         tryCreateRunningTaskRun: () => task,
         recordTaskRunProgressByRunId: () => [],
