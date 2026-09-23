@@ -204,6 +204,7 @@ describe("client voice confirmation", () => {
   it.each([
     ["exec", "git clean -fdx"],
     ["bash", "mv a b"],
+    ["exec", "sed -n '-e$w /tmp/out' 1p"],
   ])(
     "requires confirmation for an unlisted destructive shell command: %s %s",
     (toolName, command) => {
@@ -218,19 +219,21 @@ describe("client voice confirmation", () => {
     },
   );
 
-  it.each(["ls -la", "grep -n TODO README.md"])(
-    "does not require confirmation for a classified read-only shell command: %s",
-    (command) => {
-      expect(
-        checkClientVoiceToolConfirmationPolicy({
-          voiceSessionId: "voice-1",
-          runId: "voice-run",
-          toolName: "exec",
-          toolParams: { command },
-        }),
-      ).toEqual({ allowed: true });
-    },
-  );
+  it.each([
+    "ls -la",
+    "grep -n TODO README.md",
+    "rg -n 'token|8123|http|secret' notes.md",
+    "find . -maxdepth 1 -type f | wc -l && find . -maxdepth 1 -type f ! -name '.*' | wc -l",
+  ])("does not require confirmation for a classified read-only shell command: %s", (command) => {
+    expect(
+      checkClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "voice-run",
+        toolName: "exec",
+        toolParams: { command },
+      }),
+    ).toEqual({ allowed: true });
+  });
 
   it("requires confirmation before delegating work outside the voice-bound run", () => {
     expect(
