@@ -5,8 +5,8 @@
   "type": "module",
   "dependencies": {
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.30",
-    "yaml": "2.9.0",
+    "typebox": "1.3.32",
+    "yaml": "2.9.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

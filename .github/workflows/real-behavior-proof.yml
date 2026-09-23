@@ -7,10 +7,6 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
-
 permissions: {}
 
 jobs:
@@ -18,10 +14,16 @@ jobs:
     name: PR context and evidence
     if: >-
       ${{
-        github.event.action != 'edited' ||
-        github.event.changes.body ||
-        github.event.changes.base
+        github.event.pull_request.user.type != 'Bot' &&
+        !endsWith(github.event.pull_request.user.login, '[bot]') &&
+        !startsWith(github.event.pull_request.user.login, 'app/') &&
+        !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+        (github.event.action != 'edited' ||
+          github.event.changes.body || github.event.changes.base)
       }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       issues: read

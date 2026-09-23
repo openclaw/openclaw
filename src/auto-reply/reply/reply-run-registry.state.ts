@@ -205,6 +205,7 @@ export function hasReplyOperationExecutionStarted(operation: ReplyOperation): bo
 }
 export const abortFrozenOperations = new WeakSet<ReplyOperation>();
 export const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
+export const producerCompletionByOperation = new WeakMap<ReplyOperation, Promise<void>>();
 export const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();
 type ReplyOperationAfterClear = {
   callbacks: Set<(sessionId: string) => void>;
@@ -287,9 +288,14 @@ export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
 }
 
 /** Resolve only the live operation admitted with this exact upstream signal. */
-export function resolveActiveReplyRunOwnerForSignal(
-  signal: AbortSignal,
-): { sessionId: string; sessionKey: string; abort: () => boolean } | undefined {
+export function resolveActiveReplyRunOwnerForSignal(signal: AbortSignal):
+  | {
+      sessionId: string;
+      sessionKey: string;
+      abort: () => boolean;
+      handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+    }
+  | undefined {
   const operation = operationsByUpstreamAbortSignal.get(signal);
   if (!operation) {
     return undefined;
@@ -309,6 +315,20 @@ export function resolveActiveReplyRunOwnerForSignal(
     sessionKey,
     // A retained selector must never cancel the operation that replaced this owner.
     abort: () => isCurrent() && operation.abortByUser(),
+    handoff: (settle) => {
+      const producerCompleted = producerCompletionByOperation.get(operation);
+      if (!isCurrent() || !producerCompleted) {
+        return false;
+      }
+      const settlement = settle(producerCompleted);
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId,
+        sessionKeys: [sessionKey],
+        start: () => settlement,
+      });
+      return true;
+    },
   };
 }
 

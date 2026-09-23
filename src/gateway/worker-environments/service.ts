@@ -516,6 +516,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();
     maintenanceAbort.abort();
@@ -659,6 +660,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    getDedicatedNodeLeaseSignal: providerLifecycle.getDedicatedNodeLeaseSignal,
     prepareProjectIntent: (...args: Parameters<typeof providerLifecycle.prepareIntent>) => {
       providerLifecycle.warmMachineShape(args[0]);
       return providerLifecycle.prepareIntent(...args);

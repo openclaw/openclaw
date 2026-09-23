@@ -123,6 +123,10 @@ export type OpenClawStateWorkerOperations = WorktreeRegistryReadOperations &
   TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations & {
+    "worktrees.releaseRunLease": {
+      input: { worktreeId: string; token: string };
+      output: void;
+    };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };

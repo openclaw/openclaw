@@ -14,7 +14,6 @@ import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -85,8 +84,8 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
-import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
+import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -388,18 +387,15 @@ export function createOpenClawCodingToolsInternal(
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
   const cronManagementGrant = bindCronManagementGrant(options?.runId);
-  // Exact-run capabilities authorize only their automation operations. Keep every
-  // other owner-only control-plane tool denied for senderless operator turns.
-  const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) =>
-            toolName !== AUTOMATIONS_TOOL_NAME ||
-            !(cronCreatorAuthorityResolver || cronManagementGrant),
-        )
-      : [];
-  const ownerOnlyCoreToolPolicy =
-    ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
+  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy } =
+    prepareSessionPortalToolAccess({
+      sessionKey: executionSessionKey,
+      agentId: executionAgentId,
+      sessionId: options?.sessionId,
+      senderIsOwner: options?.senderIsOwner,
+      sandboxed: Boolean(sandbox),
+      hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
+    });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
@@ -527,6 +523,7 @@ export function createOpenClawCodingToolsInternal(
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
+            sessionPortalTarget,
             ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,

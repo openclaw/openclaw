@@ -21,7 +21,11 @@ import {
   transcriptArchiveIdentityKey,
   uniqueTranscriptArchives,
 } from "./session-accessor.sqlite-archive-store-kernel.js";
-import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import type {
+  MaterializedSessionStateDeletePlan,
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+} from "./session-accessor.sqlite-archive-types.js";
 import { runSqliteTranscriptArchivePublishWorker } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -105,6 +109,12 @@ export function persistSessionTranscriptArchive(
 export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
+  storage?: {
+    prepare(
+      requested: readonly SessionLifecycleArchivedTranscript[],
+    ): Promise<TranscriptArchivePublishPlan[]>;
+    record(results: readonly TranscriptArchivePublishResult[]): Promise<void>;
+  },
 ): Promise<SessionLifecycleArchivedTranscript[]> {
   const requestedArchives = uniqueTranscriptArchives(requested);
   const requestedIdentitySet = new Set(
@@ -114,51 +124,57 @@ export async function publishSessionStateArchives(
   );
   let includeRequested = true;
   while (true) {
-    const plans = await runExclusiveSqliteSessionWrite(
-      scope,
-      async () => {
-        const databaseOptions = toDatabaseOptions(scope);
-        const requestedForPass = includeRequested ? requestedArchives : [];
-        if (requestedForPass.length === 0 && !getOpenClawAgentDatabaseIfOpen(databaseOptions)) {
-          try {
-            const pending = withOpenClawAgentDatabaseReadOnly(
-              (database) =>
-                runSqliteDeferredTransactionSync(database.db, () =>
-                  hasPendingSessionTranscriptArchives(database),
-                ),
-              databaseOptions,
-            );
-            if (!pending.found || !pending.value) {
-              return [];
+    const requestedForPass = includeRequested ? requestedArchives : [];
+    const plans = storage
+      ? await storage.prepare(requestedForPass)
+      : await runExclusiveSqliteSessionWrite(
+          scope,
+          async () => {
+            const databaseOptions = toDatabaseOptions(scope);
+            if (requestedForPass.length === 0 && !getOpenClawAgentDatabaseIfOpen(databaseOptions)) {
+              try {
+                const pending = withOpenClawAgentDatabaseReadOnly(
+                  (database) =>
+                    runSqliteDeferredTransactionSync(database.db, () =>
+                      hasPendingSessionTranscriptArchives(database),
+                    ),
+                  databaseOptions,
+                );
+                if (!pending.found || !pending.value) {
+                  return [];
+                }
+              } catch {
+                // Pending or uncertain publication still uses the canonical writable planner.
+              }
             }
-          } catch {
-            // Pending or uncertain publication still uses the canonical writable planner.
-          }
-        }
-        const database = openOpenClawAgentDatabase(databaseOptions);
-        return prepareSessionTranscriptArchivePublishPlans(database, {
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
-          requested: requestedForPass,
-        });
-      },
-      "session.archive.publish-prepare",
-    );
+            const database = openOpenClawAgentDatabase(databaseOptions);
+            return prepareSessionTranscriptArchivePublishPlans(database, {
+              archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
+              requested: requestedForPass,
+            });
+          },
+          "session.archive.publish-prepare",
+        );
     includeRequested = false;
     if (plans.length === 0) {
       break;
     }
 
     const results = await runSqliteTranscriptArchivePublishWorker(plans);
-    await runExclusiveSqliteSessionWrite(
-      scope,
-      async () => {
-        const now = Date.now();
-        runOpenClawAgentWriteTransaction((transactionDb) => {
-          recordSessionTranscriptArchivePublishResults(transactionDb, results, now);
-        }, toDatabaseOptions(scope));
-      },
-      "session.archive.publish-commit",
-    );
+    if (storage) {
+      await storage.record(results);
+    } else {
+      await runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          const now = Date.now();
+          runOpenClawAgentWriteTransaction((transactionDb) => {
+            recordSessionTranscriptArchivePublishResults(transactionDb, results, now);
+          }, toDatabaseOptions(scope));
+        },
+        "session.archive.publish-commit",
+      );
+    }
 
     const planByIdentity = new Map(
       plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),

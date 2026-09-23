@@ -1042,6 +1042,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
+      "test/plugins/browser-session-authority.gateway.test.ts",
+      "test/plugins/chat-abort-codex.gateway.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
       "test/plugins/crabbox-allocation-authority.gateway.test.ts",
       "test/plugins/team-reports-http.gateway.test.ts",
