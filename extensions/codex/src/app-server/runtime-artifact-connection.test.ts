@@ -58,7 +58,6 @@ describe("configured Codex connection verification", () => {
       command: "/another/local/codex",
       args: ["app-server", "--another-local-option"],
       env: { PATH: "/another/local/path", CODEX_HOME: "/local/home" },
-      codexHome: "/another/local/home",
     });
     expect(validateCodexConfiguredConnectionCapture(binding, capture)).toBe(true);
   });
