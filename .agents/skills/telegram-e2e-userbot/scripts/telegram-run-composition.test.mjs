@@ -18,7 +18,7 @@ function deadline(promise, label, milliseconds = 1500) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function composition(mode) {
+async function composition(mode, acquisitionReady = Promise.resolve()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-run-composition-"));
   const children = [];
   const watchers = [];
@@ -43,7 +43,13 @@ async function composition(mode) {
     if (events.includes(name)) return Promise.resolve();
     const waiter = Promise.withResolvers();
     waiters.set(name, waiter);
-    return waiter.promise;
+    return Promise.race([
+      waiter.promise,
+      outcome.then((result) => {
+        if (!result.ok) throw result.error;
+        throw new Error(`Telegram run completed before ${name}.`);
+      }),
+    ]);
   };
   fs.mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"));
@@ -241,7 +247,10 @@ sys.exit(record.main())
   const run = runTelegramTestScenario({
     repoRoot: root,
     signal: controller.signal,
-    acquireCredential: async () => credential,
+    acquireCredential: async () => {
+      await acquisitionReady;
+      return credential;
+    },
     args: {
       backend: "mock",
       dm: true,
@@ -340,6 +349,10 @@ test("run owner cancels provider startup before the banner deadline", async () =
     f.controller.abort(new Error("cancel startup"));
     const result = await deadline(f.outcome, "provider wait ignored run cancellation");
     assert.equal(result.ok, false);
+    await assert.rejects(
+      Promise.race([f.wait("restart-stop"), new Promise((resolve) => setImmediate(resolve))]),
+      (error) => error === result.error,
+    );
     assert.equal(f.events.includes("gateway-spawn"), false);
     assert.equal(f.releaseCount(), 1);
     const config = JSON.parse(fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8"));
@@ -379,12 +392,18 @@ test("unconfirmed child termination cannot report clean release", async () => {
 });
 
 test("closed run admission rejects a Gateway replacement after awaited stop", async () => {
-  const f = await composition("late");
+  const acquisition = Promise.withResolvers();
+  const f = await composition("late", acquisition.promise);
   try {
-    await deadline(
-      f.wait("restart-stop"),
-      "configuration replacement did not reach old-child stop",
-    );
+    let stopped = false;
+    const restartStop = f.wait("restart-stop").then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+    assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
+    acquisition.resolve();
+    await restartStop;
     f.controller.abort(new Error("cancel replacement"));
     f.finishOldGatewayStop();
     const result = await deadline(
@@ -399,6 +418,7 @@ test("closed run admission rejects a Gateway replacement after awaited stop", as
     );
     assert.equal(result.ok, false, "replacement cancellation must finish as a failed run");
   } finally {
+    acquisition.resolve();
     await f.cleanup();
   }
 });
@@ -408,6 +428,10 @@ test("uninterrupted composition completes strict readiness and drive on one leas
   try {
     const result = await deadline(f.outcome, "positive composition did not complete", 10000);
     assert.equal(result.ok, true, String(result.error));
+    await assert.rejects(
+      Promise.race([f.wait("restart-stop"), new Promise((resolve) => setImmediate(resolve))]),
+      /Telegram run completed before restart-stop/,
+    );
     assert.equal(f.releaseCount(), 1);
     const evidence = fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8");
     const config = JSON.parse(evidence);
