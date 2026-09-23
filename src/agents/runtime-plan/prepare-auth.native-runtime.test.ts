@@ -78,6 +78,26 @@ describe("native runtime auth deferral", () => {
     expect(plan.credentialSource).toBeUndefined();
   });
 
+  it("keeps a previously selected automatic profile on the host route for this run", () => {
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "openai",
+      modelId: "gpt-6-luna",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      env: {},
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      harnessAuthBootstrap: "harness",
+      config: openAIConfig({ models: lunaReasoningCatalog() }),
+      authProfileStore: openAIOAuthStore(),
+      sessionAuthProfileId: "openai:chatgpt",
+      sessionAuthProfileSource: "auto",
+    });
+
+    expect(plan.forwardedAuthProfileId).toBe("openai:chatgpt");
+    expect(plan.modelRoute).toBeDefined();
+  });
+
   it("honors explicit auth order for a reasoning-only catalog row", () => {
     const config: OpenClawConfig = {
       auth: { order: { openai: ["openai:chatgpt"] } },

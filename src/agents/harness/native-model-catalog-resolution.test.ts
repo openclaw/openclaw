@@ -30,6 +30,8 @@ function fixture(
     current?: () => boolean;
     ready?: boolean;
     load?: PreparedModelRuntimeSnapshot["loadFullModelCatalog"];
+    loadNative?: PreparedModelRuntimeSnapshot["loadNativeModelCatalog"];
+    readFull?: PreparedModelRuntimeSnapshot["readFullModelCatalog"];
   } = {},
 ) {
   const config: OpenClawConfig = params.config ?? {
@@ -69,6 +71,8 @@ function fixture(
     findConfiguredRuntimeModel: () => undefined,
     isCurrent: params.current ?? (() => true),
     modelCatalog: catalog(params.entries ?? []),
+    ...(params.readFull ? { readFullModelCatalog: params.readFull } : {}),
+    ...(params.loadNative ? { loadNativeModelCatalog: params.loadNative } : {}),
     ...(params.load ? { loadFullModelCatalog: params.load } : {}),
     configuredRuntimeModels: [],
     inlineProviderModels: [],
@@ -197,6 +201,35 @@ describe("first-turn native model catalog resolution", () => {
       await vi.advanceTimersByTimeAsync(12_000);
       await expect(resolved).resolves.toBeUndefined();
       expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when the owner becomes stale before the foreground timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let current = true;
+      const { harness, snapshot } = fixture({
+        current: () => current,
+        readFull: () => {
+          if (!current) {
+            throw new Error("prepared model runtime owner is stale");
+          }
+          return catalog([]);
+        },
+        loadNative: vi.fn(async () => new Promise<ModelCatalogSnapshot>(() => {})),
+      });
+      const resolved = resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      });
+
+      current = false;
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(resolved).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
