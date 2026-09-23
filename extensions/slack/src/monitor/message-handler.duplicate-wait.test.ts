@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSlackAccount } from "../accounts.js";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
@@ -91,6 +92,7 @@ describe("Slack duplicate wait admission", () => {
     guard.claim = claim;
     const handler = createSlackMessageHandler({
       ctx: createContext(),
+      account: resolveSlackAccount({ cfg: {}, accountId: "default" }),
       abortSignal: controller.signal,
       dispatchReplayGuard: guard,
     });

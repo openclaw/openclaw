@@ -2,11 +2,7 @@ import { getEventListeners } from "node:events";
 import path from "node:path";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import {
-  createMockPluginRegistry,
-  createPluginMetadataSnapshotFixture,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createPluginMetadataSnapshotFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mcpMocks = vi.hoisted(() => ({

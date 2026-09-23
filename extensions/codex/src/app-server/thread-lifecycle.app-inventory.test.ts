@@ -70,9 +70,9 @@ describe("Codex app inventory across physical process restart", () => {
     nativeApps: JsonObject = {},
     restricted = false,
   ) {
-    if (restricted) {
-      configuredPlugins = { ...configuredPlugins, codexPlugins: { enabled: false } };
-    }
+    const effectivePlugins = restricted
+      ? { ...configuredPlugins, codexPlugins: { enabled: false } }
+      : configuredPlugins;
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     const params = createParams(
@@ -342,9 +342,9 @@ describe("Codex app inventory across physical process restart", () => {
       processes.push({ close });
       const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
-      const policy = resolveCodexPluginsPolicy(configuredPlugins);
+      const policy = resolveCodexPluginsPolicy(effectivePlugins);
       const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-        pluginConfig: configuredPlugins,
+        pluginConfig: effectivePlugins,
         appCacheKey,
       });
       const provider = () =>
@@ -356,7 +356,7 @@ describe("Codex app inventory across physical process restart", () => {
           policy,
           requestTimeoutMs: appServer.requestTimeoutMs,
           signal: abort.signal,
-          pluginConfig: configuredPlugins,
+          pluginConfig: effectivePlugins,
           client: fake.client,
           configCwd: workspaceDir,
           appCache,

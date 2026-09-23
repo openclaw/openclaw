@@ -122,9 +122,9 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
         workspaceDir: executionRoot,
         skillsSnapshot,
         trigger: "cron",
-        toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
       }),
     );
+    expect(runCliAgentMock.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 

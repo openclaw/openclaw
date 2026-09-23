@@ -605,7 +605,7 @@ async function dispatchSlackMessageWithSetup(
           }
           return await progress.pushPlanProgress(payload.steps, payload.explanation);
         },
-        onApprovalEvent: progress.progressDraft.pushApprovalEvent,
+        onApprovalEvent: (payload) => progress.progressDraft.pushApprovalEvent(payload),
         onCommandOutput: async (payload) =>
           progress.preambleOnlyProgress
             ? await progress.progressDraft.noteActivity()

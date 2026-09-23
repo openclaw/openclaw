@@ -527,7 +527,7 @@ describe("incomplete-turn error recovery", () => {
     ).toBe(false);
   });
 
-  it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
+  it("honors explicit NO_REPLY even when empty assistant replies are disallowed", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
       lastAssistant: makeLastAssistant({
@@ -540,7 +540,7 @@ describe("incomplete-turn error recovery", () => {
       shouldTreatEmptyAssistantReplyAsSilent(
         makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {

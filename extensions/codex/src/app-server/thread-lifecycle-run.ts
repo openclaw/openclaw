@@ -124,8 +124,7 @@ export async function startOrResumeThread(
       webSearchThreadConfigFingerprint,
     } = preflight;
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
-    const initialBoundThreadId = binding?.threadId;
-    const initialBoundClientId = binding?.clientId;
+    const { threadId: initialBoundThreadId, clientId: initialBoundClientId } = binding ?? {};
     const normalizeBindingModelProvider = (
       authProfileId: string | undefined,
       modelProvider: string | undefined,

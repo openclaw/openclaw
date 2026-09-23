@@ -5,10 +5,6 @@ import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveAndApplyOutboundReplyToId,
-  resolveAndApplyOutboundThreadId,
-} from "../../../src/infra/outbound/message-action-threading.js";
 import { slackPlugin } from "./channel.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { slackOutbound } from "./outbound-adapter.js";
@@ -1414,30 +1410,27 @@ describe("slackPlugin outbound", () => {
       currentMessageId: "1712345688.654321",
       replyToMode: "all" as const,
     };
-    const params: Record<string, unknown> = { message: "Still checking." };
-    const reply = resolveAndApplyOutboundReplyToId(params, {
-      channel: "slack",
-      toolContext,
-      matchesToolContextTarget: slackPlugin.threading?.matchesToolContextTarget,
-    });
-    const threadId = resolveAndApplyOutboundThreadId(params, {
+    const threadId = slackPlugin.threading?.resolveAutoThreadId?.({
       cfg,
       to: "channel:C123",
       toolContext,
-      resolveAutoThreadId: slackPlugin.threading?.resolveAutoThreadId,
-      resolveReplyTransport: slackPlugin.threading?.resolveReplyTransport,
-      replyToIsExplicit: reply?.source === "explicit",
+    });
+    const reply = slackPlugin.threading?.resolveReplyTransport?.({
+      cfg,
+      threadId,
+      replyToId: toolContext.currentMessageId,
+      replyToIsExplicit: false,
     });
 
     await requireSlackSendText()({
       cfg,
       to: "channel:C123",
       text: "Still checking.",
-      replyToId: String(params.replyTo),
+      replyToId: reply?.replyToId,
       threadId,
     });
 
-    expect(params.replyTo).toBe("1712345678.123456");
+    expect(reply?.replyToId).toBe("1712345678.123456");
     expect(threadId).toBe("1712345678.123456");
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "channel:C123",

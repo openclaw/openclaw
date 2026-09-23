@@ -524,7 +524,7 @@ export function buildDisabledAppsConfigPatch(): JsonObject & { apps: JsonObject 
   };
 }
 
-export function disableUnlistedCodexApps(
+function disableUnlistedCodexApps(
   configPatch: { apps: JsonObject },
   nativeConfig: Record<string, unknown>,
 ): JsonObject & { apps: JsonObject } {
@@ -718,7 +718,7 @@ function fingerprintJson(value: JsonValue): string {
   return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
 }
 
-export function stringifyCodexPluginPolicy(value: unknown): string {
+function stringifyCodexPluginPolicy(value: unknown): string {
   // Fingerprints must be process-stable across object insertion order so prompt
   // cache and thread-binding comparisons do not churn between runs.
   if (Array.isArray(value)) {

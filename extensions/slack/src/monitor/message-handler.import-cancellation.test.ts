@@ -2,7 +2,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { expect, it, vi } from "vitest";
 import { createSlackMessageHandler } from "./message-handler.js";
-import { createInboundSlackTestContext } from "./message-handler/prepare.test-helpers.js";
+import {
+  createInboundSlackTestContext,
+  createSlackTestAccount,
+} from "./message-handler/prepare.test-helpers.js";
 
 const importStarted = createDeferred<void>();
 const importGate = createDeferred<void>();
@@ -17,7 +20,6 @@ vi.mock("./message-handler/pipeline.runtime.js", async () => {
 
 it("releases the replay claim when cancellation interrupts the lazy pipeline import", async () => {
   const ctx = createInboundSlackTestContext({ cfg: { messages: { inbound: { debounceMs: 0 } } } });
-  ctx.readRuntimeContext = async () => ctx;
   const controller = new AbortController();
   const guard = createChannelReplayGuard<{ keys: readonly string[] }>({
     dedupe: { ttlMs: 0, memoryMaxSize: 10 },
@@ -31,6 +33,7 @@ it("releases the replay claim when cancellation interrupts the lazy pipeline imp
   vi.spyOn(guard, "claim").mockResolvedValue({ kind: "claimed", handle: claim });
   const handler = createSlackMessageHandler({
     ctx,
+    account: createSlackTestAccount(),
     abortSignal: controller.signal,
     dispatchReplayGuard: guard,
   });
