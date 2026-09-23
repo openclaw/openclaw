@@ -6,6 +6,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { isDecisionTaskOwnedBy } from "../decisions/task-ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginCandidate } from "./discovery.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
@@ -506,6 +507,9 @@ export function buildPluginManifestRecord(params: {
     ),
     transcriptSources: params.manifest.transcriptSources,
     decisionModels: params.manifest.decisionModels,
+    decisionTasks: params.manifest.decisionTasks?.filter((task) =>
+      isDecisionTaskOwnedBy(task.id, pluginId),
+    ),
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,

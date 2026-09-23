@@ -535,6 +535,8 @@ const enSettings = {
     },
     defaults: {
       title: "Defaults for all agents",
+      llmSection: "LLM models",
+      utilitySection: "Utility",
       subtitle:
         "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",

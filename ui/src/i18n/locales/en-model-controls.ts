@@ -24,13 +24,56 @@ const enModelControls = {
             "Anthropic models can use the API or Claude CLI, depending on their configured runtime and account. The provider name alone does not determine billing.",
         },
       },
-      decisionLabel: "Decision Model",
+      decisionLabel: "Decision model",
+      decisionDefaultLabel: "Decision model",
+      decisionSection: "Decision models",
+      decisionHelpLabel: "About decision models",
+      decisionGlobalScope: "All agents",
+      decisionAddModel: "Add decision model",
+      decisionChooseModel: "Choose a model to configure",
+      decisionSetupIntro:
+        "Configure a provider before adding a model. Adding it does not select it for any task.",
+      decisionSetupProviderHelp:
+        "Open the provider settings to configure credentials or a local endpoint, and enable the provider if needed.",
+      decisionConfigureProvider: "Configure provider ↗",
+      decisionBrowseProviders: "Find a decision provider ↗",
+      decisionSetupReturn:
+        "Provider settings open in a new tab. After saving there, return here and add the model to your list. This does not test the connection.",
+      decisionRegisterModel: "Add to Decision models",
+      decisionCoreOverride: "Saved built-in task override",
+      decisionReplaceTitle: "Replace this model before removing it",
+      decisionReplaceHelp:
+        "This model is used by the following settings. Choose a replacement to keep them working.",
+      decisionReplacement: "Replacement decision model",
+      decisionChooseReplacement: "Choose a replacement",
+      decisionReplaceRemove: "Replace and remove",
+      decisionInventorySaved: "Decision models updated.",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",
+      decisionTaskInherit: "Use inherited model · {model}",
+      decisionTaskLabel: "Decision model · {task}",
+      decisionTaskDisabled: "Disabled by the effective Decision Model setting.",
+      decisionTaskDisabledByAgent: "Disabled by this agent's Decision Model setting.",
+      decisionTaskDisabledByDefault: "Disabled by the global Decision Model setting.",
+      decisionTaskUnconfigured: "No Decision model is configured for this task yet.",
+      decisionTaskSource: {
+        "agent-task": "Uses this agent's task override.",
+        "global-task": "Uses the global task override.",
+        agent: "Uses this agent's Decision model.",
+        default: "Uses the global Decision model.",
+        none: "No Decision model is configured.",
+      },
+      decisionTaskCore: "Decision model",
+      decisionTaskUndeclared: "This task is no longer available. Its saved selection is preserved.",
       decisionUnavailable:
         "This decision model is unavailable. Enable its plugin or choose another model.",
       decisionHelp:
-        "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
+        "Makes typed choices, scores, and yes/no judgments. The default applies to tasks without an override. Chat models are not used as a fallback.",
+      decisionTaskOnlyHelp:
+        "You can choose a different model for each task, or disable a task. Task-specific selections also work without a default decision model.",
+      decisionTaskOnlyAgentHelp:
+        "No default decision model is selected. Task-specific selections can still enable supported tasks.",
+      decisionTaskOnlyScalar: "No default model · choose per task",
       decisionAgentHelp:
         "Use the global decision model, choose an override, or disable decisions for this agent.",
       effort: "Effort",

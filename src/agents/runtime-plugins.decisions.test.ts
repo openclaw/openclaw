@@ -20,7 +20,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it("lets a separate credential-free plugin invoke the prepared Gateway decision provider", async () => {
+it.each([undefined, "consumer/check"])("prepared provider for task %s", async (taskId) => {
   const state = await createOpenClawTestState({
     prefix: "decisions-prepared-registry-",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
@@ -62,7 +62,7 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
         async execute() {
           const details = await api.runtime.decisions.evaluate(
             { state: "synthetic", questions: { check: { type: "boolean" } } },
-            { purpose: "test", rubricVersion: "1", timeoutMs: 1000, signal: new AbortController().signal }
+            { taskId: ${JSON.stringify(taskId) ?? "undefined"}, purpose: "test", rubricVersion: "1", timeoutMs: 1000, signal: new AbortController().signal }
           );
           return { content: [], details };
         }
@@ -76,7 +76,11 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     configSchema: { type: "object", additionalProperties: false },
   });
   const source: OpenClawConfig = {
-    agents: { defaults: { decisionModel: "fixture/synthetic" } },
+    agents: {
+      defaults: taskId
+        ? { decisionModelsByTask: { [taskId]: "fixture/synthetic" } }
+        : { decisionModel: "fixture/synthetic" },
+    },
     plugins: {
       allow: ["fixture", "consumer"],
       slots: { memory: "none" },

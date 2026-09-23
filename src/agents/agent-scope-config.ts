@@ -81,6 +81,7 @@ export type ResolvedAgentConfig = {
   agentRuntime?: AgentEntry["agentRuntime"];
   utilityModel?: AgentEntry["utilityModel"];
   decisionModel?: AgentEntry["decisionModel"];
+  decisionModelsByTask?: AgentEntry["decisionModelsByTask"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
@@ -420,6 +421,7 @@ export function resolveAgentConfig(
     ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
     decisionModel: readStringValue(entry.decisionModel),
+    decisionModelsByTask: entry.decisionModelsByTask,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,

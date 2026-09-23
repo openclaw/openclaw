@@ -15,6 +15,36 @@ import {
   resolveDefaultModelPresentation,
 } from "./data.ts";
 
+it.each(["restricted", "retired"])(
+  "does not restore configured task references when the catalog is %s",
+  (state) => {
+    const { defaults } = resolveDefaultModelPresentation(
+      {
+        models: [],
+        hasSnapshot: true,
+        retired: state === "retired",
+        ...(state === "restricted"
+          ? { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }
+          : {}),
+      },
+      {
+        primary: "private/chat",
+        fallbacks: [],
+        utilityModel: null,
+        decisionModel: "private/model",
+        decisionModelsByTask: { "private/task": "private/model" },
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      },
+      null,
+    );
+    expect(defaults.decisionModelsByTask).toBeUndefined();
+    expect(defaults.decisionModel).toBeNull();
+  },
+);
+
 function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string }) {
   return {
     id: `${overrides.provider}/model`,

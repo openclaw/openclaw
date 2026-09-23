@@ -7,9 +7,15 @@ import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
 } from "../../components/decision-model-picker.ts";
-import { icons } from "../../components/icons.ts";
+import {
+  decisionTaskEntries,
+  type DecisionTaskEntry,
+  renderDecisionTaskRows,
+  resolveGlobalDecisionTaskSelection,
+} from "../../components/decision-task-rows.ts";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import {
+  renderSettingsInfoTitle,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -23,10 +29,16 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import {
+  renderDecisionInventory,
+  type DecisionInventoryViewProps,
+} from "./decision-inventory-view.ts";
 
 type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
   decisionModels: DecisionModelEntry[];
+  decisionTasks: DecisionTaskEntry[];
+  decisionInventory: Omit<DecisionInventoryViewProps, "disabled">;
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
@@ -47,6 +59,7 @@ type DefaultModelsViewProps = {
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
+  onDecisionTaskChange: (taskId: string, model: string | null) => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -101,37 +114,6 @@ function modelOption(
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };
-}
-
-function renderHelpTitle(params: {
-  title: string;
-  label: string;
-  triggerId: string;
-  body: TemplateResult;
-}) {
-  return html`
-    <span class="model-providers__label-with-help">
-      <span>${params.title}</span>
-      <span class="settings-section__docs">
-        <openclaw-tooltip open-on-click>
-          <button
-            id=${params.triggerId}
-            type="button"
-            class="settings-section__help-button model-providers__help-button"
-            aria-label=${params.label}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key === "Escape") {
-                event.stopPropagation();
-              }
-            }}
-          >
-            ${icons.info}
-          </button>
-          <div slot="content" class="settings-section__help-panel">${params.body}</div>
-        </openclaw-tooltip>
-      </span>
-    </span>
-  `;
 }
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
@@ -201,194 +183,223 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       )
     : undefined;
 
-  const body = html`
-    <div class="model-providers__defaults">
-      ${
-        !props.loading && props.models.length === 0
-          ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>`
-          : nothing
-      }
-      ${renderSettingsRow({
-        title: t("modelProviders.defaults.primary"),
-        control: renderModelPicker({
-          label: t("modelProviders.defaults.primary"),
-          value: props.selection.primary,
-          options: [
-            {
-              value: "",
-              label: t("modelProviders.defaults.selectModel"),
-              disabled: Boolean(props.selection.primary),
-            },
-            ...options,
-          ],
-          disabled: modelControlsDisabled || saving,
-          title,
-          showSelectedDetail: true,
-          onChange: props.onPrimaryChange,
-        }),
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("modelProviders.defaults.utility"),
+  return html`
+    ${renderSettingsSection(
+      {
+        title: t("modelProviders.defaults.llmSection"),
+        description: t("modelProviders.defaults.subtitle"),
+        notice: html`
+          ${!props.loading && props.models.length === 0 ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>` : nothing}
+          ${renderCatalogProgress(props)}
+        `,
+      },
+      html`
+        ${renderSettingsRow({
+          title: t("modelProviders.defaults.primary"),
+          control: renderModelPicker({
+            label: t("modelProviders.defaults.primary"),
+            value: props.selection.primary,
+            options: [
+              {
+                value: "",
+                label: t("modelProviders.defaults.selectModel"),
+                disabled: Boolean(props.selection.primary),
+              },
+              ...options,
+            ],
+            disabled: modelControlsDisabled || saving,
+            title,
+            showSelectedDetail: true,
+            onChange: props.onPrimaryChange,
+          }),
+        })}
+        ${renderSettingsRow({
+          title: t("modelProviders.defaults.fallback"),
+          control: renderModelPicker({
+            label: t("modelProviders.defaults.fallback"),
+            value: fallback,
+            options: [
+              { value: "", label: t("modelProviders.defaults.noFallback") },
+              ...options.filter((option) => option.value !== props.selection.primary),
+            ],
+            disabled: modelControlsDisabled || saving || !props.selection.primary,
+            title,
+            showSelectedDetail: true,
+            onChange: (value) => props.onFallbackChange(value || null),
+          }),
+        })}
+        ${renderSettingsRow({
+          title: renderSettingsInfoTitle({
+            title: t("quickSettings.model.thinking"),
+            label: t("modelProviders.defaults.thinkingHelpLabel"),
+            triggerId: THINKING_HELP_ID,
+            body: html`
+              <p>${t("modelProviders.defaults.thinkingHelp")}</p>
+              <p>${t("modelProviders.defaults.thinkingDefaultHelp")}</p>
+            `,
+          }),
+          control: html`
+            ${renderSettingsSegmented({
+              value: props.thinkingLevel ?? "",
+              ariaLabel: t("quickSettings.model.thinking"),
+              options: [
+                {
+                  value: "",
+                  label: t("quickSettings.model.default"),
+                },
+                ...thinkingLevels.map((level) => ({
+                  value: level,
+                  label: THINKING_LEVEL_SET.has(level)
+                    ? t(`quickSettings.model.thinkingLevels.${level}`)
+                    : formatThinkingOverrideLabel(level),
+                })),
+              ],
+              disabled: saving || behaviorControlsDisabled,
+              onChange: (value, element) =>
+                value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+              onReselect: (value) => {
+                if (value === "" && props.thinkingOverridden) {
+                  props.onThinkingReset();
+                }
+              },
+            })}
+          `,
+        })}
+        ${renderSettingsRow({
+          title: renderSettingsInfoTitle({
+            title: t("quickSettings.model.fastMode"),
+            label: t("modelProviders.defaults.fastModeHelpLabel"),
+            triggerId: FAST_MODE_HELP_ID,
+            body: html`
+              <p>${t("modelProviders.defaults.fastModeHelp")}</p>
+              <p>${t("modelProviders.defaults.fastModeDefaultHelp")}</p>
+            `,
+          }),
+          control: html`
+            ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+              value: fastMode,
+              ariaLabel: t("quickSettings.model.fastMode"),
+              options: [
+                {
+                  value: "",
+                  label: t("quickSettings.model.default"),
+                },
+                { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+                { value: "on", label: t("quickSettings.model.fastModes.on") },
+                { value: "off", label: t("quickSettings.model.fastModes.off") },
+              ],
+              disabled: saving || behaviorControlsDisabled,
+              onChange: (value) => {
+                if (value === "") {
+                  props.onFastModeReset();
+                } else if (value !== fastMode) {
+                  props.onFastModeChange(fastModeOptionValue(value));
+                }
+              },
+              onReselect: (value) => {
+                if (value === "" && props.fastModeOverridden) {
+                  props.onFastModeReset();
+                }
+              },
+            })}
+          `,
+        })}
+      `,
+    )}
+    ${renderSettingsSection(
+      {
+        title: renderSettingsInfoTitle({
+          title: t("modelProviders.defaults.utilitySection"),
           label: t("modelProviders.defaults.utilityHelpLabel"),
           triggerId: UTILITY_MODEL_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
-            <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
-          `,
+          body: html`<p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
+            <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>`,
         }),
-        control: renderModelPicker({
-          id: UTILITY_MODEL_PICKER_ID,
-          label: t("modelProviders.defaults.utility"),
-          value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
-          options: [
-            {
-              value: AUTOMATIC_UTILITY_VALUE,
-              label: props.automaticUtilityModel
-                ? `${t("quickSettings.model.fastModes.auto")} · ${automaticModel?.label ?? props.automaticUtilityModel}`
-                : t("quickSettings.model.fastModes.auto"),
-              provider: automaticModel?.provider,
-              detail:
-                automaticRef === null
-                  ? t("modelProviders.defaults.automaticUnavailable")
-                  : automaticModel?.detail,
-            },
-            { value: "", label: t("modelProviders.defaults.disabled") },
-            ...options,
-          ],
-          disabled: modelControlsDisabled || saving,
-          title,
-          showSelectedDetail: true,
-          onChange: (value) =>
-            props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
+      },
+      html`
+        ${renderSettingsRow({
+          title: t("modelProviders.defaults.utility"),
+          control: renderModelPicker({
+            id: UTILITY_MODEL_PICKER_ID,
+            label: t("modelProviders.defaults.utility"),
+            value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
+            options: [
+              {
+                value: AUTOMATIC_UTILITY_VALUE,
+                label: props.automaticUtilityModel
+                  ? `${t("quickSettings.model.fastModes.auto")} · ${automaticModel?.label ?? props.automaticUtilityModel}`
+                  : t("quickSettings.model.fastModes.auto"),
+                provider: automaticModel?.provider,
+                detail:
+                  automaticRef === null
+                    ? t("modelProviders.defaults.automaticUnavailable")
+                    : automaticModel?.detail,
+              },
+              { value: "", label: t("modelProviders.defaults.disabled") },
+              ...options,
+            ],
+            disabled: modelControlsDisabled || saving,
+            title,
+            showSelectedDetail: true,
+            onChange: (value) =>
+              props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
+          }),
+        })}
+      `,
+    )}
+    ${renderSettingsSection(
+      {
+        title: renderSettingsInfoTitle({
+          title: t("chat.modelControls.decisionSection"),
+          label: t("chat.modelControls.decisionHelpLabel"),
+          triggerId: "model-providers-decision-help",
+          body: html`<p>${t("chat.modelControls.decisionHelp")}</p>
+            <p>${t("chat.modelControls.decisionTaskOnlyHelp")}</p>`,
         }),
-      })}
-      ${renderSettingsRow({
-        title: t("chat.modelControls.decisionLabel"),
-        description: t("chat.modelControls.decisionHelp"),
-        control: renderDecisionModelPicker({
-          id: "model-providers-decision-model",
-          models: props.decisionModels,
-          value: props.selection.decisionModel,
+      },
+      html`
+        ${renderDecisionInventory({
+          ...props.decisionInventory,
           disabled: !props.canMutate || saving,
-          title,
-          onChange: props.onDecisionChange,
-        }),
-      })}
-      ${renderSettingsRow({
-        title: t("modelProviders.defaults.fallback"),
-        control: renderModelPicker({
-          label: t("modelProviders.defaults.fallback"),
-          value: fallback,
-          options: [
-            { value: "", label: t("modelProviders.defaults.noFallback") },
-            ...options.filter((option) => option.value !== props.selection.primary),
-          ],
-          disabled: modelControlsDisabled || saving || !props.selection.primary,
-          title,
-          showSelectedDetail: true,
-          onChange: (value) => props.onFallbackChange(value || null),
-        }),
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.thinking"),
-          label: t("modelProviders.defaults.thinkingHelpLabel"),
-          triggerId: THINKING_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.thinkingHelp")}</p>
-            <p>${t("modelProviders.defaults.thinkingDefaultHelp")}</p>
-          `,
-        }),
-        control: html`
-          ${renderSettingsSegmented({
-            value: props.thinkingLevel ?? "",
-            ariaLabel: t("quickSettings.model.thinking"),
-            options: [
-              {
-                value: "",
-                label: t("quickSettings.model.default"),
-              },
-              ...thinkingLevels.map((level) => ({
-                value: level,
-                label: THINKING_LEVEL_SET.has(level)
-                  ? t(`quickSettings.model.thinkingLevels.${level}`)
-                  : formatThinkingOverrideLabel(level),
-              })),
-            ],
-            disabled: saving || behaviorControlsDisabled,
-            onChange: (value, element) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
-            onReselect: (value) => {
-              if (value === "" && props.thinkingOverridden) {
-                props.onThinkingReset();
-              }
-            },
-          })}
-        `,
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.fastMode"),
-          label: t("modelProviders.defaults.fastModeHelpLabel"),
-          triggerId: FAST_MODE_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.fastModeHelp")}</p>
-            <p>${t("modelProviders.defaults.fastModeDefaultHelp")}</p>
-          `,
-        }),
-        control: html`
-          ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
-            value: fastMode,
-            ariaLabel: t("quickSettings.model.fastMode"),
-            options: [
-              {
-                value: "",
-                label: t("quickSettings.model.default"),
-              },
-              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-              { value: "on", label: t("quickSettings.model.fastModes.on") },
-              { value: "off", label: t("quickSettings.model.fastModes.off") },
-            ],
-            disabled: saving || behaviorControlsDisabled,
-            onChange: (value) => {
-              if (value === "") {
-                props.onFastModeReset();
-              } else if (value !== fastMode) {
-                props.onFastModeChange(fastModeOptionValue(value));
-              }
-            },
-            onReselect: (value) => {
-              if (value === "" && props.fastModeOverridden) {
-                props.onFastModeReset();
-              }
-            },
-          })}
-        `,
-      })}
-      ${renderCatalogProgress(props)}
-      ${
-        props.canMutate && props.message
-          ? html`<div
-              class="callout ${props.message.kind}"
-              role=${props.message.kind === "error" ? "alert" : "status"}
-            >
-              ${props.message.text}
-            </div>`
-          : nothing
-      }
-      ${
-        props.canMutate && props.message?.warning
-          ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
-          : nothing
-      }
-    </div>
+          setupError: props.message?.kind === "error" ? props.message.text : undefined,
+        })}
+        ${renderSettingsRow({
+          title: t("chat.modelControls.decisionDefaultLabel"),
+          control: renderDecisionModelPicker({
+            id: "model-providers-decision-model",
+            label: t("chat.modelControls.decisionDefaultLabel"),
+            models: props.decisionModels,
+            value: props.selection.decisionModel,
+            disabled: !props.canMutate || saving,
+            title,
+            onChange: props.onDecisionChange,
+          }),
+        })}
+        ${renderDecisionTaskRows({
+          scope: "global",
+          pickerPrefix: "model-providers-decision-task",
+          tasks: decisionTaskEntries(props.decisionTasks, props.selection.decisionModelsByTask),
+          models: props.decisionModels,
+          disabled: !props.canMutate || saving,
+          getSelection: (taskId) => resolveGlobalDecisionTaskSelection(props.selection, taskId),
+          onChange: (taskId, model) => props.onDecisionTaskChange(taskId, model),
+        })}
+      `,
+    )}
+    ${
+      props.canMutate && props.message
+        ? html`<div
+            class="callout ${props.message.kind}"
+            role=${props.message.kind === "error" ? "alert" : "status"}
+          >
+            ${props.message.text}
+          </div>`
+        : nothing
+    }
+    ${
+      props.canMutate && props.message?.warning
+        ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
+        : nothing
+    }
   `;
-  return renderSettingsSection(
-    {
-      title: t("modelProviders.defaults.title"),
-      description: t("modelProviders.defaults.subtitle"),
-    },
-    body,
-  );
 }

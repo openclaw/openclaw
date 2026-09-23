@@ -12,8 +12,9 @@ export function renderDecisionModelPicker(params: {
   id: string;
   models: readonly DecisionModelEntry[];
   value: string | null | undefined;
-  inherit?: { model: string | undefined };
+  inherit?: { model: string | undefined; label?: string };
   disabled: boolean;
+  label?: string;
   title?: string;
   onOpen?: () => void;
   onChange: (model: string | null) => void;
@@ -37,16 +38,18 @@ export function renderDecisionModelPicker(params: {
   const inheritedName = options.find((option) => option.value === inherited)?.label ?? inherited;
   return renderModelPicker({
     id: params.id,
-    label: t("chat.modelControls.decisionLabel"),
+    label: params.label ?? t("chat.modelControls.decisionLabel"),
     value: params.inherit && params.value == null ? INHERIT_VALUE : (selected ?? ""),
     options: [
       ...(params.inherit
         ? [
             {
               value: INHERIT_VALUE,
-              label: t("chat.modelControls.decisionInherit", {
-                model: inheritedName || t("chat.modelControls.decisionDisabled"),
-              }),
+              label:
+                params.inherit.label ??
+                t("chat.modelControls.decisionInherit", {
+                  model: inheritedName || t("chat.modelControls.decisionDisabled"),
+                }),
               ...(inherited &&
               !params.models.some((model) => `${model.provider}/${model.id}` === inherited)
                 ? { detail: t("chat.modelControls.decisionUnavailable") }

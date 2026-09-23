@@ -10,6 +10,10 @@ import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { DmConfigSchema } from "./zod-schema.messages.js";
+import {
+  DecisionModelInventorySchema,
+  ModelCatalogRefreshConfigSchema,
+} from "./zod-schema.model-catalog.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -617,40 +621,13 @@ const ModelProvidersSchema = z
     }
   });
 
-const ModelCatalogRefreshConfigSchema = z
-  .object({
-    /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
-    enabled: z.boolean().optional(),
-    /** Override the hosted catalog URL (HTTPS mirrors, or localhost HTTP for testing). */
-    url: z
-      .string()
-      .refine(
-        (value) => {
-          try {
-            const parsed = new URL(value);
-            return (
-              parsed.protocol === "https:" ||
-              (parsed.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
-            );
-          } catch {
-            return false;
-          }
-        },
-        {
-          message: "models.catalogRefresh.url must use https, or http on localhost",
-        },
-      )
-      .optional(),
-  })
-  .strict()
-  .optional();
-
 export const ModelsConfigSchema = z
   .object({
     /** Merge provider config with bundled catalogs or replace bundled catalogs entirely. */
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
+    /** Saved decision choices only; not a runtime selection or execution allowlist. */
+    decisionModels: DecisionModelInventorySchema,
     /** Hosted model catalog refresh settings. */
     catalogRefresh: ModelCatalogRefreshConfigSchema,
   })

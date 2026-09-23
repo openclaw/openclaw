@@ -428,6 +428,8 @@ export type DefaultModelSelection = {
   utilityModel: string | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
+  /** Authored task-specific decision selections; absence means inherit. */
+  decisionModelsByTask?: Record<string, string>;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
@@ -452,6 +454,7 @@ export function resolveDefaultModelPresentation(
         fallbacks: [],
         utilityModel: null,
         decisionModel: null,
+        decisionModelsByTask: undefined,
       },
       configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
     };
@@ -544,6 +547,11 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const fallbacks = Array.isArray(modelObject?.fallbacks)
     ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
     : [];
+  const decisionModelsByTask = Object.fromEntries(
+    Object.entries(asRecord(defaults?.decisionModelsByTask) ?? {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
   return {
     providerIds: Object.keys(providers ?? {}),
     apiKeyProviderIds: Object.entries(providers ?? {})
@@ -565,6 +573,7 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),
+      ...(Object.keys(decisionModelsByTask).length > 0 ? { decisionModelsByTask } : {}),
     },
   };
 }

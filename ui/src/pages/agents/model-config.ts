@@ -3,8 +3,25 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 // agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
+import { readDecisionModelInventory } from "../../lib/decision-model-inventory.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
+
+export function agentDecisionCatalogView(
+  catalog: ModelCatalogPresentation,
+  config: Record<string, unknown> | null,
+) {
+  const available = catalog.decisionModels ?? [];
+  const visibleConfig = catalog.retired || catalog.modelSelectionPolicy?.restricted ? null : config;
+  const inventory = readDecisionModelInventory(visibleConfig, available);
+  return {
+    decisionModels: available.filter((model) =>
+      inventory.some((entry) => entry.ref === `${model.provider}/${model.id}`),
+    ),
+    decisionTasks: catalog.decisionTasks ?? [],
+  };
+}
 
 export function createAgentModelActions(params: {
   getRuntimeConfig: () => RuntimeConfig;
@@ -21,6 +38,11 @@ export function createAgentModelActions(params: {
     onDecisionModelChange: (agentId: string, modelId: string | null) => {
       if (params.canUpdate(agentId)) {
         stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+      }
+    },
+    onDecisionTaskChange: (agentId: string, taskId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentDecisionTask(params.getRuntimeConfig(), agentId, taskId, modelId);
       }
     },
     onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
@@ -44,6 +66,35 @@ function stageAgentDecisionModel(
   const path = [...target.path, "decisionModel"];
   if (model === null) {
     runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(path, model);
+  }
+}
+
+/** Null removes the task override; an empty string preserves an explicit disable. */
+function stageAgentDecisionTask(
+  runtimeConfig: RuntimeConfig,
+  agentId: string,
+  taskId: string,
+  model: string | null,
+) {
+  const target = runtimeConfig.agentEntry(agentId, { ensure: model !== null });
+  if (!target) {
+    return;
+  }
+  const path = [...target.path, "decisionModelsByTask", taskId];
+  if (model === null) {
+    runtimeConfig.removeFormValue(path);
+    const currentEntry = runtimeConfig.agentEntry(agentId)?.entry;
+    const remaining = currentEntry?.decisionModelsByTask;
+    if (
+      remaining &&
+      typeof remaining === "object" &&
+      !Array.isArray(remaining) &&
+      Object.keys(remaining).length === 0
+    ) {
+      runtimeConfig.removeFormValue([...target.path, "decisionModelsByTask"]);
+    }
   } else {
     runtimeConfig.patchForm(path, model);
   }

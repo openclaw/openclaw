@@ -83,6 +83,7 @@ The anchors from the single-page version still resolve here.
 
 - <a id="contracts-reference"></a>[`contracts`](/plugins/manifest/capabilities#contracts-reference)
 - [`decisionModels`](/plugins/manifest/capabilities#decision-models-reference)
+- [`decisionTasks`](/plugins/manifest/capabilities#decision-tasks-reference)
 - <a id="tool-metadata-reference"></a>[`toolMetadata`](/plugins/manifest/capabilities#tool-metadata-reference)
 - <a id="activation-reference"></a>[`activation`](/plugins/manifest/capabilities#activation-reference)
 

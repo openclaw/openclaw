@@ -24,6 +24,7 @@ suite.define(() => {
       { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         let config: unknown = {
+          models: { decisionModels: ["typesafe/jev-latest", "typesafe/jev-preview"] },
           agents: { defaults: {}, entries: { main: { default: true }, scout: {} } },
         };
         let revision = 0;
@@ -46,7 +47,11 @@ suite.define(() => {
               mainKey: "main",
               scope: "per-sender",
             },
-            "models.list": { models: [], decisionModels },
+            "models.list": {
+              models: [],
+              decisionModels,
+              decisionTasks: [{ id: "decision_evaluate", title: "Decision model" }],
+            },
             "models.authStatus": { ts: 1, providers: [] },
             "config.get": snapshot(),
             "usage.status": { updatedAt: 1, providers: [] },
@@ -140,7 +145,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await expect.poll(() => pickerValue(global)).toBe("typesafe/jev-latest");
         expect(
-          await page.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
+          await global.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
         ).toBe(1);
         expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
         await page.screenshot({

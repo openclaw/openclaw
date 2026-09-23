@@ -17,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
   DecisionBatch,
@@ -57,10 +58,11 @@ function registered(
   evaluate: DecisionProviderV1["evaluate"] = async () => answer,
   isReady?: () => boolean,
   providerId = "fixture",
+  pluginId = "owner",
 ) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
-    id: "owner",
+    id: pluginId,
     source: "/synthetic/index.ts",
     origin: "global",
     enabled: true,
@@ -86,8 +88,8 @@ function registered(
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
-  const run = (opts = options(), cfg = config) =>
-    evaluateDecisionInRegistry(batch, opts, builder.registry, cfg);
+  const run = (opts = options(), cfg = config, consumerId?: string) =>
+    evaluateDecisionInRegistry(batch, opts, builder.registry, cfg, consumerId);
   return { ...builder, record, api, run };
 }
 afterEach(() => {
@@ -116,12 +118,13 @@ describe("registered decision capability", () => {
   });
 
   it.each([
-    { model: "fixture-v1", source: "agent-tool" },
-    { model: "shortcut", source: "direct-tool" },
-    { model: "shortcut", source: "unbound-operator" },
+    { model: "fixture-v1", source: "agent-tool", task: false },
+    { model: "fixture-v1", source: "agent-tool", task: true },
+    { model: "shortcut", source: "direct-tool", task: false },
+    { model: "shortcut", source: "unbound-operator", task: false },
   ] as const)(
-    "enforces requester exclusions for $model from $source while preserving independent system decisions",
-    async ({ model, source }) => {
+    "enforces requester exclusions for $model from $source (task: $task) while preserving independent system decisions",
+    async ({ model, source, task }) => {
       const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
       const host = registered(evaluate);
       const metadata = createPluginMetadataSnapshotFixture({
@@ -141,7 +144,11 @@ describe("registered decision capability", () => {
       const selected: OpenClawConfig = {
         agents: {
           entries: { main: {} },
-          defaults: { model: "fixture/permitted", decisionModel: `fixture/${model}` },
+          defaults: {
+            model: "fixture/permitted",
+            decisionModel: task ? "fixture/permitted" : `fixture/${model}`,
+            ...(task ? { decisionModelsByTask: { "owner/check": `fixture/${model}` } } : {}),
+          },
         },
       };
       setRuntimeConfigSnapshot(selected);
@@ -155,7 +162,11 @@ describe("registered decision capability", () => {
           manifestPlugins: metadata,
         }),
       });
-      const invoke = () => host.api.runtime.decisions.evaluate(batch, options());
+      const invoke = () =>
+        host.api.runtime.decisions.evaluate(batch, {
+          ...options(),
+          ...(task ? { taskId: "owner/check" as const } : {}),
+        });
       await expect(
         source === "agent-tool"
           ? withGatewayToolCallerIdentity(
@@ -181,7 +192,7 @@ describe("registered decision capability", () => {
           : "cannot use this model",
       );
       expect(evaluate).not.toHaveBeenCalled();
-      await expect(host.api.runtime.decisions.evaluate(batch, options())).resolves.toMatchObject({
+      await expect(invoke()).resolves.toMatchObject({
         status: "ok",
       });
       expect(evaluate).toHaveBeenCalledOnce();
@@ -278,6 +289,63 @@ describe("registered decision capability", () => {
       { model: "specialist-v1", agentId: "specialist" },
     ]);
   });
+  it("captures public multi-entry task calls and enforces the exact plugin owner", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(call, undefined, "fixture", "pack/one");
+    const decisionModelsByTask = {
+      "pack/one/first": "fixture/first-v1",
+      "pack/one/second": "fixture/second-v1",
+    };
+    setRuntimeConfigSnapshot({ agents: { defaults: { decisionModelsByTask } } });
+    const mutable = { ...options(), agentId: "first-agent" };
+    mutable.taskId = "pack/one/first";
+    const first = host.api.runtime.decisions.evaluate(batch, mutable);
+    mutable.agentId = "second-agent";
+    mutable.taskId = "pack/one/second";
+    const second = host.api.runtime.decisions.evaluate(batch, mutable);
+    expect(await Promise.all([first, second])).toMatchObject([{ status: "ok" }, { status: "ok" }]);
+    for (const taskId of [
+      "pack/check",
+      "pack/two/check",
+      "pack/one/child/check",
+      "decision_evaluate",
+    ] as const) {
+      await expect(
+        host.api.runtime.decisions.evaluate(batch, { ...options(), taskId }),
+      ).rejects.toThrow("Invalid decision contract");
+    }
+    await expect(
+      host.run({ ...options(), taskId: "pack/one/first" }, config, "pack"),
+    ).rejects.toThrow("Invalid decision contract");
+    expect(call.mock.calls.map(([, { agentId, model }]) => ({ agentId, model }))).toEqual([
+      { agentId: "first-agent", model: "first-v1" },
+      { agentId: "second-agent", model: "second-v1" },
+    ]);
+  });
+  it.each(["", "fixture/check-v2"] as const)(
+    "fences a task mapping change while provider inference is pending (%j)",
+    async (nextModel) => {
+      const release = createDeferredCore();
+      const host = registered(async () => {
+        await release.promise;
+        return answer;
+      });
+      const selected: OpenClawConfig = {
+        agents: { defaults: { decisionModelsByTask: { "owner/check": "fixture/check-v1" } } },
+      };
+      setRuntimeConfigSnapshot(selected);
+      const pending = host.run({ ...options(), taskId: "owner/check" }, selected, "owner");
+      const next = structuredClone(selected);
+      next.agents!.defaults!.decisionModelsByTask!["owner/check"] = nextModel;
+      setRuntimeConfigSnapshot(next);
+      release.resolve();
+      expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
+      expect(host.registry.decisionProviders[0]!.host.inspect(next)).toMatchObject({
+        successCount: 0,
+        activeRequests: 0,
+      });
+    },
+  );
   it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
     const releases = new Map<string, () => void>();
     const host = registered(async (_batch, { agentId }) => {

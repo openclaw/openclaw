@@ -359,6 +359,7 @@ export function loadPluginManifest(
         raw.decisionModels,
         contracts?.decisionProviders,
       ),
+      decisionTasks: capabilityNormalizers.normalizeManifestDecisionTasks(raw.decisionTasks),
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,

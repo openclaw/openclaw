@@ -136,6 +136,7 @@ export function createAgentViewTestProps(
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
     onDecisionModelChange: () => undefined,
+    onDecisionTaskChange: () => undefined,
     onModelFallbacksChange: () => undefined,
     onModelCatalogOpen: () => undefined,
     onChannelsRefresh: () => undefined,

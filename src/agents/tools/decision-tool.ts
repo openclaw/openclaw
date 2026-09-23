@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { CORE_DECISION_TASK_ID } from "../../decisions/task-ids.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveDecisionModelSetting } from "../decision-model-setting.js";
@@ -19,7 +20,7 @@ export function createDecisionTool(
   options?: Pick<OpenClawToolsOptions, "config" | "preparedModelRuntime">,
 ): AnyAgentTool | null {
   const config = options?.config ?? getRuntimeConfig();
-  const selected = resolveDecisionModelSetting(config, agentId);
+  const selected = resolveDecisionModelSetting(config, agentId, CORE_DECISION_TASK_ID);
   if (!agentId.trim() || !selected) {
     return null;
   }
@@ -60,7 +61,11 @@ export function createDecisionTool(
       const { evaluateDecision } = await import("../../decisions/runtime.js");
       operationSignal.throwIfAborted();
       const currentConfig = getRuntimeConfig();
-      const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);
+      const currentSelection = resolveDecisionModelSetting(
+        currentConfig,
+        agentId,
+        CORE_DECISION_TASK_ID,
+      );
       const currentCapabilities =
         currentSelection &&
         models.find(
@@ -69,6 +74,7 @@ export function createDecisionTool(
         )?.capabilities;
       const outcome = await evaluateDecision(batch, {
         agentId,
+        taskId: CORE_DECISION_TASK_ID,
         purpose: "decision_evaluate",
         rubricVersion: rubricVersion(batch),
         timeoutMs: 30_000,

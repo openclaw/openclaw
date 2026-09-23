@@ -2,6 +2,7 @@ import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-ca
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import type { DecisionTaskDescriptor } from "../decisions/task-ids.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -523,6 +524,8 @@ export type PluginManifest = {
   contracts?: PluginManifestContracts;
   /** Static model choices owned by contracts.decisionProviders; never conversational models. */
   decisionModels?: PluginManifestDecisionModel[];
+  /** Task descriptors; manifest records restrict ownership to the exact effective plugin id. */
+  decisionTasks?: DecisionTaskDescriptor[];
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */

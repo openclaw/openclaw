@@ -9,7 +9,12 @@ import { InferenceWorkerClient } from "./src/worker-client.js";
 function selectedModels(config: OpenClawConfig): string[] {
   const selectors = [
     config.agents?.defaults?.decisionModel,
-    ...Object.values(config.agents?.entries ?? {}).map((agent) => agent.decisionModel),
+    ...Object.values(config.agents?.defaults?.decisionModelsByTask ?? {}),
+    ...Object.values(config.agents?.entries ?? {}).flatMap((agent) =>
+      agent.decisionModel === ""
+        ? []
+        : [agent.decisionModel].concat(Object.values(agent.decisionModelsByTask ?? {})),
+    ),
   ];
   return [
     ...new Set(

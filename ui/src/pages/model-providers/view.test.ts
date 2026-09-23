@@ -4,10 +4,78 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { renderDecisionInventory } from "./decision-inventory-view.ts";
 import { card, mount, props, text } from "./view.test-support.ts";
 import { renderModelProviders } from "./view.ts";
 
 type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
+
+it("keeps provider configuration reachable with an empty catalog and shows setup errors", () => {
+  const container = document.createElement("div");
+  render(
+    renderDecisionInventory({
+      ...props().decisionInventory,
+      disabled: false,
+      basePath: "/control",
+      setupRef: "",
+      setupError: "Setup save failed",
+    }),
+    container,
+  );
+  expect(container.querySelector("#decision-model-add")?.hasAttribute("disabled")).toBe(false);
+  expect(container.querySelector("#decision-model-configure-provider")?.getAttribute("href")).toBe(
+    "/control/settings/plugins",
+  );
+  expect(container.querySelector("#decision-model-add-confirm")?.hasAttribute("disabled")).toBe(
+    true,
+  );
+  expect(text(container.querySelector('[role="alert"]'))).toBe("Setup save failed");
+});
+
+it("separates LLM, Utility and Decision settings with readable discovered tasks and info controls", async () => {
+  const container = document.createElement("div");
+  render(
+    renderModelProviders(
+      props({
+        decisionTasks: [
+          { id: "decision_evaluate", title: "Decision model" },
+          {
+            id: "sample/triage",
+            title: "Message triage",
+            description: "Routes incoming messages.",
+          },
+        ],
+      }),
+    ),
+    container,
+  );
+  await updatePickers(container);
+  const sections = [...container.querySelectorAll(".model-providers__defaults .settings-section")];
+  expect(
+    sections.map((section) =>
+      text(
+        section.querySelector("h2 > .settings-label-with-help > span:first-child") ??
+          section.querySelector("h2"),
+      ),
+    ),
+  ).toEqual(["LLM models", "Utility", "Decision models"]);
+  expect(text(sections[0]!)).toContain("Fallback Model");
+  expect(text(sections[0]!)).not.toContain("Decision model");
+  expect(container.querySelector("#model-providers-utility-help")).not.toBeNull();
+  expect(container.querySelector("#model-providers-decision-help")).not.toBeNull();
+  expect(container.querySelector('[data-decision-task-id="decision_evaluate"]')).toBeNull();
+  expect(text(container.querySelector('[data-decision-task-id="sample/triage"]'))).toContain(
+    "Message triage",
+  );
+  expect(text(container)).not.toContain("decision_evaluate");
+  expect(text(container)).not.toContain("Add task");
+  expect(text(container)).not.toContain("code-owned");
+  expect(
+    text(
+      container.querySelector("#model-providers-decision-model")?.closest(".settings-row") ?? null,
+    ),
+  ).toContain("Decision model");
+});
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
   const onDecisionChange = vi.fn();
@@ -29,7 +97,9 @@ it("offers only decision models, even without a chat provider, and retains an un
   expect(picker.disabled).toBe(false);
   expect(picker.textContent).toContain("typesafe/retired");
   expect(
-    container.querySelectorAll('[role="option"][data-value="typesafe/jev-latest"]'),
+    picker
+      .closest("openclaw-select-picker")
+      ?.querySelectorAll('[role="option"][data-value="typesafe/jev-latest"]'),
   ).toHaveLength(1);
   await choosePickerValue(picker, "typesafe/retired");
   expect(onDecisionChange).not.toHaveBeenCalled();
@@ -96,7 +166,7 @@ function settingsRow(container: Element, label: string): HTMLElement {
   const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
     (candidate) =>
       text(
-        candidate.querySelector(".model-providers__label-with-help > span:first-child") ??
+        candidate.querySelector(".settings-label-with-help > span:first-child") ??
           candidate.querySelector(".settings-row__title"),
       ) === label,
   );
@@ -777,7 +847,8 @@ describe("renderModelProviders", () => {
       expect(
         text(
           automatic
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            .querySelector("#model-providers-utility-model")
+            ?.closest("openclaw-select-picker")
             ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
         ),
       ).toBe(automaticUtilityModel === null ? "Auto No recommended small model" : "Auto");
@@ -792,7 +863,8 @@ describe("renderModelProviders", () => {
       expect(
         text(
           disabled
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            .querySelector("#model-providers-utility-model")
+            ?.closest("openclaw-select-picker")
             ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
         ),
       ).toBe("Disabled");

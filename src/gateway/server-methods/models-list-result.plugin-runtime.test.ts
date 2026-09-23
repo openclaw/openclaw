@@ -14,6 +14,7 @@ import {
 } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
+import { listDecisionTasks } from "./models-list-capabilities.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 import {
   buildModelsListResult,
@@ -52,12 +53,16 @@ describe("models.list plugin metadata handoff", () => {
     name: string;
     plugins: OpenClawConfig["plugins"];
     expected: boolean;
+    expectedTasks?: boolean;
+    taskEnabledByDefault?: boolean;
+    view?: "provider-config";
     provider?: string;
     chat?: boolean;
     expectedChat?: boolean;
     error?: string;
   }>([
     { name: "available", plugins: {}, expected: true },
+    { name: "provider settings view", plugins: {}, expected: true, view: "provider-config" },
     { name: "globally disabled", plugins: { enabled: false }, expected: false },
     {
       name: "plugin disabled",
@@ -65,6 +70,14 @@ describe("models.list plugin metadata handoff", () => {
       expected: false,
     },
     { name: "denied", plugins: { deny: ["decisions"] }, expected: false },
+    { name: "not allowlisted", plugins: { allow: ["custom"] }, expected: false },
+    {
+      name: "inactive consumer",
+      plugins: {},
+      expected: true,
+      taskEnabledByDefault: false,
+      expectedTasks: false,
+    },
     { name: "decision-only provider filter", plugins: {}, provider: "fixture", expected: true },
     {
       name: "disabled decision provider filter",
@@ -99,6 +112,7 @@ describe("models.list plugin metadata handoff", () => {
       chat: true,
       expectedChat: true,
       expected: false,
+      expectedTasks: true,
     },
     {
       name: "mixed catalog without a filter",
@@ -109,7 +123,17 @@ describe("models.list plugin metadata handoff", () => {
     },
   ])(
     "keeps decision discovery separate from chat routing: $name",
-    async ({ plugins, expected, provider, chat, expectedChat, error }) => {
+    async ({
+      plugins,
+      expected,
+      expectedTasks,
+      taskEnabledByDefault,
+      view,
+      provider,
+      chat,
+      expectedChat,
+      error,
+    }) => {
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: {} },
@@ -132,6 +156,10 @@ describe("models.list plugin metadata handoff", () => {
         plugins: [
           {
             id: "decisions",
+            ...(taskEnabledByDefault === undefined
+              ? {}
+              : { enabledByDefault: taskEnabledByDefault }),
+            decisionTasks: [{ id: "decisions/route", title: "Routing" }],
             contracts: { decisionProviders: ["fixture"] },
             decisionModels: [
               { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
@@ -158,7 +186,7 @@ describe("models.list plugin metadata handoff", () => {
       const request = buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
-        params: { view: "configured", ...(provider ? { provider } : {}) },
+        params: { view: view ?? "configured", ...(provider ? { provider } : {}) },
         preloadedCatalog: { agentId: "main", config: cfg, snapshot },
         preloadedOnly: true,
         catalogProjector: projector,
@@ -184,9 +212,25 @@ describe("models.list plugin metadata handoff", () => {
           : [],
       );
       expect(Check(ModelsListResultSchema, result)).toBe(true);
+      expect(result.decisionTasks).toEqual([
+        { id: "decision_evaluate", title: "Decision model" },
+        ...((expectedTasks ?? expected)
+          ? [{ id: "decisions/route", title: "Routing", pluginId: "decisions" }]
+          : []),
+      ]);
       expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
     },
   );
+
+  it("discovers enabled consumer-only tasks without requiring a decision provider", () => {
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "consumer", decisionTasks: [{ id: "consumer/route", title: "Routing" }] }],
+    });
+    expect(listDecisionTasks({ config: {}, snapshot })).toEqual([
+      { id: "decision_evaluate", title: "Decision model" },
+      { id: "consumer/route", title: "Routing", pluginId: "consumer" },
+    ]);
+  });
 
   it("reuses one Gateway-owned metadata snapshot across startup projection and browse", async () => {
     await withOpenClawTestState(

@@ -3,6 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { MODEL_CATALOG_FIELD_LABELS } from "./schema.labels.model-catalog.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -438,11 +439,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.stream.deliveryMode": "ACP Stream Delivery Mode",
   "acp.stream.tagVisibility": "ACP Stream Tag Visibility",
   "acp.runtime.installCommand": "ACP Runtime Install Command",
-  models: "Models",
-  "models.mode": "Model Catalog Mode",
-  "models.catalogRefresh": "Model Catalog Refresh",
-  "models.catalogRefresh.enabled": "Model Catalog Refresh Enabled",
-  "models.catalogRefresh.url": "Model Catalog Refresh URL",
+  ...MODEL_CATALOG_FIELD_LABELS,
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret

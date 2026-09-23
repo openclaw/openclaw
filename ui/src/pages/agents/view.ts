@@ -25,6 +25,7 @@ import {
 import type { CronState } from "../../lib/cron/types.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import type { AgentFilesViewState } from "./files.ts";
+import { agentDecisionCatalogView } from "./model-config.ts";
 import { renderAgentFiles } from "./panels-files.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
@@ -122,6 +123,7 @@ type AgentsProps = {
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onDecisionModelChange: (agentId: string, modelId: string | null) => void;
+  onDecisionTaskChange: (agentId: string, taskId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onModelCatalogOpen: () => void;
   onChannelsRefresh: () => void;
@@ -299,7 +301,7 @@ export function renderAgents(props: AgentsProps) {
                             configSaving: props.config.configSaving,
                             configDirty: props.config.configFormDirty,
                             modelCatalog: props.modelCatalog.models,
-                            decisionModels: props.modelCatalog.decisionModels ?? [],
+                            ...agentDecisionCatalogView(props.modelCatalog, config),
                             modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
                             modelCatalogRetired: props.modelCatalog.retired,
                             modelCatalogStatus: props.modelCatalogStatus,
@@ -310,6 +312,7 @@ export function renderAgents(props: AgentsProps) {
                             onIdentitySave: props.onIdentitySave,
                             onModelChange: props.onModelChange,
                             onDecisionModelChange: props.onDecisionModelChange,
+                            onDecisionTaskChange: props.onDecisionTaskChange,
                             onModelFallbacksChange: props.onModelFallbacksChange,
                             onModelCatalogOpen: props.onModelCatalogOpen,
                             onSelectPanel: props.onSelectPanel,

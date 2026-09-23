@@ -160,6 +160,43 @@ malformed `questionTypes` value removes the whole capability descriptor but does
 not remove the model entry. Duplicate `provider/id` entries keep the first valid
 model descriptor.
 
+## Decision tasks reference
+
+Declare `decisionTasks` for decision consumers owned by your plugin. The host
+reads these descriptors without importing plugin runtime code and exposes them
+through `models.list.decisionTasks` for task settings. A consumer does not need to
+provide a decision model or declare `contracts.decisionProviders`.
+
+```json
+{
+  "id": "example-plugin",
+  "decisionTasks": [
+    {
+      "id": "example-plugin/route",
+      "title": "Routing",
+      "description": "Choose the next workflow route."
+    }
+  ]
+}
+```
+
+Each descriptor needs an `id` and a nonempty `title` (up to 128 characters), with
+an optional `description` (up to 1024 characters). IDs use the exact effective
+plugin ID followed by `/` and a lowercase task name: an initial letter followed
+by up to 63 letters, digits, or hyphens. A single-entry plugin uses its manifest
+ID. A multi-entry package's shared manifest declares entry-scoped IDs such as
+`pack/one/route`; only the `pack/one` record receives that task, not `pack` or
+`pack/two`. Plugins cannot declare core's `decision_evaluate` or another plugin's
+task. Invalid descriptors are omitted; duplicate IDs keep the first valid entry.
+An invalid optional description is omitted without removing the task.
+
+Only enabled plugins allowed by control-plane policy contribute rows. The host
+adds `pluginId` to their public descriptors; the core **Decision model** task has
+no `pluginId`. Task discovery is independent of a model-provider filter and does
+not require provider credentials or start automatic work. Declarations describe
+the consumer's existing use of `api.runtime.decisions.evaluate` with `taskId`;
+they do not create a consumer, grant authority, or change selection precedence.
+
 ## Tool metadata reference
 
 `toolMetadata` uses the same `configSignals` and `authSignals` shapes as generation provider metadata, keyed by tool name. `contracts.tools` declares ownership. `toolMetadata` declares cheap availability evidence so OpenClaw can avoid importing a plugin runtime just to have its tool factory return `null`.

@@ -119,6 +119,17 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Declared core and enabled plugin consumers, independent of the provider filter. */
+  decisionTasks: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        title: Type.String({ minLength: 1, maxLength: 128 }),
+        description: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+        pluginId: Type.Optional(NonEmptyString),
+      }),
+    ),
+  ),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
   modelSelectionPolicy: Type.Optional(
     closedObject({

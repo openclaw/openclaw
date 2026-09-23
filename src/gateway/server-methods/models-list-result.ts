@@ -72,6 +72,7 @@ import {
   apiKeyProviderCapabilities,
   createModelsListProviderFilter,
   listDecisionModels,
+  listDecisionTasks,
 } from "./models-list-capabilities.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 import {
@@ -370,6 +371,7 @@ export async function prepareModelsListResult(
     config: cfg,
     snapshot: metadataSnapshot,
   });
+  const decisionTasks = listDecisionTasks({ config: cfg, snapshot: metadataSnapshot });
   const retainedModel =
     params.includeManualSelection && view === "configured" && scope?.sessionEntry
       ? resolveSessionModelRef(cfg, scope.sessionEntry, agentId, {
@@ -459,6 +461,7 @@ export async function prepareModelsListResult(
   );
   draft?.assertCurrent();
   const outcomeProjection = {
+    decisionTasks,
     ...(pendingProviders?.length ? { pendingProviders } : {}),
     ...((params.params.includeDefaultModels ??
     (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))

@@ -43,6 +43,15 @@ describe("decision provider startup", () => {
       expected: ["decision-plugin"],
     },
     {
+      name: "selected by a task-only default",
+      config: {
+        agents: {
+          defaults: { decisionModelsByTask: { decision_evaluate: "decision-provider/fast" } },
+        },
+      },
+      expected: ["decision-plugin"],
+    },
+    {
       name: "explicitly disabled",
       config: {
         agents: { defaults: { decisionModel: "decision-provider/fast" } },
@@ -62,11 +71,14 @@ describe("decision provider startup", () => {
     ).toEqual(expected);
   });
 
-  it("maps per-agent provider IDs through contract ownership in metadata scopes", () => {
+  it.each([
+    { decisionModel: "decision-provider/fast" },
+    { decisionModelsByTask: { decision_evaluate: "decision-provider/fast" } },
+  ])("maps per-agent selections through metadata ownership: %j", (specialist) => {
     expect(
       resolveGatewayStartupMetadataPluginIds({
         config: {
-          agents: { entries: { specialist: { decisionModel: "decision-provider/fast" } } },
+          agents: { entries: { specialist } },
           plugins: { allow: ["allowed-plugin"], slots: { memory: "none" } },
         },
         env: {},

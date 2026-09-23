@@ -209,6 +209,11 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     consumerId?: string,
   ): Promise<DecisionOutcome> {
+    // Options are caller-owned. Capture routing inputs before any provider await so a
+    // mutation by the caller cannot redirect delayed validation to another selection.
+    const agentId = options.agentId;
+    const taskId = options.taskId;
+    const rubricVersion = options.rubricVersion;
     options.signal.throwIfAborted();
     let submitted: DecisionBatch;
     try {
@@ -261,7 +266,7 @@ export class DecisionProviderHost {
         return this.unavailable("deadline");
       }
       const currentConfig = readConfig();
-      const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
+      const selection = resolveDecisionModelSetting(currentConfig, agentId, taskId);
       if (
         getActiveSecretsRuntimeSnapshotRevisionState() !== health.secretRevision ||
         this.health !== health ||
@@ -285,7 +290,7 @@ export class DecisionProviderHost {
         outcome = await instance.runInRegistry(registry, () =>
           this.provider.evaluate(submitted, {
             model,
-            ...(options.agentId ? { agentId: options.agentId } : {}),
+            ...(agentId ? { agentId } : {}),
             signal,
             deadlineMonotonicMs,
           }),
@@ -323,7 +328,7 @@ export class DecisionProviderHost {
           result: structuredClone(outcome.result),
           provenance: {
             providerId: this.provider.id,
-            rubricVersion: options.rubricVersion,
+            rubricVersion,
             runtimeGeneration: health.id,
           },
         };

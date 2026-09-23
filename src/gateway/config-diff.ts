@@ -85,6 +85,15 @@ export function diffGatewayReloadPaths(
       }
     }
   }
+  if (refinementPrefixes.delete("agents.entries.*.decisionModelsByTask")) {
+    for (const config of [prevConfig, nextConfig]) {
+      for (const [agentId, agent] of Object.entries(config.agents?.entries ?? {})) {
+        if (agent.decisionModelsByTask !== undefined) {
+          refinementPrefixes.add(`agents.entries.${agentId}.decisionModelsByTask`);
+        }
+      }
+    }
+  }
   const changedPaths = diffConfigPaths(prevConfig, nextConfig, "", [...refinementPrefixes]);
   const boundaryPaths = diffConfigPaths(
     projectGatewayReloadBoundaries(prevConfig),

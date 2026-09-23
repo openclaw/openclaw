@@ -31,6 +31,26 @@ describe("decision model reload planning", () => {
       reloadPlugins: true,
     },
     {
+      name: "adds a task-only decision agent",
+      previous: { agents: { entries: {} } },
+      next: {
+        agents: {
+          entries: { worker: { decisionModelsByTask: { decision_evaluate: "fixture/fast" } } },
+        },
+      },
+      reloadPlugins: true,
+    },
+    {
+      name: "removes a task-only decision agent",
+      previous: {
+        agents: {
+          entries: { worker: { decisionModelsByTask: { decision_evaluate: "fixture/fast" } } },
+        },
+      },
+      next: { agents: { entries: {} } },
+      reloadPlugins: true,
+    },
+    {
       name: "adds the decision agent roster",
       previous: {},
       next: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
@@ -86,7 +106,33 @@ describe("decision model reload planning", () => {
       path: "agents.entries.worker.decisionModel",
       expected: { reloadPlugins: true, refreshHooksPolicy: true, reloadInternalHooks: true },
     },
+    {
+      path: "agents.entries.worker.decisionModelsByTask.decision_evaluate",
+      expected: { reloadPlugins: true, refreshHooksPolicy: true, reloadInternalHooks: true },
+    },
+    {
+      path: "agents.defaults.decisionModelsByTask.decision_evaluate",
+      expected: { reloadPlugins: true },
+    },
   ])("hot-applies $path", ({ path, expected }) => {
     expect(buildGatewayReloadPlan([path])).toMatchObject({ restartGateway: false, ...expected });
+  });
+
+  it("keeps task-map changes at the decision-plugin reload boundary", () => {
+    const withModel = (model: string): OpenClawConfig => ({
+      agents: { entries: { worker: { decisionModelsByTask: { decision_evaluate: model } } } },
+    });
+    const paths = diffGatewayReloadPaths(
+      withModel("fixture/old"),
+      withModel("fixture/new"),
+      listConfigReloadRefinementPrefixes(),
+    );
+    expect(paths).toEqual(["agents.entries.worker.decisionModelsByTask.decision_evaluate"]);
+    expect(buildGatewayReloadPlan(paths)).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: true,
+      refreshHooksPolicy: true,
+      reloadInternalHooks: true,
+    });
   });
 });

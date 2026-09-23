@@ -1,7 +1,13 @@
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
+import { CORE_DECISION_TASKS } from "../../decisions/task-ids.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  listAvailableManifestContractPlugins,
+} from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 
@@ -52,6 +58,40 @@ export function listDecisionModels({
     }
   }
   return decisionModels;
+}
+
+export function listDecisionTasks({
+  config,
+  snapshot,
+}: {
+  config: OpenClawConfig;
+  snapshot: PluginMetadataSnapshot;
+}): NonNullable<ModelsListResult["decisionTasks"]> {
+  const tasks: NonNullable<ModelsListResult["decisionTasks"]> = [...CORE_DECISION_TASKS];
+  if (config.plugins?.enabled === false) {
+    return tasks;
+  }
+  const normalizedConfig = normalizePluginsConfig(config.plugins);
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
+  for (const plugin of snapshot.plugins) {
+    if (
+      !plugin.decisionTasks?.length ||
+      !isEnabled(plugin.id) ||
+      !isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config,
+        normalizedConfig,
+        isInstalledPluginEnabled: isEnabled,
+      })
+    ) {
+      continue;
+    }
+    for (const task of plugin.decisionTasks) {
+      tasks.push({ ...task, pluginId: plugin.id });
+    }
+  }
+  return tasks;
 }
 
 export function createModelsListProviderFilter(params: {

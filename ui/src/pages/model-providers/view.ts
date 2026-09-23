@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
+import type { DecisionTaskEntry } from "../../components/decision-task-rows.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
@@ -25,9 +26,9 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
-import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type {
   DefaultModelSelection,
   ModelPickerEntry,
@@ -35,6 +36,7 @@ import type {
   ModelProviderPendingLogout,
   ProviderOption,
 } from "./data.ts";
+import type { DecisionInventoryViewProps } from "./decision-inventory-view.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
 import { renderProviderProfiles } from "./profiles-view.ts";
 import {
@@ -61,6 +63,8 @@ type ModelProvidersViewProps = {
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   decisionModels: DecisionModelEntry[];
+  decisionTasks: DecisionTaskEntry[];
+  decisionInventory: Omit<DecisionInventoryViewProps, "disabled">;
   defaultModels: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
@@ -109,6 +113,7 @@ type ModelProvidersViewProps = {
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
+  onDecisionTaskChange: (taskId: string, model: string | null) => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -559,10 +564,12 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     !props.loading && !props.configuredModels.some((model) => model.available !== false);
   return html`${renderSettingsPage(html`
     ${needsModelSetup ? renderModelReadiness(props) : nothing}
-    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
+    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior} class="model-providers__defaults settings-stack">
       ${renderDefaultModels({
         models: props.configuredModels,
         decisionModels: props.decisionModels,
+        decisionTasks: props.decisionTasks,
+        decisionInventory: props.decisionInventory,
         selection: props.defaultModels,
         authStatus: props.authStatus,
         automaticUtilityModel: props.automaticUtilityModel,
@@ -581,6 +588,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onFallbackChange: props.onFallbackChange,
         onUtilityChange: props.onUtilityChange,
         onDecisionChange: props.onDecisionChange,
+        onDecisionTaskChange: props.onDecisionTaskChange,
         onThinkingChange: props.onThinkingChange,
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,

@@ -12,6 +12,12 @@ import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
 } from "../../components/decision-model-picker.ts";
+import {
+  decisionTaskEntries,
+  type DecisionTaskEntry,
+  renderDecisionTaskRows,
+  resolveDecisionTaskSelection,
+} from "../../components/decision-task-rows.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import "../../components/multi-select-registration.ts";
@@ -19,7 +25,11 @@ import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
-import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
+import {
+  renderSettingsInfoTitle,
+  renderSettingsRow,
+  renderSettingsSection,
+} from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -70,6 +80,7 @@ export function renderAgentOverview(params: {
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   modelCatalogRetired?: boolean;
   decisionModels: DecisionModelEntry[];
+  decisionTasks: DecisionTaskEntry[];
   modelCatalogStatus: PanelRefreshStatus;
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -78,6 +89,7 @@ export function renderAgentOverview(params: {
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onDecisionModelChange: (agentId: string, modelId: string | null) => void;
+  onDecisionTaskChange: (agentId: string, taskId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onModelCatalogOpen: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -128,6 +140,19 @@ export function renderAgentOverview(params: {
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
   const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
+  const decisionTaskConfigured =
+    Object.keys(config.defaults?.decisionModelsByTask ?? {}).length > 0 ||
+    Object.keys(config.entry?.decisionModelsByTask ?? {}).length > 0;
+  const agentDecisionModel =
+    typeof config.entry?.decisionModel === "string" && config.entry.decisionModel.length > 0
+      ? config.entry.decisionModel
+      : undefined;
+  const decisionHelp =
+    config.entry?.decisionModel === ""
+      ? t("chat.modelControls.decisionTaskDisabledByAgent")
+      : !config.defaults?.decisionModel && !agentDecisionModel && decisionTaskConfigured
+        ? t("chat.modelControls.decisionTaskOnlyAgentHelp")
+        : t("chat.modelControls.decisionAgentHelp");
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const identityDraft = params.identityDraft;
@@ -286,24 +311,6 @@ export function renderAgentOverview(params: {
       {
         title: t("agents.overview.modelSelection"),
         notice: renderPanelRefreshStatus({ status: params.modelCatalogStatus }),
-        actions: html`
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${configLoading}
-            @click=${onConfigReload}
-          >
-            ${t("common.reloadConfig")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm primary"
-            ?disabled=${!params.canUpdateConfig || configSaving || !configDirty}
-            @click=${onConfigSave}
-          >
-            ${configSaving ? t("common.saving") : t("common.save")}
-          </button>
-        `,
       },
       html`
         ${renderSettingsRow({
@@ -337,27 +344,6 @@ export function renderAgentOverview(params: {
           }),
         })}
         ${renderSettingsRow({
-          title: t("chat.modelControls.decisionLabel"),
-          description: t("chat.modelControls.decisionAgentHelp"),
-          control: renderDecisionModelPicker({
-            id: "agent-decision-model",
-            models: params.decisionModels,
-            value:
-              typeof config.entry?.decisionModel === "string"
-                ? config.entry.decisionModel
-                : undefined,
-            inherit: {
-              model:
-                typeof config.defaults?.decisionModel === "string"
-                  ? config.defaults.decisionModel
-                  : undefined,
-            },
-            disabled,
-            onChange: (value) => params.onDecisionModelChange(agent.id, value),
-            onOpen: params.onModelCatalogOpen,
-          }),
-        })}
-        ${renderSettingsRow({
           title: t("agents.overview.fallbacks"),
           stacked: true,
           control: html`
@@ -375,6 +361,81 @@ export function renderAgentOverview(params: {
               .onOpen=${params.onModelCatalogOpen}
             ></openclaw-multi-select>
           `,
+        })}
+      `,
+    )}
+    ${renderSettingsSection(
+      {
+        title: renderSettingsInfoTitle({
+          title: t("chat.modelControls.decisionSection"),
+          label: t("chat.modelControls.decisionHelpLabel"),
+          triggerId: "agent-decision-help",
+          body: html`<p>${t("chat.modelControls.decisionHelp")}</p>
+            <p>${decisionHelp}</p>`,
+        }),
+        actions: html`
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${configLoading}
+            @click=${onConfigReload}
+          >
+            ${t("common.reloadConfig")}
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm primary"
+            ?disabled=${!params.canUpdateConfig || configSaving || !configDirty}
+            @click=${onConfigSave}
+          >
+            ${configSaving ? t("common.saving") : t("common.save")}
+          </button>
+        `,
+      },
+      html`
+        ${renderSettingsRow({
+          title: t("chat.modelControls.decisionDefaultLabel"),
+          control: renderDecisionModelPicker({
+            id: "agent-decision-model",
+            label: t("chat.modelControls.decisionDefaultLabel"),
+            models: params.decisionModels,
+            value:
+              typeof config.entry?.decisionModel === "string"
+                ? config.entry.decisionModel
+                : undefined,
+            inherit: {
+              model:
+                typeof config.defaults?.decisionModel === "string"
+                  ? config.defaults.decisionModel
+                  : undefined,
+              ...(decisionTaskConfigured && !config.defaults?.decisionModel && !agentDecisionModel
+                ? { label: t("chat.modelControls.decisionTaskOnlyScalar") }
+                : {}),
+            },
+            disabled,
+            onChange: (value) => params.onDecisionModelChange(agent.id, value),
+            onOpen: params.onModelCatalogOpen,
+          }),
+        })}
+        ${renderDecisionTaskRows({
+          scope: agent.id,
+          pickerPrefix: "agent-decision-task",
+          tasks: decisionTaskEntries(
+            params.decisionTasks,
+            config.defaults?.decisionModelsByTask,
+            config.entry?.decisionModelsByTask,
+          ),
+          models: params.decisionModels,
+          disabled,
+          getSelection: (taskId) =>
+            resolveDecisionTaskSelection(config.defaults, config.entry, taskId),
+          getInheritedLabel: (selection) =>
+            selection.source === "agent" && selection.disabled
+              ? t("chat.modelControls.decisionTaskDisabledByAgent")
+              : t("chat.modelControls.decisionTaskInherit", {
+                  model: selection.inheritedModel ?? t("chat.modelControls.decisionDisabled"),
+                }),
+          onChange: (taskId, model) => params.onDecisionTaskChange(agent.id, taskId, model),
         })}
       `,
     )}

@@ -55,6 +55,13 @@ async function mount(overrides: Partial<Parameters<typeof renderDecisionModelPic
 }
 
 describe("decision model provider groups", () => {
+  it("exposes a task-specific accessible label when provided", async () => {
+    const p = await mount({ label: "Decision Model · plugin/check" });
+    expect(p.picker.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+      "Decision Model · plugin/check",
+    );
+  });
+
   it("groups interleaved model names and traverses the rendered order, leaving Disabled ungrouped", async () => {
     const p = await mount();
     expect(

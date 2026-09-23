@@ -103,6 +103,37 @@ export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): Temp
   `;
 }
 
+export function renderSettingsInfoTitle(params: {
+  title: string;
+  label: string;
+  triggerId: string;
+  body: TemplateResult;
+}): TemplateResult {
+  return html`
+    <span class="settings-label-with-help">
+      <span>${params.title}</span>
+      <span class="settings-section__docs">
+        <openclaw-tooltip open-on-click>
+          <button
+            id=${params.triggerId}
+            type="button"
+            class="settings-section__help-button settings-info-button"
+            aria-label=${params.label}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+              }
+            }}
+          >
+            ${icons.info}
+          </button>
+          <div slot="content" class="settings-section__help-panel">${params.body}</div>
+        </openclaw-tooltip>
+      </span>
+    </span>
+  `;
+}
+
 export function renderLearnMoreLink(url: string): TemplateResult {
   return html`<a
     class="learn-more-link"

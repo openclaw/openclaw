@@ -479,6 +479,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/model-providers/view.test-support.ts",
+      "text": "Decision model"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",

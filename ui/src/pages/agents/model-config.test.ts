@@ -4,7 +4,29 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createAgentModelActions } from "./model-config.ts";
+import { agentDecisionCatalogView, createAgentModelActions } from "./model-config.ts";
+
+it.each(["restricted", "retired"])(
+  "does not expose saved decision models through a %s catalog",
+  (state) => {
+    expect(
+      agentDecisionCatalogView(
+        {
+          models: [],
+          hasSnapshot: true,
+          retired: state === "retired",
+          decisionModels: [
+            { provider: "private", id: "model", name: "Private", pluginId: "private" },
+          ],
+          ...(state === "restricted"
+            ? { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }
+            : {}),
+        },
+        { models: { decisionModels: ["private/model"] } },
+      ).decisionModels,
+    ).toEqual([]);
+  },
+);
 
 function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const client = {
@@ -99,6 +121,37 @@ describe("agent model config", () => {
     });
     modelActionsFor(runtimeConfig).onDecisionModelChange("main", null);
     expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults, entries: { main: {} } } });
+    runtimeConfig.dispose();
+  });
+
+  it("stages per-task overrides, preserves explicit disables, and removes inheritance", async () => {
+    const runtimeConfig = createRuntimeConfig({
+      agents: {
+        defaults: { decisionModel: "typesafe/jev-latest" },
+        entries: { main: { decisionModelsByTask: { "plugin/check": "typesafe/old" } } },
+      },
+    });
+    await runtimeConfig.ensureLoaded();
+    const actions = modelActionsFor(runtimeConfig);
+
+    actions.onDecisionTaskChange("main", "plugin/check", "typesafe/new");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        defaults: { decisionModel: "typesafe/jev-latest" },
+        entries: { main: { decisionModelsByTask: { "plugin/check": "typesafe/new" } } },
+      },
+    });
+    actions.onDecisionTaskChange("main", "plugin/check", "");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        defaults: { decisionModel: "typesafe/jev-latest" },
+        entries: { main: { decisionModelsByTask: { "plugin/check": "" } } },
+      },
+    });
+    actions.onDecisionTaskChange("main", "plugin/check", null);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults: { decisionModel: "typesafe/jev-latest" }, entries: { main: {} } },
+    });
     runtimeConfig.dispose();
   });
   it("writes primary and fallback changes through keyed agent entries", async () => {

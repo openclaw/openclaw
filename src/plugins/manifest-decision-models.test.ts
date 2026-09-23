@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -15,6 +16,16 @@ it("discovers only decision models owned by the manifest without executing its r
       id: "fixture",
       configSchema: { type: "object" },
       contracts: { decisionProviders: ["fixture"] },
+      decisionTasks: [
+        { id: "fixture/route", title: " Routing ", description: " Choose a route " },
+        { id: "fixture/route", title: "Duplicate" },
+        { id: "other/route", title: "Foreign task" },
+        { id: "fixture/nested/route", title: "Different entry owner" },
+        { id: "decision_evaluate", title: "Core impersonation" },
+        { id: "fixture/missing-title" },
+        { id: "fixture/oversize-title", title: "x".repeat(129) },
+        { id: "fixture/short", title: "Short", description: "x".repeat(1025) },
+      ],
       decisionModels: [
         {
           provider: " fixture ",
@@ -60,6 +71,62 @@ it("discovers only decision models owned by the manifest without executing its r
     },
   ]);
   expect(result.manifest.providers ?? []).toEqual([]);
+  expect(result.manifest.decisionTasks).toEqual([
+    { id: "fixture/route", title: "Routing", description: "Choose a route" },
+    { id: "other/route", title: "Foreign task" },
+    { id: "fixture/nested/route", title: "Different entry owner" },
+    { id: "decision_evaluate", title: "Core impersonation" },
+    { id: "fixture/short", title: "Short" },
+  ]);
+});
+
+it.each([
+  { name: "single-entry", entries: ["index"], expected: [{ id: "pack", taskId: "pack/route" }] },
+  {
+    name: "multi-entry",
+    entries: ["one", "two"],
+    expected: [
+      { id: "pack/one", taskId: "pack/one/route" },
+      { id: "pack/two", taskId: "pack/two/route" },
+    ],
+  },
+])("binds $name task declarations to exact effective record owners", ({ entries, expected }) => {
+  const root = tempDirs.make("manifest-decision-tasks-");
+  fs.writeFileSync(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "pack",
+      configSchema: { type: "object" },
+      decisionTasks: [
+        { id: "pack/route", title: "Routing" },
+        { id: "pack/one/route", title: "Routing" },
+        { id: "pack/two/route", title: "Routing" },
+        { id: "pack/one/nested/route", title: "Unowned nested task" },
+        { id: "foreign/route", title: "Foreign task" },
+        { id: "decision_evaluate", title: "Core impersonation" },
+      ],
+    }),
+  );
+  const candidates = entries.map((entry) => {
+    const id = entries.length === 1 ? "pack" : `pack/${entry}`;
+    const source = path.join(root, `${entry}.js`);
+    fs.writeFileSync(source, "throw new Error('runtime must stay cold');");
+    return {
+      idHint: id,
+      ...(entries.length === 1 ? {} : { effectivePluginId: id }),
+      source,
+      rootDir: root,
+      origin: "bundled" as const,
+    };
+  });
+  const registry = loadPluginManifestRegistryCore({ candidates, installRecords: {} });
+  expect(registry.diagnostics).toEqual([]);
+  expect(registry.plugins.map(({ id, decisionTasks }) => ({ id, decisionTasks }))).toEqual(
+    expected.map(({ id, taskId }) => ({
+      id,
+      decisionTasks: [{ id: taskId, title: "Routing" }],
+    })),
+  );
 });
 
 it("bounds provider metadata before discovery can expose it to tool diagnostics", () => {

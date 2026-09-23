@@ -82,9 +82,13 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
   "agents.defaults.decisionModel":
-    "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
+    "Optional default provider/model for typed choices, scores, and boolean probabilities. Unset or empty leaves calls without a task off; decisionModelsByTask can select task-only models. Supporting plugins send bounded task evidence to the selected provider; chat and utility models are unchanged.",
   "agents.entries.*.decisionModel":
     "Per-agent decision model. Unset inherits agents.defaults.decisionModel; an empty string disables decision calls for this agent.",
+  "agents.defaults.decisionModelsByTask":
+    "Decision provider/model references by trusted task ID. Agent task entries take precedence; an empty task value disables that task. Selection does not enable automatic work. Hosted providers receive supplied evidence and may charge.",
+  "agents.entries.*.decisionModelsByTask":
+    "Per-agent decision task overrides, before global task entries and the agent/default decisionModel. An explicitly empty agent decisionModel disables all tasks. Task-only selection does not require an agent-wide default.",
   "agents.entries.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",

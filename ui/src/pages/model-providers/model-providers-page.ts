@@ -20,8 +20,7 @@ import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsage } from "./account-usage.ts";
 import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
-  buildDefaultsPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
+  modelDefaultsMutation,
   modelProviderApiKeySuccess,
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
@@ -42,6 +41,7 @@ import {
   type DefaultsDraft,
   type ModelProviderPendingLogout,
 } from "./data.ts";
+import { DecisionInventoryController } from "./decision-inventory-controller.ts";
 import { ModelProviderDiscoveryController } from "./discovery-controller.ts";
 import { InstalledAgentsController } from "./installed-agents.ts";
 import {
@@ -88,6 +88,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderId = "";
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultsDraft | null = null;
+  private readonly decisionInventory = new DecisionInventoryController(this, {
+    getBasePath: () => this.context.basePath,
+    getConfig: () => currentConfigObject(this.context.runtimeConfig.state),
+    patchConfig: (mutation) => this.patchConfig(mutation),
+    getGateway: () => this.gateway,
+  });
   @state() private selectedAgentId = "";
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
@@ -369,6 +375,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.resetAgentScopeState();
     this.profileActions.resetProbes();
     this.defaultsDraft = null;
+    this.decisionInventory.reset();
   }
 
   private resetAgentScopeState() {
@@ -565,12 +572,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!defaults) {
       return;
     }
-    await this.patchConfig({
-      key: "defaults",
-      raw: buildDefaultsPatch(defaults),
-      note: t("modelProviders.notes.defaultModel"),
-      replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
-    });
+    await this.patchConfig(modelDefaultsMutation(defaults));
     // Global defaults outlive agent selection. Connection resets clear the draft;
     // object identity protects newer edits.
     if (this.defaultsDraft === defaults) {
@@ -655,7 +657,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
       cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
       configuredModels,
-      decisionModels: catalog?.decisionModels ?? [],
+      ...this.decisionInventory.view(catalog),
       defaultModels: defaults,
       authStatus: data.authStatus,
       automaticUtilityModel: catalog?.defaultModels?.automaticUtilityModel,

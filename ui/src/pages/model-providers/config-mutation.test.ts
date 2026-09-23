@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDefaultsPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
+  modelDefaultsMutation,
   modelProviderErrorMessage,
 } from "./config-mutation.ts";
 
@@ -60,7 +60,17 @@ describe("model provider config patches", () => {
   });
 
   it("confirms fallback-array shrinkage for the gateway destructive-array guard", () => {
-    expect(DEFAULT_MODELS_REPLACE_PATHS).toEqual(["agents.defaults.model.fallbacks"]);
+    expect(
+      modelDefaultsMutation({
+        primary: "openai/gpt-5",
+        fallbacks: [],
+        utilityModel: null,
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      }),
+    ).toHaveProperty("replacePaths", ["agents.defaults.model.fallbacks"]);
   });
 
   it.each(["openai/gpt-5-mini", "", null])(

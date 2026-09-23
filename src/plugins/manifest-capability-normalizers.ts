@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import { isDecisionTaskId } from "../decisions/task-ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
@@ -98,6 +99,32 @@ export function normalizeManifestDecisionModels(
     }
   }
   return models.length ? models : undefined;
+}
+
+/** Preserve task syntax until manifest records resolve the exact entry owner. */
+export function normalizeManifestDecisionTasks(value: unknown): PluginManifest["decisionTasks"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const tasks: NonNullable<PluginManifest["decisionTasks"]> = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!isRecord(entry) || !isDecisionTaskId(entry.id)) {
+      continue;
+    }
+    const title = normalizeOptionalString(entry.title);
+    if (!title || title.length > 128 || seen.has(entry.id)) {
+      continue;
+    }
+    const description = normalizeOptionalString(entry.description);
+    tasks.push({
+      id: entry.id,
+      title,
+      ...(description && description.length <= 1024 ? { description } : {}),
+    });
+    seen.add(entry.id);
+  }
+  return tasks.length ? tasks : undefined;
 }
 
 /** Endpoint restrictions constrain a provider alias without changing stored credential identity. */

@@ -1,5 +1,5 @@
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
+import { resolveDecisionModelSelection } from "../agents/decision-model-setting.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,6 +16,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { DecisionProviderHost } from "./provider-host.js";
+import { isDecisionTaskId, isDecisionTaskOwnedBy } from "./task-ids.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 
@@ -41,10 +42,13 @@ export async function evaluateDecisionInRegistry(
   config: OpenClawConfig,
   consumerId?: string,
 ): Promise<DecisionOutcome> {
+  const agentId = options?.agentId;
+  const taskId = options?.taskId;
   if (
     !options ||
-    (options.agentId !== undefined &&
-      (typeof options.agentId !== "string" || !options.agentId.trim())) ||
+    (agentId !== undefined && (typeof agentId !== "string" || !agentId.trim())) ||
+    (taskId !== undefined &&
+      (!isDecisionTaskId(taskId) || !isDecisionTaskOwnedBy(taskId, consumerId))) ||
     typeof options.purpose !== "string" ||
     !options.purpose ||
     options.purpose.length > 128 ||
@@ -61,7 +65,7 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const selected = resolveDecisionModelSetting(config, options.agentId);
+  const { selection: selected } = resolveDecisionModelSelection(config, agentId, taskId);
   if (!selected) {
     return { status: "unavailable", reason: "disabled" };
   }
@@ -105,7 +109,7 @@ export async function evaluateDecisionInRegistry(
     if (getPluginRegistryResourceOwner(registry) === getPluginRegistryState()?.activeRegistry) {
       const result = await entry.host.evaluate(
         batch,
-        { ...options, signal: modelSignal },
+        { ...options, agentId, taskId, signal: modelSignal },
         selected.model,
         config,
         registry,
@@ -126,7 +130,7 @@ export async function evaluateDecisionInRegistry(
     const signal = AbortSignal.any([modelSignal, lifetime]);
     const result = await entry.host.evaluate(
       batch,
-      { ...options, signal },
+      { ...options, agentId, taskId, signal },
       selected.model,
       config,
       registry,
