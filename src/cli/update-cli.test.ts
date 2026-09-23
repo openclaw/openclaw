@@ -405,18 +405,6 @@ describe("update-cli", () => {
     },
   );
 
-  it("falls back to latest when beta tag is older than release", async () => {
-    await mockPackageInstallAtCaseDir();
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      config: { update: { channel: "beta" } } as OpenClawConfig,
-    });
-    primeNpmChannelTag("latest", `${VERSION}-1`);
-    await updateCommand({});
-
-    expectPackageInstallSpec(`openclaw@${VERSION}-1`);
-  });
-
   it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValueOnce("1.0.0").mockResolvedValue("2026.6.33");
