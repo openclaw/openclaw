@@ -577,7 +577,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       disabled: !this.connected,
       onAttachmentsChange: this.onAttachmentsChange,
       onPendingReadsChange: (delta) => {
-        if (readSignal) reads?.updatePending(readSignal, delta);
+        if (readSignal) {
+          reads?.updatePending(readSignal, delta);
+        }
       },
     };
     const drop = createChatAttachmentDropHandlers({

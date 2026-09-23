@@ -23,7 +23,7 @@ export function createSessionRailComposer(options: {
   sendShortcut: () => ChatSendShortcut;
 }) {
   let textarea: HTMLTextAreaElement | null = null;
-  const ref = (element?: Element) => {
+  const bindTextarea = (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
     if (textarea && textarea !== nextTextarea) {
       disconnectTextareaOverflowObserver(textarea);
@@ -35,9 +35,9 @@ export function createSessionRailComposer(options: {
     }
   };
   return {
-    ref,
+    ref: bindTextarea,
     dispose() {
-      ref();
+      bindTextarea();
     },
     syncDraft(draft: string) {
       if (textarea?.isConnected && textarea.value !== draft) {
@@ -104,7 +104,9 @@ export function renderSessionRailComposer(options: {
             @paste=${(event: ClipboardEvent) => {
               if (connected) {
                 handleChatAttachmentPaste(event, attachmentProps, { imagesOnly: true });
-                if (event.defaultPrevented) event.stopPropagation();
+                if (event.defaultPrevented) {
+                  event.stopPropagation();
+                }
               }
             }}
             @keydown=${composer.handleKeydown}

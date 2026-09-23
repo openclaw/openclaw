@@ -337,11 +337,15 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
   };
   return {
     onDragenter: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) event.stopPropagation();
+      if (isFileDrag(event.dataTransfer)) {
+        event.stopPropagation();
+      }
       setActive(event, true);
     },
     onDragleave: (event: DragEvent) => {
-      if (isFileDrag(event.dataTransfer)) event.stopPropagation();
+      if (isFileDrag(event.dataTransfer)) {
+        event.stopPropagation();
+      }
       setActive(event, false);
     },
     onDragover: (event: DragEvent) => {
