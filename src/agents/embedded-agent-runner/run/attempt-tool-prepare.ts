@@ -276,6 +276,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           const codingToolOptions: OpenClawCodingToolsOptions = {
             agentId: params.setup.sessionAgentId,
             ...buildConversationContext(),
+            questionPrompt: attempt.questionPrompt,
             exec: {
               ...attempt.execOverrides,
               ...(sessionPermissionPolicy

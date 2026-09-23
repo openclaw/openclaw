@@ -26,6 +26,7 @@ import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
+import type { QuestionPromptDelivery } from "./tools/question-prompt-delivery.types.js";
 import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
@@ -59,6 +60,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   /** Reports source delivery observed through bridged tool lifecycle events. */
   onDeliveredMessageToolOnlySourceReply?: () => void;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /** Initiator-owned prompt delivery for blocking question tools; set, the harness reserves nothing. */
+  questionPrompt?: QuestionPromptDelivery;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
   /** Attempt-scoped trajectory recorder for runtime tool audit events. */

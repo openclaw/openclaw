@@ -8,6 +8,8 @@ import {
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import type { QuestionPromptDelivery } from "../agents/tools/question-prompt-delivery.types.js";
+import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import {
@@ -355,6 +357,26 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
+/** Prompt delivery for a consult: the requesting chat shows the question and may answer it by text. */
+function resolveConsultQuestionPrompt(params: {
+  cfg: OpenClawConfig;
+  deliveryContext: DeliveryContext | undefined;
+  requesterSessionKey: string | null | undefined;
+}): QuestionPromptDelivery | undefined {
+  const delivery = createChannelQuestionPromptDelivery({
+    cfg: params.cfg,
+    channel: params.deliveryContext?.channel,
+    to: params.deliveryContext?.to,
+    accountId: params.deliveryContext?.accountId,
+    threadId: params.deliveryContext?.threadId,
+  });
+  const answerSessionKey = params.requesterSessionKey?.trim();
+  if (!delivery || !answerSessionKey) {
+    return delivery;
+  }
+  return { ...delivery, answerSessionKey };
+}
+
 /**
  * Runs an embedded agent consult and returns concise speakable text for realtime voice playback.
  */
@@ -507,6 +529,14 @@ export async function consultRealtimeVoiceAgent(params: {
         ...toolAuthorityOverlay,
         // ASR voice ingress has no trace/client-tool or privileged handoff capability.
         messageProvider: toolAuthorityOverlay.messageProvider,
+        // The consult shows no tool results, so a blocking question must reach the
+        // conversation that requested the call on its own, and that conversation
+        // must be able to answer it by plain text as well as by button.
+        questionPrompt: resolveConsultQuestionPrompt({
+          cfg: params.cfg,
+          deliveryContext: consultDeliveryContext,
+          requesterSessionKey: params.spawnedBy,
+        }),
         messageTo: consultDeliveryContext?.to,
         messageThreadId: consultDeliveryContext?.threadId,
         currentChannelId: consultDeliveryContext?.to,

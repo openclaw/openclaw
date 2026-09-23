@@ -333,15 +333,18 @@ function buildOpenClawCodingToolsOptions(
     messageProvider: a.messageProvider ?? a.messageChannel,
     messageChannel: a.messageChannel,
     // Bridged tools are dispatched here, not through the embedded tool lifecycle,
-    // so no tool-start handler reserves a blocking question's prompt for them.
-    ...(a.onToolResult
-      ? {
-          questionPrompt: {
-            send: a.onToolResult,
-            ...(a.messageChannel ? { messageChannel: a.messageChannel } : {}),
-          },
-        }
-      : {}),
+    // so no tool-start handler reserves a blocking question's prompt for them. An
+    // initiator-owned delivery wins over the run's tool-result sink.
+    ...(a.questionPrompt
+      ? { questionPrompt: a.questionPrompt }
+      : a.onToolResult
+        ? {
+            questionPrompt: {
+              send: a.onToolResult,
+              ...(a.messageChannel ? { messageChannel: a.messageChannel } : {}),
+            },
+          }
+        : {}),
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,

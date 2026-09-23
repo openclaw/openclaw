@@ -280,12 +280,13 @@ export async function buildDynamicTools(
     messageProvider: messageToolProvider,
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
     // Codex dispatches dynamic tools itself, so no tool-start handler reserves a
-    // blocking question's prompt. Hand the tools this run's own way to show one.
-    ...(params.onToolResult
-      ? {
-          questionPrompt: { send: params.onToolResult, messageChannel: messageToolProvider },
-        }
-      : {}),
+    // blocking question's prompt. An initiator-owned delivery wins; otherwise hand
+    // the tools this run's own way to show one.
+    ...(params.questionPrompt
+      ? { questionPrompt: params.questionPrompt }
+      : params.onToolResult
+        ? { questionPrompt: { send: params.onToolResult, messageChannel: messageToolProvider } }
+        : {}),
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     allowGatewaySubagentBinding:

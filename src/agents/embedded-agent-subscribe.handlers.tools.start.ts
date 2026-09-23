@@ -346,6 +346,9 @@ export function handleToolExecutionStart(
   const questionPromptReservation =
     isQuestionTool &&
     ctx.params.onToolResult &&
+    // An initiator-owned delivery shows the prompt itself; reserving it here would
+    // send it through a tool-result sink that may show nothing.
+    !ctx.params.questionPrompt &&
     // Native credential cards arrive through question.requested, not a public link.
     (startToolName === "ask_user" || isDeliverableMessageChannel(ctx.params.messageChannel ?? ""))
       ? reserveQuestionPromptDelivery(

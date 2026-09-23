@@ -612,6 +612,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
     onToolResult: notifyToolResult,
+    questionPrompt: params.questionPrompt,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: notifyAgentEvent,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.

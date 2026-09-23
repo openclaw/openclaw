@@ -79,8 +79,6 @@ import type {
   StreamRunState,
 } from "./types.js";
 
-type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
   cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -95,7 +93,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   activeSession: AgentSession;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   runtimeChannel?: string;
-  hookRunner: HookRunner;
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
   clientToolCallSlots: readonly EmbeddedAttemptClientToolCallSlot[];
@@ -309,6 +307,7 @@ function prepareStream(
     observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,
     onToolResult: attempt.onToolResult,
+    questionPrompt: attempt.questionPrompt,
     onReasoningStream: attempt.onReasoningStream,
     streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
     onReasoningEnd: attempt.onReasoningEnd,

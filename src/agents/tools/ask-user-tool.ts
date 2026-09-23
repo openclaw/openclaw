@@ -576,6 +576,9 @@ export function createAskUserTool(params: {
           registerPendingAgentQuestion({
             questionId,
             sessionKey,
+            ...(params.questionPrompt?.answerSessionKey
+              ? { answerSessionKeys: [params.questionPrompt.answerSessionKey] }
+              : {}),
             questions: normalized.questions.map(({ questionId: id, ...question }) => ({
               ...question,
               id,

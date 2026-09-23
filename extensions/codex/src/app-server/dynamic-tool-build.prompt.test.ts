@@ -73,4 +73,27 @@ describe("Codex app-server dynamic tool question prompts", () => {
       expect(onToolResult).toHaveBeenCalledExactlyOnceWith({ text: "Question for you:" });
     },
   );
+
+  it("prefers an initiator-owned question prompt over the tool-result sink", async () => {
+    const workspaceDir = path.join(tempDir, "question-prompt-owned-workspace");
+    const params = createParams(
+      path.join(tempDir, "question-prompt-owned-session.jsonl"),
+      workspaceDir,
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.onToolResult = vi.fn();
+    const send = vi.fn();
+    params.questionPrompt = { send, messageChannel: "telegram" };
+    let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
+    setCodexTestToolFactory(params, (options) => {
+      capturedQuestionPrompt = options?.questionPrompt;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(capturedQuestionPrompt?.send).toBe(send);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
+  });
 });
