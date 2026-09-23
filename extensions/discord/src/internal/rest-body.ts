@@ -1,4 +1,9 @@
-import type { RequestData } from "./rest.js";
+type RequestData = {
+  body?: unknown;
+  multipartStyle?: "message" | "form";
+  rawBody?: boolean;
+  headers?: Record<string, string>;
+};
 
 export function serializeRequestBody(
   data: RequestData | undefined,
