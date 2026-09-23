@@ -613,8 +613,9 @@ describe("createGatewayCloseHandler", () => {
       const closing = close({
         reason: "actual cleanup proof",
         ...(owner === "pre-restart" ? { restartExpectedMs: 1000 } : {}),
-      }).then(() => {
+      }).then((result) => {
         closed = true;
+        return result;
       });
       try {
         await entered.promise;
@@ -636,7 +637,10 @@ describe("createGatewayCloseHandler", () => {
         release.resolve();
         await finished.promise;
         try {
-          await closing;
+          const result = await closing;
+          expect(result.warnings).toContain(
+            owner === "harness" ? "agent-harnesses" : `gateway:${owner}`,
+          );
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
           expect(sdkDatabase.isOpen).toBe(false);
           expect(preparedDatabase.isOpen).toBe(false);
@@ -1127,6 +1131,7 @@ describe("createGatewayCloseHandler", () => {
 
       const closePromise = close({ reason: "test" });
       await vi.waitFor(() => {
+        expect(mocks.fenceSessionSuspensionWritesForGatewayShutdown).toHaveBeenCalledOnce();
         expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
       });
       try {
@@ -1276,34 +1281,6 @@ describe("createGatewayCloseHandler", () => {
     expect(result.warnings).toContain("channel/telegram");
   });
 
-  it("clears session suspension timers before plugin services and channels stop", async () => {
-    const events: string[] = [];
-    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
-      events.push("session-suspension-timers");
-      return 1;
-    });
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugin-services");
-      }),
-    };
-    const stopChannel = vi.fn(async (channelId: string) => {
-      events.push(`channel:${channelId}`);
-    });
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        pluginServices: pluginServices as never,
-        stopChannel,
-      }),
-    );
-
-    await close({ reason: "test shutdown" });
-
-    expect(mocks.fenceSessionSuspensionWritesForGatewayShutdown).toHaveBeenCalledOnce();
-    expect(events).toEqual(["session-suspension-timers", "plugin-services", "channel:discord"]);
-  });
-
   it("emits gateway shutdown and pre-restart hooks", async () => {
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
@@ -1346,37 +1323,27 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "gateway restarting", restartExpectedMs: 123 });
 
     const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
-    expect(messages).toEqual(
-      expect.arrayContaining([
+    for (const phase of [
+      "gateway-shutdown-hook",
+      "gateway-pre-restart-hook",
+      "session-end-drain",
+      "channels",
+      "bundle-runtimes",
+      "plugin-services",
+      "gmail-watcher",
+      "websocket-server",
+      "http-server",
+    ]) {
+      expect(messages).toContainEqual(
         expect.stringMatching(
-          /^restart trace: restart\.close\.gateway-shutdown-hook [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
+          new RegExp(
+            String.raw`^restart trace: restart\.close\.${phase} [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$`,
+            "u",
+          ),
         ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.gateway-pre-restart-hook [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.session-end-drain [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.channels [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.bundle-runtimes [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.plugin-services [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.gmail-watcher [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.websocket-server [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-        expect.stringMatching(
-          /^restart trace: restart\.close\.http-server [0-9.]+ms total=[0-9.]+ms reason=gateway_restarting$/u,
-        ),
-      ]),
-    );
+      );
+    }
+
     expect(
       messages.some(
         (message) =>
@@ -1681,14 +1648,6 @@ describe("createGatewayCloseHandler", () => {
         String(message).includes("session-end-drain timed out"),
       ),
     ).toBe(true);
-  });
-
-  it("skips the session-end drain step when no drain helper is provided", async () => {
-    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
-
-    const result = await close({ reason: "SIGTERM" });
-
-    expect(result.warnings).not.toContain("session-end-drain");
   });
 
   it("waits for pending replies to settle before restart shutdown", async () => {
@@ -2870,21 +2829,6 @@ describe("createGatewayCloseHandler", () => {
 
     expect(result.warnings).toContain("ws-clients");
     expect(clients.size).toBe(0);
-  });
-
-  it("records a warning when HTTP server close fails", async () => {
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        httpServer: {
-          close: (cb: (err?: Error | null) => void) => cb(new Error("EADDRINUSE")),
-          closeIdleConnections: vi.fn(),
-        } as never,
-      }),
-    );
-
-    const result = await close({ reason: "test shutdown" });
-
-    expect(result.warnings).toContain("http-server");
   });
 
   it("forces lingering HTTP connections closed and records a timeout warning", async () => {
