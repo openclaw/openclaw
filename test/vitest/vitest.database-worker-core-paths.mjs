@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/cli/daemon-cli/restart-health-client.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/config/sessions/disk-budget.physical-usage.test.ts",
   "src/agents/agent-bundle-mcp-requester-connect.read.test.ts",
