@@ -20,7 +20,8 @@ import {
   reloadSystemdUserManager,
 } from "./systemd-exec.js";
 import {
-  assertNoSystemGatewayOwnershipForActivation,
+  admitUserUnitActivationPastUnverifiableOwnership,
+  assertNoSystemGatewayOwnership,
   findInstalledSystemdGatewayScope,
 } from "./systemd-scope.js";
 import {
@@ -54,10 +55,12 @@ async function runSystemdServiceAction(params: {
   const env = params.env ?? process.env;
   if (params.systemdIdentity && params.action !== "stop") {
     if (params.systemdIdentity.scope === "user") {
-      await assertNoSystemGatewayOwnershipForActivation({
-        ...env,
-        OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName,
-      });
+      const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
+      try {
+        await assertNoSystemGatewayOwnership(scopedEnv);
+      } catch (error) {
+        await admitUserUnitActivationPastUnverifiableOwnership(scopedEnv, error);
+      }
     }
     if (params.systemdIdentity.scope === "system" && !isRunningAsRoot()) {
       throw new Error(
@@ -94,7 +97,11 @@ async function runSystemdServiceAction(params: {
   } else {
     await assertSystemdAvailable(env);
     if (params.action !== "stop") {
-      await assertNoSystemGatewayOwnershipForActivation(env);
+      try {
+        await assertNoSystemGatewayOwnership(env);
+      } catch (error) {
+        await admitUserUnitActivationPastUnverifiableOwnership(env, error);
+      }
     }
     runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
   }
