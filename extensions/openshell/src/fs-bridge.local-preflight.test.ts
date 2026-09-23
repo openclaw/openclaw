@@ -7,13 +7,13 @@ import type { OpenShellMirrorBackend } from "./backend.types.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 
 function createBridge(workspaceDir: string) {
-  const backend: OpenShellMirrorBackend = {
+  const backend = {
     remoteAgentWorkspaceDir: "/agent",
     mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
     renameRemotePath: vi.fn().mockResolvedValue(undefined),
     removeRemotePath: vi.fn().mockResolvedValue(undefined),
     syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
-  };
+  } satisfies OpenShellMirrorBackend;
   const sandbox = createSandboxTestContext({
     overrides: {
       backendId: "openshell",
