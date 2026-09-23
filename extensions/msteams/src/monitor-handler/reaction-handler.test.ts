@@ -228,7 +228,10 @@ describe("createMSTeamsReactionHandler", () => {
         expect(enqueue).toHaveBeenCalledExactlyOnceWith(
           "Teams reaction 👍 added by User on message msg-1",
           {
-            sessionKey: "test-session",
+            // Only channel conversations thread, and this reaction names its target in
+            // replyToId, so the session matches the message path for the same replyToId.
+            sessionKey:
+              conversationType === "channel" ? "test-session:thread:msg-1" : "test-session",
             contextKey: `msteams:reaction:${conversationId}:msg-1:allowed-aad:like:added`,
           },
         );
@@ -409,13 +412,16 @@ describe("createMSTeamsReactionHandler", () => {
 
       await invokeReactionEvent(handler, reactionFrom(allowedConversation, "trustedTeam"), "added");
 
-      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([
+      // The reacted message is named in replyToId with no `;messageid=` on the channel,
+      // so the event belongs to that message's thread rather than the parent conversation.
+      expect(peekSystemEventEntries(`${allowedRoute.sessionKey}:thread:target-message`)).toEqual([
         expect.objectContaining({
           text: "Teams reaction 👍 added by Allowed Sender on message target-message",
           contextKey:
             "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
         }),
       ]);
+      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([]);
 
       resetSystemEventsForTest();
       const threadId = "1700000000000";

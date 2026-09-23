@@ -94,6 +94,10 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       baseSessionKey: route.sessionKey,
       isChannel,
       conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
+      // A channel reaction can omit the `;messageid=` suffix and still name the reacted
+      // message in replyToId. Pass it as the same fallback the message and feedback paths
+      // use, or the reaction lands in the parent conversation instead of its thread.
+      replyToId: activity.replyToId,
     });
 
     // The replyToId points to the message that was reacted to.
