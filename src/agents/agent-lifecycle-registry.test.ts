@@ -7,8 +7,11 @@ import {
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
@@ -46,6 +49,34 @@ afterEach(() => {
 });
 
 describe("agent lifecycle registry", () => {
+  it("does not recreate a missing mandatory deletion journal while reading authority", () => {
+    const options = createOptions();
+    expect(readAgentDeletionJournal("main", options)).toBeUndefined();
+    const database = openOpenClawStateDatabase(options);
+    database.db.exec("DROP TABLE agent_deletion_journal");
+    expect(() => readAgentDeletionJournal("main", options)).toThrow(/agent_deletion_journal/);
+    expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
+  });
+
+  it("reads current deletion authority outside an inherited discovery snapshot", async () => {
+    const options = createOptions();
+    const config = { agents: { entries: { main: {} } } };
+    recordAgentProvenance("main", { createdVia: "operator" }, options);
+    const binding = captureAgentLifecycleBinding(config, "main", options);
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      await withAgentDeletion(
+        "main",
+        async (begin) => {
+          const deletion = begin(createEntry("main"));
+          expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+          deletion.rollback();
+          expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+        },
+        options,
+      );
+    }, options);
+  });
+
   it("binds legacy and recreated agents to distinct durable incarnations", () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {} } } };
