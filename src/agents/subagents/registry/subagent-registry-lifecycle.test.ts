@@ -55,6 +55,7 @@ import {
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
+import { retainRequesterSettleCompletionHandoffForTest } from "../announce/subagent-announce-completion-handoff-retention.test-support.js";
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
@@ -95,6 +96,12 @@ import {
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import {
+  expectFields,
+  findCallArg,
+  firstCall,
+  firstCallArg,
+} from "./subagent-registry.mock-call.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
@@ -415,44 +422,6 @@ function makeInterruptedSubagentCompletion(
     recoverInterrupted: true,
     ...overrides,
   });
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
-function firstCall(mock: ReturnType<typeof vi.fn>): ReadonlyArray<unknown> {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected first mock call");
-  }
-  return call;
-}
-
-function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [arg] = firstCall(mock);
-  if (!arg || typeof arg !== "object") {
-    throw new Error("expected first call argument object");
-  }
-  return arg as Record<string, unknown>;
-}
-
-function findCallArg(
-  mock: ReturnType<typeof vi.fn>,
-  predicate: (arg: Record<string, unknown>) => boolean,
-): Record<string, unknown> {
-  for (const [arg] of mock.mock.calls) {
-    if (arg && typeof arg === "object" && predicate(arg as Record<string, unknown>)) {
-      return arg as Record<string, unknown>;
-    }
-  }
-  throw new Error("expected matching mock call");
 }
 
 function hasDeliveredTaskStatusUpdate(runId: string): boolean {
@@ -1483,6 +1452,11 @@ describe("subagent registry lifecycle hardening", () => {
           batchRunIds: ["retirement-intermediate"],
         },
       });
+      const retainedHandoff = retainRequesterSettleCompletionHandoffForTest({
+        requesterAgentId: "main",
+        requesterSessionKey: intermediate.requesterSessionKey,
+        batchRunIds: [intermediate.runId],
+      });
       const descendant = createRunEntry({
         runId: "retirement-descendant",
         childSessionKey: "agent:main:subagent:retirement-descendant",
@@ -1527,6 +1501,7 @@ describe("subagent registry lifecycle hardening", () => {
           await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
           expect(subagentRuns.has(intermediate.runId)).toBe(true);
           expect(ancestor.cleanupCompletedAt).toBeUndefined();
+          expect(retainedHandoff.isRetained()).toBe(true);
           failRetirement = false;
           const deadline = controller.getRequesterSettleWakeTimer(intermediate.runId)!.deadline;
           controller.resumeRequesterSettleWake(intermediate.runId, intermediate);
@@ -1536,6 +1511,7 @@ describe("subagent registry lifecycle hardening", () => {
           await vi.advanceTimersByTimeAsync(1);
         }
         await waitForLifecycleState(() => expect(subagentRuns.has(intermediate.runId)).toBe(false));
+        expect(retainedHandoff.isRetained()).toBe(false);
         await completeRun(controller, descendant, {
           endedAt: Date.now(),
           triggerCleanup: true,
@@ -1546,6 +1522,7 @@ describe("subagent registry lifecycle hardening", () => {
         for (const entry of [ancestor, intermediate, descendant]) {
           subagentRuns.delete(entry.runId);
         }
+        retainedHandoff.release();
         vi.useRealTimers();
       }
     },

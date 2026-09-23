@@ -14,6 +14,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { releaseAnnounceCompletionHandoffForChildRun } from "../announce/subagent-announce-completion-handoff-retention.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
@@ -176,6 +177,11 @@ export function suspendPendingFinalDelivery(
   },
 ): void {
   const params = context.options;
+  // Deadline expiry / permanent failure stop announce replay — release retained handoff keys.
+  releaseAnnounceCompletionHandoffForChildRun({
+    childSessionKey: args.entry.childSessionKey,
+    childRunId: args.entry.runId,
+  });
   const committed = blockSubagentCompletionDelivery({
     subagent: args.entry,
     taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",

@@ -149,6 +149,7 @@ export async function runSubagentAnnounceDispatch(params: {
   if (
     !allowSteerFallback ||
     primaryDirect.delivered ||
+    primaryDirect.terminal ||
     primaryDirect.reason === "requester_turn_pending" ||
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||

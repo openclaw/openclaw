@@ -82,7 +82,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
-function isWriterClaimReboundAnnounceError(error: unknown): boolean {
+export function isWriterClaimReboundAnnounceError(error: unknown): boolean {
   return Boolean(
     (error &&
       typeof error === "object" &&

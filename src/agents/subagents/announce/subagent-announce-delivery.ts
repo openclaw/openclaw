@@ -30,7 +30,10 @@ import {
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
+import { clearRetainedCompletionHandoffKeysForTest } from "./subagent-announce-completion-handoff-retention.js";
 import {
+  hasAnnounceSendEvidence,
+  isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
   sourceOwnerChangedResult,
@@ -40,6 +43,8 @@ import {
   getSubagentAnnounceRuntimeConfig,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
+  setSubagentAnnounceDeliveryDepsForTest,
+  type SubagentAnnounceDeliveryDeps,
 } from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
@@ -83,6 +88,7 @@ function createCompletionUserTurnTranscriptRecorderFactory(params: {
   requesterAgentId?: string;
   sourceSessionKey?: string;
   sourceTool?: string;
+  settleWakeSourceSessionKeys?: readonly string[];
   targetRequesterSessionKey: string;
   triggerMessage: string;
 }): (sessionId: string) => UserTurnTranscriptRecorder {
@@ -144,7 +150,6 @@ export async function deliverSubagentAnnouncement(params: {
   sourceSessionKey?: string;
   sourceRunId?: string;
   sourceTool?: string;
-  settleWakeSourceSessionKeys?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
@@ -292,7 +297,7 @@ export async function deliverSubagentAnnouncement(params: {
     ? createCompletionUserTurnTranscriptRecorderFactory(params)
     : undefined;
 
-  const delivery = await runSubagentAnnounceDispatch({
+  return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     requireDirectDelivery: params.requireDirectDelivery || params.completionTarget === "parent",
     signal: params.signal,
@@ -345,20 +350,18 @@ export async function deliverSubagentAnnouncement(params: {
       });
     },
   });
-  const failedDirect =
-    params.expectsCompletionMessage || params.sourceTool === "subagent_announce"
-      ? delivery.phases?.find(
-          (phase) =>
-            phase.phase === "direct-primary" && !phase.delivered && phase.path === "direct",
-        )
-      : undefined;
-  if (failedDirect?.error) {
-    const source = params.sourceRunId
-      ? `run ${params.sourceRunId}`
-      : `session ${params.sourceSessionKey ?? params.requesterSessionKey}`;
-    defaultRuntime.log(
-      `[warn] Subagent completion direct announce failed for ${source}: ${failedDirect.error}${delivery.delivered ? "; recovered via steered" : ""}`,
-    );
-  }
-  return delivery;
+}
+
+const testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
+    setSubagentAnnounceDeliveryDepsForTest(overrides);
+  },
+  clearRetainedCompletionHandoffKeysForTest,
+  hasAnnounceSendEvidence,
+  isWriterClaimReboundAnnounceError,
+};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
+  ] = testing;
 }

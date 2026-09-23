@@ -28,6 +28,7 @@ import {
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
+import { releaseAnnounceCompletionHandoffForChildRun } from "../announce/subagent-announce-completion-handoff-retention.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
@@ -495,6 +496,11 @@ export const emitCompletionEndedHookIfNeeded = async (
 };
 
 export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
+  // Final retirement of pending announce delivery also drops retained handoff ownership.
+  releaseAnnounceCompletionHandoffForChildRun({
+    childSessionKey: entry.childSessionKey,
+    childRunId: entry.runId,
+  });
   const delivery = ensureDeliveryState(entry);
   delivery.payload = undefined;
   delivery.createdAt = undefined;

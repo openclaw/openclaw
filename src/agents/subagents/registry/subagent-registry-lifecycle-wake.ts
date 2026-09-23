@@ -12,6 +12,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { releaseAnnounceCompletionHandoffForRequesterSettleBatch } from "../announce/subagent-announce-completion-handoff-retention.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { settleRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
@@ -117,6 +118,20 @@ const completeRequesterSettleWakeBatch = (
   ) {
     return false;
   }
+  // Batch retirement can skip another delivery attempt (missing requester,
+  // exhausted attempts, deferral limit). Remember the retained settle-wake keys,
+  // but keep their replay fence until the durable settlement commits.
+  const settleAnchor = entries.find((entry) => entry.requesterSettleWake) ?? entries[0];
+  const retainedHandoffOwner = settleAnchor?.requesterSettleWake
+    ? {
+        requesterAgentId: resolveSubagentRequesterAgentId(params.getRuntimeConfig(), settleAnchor),
+        requesterSessionKey: settleAnchor.requesterSessionKey,
+        batchRunIds:
+          settleAnchor.requesterSettleWake.batchRunIds ??
+          entries.map((entry) => entry.runId).toSorted(),
+        rearmGeneration: settleAnchor.requesterSettleWake.rearmGeneration,
+      }
+    : undefined;
   if (outcome) {
     settleRequesterCompletionBatch({
       entries: entries.map((subagent) => {
@@ -165,6 +180,9 @@ const completeRequesterSettleWakeBatch = (
       });
       throw error;
     }
+  }
+  if (retainedHandoffOwner) {
+    releaseAnnounceCompletionHandoffForRequesterSettleBatch(retainedHandoffOwner);
   }
   releaseRequesterSettleWakeBatch(context, entries, rearmGeneration);
   return true;
