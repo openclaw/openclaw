@@ -1,8 +1,15 @@
-import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import {
   sanitizeAndNormalizeEmbedding,
   type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
@@ -343,10 +350,25 @@ export async function createOllamaEmbeddingProvider(
   const client = await resolveOllamaEmbeddingClient(options);
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
-  const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (
+    input: string | string[],
+    signal?: AbortSignal,
+    deadlineControl?: MemorySearchDeadlineControl,
+  ): Promise<number[][]> => {
     const localServiceLease =
       client.localServiceTarget && client.acquireLocalService
-        ? await client.acquireLocalService(client.localServiceTarget, signal)
+        ? await client.acquireLocalService(
+            deadlineControl
+              ? {
+                  ...client.localServiceTarget,
+                  // The managed service's own readiness budget covers a cold start;
+                  // report the wait so the memory_search deadline does not consume it.
+                  onReadinessWait: (waiting: boolean) =>
+                    deadlineControl.report(waiting ? "pause" : "resume"),
+                }
+              : client.localServiceTarget,
+            signal,
+          )
         : undefined;
     let json: Awaited<ReturnType<typeof readOllamaEmbeddingJsonResponse>>;
     try {
@@ -397,8 +419,12 @@ export async function createOllamaEmbeddingProvider(
     });
   };
 
-  const embedOne = async (text: string, signal?: AbortSignal): Promise<number[]> => {
-    const [embedding] = await embedMany(text, signal);
+  const embedOne = async (
+    text: string,
+    signal?: AbortSignal,
+    deadlineControl?: MemorySearchDeadlineControl,
+  ): Promise<number[]> => {
+    const [embedding] = await embedMany(text, signal, deadlineControl);
     if (!embedding) {
       throw new Error("Ollama embed response returned no embedding");
     }
@@ -407,9 +433,13 @@ export async function createOllamaEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    optionsValue?: { signal?: AbortSignal },
+    optionsValue?: EmbeddingProviderCallOptions,
   ): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text), optionsValue?.signal);
+    await embedOne(
+      applyQueryInstructionTemplate(client.model, text),
+      optionsValue?.signal,
+      optionsValue?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+    );
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
@@ -418,7 +448,13 @@ export async function createOllamaEmbeddingProvider(
       const text = typeof input === "string" ? input : input.text;
       return optionsValue?.inputType === "query"
         ? await embedQuery(text, optionsValue)
-        : ((await embedMany([text], optionsValue?.signal))[0] ?? []);
+        : ((
+            await embedMany(
+              [text],
+              optionsValue?.signal,
+              optionsValue?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+            )
+          )[0] ?? []);
     },
     embedBatch: async (inputs, optionsLocal) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
@@ -428,7 +464,11 @@ export async function createOllamaEmbeddingProvider(
       if (optionsLocal?.inputType === "query") {
         return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal)));
       }
-      return await embedMany(texts, optionsLocal?.signal);
+      return await embedMany(
+        texts,
+        optionsLocal?.signal,
+        optionsLocal?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+      );
     },
   };
 
