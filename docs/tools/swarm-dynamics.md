@@ -33,7 +33,7 @@ x_i(t) = {
 }
 ```
 
-The population evolves through measured feedback:
+The population evolves through caller-supplied feedback:
 
 ```text
 X_t --measure--> M(X_t) --search-only control--> a_t --existing owners--> X_(t+1)
@@ -90,7 +90,7 @@ Ten highly correlated replicas are not ten independent searches. For a roughly e
 N_effective = N / (1 + (N - 1) * rho)
 ```
 
-Here `rho` is mean measured correlation. This is not a permission boundary or proof of statistical independence. It expresses the control objective: spend compute on independent information, not merely more replicas.
+Here `rho` is the mean correlation supplied by the caller. This is not a permission boundary or proof of statistical independence. It expresses the control objective: spend compute on independent information, not merely more replicas.
 
 ## Bounded launch contract
 
@@ -149,7 +149,12 @@ The contract is monotone with respect to authority. It may request a stricter ex
 
 ### Energetic actuation
 
-When `dynamics.energetics` is present, measured state changes the child sent to `sessions_spawn`:
+**Energetic state is caller-supplied, not host-measured.** `dynamics.energetics` values are
+read verbatim from the launch request; OpenClaw's native collector does not observe energy,
+temperature, mobility, novelty, verifier disagreement, or correlation. Treat them as declared
+control inputs — the same standing as `boundary` — not as measurements the host produced.
+
+When `dynamics.energetics` is present, the caller-supplied state changes the child sent to `sessions_spawn`:
 
 - low energy maps to `thinking: "low"` and `fastMode: true`
 - medium energy maps to `thinking: "medium"` and `fastMode: "auto"`
@@ -160,7 +165,7 @@ When `dynamics.energetics` is present, measured state changes the child sent to 
 - jammed state suppresses the launch before native dispatch
 - high or low temperature changes search posture while remaining distinct from energy
 
-If the caller supplies `thinking` or `fastMode` and measured energetics requires a stronger transition, the energetic plan is applied last and changes the real child launch. Calls without `energetics` preserve the caller's existing controls.
+If the caller supplies `thinking` or `fastMode` and the supplied energetics requires a stronger transition, the energetic plan is applied last and changes the real child launch. Calls without `energetics` preserve the caller's existing controls.
 
 The optional `peers` array supplies a bounded population snapshot. Correlation can therefore reduce effective population size and trigger a decorrelation action for the target lane.
 
@@ -230,6 +235,6 @@ independent deterministic verification
 
 In short:
 
-> OpenClaw should not merely run a swarm; it should reshape the swarm by moving agents between different energy and temperature regimes, spending compute where measured novelty, uncertainty, disagreement, and correlation make the next unit of reasoning most valuable, then crystallize exact candidates for deterministic verification.
+> OpenClaw should not merely run a swarm; it should reshape the swarm by moving agents between different energy and temperature regimes, spending compute where reported novelty, uncertainty, disagreement, and correlation make the next unit of reasoning most valuable, then crystallize exact candidates for deterministic verification.
 
 The energetic controller is search-only, but it is no longer diagnostic-only: its plan changes the next child launch end to end. Existing OpenClaw owners still decide whether that changed launch is admitted and retain all sandbox, tool, approval, publication, merge, and deployment authority.
