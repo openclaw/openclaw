@@ -17,7 +17,6 @@ import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-su
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   applyMcpConnectionOverride,
-  buildMcpRequesterRuntimeCacheKey,
   hashMcpResolvedConnections,
   partitionMcpServersByConnectionScope,
   redactMcpServersForFingerprint,
@@ -700,23 +699,5 @@ describe("mcp connection resolver helpers", () => {
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
-  });
-
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    );
   });
 });

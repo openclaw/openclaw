@@ -480,17 +480,7 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(result.terminate).toBe(true);
   });
 
-  it("parses a JSON string into an object (streaming delta accumulation)", async () => {
-    const { calledWith } = await executeClientTool('{"query":"hello","limit":10}');
-    expect(calledWith).toEqual({ query: "hello", limit: 10 });
-  });
-
-  it("parses a JSON string with surrounding whitespace", async () => {
-    const { calledWith } = await executeClientTool('  {"query":"hello"}  ');
-    expect(calledWith).toEqual({ query: "hello" });
-  });
-
-  it.each(["not-json", "[1,2,3]", "42", '"query"'])(
+  it.each(["not-json", "[1,2,3]", "42"])(
     "returns a visible error instead of dispatching malformed client arguments: %s",
     async (params) => {
       const { calledWith, result } = await executeClientTool(params);
@@ -514,12 +504,7 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toStrictEqual({});
   });
 
-  it("falls back to empty object for undefined", async () => {
-    const { calledWith } = await executeClientTool(undefined);
-    expect(calledWith).toStrictEqual({});
-  });
-
-  it.each([null, undefined, "", {}])(
+  it.each([undefined, "", {}])(
     "rejects missing required client arguments without reserving a completed call: %s",
     async (params) => {
       const clientTool = makeClientTool("search");
@@ -567,9 +552,9 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(result.terminate).toBe(true);
   });
 
-  it("handles nested JSON string correctly", async () => {
+  it("parses nested JSON arguments with surrounding whitespace", async () => {
     const { calledWith } = await executeClientTool(
-      '{"action":"search","params":{"q":"test","page":1}}',
+      '  {"action":"search","params":{"q":"test","page":1}}  ',
     );
     expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
   });

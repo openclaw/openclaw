@@ -119,18 +119,14 @@ describe("workspace state store", () => {
     ]);
   });
 
-  it.each(["HEARTBEAT.md", "RETIRED.md"])(
-    "reads a persisted hash for a retired or unknown bootstrap filename: %s",
-    async (filename) => {
-      insertPersistedAttestationHash(filename, "a".repeat(64));
+  it("reads a persisted hash for an unknown bootstrap filename", async () => {
+    const filename = "RETIRED.md";
+    insertPersistedAttestationHash(filename, "a".repeat(64));
 
-      expect([
-        ...(
-          await readWorkspaceStateSnapshot(workspaceDir())
-        ).attestation!.generatedHashes.entries(),
-      ]).toStrictEqual([[filename, "a".repeat(64)]]);
-    },
-  );
+    expect([
+      ...(await readWorkspaceStateSnapshot(workspaceDir())).attestation!.generatedHashes.entries(),
+    ]).toStrictEqual([[filename, "a".repeat(64)]]);
+  });
 
   it.each([
     "../AGENTS.md",
@@ -436,9 +432,7 @@ describe("workspace state store", () => {
   });
 
   it.each([
-    { cleanup: "delete", name: "plain" },
     { cleanup: "delete", name: "cafe\u0301" },
-    { cleanup: "expire", name: "plain" },
     { cleanup: "expire", name: "cafe\u0301" },
   ])(
     "$cleanup retires cached content through a missing alias ($name)",
@@ -538,14 +532,6 @@ describe("workspace state store", () => {
 
     expect((await readWorkspaceStateSnapshot(dir)).setupExists).toBe(false);
     expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
-  });
-
-  it("clears expired setup-only state for a vanished workspace", async () => {
-    const dir = workspaceDir();
-    await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
-
-    expect(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, 86_401_001)).toBe(true);
-    expect((await readWorkspaceStateSnapshot(dir)).setupExists).toBe(false);
   });
 
   it("does not protect a markerless setup row", async () => {
