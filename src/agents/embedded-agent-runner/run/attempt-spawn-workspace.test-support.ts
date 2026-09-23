@@ -669,16 +669,30 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({
+vi.mock("../../sandbox/runtime-status.js", () => {
+  type SandboxRuntime = typeof import("../../sandbox/runtime-status.js");
+  const resolveSandboxRuntimeStatus: SandboxRuntime["resolveSandboxRuntimeStatus"] = () => ({
     agentId: "main",
     sessionKey: "agent:main:main",
+    classificationAgentId: "main",
+    classificationSessionKey: "agent:main:main",
     mainSessionKey: "agent:main:main",
     mode: "off",
     sandboxed: false,
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  }),
-}));
+    sandboxRequired: false,
+    toolPolicy: {
+      allow: [],
+      deny: [],
+      sources: {
+        allow: { source: "default", key: "" },
+        deny: { source: "default", key: "" },
+      },
+    },
+  });
+  const withSandboxRuntimeStatusInWorker: SandboxRuntime["withSandboxRuntimeStatusInWorker"] =
+    async (params, _source, consume) => await consume(resolveSandboxRuntimeStatus(params));
+  return { resolveSandboxRuntimeStatus, withSandboxRuntimeStatusInWorker };
+});
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
