@@ -57,6 +57,7 @@ export interface ShellGatewayHost {
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
+  observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
@@ -89,6 +90,27 @@ export class ShellGatewayOwner {
   } | null = null;
 
   constructor(private readonly host: ShellGatewayHost) {}
+
+  observeSessions(
+    sessions: ApplicationContext["sessions"],
+    synchronizeTitle: () => void,
+  ): () => void {
+    let active = true;
+    const synchronize = () => {
+      if (!active || this.host.context?.sessions !== sessions) {
+        return;
+      }
+      this.host.observeDeletedSessions(sessions.state);
+      this.host.recoverDeletedActiveSession(sessions.state);
+      synchronizeTitle();
+    };
+    synchronize();
+    const unsubscribe = sessions.subscribe(synchronize);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }
 
   reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): void {
     const snapshot = runtimeConfig.state.configSnapshot;

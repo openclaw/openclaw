@@ -35,6 +35,7 @@ import {
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
+import { isIdentityScopesOnlyConfigChange } from "./session-row-projection-config.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import {
@@ -268,6 +269,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     topologyDirty = epoch !== revision;
   }
   function mark(change: SessionRowChange) {
+    if ("all" in change && change.scope === "config" && !change.factsInvalidated) {
+      const next = inOwnerContext(() => params.getConfig?.() ?? cfg);
+      if (isIdentityScopesOnlyConfigChange(cfg, next)) {
+        cfg = next;
+        void ensureMaterialized().catch(() => {});
+        return;
+      }
+    }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {

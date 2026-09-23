@@ -6,6 +6,7 @@ import {
   reconcileSessionHistory,
 } from "../../lib/sessions/reconcile.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
@@ -15,6 +16,7 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
+import { replayPendingChatAbort } from "./run-lifecycle.ts";
 
 function applyObservedChatSessionRow(
   state: ChatPageHost,
@@ -143,12 +145,22 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     binding.observation = sessions.observeRow(
       { key, agentId },
       (row, notification) => {
-        if (
-          ownsPane() &&
-          (row !== null || binding.observation?.hasObserved) &&
-          applyObservedChatSessionRow(state, row, binding.observation?.sessionId)
-        ) {
-          this.requestUpdate();
+        if (ownsPane() && (row !== null || binding.observation?.hasObserved)) {
+          const pending = state.pendingAbort;
+          // A resolved absence retires this target; a row still loading keeps its intent.
+          if (
+            !row &&
+            pending &&
+            uiConversationMatches(state, pending.sessionKey, key, agentId, pending.agentId)
+          ) {
+            state.pendingAbort = null;
+          }
+          if (applyObservedChatSessionRow(state, row, binding.observation?.sessionId)) {
+            this.requestUpdate();
+          }
+          if (state.pendingAbort) {
+            void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+          }
         }
         // Apply the retired row first so deletion cannot survive the replacement binding.
         if (

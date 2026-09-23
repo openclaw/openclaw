@@ -4,6 +4,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
+  deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -22,6 +23,7 @@ import * as support from "./service.test-support.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 describe("worker transcript claim fences", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -91,10 +93,17 @@ describe("worker transcript claim fences", () => {
         "session.transcript.batch",
       );
       let replacement: WorkerSessionTurnClaim | undefined;
+      let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
       try {
-        if (scenario === "preparation") {
-          bindWorkerTurnOwner(store, claim, undefined, instance, target, () => {}, prepare);
-        }
+        bindWorkerTurnOwner(
+          store,
+          claim,
+          undefined,
+          instance,
+          target,
+          () => {},
+          scenario === "preparation" ? prepare : undefined,
+        );
         await writerHeld.promise;
         const request = support.transcriptRequest(identity, "queued before claim closure");
         if (scenario === "preparation") {
@@ -131,6 +140,9 @@ describe("worker transcript claim fences", () => {
           runId: "replacement-run",
           owner: claim.owner,
         });
+        const replacementInstance = createOperationalRunInstanceRef(replacement.runId);
+        replacementAuthority = claimAgentRunDelegatedAuthority(replacementInstance);
+        bindWorkerTurnOwner(store, replacement, undefined, replacementInstance, target, () => {});
         const credential = await workerService.acquireTurnCredential(replacement);
         expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
         expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
@@ -164,6 +176,104 @@ describe("worker transcript claim fences", () => {
         unsubscribe();
         if (store.validateTurnClaim(replacement ?? claim)) {
           store.releaseTurn(replacement ?? claim);
+        }
+        releaseAgentRunDelegatedAuthority(authority);
+        if (replacementAuthority) {
+          releaseAgentRunDelegatedAuthority(replacementAuthority);
+        }
+      }
+    },
+  );
+
+  it.each(["current", "deleted", "claim-released"] as const)(
+    "keeps an admitted transcript on its original store after configuration changes: %s",
+    async (scenario) => {
+      const identity = await support.seedAttachedIdentity("worker-source", "session-source");
+      const { claim, store } = claimWorkerPlacement({
+        environmentId: identity.environmentId,
+        ownerEpoch: identity.ownerEpoch,
+        sessionId: "session-source",
+      });
+      identity.turnClaim = claim;
+      const original = {
+        agentId: "main",
+        sessionId: claim.sessionId,
+        sessionKey: `agent:main:${claim.sessionId}`,
+        storePath: path.join(support.testState.root, "original", "sessions.json"),
+        expectedLifecycleRevision: "source-lifecycle",
+        expectedWriterRunId: claim.runId,
+      };
+      const replacement = {
+        ...original,
+        storePath: path.join(support.testState.root, "replacement", "sessions.json"),
+      };
+      const entry = {
+        sessionId: claim.sessionId,
+        lifecycleRevision: original.expectedLifecycleRevision,
+        activeWriterRunId: claim.runId,
+        updatedAt: 1,
+      };
+      await upsertSessionEntryCore(original, entry);
+      await upsertSessionEntryCore(replacement, entry);
+      const replacementBefore = loadSessionEntry(replacement);
+      support.testState.config.session = { store: original.storePath };
+      const committer = createWorkerTranscriptCommitter({
+        getConfig: () => support.testState.config,
+        store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
+      });
+      const workerService = support.createService(support.createProvider(), {
+        placementStore: createWorkerSessionPlacementGate(store),
+        applyTranscriptCommit: committer.commit,
+      });
+      const instance = createOperationalRunInstanceRef(claim.runId);
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      try {
+        bindWorkerTurnOwner(store, claim, undefined, instance, original, () => {
+          resolveWorkerTurnTranscriptTarget({ ...original, sessionTarget: original });
+        });
+        support.testState.config.session = { store: replacement.storePath };
+        if (scenario === "deleted") {
+          await expect(
+            deleteSessionEntryLifecycle({
+              agentId: original.agentId,
+              storePath: original.storePath,
+              archiveTranscript: false,
+              target: { canonicalKey: original.sessionKey, storeKeys: [original.sessionKey] },
+            }),
+          ).resolves.toMatchObject({ deleted: true });
+        } else if (scenario === "claim-released") {
+          store.releaseTurn(claim);
+        }
+        const result = workerService.commitTranscript(
+          identity,
+          support.transcriptRequest(identity, "Write only to the admitted source"),
+        );
+        if (scenario === "current") {
+          await expect(result).resolves.toMatchObject({ ok: true });
+          expect(SessionManager.open(original).getEntries()).toEqual([
+            expect.objectContaining({
+              message: expect.objectContaining({
+                role: "user",
+                content: [{ type: "text", text: "Write only to the admitted source" }],
+              }),
+            }),
+          ]);
+          expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(1);
+        } else {
+          if (scenario === "deleted") {
+            await expect(result).rejects.toThrow("transcript identity is no longer current");
+            expect(loadSessionEntry(original)).toBeUndefined();
+          } else {
+            await expect(result).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+            expect(SessionManager.open(original).getEntries()).toEqual([]);
+          }
+          expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
+        }
+        expect(SessionManager.open(replacement).getEntries()).toEqual([]);
+        expect(loadSessionEntry(replacement)).toEqual(replacementBefore);
+      } finally {
+        if (store.validateTurnClaim(claim)) {
+          store.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       }

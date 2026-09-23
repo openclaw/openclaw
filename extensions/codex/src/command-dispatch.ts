@@ -1,13 +1,7 @@
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describeControlFailure } from "./app-server/capabilities.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import type { CodexCommandDepsOverride } from "./command-handlers.js";
-
-type CodexCommandOptions = {
-  pluginConfig?: unknown;
-  resolvePluginConfig?: () => unknown;
-  deps: CodexCommandDepsOverride;
-};
+import type { CodexCommandOptions } from "./commands.js";
 
 type CodexSubcommandHandler = (
   ctx: PluginCommandContext,
@@ -28,7 +22,7 @@ export async function handleCodexCommand(
   try {
     const handleCodexSubcommand = loadSubcommandHandler
       ? await loadSubcommandHandler()
-      : await loadDefaultCodexSubcommandHandler();
+      : (await import("./command-handlers.js")).handleCodexSubcommand;
     return await handleCodexSubcommand(commandContext, {
       ...subcommandOptions,
       pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,
@@ -38,9 +32,4 @@ export async function handleCodexCommand(
       text: `Codex command failed: ${formatCodexDisplayText(describeControlFailure(error))}`,
     };
   }
-}
-
-async function loadDefaultCodexSubcommandHandler(): Promise<CodexSubcommandHandler> {
-  const { handleCodexSubcommand } = await import("./command-handlers.js");
-  return handleCodexSubcommand;
 }

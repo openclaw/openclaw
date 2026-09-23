@@ -361,12 +361,8 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         return "stale";
       }
       const state = host.readState();
-      const pathFreeGroups = state.groupSettings.map(({ name: groupName, position }) => ({
-        name: groupName,
-        position,
-      }));
       publishCatalog(
-        mergeSessionGroupDefaults(pathFreeGroups, result),
+        mergeSessionGroupDefaults(state.groupSettings, result),
         state.sectionOrder,
         "ready",
       );

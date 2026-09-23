@@ -12,6 +12,8 @@ import {
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
+import { workerService } from "./environments.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -35,13 +37,6 @@ vi.mock("./chat.js", () => ({
 
 vi.mock("./chat-abort-handler.js", () => ({
   handleChatAbortRequestWithLifecycle: (...args: unknown[]) => chatAbortMock(...args),
-}));
-
-vi.mock("../worker-environments/session-target.js", () => ({
-  resolveWorkerSessionTarget: () => ({
-    agentId: "work",
-    sessionKey: "agent:work:dashboard:worker",
-  }),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -438,11 +433,24 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("resolves runId-only worker aborts to the owning session", async () => {
-    const resolveInferenceSessionForRunId = vi.fn(() => "session-worker");
     mockChatSuccess(chatAbortMock, { ok: true, aborted: true, runIds: ["run-worker"] });
     const context = createContext({
       extra: {
-        workerEnvironmentService: { resolveInferenceSessionForRunId } as never,
+        workerEnvironmentService: Object.assign(
+          createWorkerInferenceCancellationService("session-worker", ["run-worker"], () => [], {
+            agentId: "work",
+            sessionId: "session-worker",
+            sessionKey: "agent:work:dashboard:worker",
+            storePath: "/original-worker-store/sessions.json",
+          }),
+          workerService(),
+          {
+            startTunnel: async () => {
+              throw new Error("unexpected tunnel in cancellation fixture");
+            },
+            stopTunnel: async () => {},
+          },
+        ),
         dedupe: new Map(),
         getSessionEventSubscriberConnIds: () => new Set(),
       },

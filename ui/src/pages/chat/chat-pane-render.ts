@@ -231,7 +231,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const fetchLinkFavicon = resolveChatLinkFaviconFetcher(state);
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
-      hasLocalRun: () => Boolean(state.chatRunId),
+      state,
       sessionParticipationBlocked,
       onDenied: (reason) => this.publishHeaderError(reason),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),

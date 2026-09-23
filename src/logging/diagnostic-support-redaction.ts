@@ -469,6 +469,9 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  if (line.startsWith("System-scope Gateway package update cannot write its install root ")) {
+    return "System-scope Gateway package update cannot write its install root.";
+  }
   if (
     [
       "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.",

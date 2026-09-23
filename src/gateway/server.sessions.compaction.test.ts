@@ -280,21 +280,16 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   });
 
   const { ws } = await openClient();
+  // Prepare the lazy handler before arming the RPC and event observers.
+  await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
-  const startEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "start"));
-  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
-  const compacted = await rpcReq<{
-    ok: true;
-    key: string;
-    compacted: boolean;
-    result?: { tokensAfter?: number };
-  }>(ws, "sessions.compact", {
-    key: "main",
-  });
+  const [startEvent, endEvent, compacted] = await Promise.all([
+    onceMessage(ws, (message) => isCompactOperationEvent(message, "start")),
+    onceMessage(ws, (message) => isCompactOperationEvent(message, "end")),
+    rpcReq(ws, "sessions.compact", { key: "main" }),
+  ]);
 
   expectMainCompactionResult(compacted, true);
-  const startEvent = await startEventPromise;
-  const endEvent = await endEventPromise;
   const startPayload = startEvent.payload as {
     operationId?: string;
     sessionKey?: string;

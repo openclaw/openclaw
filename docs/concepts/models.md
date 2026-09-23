@@ -129,6 +129,10 @@ also refresh the affected catalog. Use **Refresh** in Models or
 `openclaw models list --refresh` to request another refresh, including newly
 released models. **Retry** requests discovery again after a failure.
 
+If a credential refresh loses its plugin generation, OpenClaw retries publication
+once against current plugins. If that retry fails, the recorded failure and Gateway
+warning identify the failed fresh-generation retry.
+
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
 native login.

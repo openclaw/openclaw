@@ -29,6 +29,7 @@ import {
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -374,6 +375,10 @@ async function continueConnect(
     });
   }
   return { ws, connectFrame: parseLatestConnectFrame(ws) };
+}
+
+function emitHello(ws: MockWebSocket, id: string | undefined, auth: GatewayHelloOk["auth"]) {
+  ws.emitMessage({ type: "res", id, ok: true, payload: { type: "hello-ok", protocol: 4, auth } });
 }
 
 async function expectSocketClosed(ws: MockWebSocket) {
@@ -1476,21 +1481,12 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
-    firstWs.emitMessage({
-      type: "res",
-      id: firstConnect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: [],
-          deviceToken: STORED_CRED,
-          recoveryMigrationAllowed: true,
-          recoveryScope: "server-stale",
-        },
-      },
+    emitHello(firstWs, firstConnect.id, {
+      role: "operator",
+      scopes: [],
+      deviceToken: STORED_CRED,
+      recoveryMigrationAllowed: true,
+      recoveryScope: "server-stale",
     });
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
     expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
@@ -1523,21 +1519,12 @@ describe("GatewayBrowserClient", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     const secondConnect = parseLatestConnectFrame(secondWs);
-    secondWs.emitMessage({
-      type: "res",
-      id: secondConnect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: [],
-          deviceToken: STORED_CRED,
-          recoveryMigrationAllowed: true,
-          recoveryScope: "server-current",
-        },
-      },
+    emitHello(secondWs, secondConnect.id, {
+      role: "operator",
+      scopes: [],
+      deviceToken: STORED_CRED,
+      recoveryMigrationAllowed: true,
+      recoveryScope: "server-current",
     });
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(recoveryMigrationRuntimeMock.migrate).toHaveBeenCalledExactlyOnceWith(
@@ -1560,6 +1547,60 @@ describe("GatewayBrowserClient", () => {
     client.stop();
     expect(client.connectionGeneration).toBeGreaterThan(connectedGeneration);
     expect(client.recoveryScopeReady).toBe(false);
+  });
+
+  it("retires the previous recovery identity before publishing an unresolved legacy hello", async () => {
+    useNodeFakeTimers();
+    const onRecoveryScopeChange = vi.fn();
+    const observedScopes: Array<{ scope: string; ready: boolean }> = [];
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+      onRecoveryScopeChange,
+      onHello: () =>
+        observedScopes.push({ scope: client.recoveryScope, ready: client.recoveryScopeReady }),
+    });
+    const { ws: firstWs, connectFrame } = await startConnect(client);
+    emitHello(firstWs, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.write"],
+      deviceToken: STORED_CRED,
+    });
+    await vi.waitFor(() => expect(client.recoveryScopeReady).toBe(true));
+    const previousScope = client.recoveryScope;
+    expect(previousScope).toBe(createHash("sha256").update(STORED_CRED).digest("hex"));
+    const digest = createDeferred<ArrayBuffer>();
+    const digestMock = vi.fn(() => digest.promise);
+    let requestId = 0;
+    vi.stubGlobal("crypto", {
+      randomUUID: () => `req-unresolved-${++requestId}`,
+      subtle: { digest: digestMock },
+    });
+    firstWs.emitClose(1006, "socket lost");
+    expect(client.recoveryScope).toBe(previousScope);
+    await vi.advanceTimersByTimeAsync(800);
+    const nextWs = getLatestWebSocket();
+    nextWs.emitOpen();
+    nextWs.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "next", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    emitHello(nextWs, parseLatestConnectFrame(nextWs).id, {
+      role: "operator",
+      scopes: ["operator.write"],
+      deviceToken: "different-synthetic-device-token",
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    expect(observedScopes.at(-1)).toEqual({ scope: "", ready: false });
+    nextWs.emitClose(1006, "unresolved identity disconnected");
+    digest.resolve(new ArrayBuffer(32));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.recoveryScope).toBe("");
+    expect(client.recoveryScopeReady).toBe(false);
+    expect(onRecoveryScopeChange).toHaveBeenCalledOnce();
+    client.stop();
   });
 
   it("keeps stale credential recovery isolated across a shared-browser principal switch", async () => {
@@ -1586,19 +1627,10 @@ describe("GatewayBrowserClient", () => {
 
     const { ws, connectFrame } = await startConnect(client);
     expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: ["operator.read"],
-          recoveryScope: principalScope,
-        },
-      },
+    emitHello(ws, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.read"],
+      recoveryScope: principalScope,
     });
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(principalScope);
@@ -1620,20 +1652,11 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: ["operator.read"],
-          deviceToken: "stored-device-token",
-          recoveryScope: "device-recovery-scope",
-        },
-      },
+    emitHello(ws, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "stored-device-token",
+      recoveryScope: "device-recovery-scope",
     });
 
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
@@ -1655,19 +1678,10 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: ["operator.read"],
-          deviceToken: STORED_CRED,
-        },
-      },
+    emitHello(ws, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: STORED_CRED,
     });
 
     const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
@@ -1687,19 +1701,10 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: ["operator.admin"],
-          recoveryScope: "gateway-recovery-scope",
-        },
-      },
+    emitHello(ws, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.admin"],
+      recoveryScope: "gateway-recovery-scope",
     });
 
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
@@ -1718,19 +1723,10 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: {
-          role: "operator",
-          scopes: ["operator.read"],
-          deviceToken: "rotated-device-token",
-        },
-      },
+    emitHello(ws, connectFrame.id, {
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "rotated-device-token",
     });
 
     await vi.waitFor(() => {

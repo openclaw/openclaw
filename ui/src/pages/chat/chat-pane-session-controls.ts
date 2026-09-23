@@ -14,7 +14,9 @@ import {
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
+  type SessionPatch,
 } from "../../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
   switchChatContextWindow,
@@ -97,10 +99,14 @@ export function readChatPaneMutationAccess(
     model: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, model: null },
+      sessionScope: true,
+      session,
     }),
     effort: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, thinkingLevel: null },
+      sessionScope: true,
+      session,
     }),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
@@ -109,6 +115,8 @@ export function readChatPaneMutationAccess(
     permission: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, permissionMode: "guarded" },
+      sessionScope: true,
+      session,
     }),
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
@@ -173,6 +181,22 @@ export function renderChatPaneComposerControls(params: {
       currentSession?.sessionId === expectedSessionId
     );
   };
+  const canPatch = (patch: SessionPatch, targetSessionKey = sessionKey) =>
+    areUiSessionKeysEquivalent(targetSessionKey, sessionKey) &&
+    ownsSelection() &&
+    readSessionMethodAccess(
+      {
+        client: state.client,
+        hello: state.hello,
+        phase: state.connected ? "connected" : "offline",
+      },
+      {
+        method: "sessions.patch",
+        params: { key: sessionKey, ...patch },
+        sessionScope: true,
+        session: selectedChatSessionRow(state),
+      },
+    ).allowed;
   let pendingChange = permissionChanges.get(permissionScopeKey);
   if (pendingChange && pendingChange.expectedSessionId !== expectedSessionId) {
     permissionChanges.delete(permissionScopeKey);
@@ -231,7 +255,8 @@ export function renderChatPaneComposerControls(params: {
               ownsSelection: () =>
                 ownsSelection() && state.chatAccountSelection === accountSelection,
               onSelect: (account) =>
-                ownsSelection() && modelAccess.allowed
+                modelAccess.allowed &&
+                canPatch({ model: `${accountModel}@${account.authProfileId}` })
                   ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
                   : Promise.resolve(false),
               onManage: onModelAccounts,
@@ -272,11 +297,11 @@ export function renderChatPaneComposerControls(params: {
           onRequestUpdate: () => state.requestUpdate?.(),
           onModelSetup,
           onFastModeSelect: (next, targetSessionKey) =>
-            effortAccess.allowed
+            effortAccess.allowed && canPatch({ fastMode: null }, targetSessionKey)
               ? switchChatFastMode(state, next, targetSessionKey)
               : Promise.resolve(false),
           onContextWindowSelect: (next, targetSessionKey) =>
-            contextWindowAccess.allowed
+            contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
               ? switchChatContextWindow(state, next, targetSessionKey)
               : Promise.resolve(false),
           onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
@@ -286,11 +311,11 @@ export function renderChatPaneComposerControls(params: {
             state.requestUpdate?.();
           },
           onModelSelect: (next, targetSessionKey, agentRuntime) =>
-            modelAccess.allowed
+            modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
               ? switchChatModel(state, next, targetSessionKey, agentRuntime)
               : Promise.resolve(false),
           onThinkingSelect: (next, targetSessionKey) =>
-            effortAccess.allowed
+            effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)
               ? switchChatThinkingLevel(state, next, targetSessionKey)
               : Promise.resolve(false),
         })}
@@ -307,7 +332,7 @@ export function renderChatPaneComposerControls(params: {
         const activeChange = permissionChanges.get(permissionScopeKey);
         if (
           !permissionAccess.allowed ||
-          !ownsSelection() ||
+          !canPatch({ permissionMode }) ||
           selectedSession?.permissionModePending ||
           (activeChange?.pending && activeChange.ownsSelection())
         ) {
@@ -334,7 +359,7 @@ export function renderChatPaneComposerControls(params: {
             state,
             sessionKey,
             { permissionMode },
-            { ...agentScope, expectedSessionId },
+            { ...agentScope, expectedSessionId, canDispatch: () => canPatch({ permissionMode }) },
           );
           if (!ownsSelection()) {
             return;
@@ -387,7 +412,7 @@ export function renderChatPaneComposerControls(params: {
 
 export function createChatPaneSessionActionCallbacks(params: {
   getSnapshot: () => ApplicationGatewaySnapshot;
-  hasLocalRun: () => boolean;
+  state: ChatPageHost;
   sessionParticipationBlocked: boolean;
   onDenied: (reason: string) => void;
   onAbort: () => void;
@@ -395,15 +420,51 @@ export function createChatPaneSessionActionCallbacks(params: {
   onFork: (entryId: string) => Promise<void>;
   onReset: () => void;
 }): SessionActionCallbacks {
+  const { state } = params;
+  const client = state.client;
+  const recoveryScope = params.getSnapshot().hello?.auth?.recoveryScope ?? client?.recoveryScope;
+  const sessionKey = state.sessionKey;
+  const selectedSession = selectedChatSessionRow(state);
+  const sessionId = selectedSession?.sessionId;
+  const agentId = scopedAgentParamsForSession(state, sessionKey).agentId;
+  const runId = state.chatRunId ?? null;
+  const activeRunIds = runId ? undefined : selectedSession?.activeRunIds?.slice();
+  const sessionAbortable = state.chatRunSessionAbortable === true;
+  const ownsAbortTarget = () => {
+    const currentSession = selectedChatSessionRow(state);
+    const snapshot = params.getSnapshot();
+    const currentRecoveryScope =
+      snapshot.hello?.auth?.recoveryScope ??
+      (snapshot.phase !== "connected" || client?.recoveryScopeReady
+        ? client?.recoveryScope
+        : undefined);
+    return (
+      state.client === client &&
+      snapshot.client === client &&
+      recoveryScope === currentRecoveryScope &&
+      state.sessionKey === sessionKey &&
+      scopedAgentParamsForSession(state, sessionKey).agentId === agentId &&
+      (state.chatRunId ?? null) === runId &&
+      (state.chatRunSessionAbortable === true) === sessionAbortable &&
+      (!sessionId || !currentSession?.sessionId || currentSession.sessionId === sessionId) &&
+      (!activeRunIds ||
+        (currentSession?.activeRunIds?.length === activeRunIds.length &&
+          activeRunIds.every((id) => currentSession?.activeRunIds?.includes(id))))
+    );
+  };
   const readAccess = () => {
     const snapshot = params.getSnapshot();
-    const hasLocalRun = params.hasLocalRun();
-    const access = readChatSessionActionAccess(snapshot, hasLocalRun);
+    const hasLocalRun = Boolean(state.chatRunId);
+    const access = readChatSessionActionAccess(snapshot, hasLocalRun, {
+      session: selectedChatSessionRow(state),
+      sessionAbortable: state.chatRunSessionAbortable === true,
+    });
     // Offline Stop captures intent only. The pane retires runs on client
     // replacement; replay checks the original client and current write access.
     if (
       snapshot.client &&
       hasLocalRun &&
+      recoveryScope &&
       !access.abort.allowed &&
       access.abort.cause === "disconnected"
     ) {
@@ -425,7 +486,7 @@ export function createChatPaneSessionActionCallbacks(params: {
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined
         : () => {
-            if (requireCurrent("abort")) {
+            if (ownsAbortTarget() && requireCurrent("abort")) {
               params.onAbort();
             }
           },
