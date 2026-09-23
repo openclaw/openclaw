@@ -12,6 +12,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   testing,
   getSessionBindingService,
@@ -479,9 +480,11 @@ describe("session binding service", () => {
       });
       const unavailable: ConversationBindingInspection =
         inspectSessionBindingByConversation(conversation);
-      expect(unavailable).toEqual({
+      expect(Object.fromEntries(Object.entries(unavailable))).toEqual({
         status: "unavailable",
       });
+      expect(readSessionBindingInspectionConversation(unavailable)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(unavailable))).toBe(true);
       await expectSessionBindingError(
         service.bind({
           targetSessionKey: "agent:finance:bound",
@@ -497,12 +500,17 @@ describe("session binding service", () => {
         resolveByConversation: () => null,
       };
       registerSessionBindingAdapter(adapter);
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      const empty = inspectSessionBindingByConversation(conversation);
+      expect(Object.fromEntries(Object.entries(empty))).toEqual({
         status: "available",
         binding: null,
       });
+      expect(readSessionBindingInspectionConversation(empty)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(empty))).toBe(true);
       unregisterSessionBindingAdapter({ channel, accountId: "default", adapter });
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      expect(
+        Object.fromEntries(Object.entries(inspectSessionBindingByConversation(conversation))),
+      ).toEqual({
         status: "unavailable",
       });
     },

@@ -71,6 +71,8 @@ export type DurableDeliveryCompletion =
     }
   | {
       kind: "pending-final";
+      /** Older queue records retain the canonical locator's original owner selection. */
+      agentId?: string;
       deliveryId: string;
       intentId: string;
       sessionId: string;
@@ -164,6 +166,7 @@ export async function settlePendingFinalDelivery(
   let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
+      agentId: completion.agentId,
       sessionKey: completion.sessionKey,
       storePath: completion.storePath,
       env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
@@ -183,6 +186,15 @@ export async function settlePendingFinalDelivery(
       }
       const authority = completion.sessionWriterDeliveryAuthority;
       const claim = authority?.harnessCompletion;
+      if (
+        completion.agentId !== undefined &&
+        ((authority?.agentId !== undefined &&
+          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
+          (claim &&
+            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
+      ) {
+        return null;
+      }
       if (
         claim &&
         (!authority ||
@@ -316,6 +328,7 @@ export async function settlePendingFinalDelivery(
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
     scheduleMainSessionRecoveryPendingTarget({
+      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),

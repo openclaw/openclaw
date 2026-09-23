@@ -41,7 +41,13 @@ describe("command CI ownership and parallel timing", () => {
         const roomy = job.runner === "blacksmith-32vcpu-ubuntu-2404";
         vi.spyOn(os, "availableParallelism").mockReturnValue(roomy ? 8 : 2);
         vi.spyOn(os, "totalmem").mockReturnValue((roomy ? 31 : 8) * 1024 ** 3);
-        const expected = runnerBackend !== "github" && roomy && job.planConcurrency === 1 ? 8 : 2;
+        const expected =
+          runnerBackend !== "github" &&
+          roomy &&
+          job.planConcurrency === 1 &&
+          job.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? 8
+            : 2;
         const seen = new Map<string, string | undefined>();
         const plans = resolveShardPlans({
           OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups),

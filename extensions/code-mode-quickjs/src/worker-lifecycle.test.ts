@@ -8,6 +8,7 @@ import {
   CODE_MODE_CONTROLLER_SOURCE,
   EMPTY_CODE_MODE_OUTPUT,
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { EvalFlags, QuickJS, type Snapshot } from "quickjs-wasi";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -16,6 +17,10 @@ import {
   runQuickJsExecutor as runCodeModeWorker,
   runQuickJsWire,
 } from "./executor.test-support.js";
+import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
+
+const productionWorkerUrl = resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint);
+const fixtureExtension = productionWorkerUrl.pathname.endsWith(".ts") ? "ts" : "mjs";
 
 // Restore the WeakRef retention probe when Bun's node:v8 exposure can provide a synchronous
 // worker-local gc without stalling the instrumented QuickJS resume path.
@@ -125,7 +130,7 @@ describe("Code Mode worker lifecycle", () => {
   v8GcIt("transfers snapshot heaps and releases consumed copies across resumes", async () => {
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
     const dir = tempDirs.make("code-mode-snapshot-transfer-");
-    const workerPath = path.join(dir, "snapshot-worker.ts");
+    const workerPath = path.join(dir, `snapshot-worker.${fixtureExtension}`);
     const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
     await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
     // The dependency's storage codec copies the whole heap in both directions.
@@ -187,7 +192,7 @@ describe("Code Mode worker lifecycle", () => {
         }
         postMessage(message, transferList);
       };
-      await import(${JSON.stringify(new URL("./code-mode.worker.ts", import.meta.url).href)});
+      await import(${JSON.stringify(productionWorkerUrl.href)});
       `,
     );
     const workerUrl = pathToFileURL(workerPath);
@@ -373,9 +378,8 @@ describe("Code Mode worker lifecycle", () => {
       const fixtureDir = await mkdtemp(path.join(os.tmpdir(), "code-mode-worker-clock-"));
       try {
         await writeFile(path.join(fixtureDir, "package.json"), '{"type":"module"}');
-        const workerPath = path.join(fixtureDir, "clock-worker.ts");
+        const workerPath = path.join(fixtureDir, `clock-worker.${fixtureExtension}`);
         const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
-        const productionWorkerUrl = new URL("./code-mode.worker.ts", import.meta.url);
         // Change the clock inside the real worker, after its VM deadline starts.
         // Parent-only clock spies cannot reach this isolated thread.
         await writeFile(

@@ -28,6 +28,11 @@ import {
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
 import {
+  calibrateKitchenSinkResources,
+  KITCHEN_RESOURCE_CONTROLS,
+  type KitchenSinkCalibration,
+} from "./lib/kitchen-sink-calibration.mts";
+import {
   compareResourcePhases,
   measureResourceOperations,
   summarizeResourcePhase,
@@ -1086,6 +1091,8 @@ async function rpcCall(method: string, params: unknown, options: RpcCallOptions)
   const module = await loadCallGatewayModule(options.runner);
   const payload = module
     ? await module.callGateway({
+        // Match gateway call: plugin RPCs are unknown to the backend scope map.
+        mode: "cli",
         config: readJson(options.env.OPENCLAW_CONFIG_PATH),
         configPath: options.env.OPENCLAW_CONFIG_PATH,
         url: `ws://127.0.0.1:${options.port}`,
@@ -2785,16 +2792,36 @@ export function assertKitchenSinkResourcePlugins(payload: unknown, enabled: bool
   return ids;
 }
 
-type KitchenSinkResourceCase = {
-  name: "empty" | "conformance";
+export type GatewayResourceCase = {
+  name: string;
   status: "blocked" | "exercised" | "failed";
   phases: KitchenSinkResourcePhase[];
   activePlugins?: string[];
+  host?: { commit: unknown; version: unknown; buildId: unknown; entrySha256: string };
+  fixtures?: Array<{ archive: string; sha256: string }>;
   shutdown?: { exited: boolean; signals: string[]; exitCode: number | null; signal: string | null };
   error?: string;
 };
 
-async function profileKitchenSinkResources(reportPath: string) {
+type KitchenSinkResourceCase = GatewayResourceCase & {
+  name: "empty" | "conformance";
+  calibration?: KitchenSinkCalibration;
+};
+
+export function assertKitchenSinkResourceShutdown(
+  shutdown: NonNullable<KitchenSinkResourceCase["shutdown"]>,
+) {
+  if (
+    !shutdown.exited ||
+    shutdown.exitCode !== 0 ||
+    shutdown.signal !== null ||
+    shutdown.signals.includes("SIGKILL")
+  ) {
+    throw new Error("Owned Gateway did not exit cleanly; temporary state retained");
+  }
+}
+
+export function resolveResourceGatewayRuntime() {
   if (
     process.versions.bun ||
     process.platform !== "linux" ||
@@ -2813,6 +2840,182 @@ async function profileKitchenSinkResources(reportPath: string) {
       "Resource comparison requires a built OpenClaw entry in the current package root",
     );
   }
+  const buildInfo = asRecord(readJson(path.resolve("dist/build-info.json")));
+  if (typeof buildInfo.commit !== "string" || !/^[a-f0-9]{40}$/u.test(buildInfo.commit)) {
+    throw new Error("Resource comparison requires dist/build-info.json with a full source commit");
+  }
+  return { runner, buildInfo };
+}
+
+type ResourceGatewayPreparation = {
+  root: string;
+  env: KitchenSinkEnv;
+  port: number;
+  token: string;
+  installArchive: (
+    file: string,
+    expectedSha256: string,
+  ) => Promise<{ archive: string; sha256: string }>;
+};
+
+type ResourceGatewayWorkload = ResourceGatewayPreparation & {
+  rpc: (method: string, params: unknown) => Promise<unknown>;
+  sample: () => ReturnType<typeof readGatewayResources>;
+  measure: (
+    name: string,
+    count: number,
+    run: (index: number) => Promise<void>,
+  ) => Promise<KitchenSinkResourcePhase>;
+};
+
+/** One frozen host package root as cwd per process; callers own outer deadlines and mock cleanup. */
+export async function runResourceGatewayCase(options: {
+  result: GatewayResourceCase;
+  runtime: ReturnType<typeof resolveResourceGatewayRuntime>;
+  prepare: (context: ResourceGatewayPreparation) => Promise<void>;
+  run: (context: ResourceGatewayWorkload) => Promise<void>;
+}) {
+  const {
+    result,
+    runtime: { runner, buildInfo },
+  } = options;
+  delete result.error;
+  const { root, env }: { root: string; env: KitchenSinkEnv } = makeEnv(kitchenSinkResourceEnv());
+  // The shared host must not select a fixture personality for other workloads.
+  delete env.OPENCLAW_KITCHEN_SINK_PERSONALITY;
+  const logPath = path.join(root, "gateway.log");
+  let child: ChildProcess | undefined;
+  const fail = (error: unknown) => {
+    result.status = "failed";
+    result.error = [result.error, error instanceof Error ? error.message : String(error)]
+      .filter(Boolean)
+      .join("; ")
+      .slice(0, 2_048);
+  };
+  try {
+    result.host = {
+      commit: buildInfo.commit,
+      version: buildInfo.version,
+      buildId: buildInfo.buildId,
+      entrySha256: createHash("sha256").update(fs.readFileSync(runner.baseArgs[0]!)).digest("hex"),
+    };
+    result.fixtures = [];
+    const port = await resolveKitchenSinkRpcPort();
+    writeJson(env.OPENCLAW_CONFIG_PATH, {
+      gateway: {
+        bind: "loopback",
+        port,
+        auth: { mode: "token", token: TOKEN },
+        controlUi: { enabled: false },
+      },
+      // A memory slot can activate a plugin outside the allowlist.
+      plugins: { enabled: false, slots: { memory: "none" } },
+    });
+    const context = {
+      root,
+      env,
+      port,
+      token: TOKEN,
+      installArchive: async (file: string, expectedSha256: string) => {
+        const archive = path.resolve(file);
+        if (
+          !archive.endsWith(".tgz") ||
+          !fs.statSync(archive).isFile() ||
+          !/^[a-f0-9]{64}$/u.test(expectedSha256) ||
+          createHash("sha256").update(fs.readFileSync(archive)).digest("hex") !== expectedSha256
+        ) {
+          throw new Error("Resource fixture must be a local archive matching its SHA-256");
+        }
+        const help = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+        if (help.stdoutTruncatedChars) {
+          throw new Error("Plugin fixture help probe output was truncated");
+        }
+        await runOpenClaw(
+          runner,
+          [
+            "plugins",
+            "install",
+            `npm-pack:${archive}`,
+            "--force",
+            ...fixtureCapabilityConsentArgs(help.stdout),
+          ],
+          env,
+          { timeoutMs: resolveKitchenSinkRpcConfig(env).installTimeoutMs },
+        );
+        const receipt = { archive: path.basename(archive), sha256: expectedSha256 };
+        result.fixtures!.push(receipt);
+        return receipt;
+      },
+    };
+    await options.prepare(context);
+    child = await startGateway(runner, port, env, logPath, true);
+    await waitForGatewayReady(child, port, logPath);
+    const sample = () => readGatewayResources(child!);
+    result.phases.push(
+      summarizeResourcePhase(
+        "startup",
+        await readGatewayResources(child, { initial: true }),
+        await sample(),
+        { attempted: 0, completed: 0, failed: 0 },
+      ),
+    );
+    await options.run({
+      ...context,
+      rpc: (method, params) => rpcCall(method, params, { runner, env, port }),
+      sample,
+      measure: async (name, count, run) => {
+        const measured = await measureResourceOperations({ name, count, sample, run });
+        result.phases.push(measured);
+        if (measured.status !== "exercised") {
+          throw new Error(`${name}: ${measured.error}`);
+        }
+        return measured;
+      },
+    });
+    result.status = "exercised";
+  } catch (error) {
+    fail(error);
+  } finally {
+    if (child) {
+      const signals: string[] = [];
+      try {
+        await stopGateway(child, {
+          killProcess: (pid, signal) => {
+            if (signal !== 0) {
+              signals.push(String(signal));
+            }
+            return defaultKillProcess(pid, signal);
+          },
+        });
+        result.shutdown = {
+          exited: !isGatewayAlive(child, defaultKillProcess),
+          signals,
+          exitCode: child.exitCode,
+          signal: child.signalCode,
+        };
+        assertKitchenSinkResourceShutdown(result.shutdown);
+        // Service-stop errors arrive during shutdown; inspect only after join.
+        assertNoErrorLogs(logPath);
+      } catch (error) {
+        fail(`Shutdown failed: ${String(error)}`);
+      }
+    }
+    if (result.status === "exercised" && process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP !== "1") {
+      try {
+        await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
+      } catch (error) {
+        fail(`Temporary state cleanup failed: ${String(error)}`);
+      }
+    } else {
+      console.error(`Gateway resource temp root preserved: ${root}`);
+    }
+  }
+  return result;
+}
+
+async function profileKitchenSinkResources(reportPath: string) {
+  const runtime = resolveResourceGatewayRuntime();
+  const { runner, buildInfo } = runtime;
   const fixture = path.resolve(PLUGIN_SPEC.slice("npm-pack:".length));
   if (
     !PLUGIN_SPEC.startsWith("npm-pack:") ||
@@ -2823,10 +3026,6 @@ async function profileKitchenSinkResources(reportPath: string) {
     throw new Error(
       "Resource comparison requires OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:<local.tgz>",
     );
-  }
-  const buildInfo = asRecord(readJson(path.resolve("dist/build-info.json")));
-  if (typeof buildInfo.commit !== "string" || !/^[a-f0-9]{40}$/u.test(buildInfo.commit)) {
-    throw new Error("Resource comparison requires dist/build-info.json with a full source commit");
   }
   const sha256 = (file: string | URL) =>
     createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -2849,6 +3048,7 @@ async function profileKitchenSinkResources(reportPath: string) {
         [
           "./kitchen-sink-rpc-walk.mts",
           "./lib/kitchen-sink-resources.mts",
+          "./lib/kitchen-sink-calibration.mts",
           "../lib/gateway-bench-profile.ts",
           "../lib/gateway-bench-profile-preload.ts",
         ].map((file) => [file, sha256(new URL(file, import.meta.url))]),
@@ -2875,6 +3075,12 @@ async function profileKitchenSinkResources(reportPath: string) {
       isolation:
         "minimal child environment; network and resource limits must be enforced by the external runner",
       instrumentation: "same private IPC preload in both cases; includes measurement overhead",
+      activeResources:
+        "resource types keeping the event loop alive; not ownership IDs or every live object",
+      calibration: {
+        ...KITCHEN_RESOURCE_CONTROLS,
+        operations: "asserted control steps, including any timer progress probes",
+      },
       runs: 1,
       neutralWarmupOperations: 1,
       pluginToolWarmupOperations: 0,
@@ -2885,180 +3091,86 @@ async function profileKitchenSinkResources(reportPath: string) {
     },
     postDisposalResidual: {
       status: "unsupported",
-      reason: "Gateway shutdown exits the measured process; no in-process disposal observation",
-    },
+      reason: "In-process plugin retirement has not completed",
+    } as KitchenSinkCalibration["postDisposalResidual"],
     cases,
     comparison: [] as ReturnType<typeof compareResourcePhases>,
   };
   try {
     for (const result of cases) {
-      const { name } = result;
-      const enabled = name === "conformance";
-      delete result.error;
-      const { root, env } = makeEnv(kitchenSinkResourceEnv());
-      const logPath = path.join(root, "gateway.log");
-      let child: ChildProcess | undefined;
-      try {
-        const port = await resolveKitchenSinkRpcPort();
-        writeJson(env.OPENCLAW_CONFIG_PATH, {
-          gateway: {
-            bind: "loopback",
-            port,
-            auth: { mode: "token", token: TOKEN },
-            controlUi: { enabled: false },
-          },
-          // The default memory slot bypasses the allowlist when plugins are enabled.
-          // Keep it off in both cases so conformance measures only the fixture.
-          plugins: { enabled: false, slots: { memory: "none" } },
-        });
-        if (enabled) {
-          if (sha256(fixture) !== fixtureSha256) {
-            throw new Error("Kitchen Sink fixture changed after profiling admission");
+      const enabled = result.name === "conformance";
+      await runResourceGatewayCase({
+        result,
+        runtime,
+        prepare: async ({ env, port, installArchive }) => {
+          env.OPENCLAW_KITCHEN_SINK_PERSONALITY = "conformance";
+          if (enabled) {
+            if (sha256(fixture) !== fixtureSha256) {
+              throw new Error("Kitchen Sink fixture changed after profiling admission");
+            }
+            await installArchive(fixture, fixtureSha256);
+            configureKitchenSink(env, port);
           }
-          const help = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
-          if (help.stdoutTruncatedChars) {
-            throw new Error("Plugin fixture help probe output was truncated");
-          }
-          await runOpenClaw(
-            runner,
-            [
-              "plugins",
-              "install",
-              `npm-pack:${fixture}`,
-              "--force",
-              ...fixtureCapabilityConsentArgs(help.stdout),
-            ],
-            env,
-            {
-              timeoutMs: resolveKitchenSinkRpcConfig(env).installTimeoutMs,
-            },
+        },
+        run: async ({ rpc, sample, measure }) => {
+          result.activePlugins = assertKitchenSinkResourcePlugins(
+            await rpc("plugins.list", {}),
+            enabled,
           );
-          configureKitchenSink(env, port);
-        }
-        child = await startGateway(runner, port, env, logPath, true);
-        await waitForGatewayReady(child, port, logPath);
-        const sample = () => readGatewayResources(child!);
-        const initial = await readGatewayResources(child, { initial: true });
-        result.phases.push(
-          summarizeResourcePhase("startup", initial, await sample(), {
-            attempted: 0,
-            completed: 0,
-            failed: 0,
-          }),
-        );
-        const rpcOptions = { runner, env, port };
-        result.activePlugins = assertKitchenSinkResourcePlugins(
-          await rpcCall("plugins.list", {}, rpcOptions),
-          enabled,
-        );
-        // Equal warmup and neutral work isolate enabled-plugin host overhead.
-        // Never retry measured RPCs: a failed response must remain a failed operation.
-        assertGatewayHealthPayload(await rpcCall("health", {}, rpcOptions));
-        const idle = async (phase: string) => {
-          const before = await sample();
-          await delay(report.measurement.idleMs);
-          result.phases.push(
-            summarizeResourcePhase(phase, before, await sample(), {
-              attempted: 0,
-              completed: 0,
-              failed: 0,
-            }),
-          );
-        };
-        await idle("idle");
-        const runPhase = async (
-          phase: string,
-          count: number,
-          run: (index: number) => Promise<void>,
-        ) => {
-          const measured = await measureResourceOperations({ name: phase, count, sample, run });
-          result.phases.push(measured);
-          if (measured.status !== "exercised") {
-            throw new Error(`${phase}: ${measured.error}`);
-          }
-        };
-        await runPhase("neutral-rpc", report.measurement.neutralOperations, async () => {
-          assertGatewayHealthPayload(await rpcCall("health", {}, rpcOptions));
-        });
-        await idle("post-neutral");
-        if (enabled) {
-          const session = assertCreatedKitchenSinkSession(
-            await rpcCall(
-              "sessions.create",
-              { key: SESSION_KEY, agentId: "main", label: "kitchen-sink-resources" },
-              rpcOptions,
-            ),
-          );
-          await runPhase("plugin-tool", report.measurement.pluginToolOperations, async (index) => {
-            assertKitchenSinkTextInvokeResult(
-              await rpcCall(
-                "tools.invoke",
-                {
+          // Equal warmup and neutral work isolate enabled-plugin host overhead.
+          // Never retry measured RPCs: a failed response must remain a failed operation.
+          assertGatewayHealthPayload(await rpc("health", {}));
+          const idle = async (phase: string) => {
+            const before = await sample();
+            await delay(report.measurement.idleMs);
+            result.phases.push(
+              summarizeResourcePhase(phase, before, await sample(), {
+                attempted: 0,
+                completed: 0,
+                failed: 0,
+              }),
+            );
+          };
+          await idle("idle");
+          await measure("neutral-rpc", report.measurement.neutralOperations, async () => {
+            assertGatewayHealthPayload(await rpc("health", {}));
+          });
+          await idle("post-neutral");
+          if (enabled) {
+            const session = assertCreatedKitchenSinkSession(
+              await rpc("sessions.create", {
+                key: SESSION_KEY,
+                agentId: "main",
+                label: "kitchen-sink-resources",
+              }),
+            );
+            await measure("plugin-tool", report.measurement.pluginToolOperations, async (index) => {
+              assertKitchenSinkTextInvokeResult(
+                await rpc("tools.invoke", {
                   name: "kitchen_sink_text",
                   args: { prompt: "explain kitchen sink resource profiling" },
                   sessionKey: String(session.key),
                   agentId: "main",
                   idempotencyKey: `kitchen-sink-resources-${index}`,
-                },
-                rpcOptions,
-              ),
-            );
-          });
-          await idle("post-tool");
-        }
-        assertNoErrorLogs(logPath);
-        result.status = "exercised";
-      } catch (error) {
-        result.status = "failed";
-        result.error = String(error instanceof Error ? error.message : error).slice(0, 2_048);
-      } finally {
-        if (child) {
-          const signals: string[] = [];
-          try {
-            await stopGateway(child, {
-              killProcess: (pid, signal) => {
-                if (signal !== 0) {
-                  signals.push(String(signal));
-                }
-                return defaultKillProcess(pid, signal);
+                }),
+              );
+            });
+            await idle("post-tool");
+            result.calibration = await calibrateKitchenSinkResources({
+              pluginId: PLUGIN_ID,
+              rpc,
+              sample,
+              assertDisabled: (payload) => {
+                assertKitchenSinkResourcePlugins(payload, false);
               },
             });
-            const exited = !isGatewayAlive(child, defaultKillProcess);
-            result.shutdown = {
-              exited,
-              signals,
-              exitCode: child.exitCode,
-              signal: child.signalCode,
-            };
-            if (!exited) {
-              result.status = "failed";
-              result.error = [
-                result.error,
-                "Owned Gateway process group did not exit; temporary state retained",
-              ]
-                .filter(Boolean)
-                .join("; ")
-                .slice(0, 2_048);
+            report.postDisposalResidual = result.calibration.postDisposalResidual;
+            if (result.calibration.status !== "exercised") {
+              throw new Error(`Resource calibration: ${result.calibration.error}`);
             }
-          } catch (error) {
-            result.status = "failed";
-            result.error = [result.error, `Shutdown failed: ${String(error)}`]
-              .filter(Boolean)
-              .join("; ")
-              .slice(0, 2_048);
           }
-        }
-        if (result.status === "exercised" && process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP !== "1") {
-          try {
-            await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
-          } catch (error) {
-            result.status = "failed";
-            result.error = `Temporary state cleanup failed: ${String(error)}`.slice(0, 2_048);
-          }
-        } else {
-          console.error(`Kitchen Sink resource temp root preserved: ${root}`);
-        }
-      }
+        },
+      });
       if (result.status !== "exercised") {
         throw new Error(result.error ?? "Kitchen Sink resource case did not complete");
       }

@@ -30,8 +30,9 @@ export { sessionReadHandlers };
 const projections = new Set<SessionRowProjection>();
 const profileSubscriptions = new Set<() => void>();
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
-export function disposeSessionReadContexts() {
-  for (const projection of projections) {
+export async function disposeSessionReadContexts() {
+  const disposing = [...projections];
+  for (const projection of disposing) {
     projection.dispose();
   }
   for (const stop of profileSubscriptions) {
@@ -39,6 +40,14 @@ export function disposeSessionReadContexts() {
   }
   projections.clear();
   profileSubscriptions.clear();
+  // Disposal stops publications; accepted reads still own native database custody.
+  const settled = await Promise.allSettled(
+    disposing.map((projection) => projection.ensureMaterialized()),
+  );
+  const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "Session read fixture cleanup failed");
+  }
 }
 afterEach(disposeSessionReadContexts);
 export function initializeSessionReadContext(context: GatewayRequestContext) {

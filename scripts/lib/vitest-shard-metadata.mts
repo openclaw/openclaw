@@ -302,8 +302,15 @@ const DEFAULT_STRIPE_FILE_SECONDS = 3;
 // Run 33364935118: 494 unlisted tooling files used 945.94s including imports/setup.
 const DEFAULT_TOOLING_STRIPE_FILE_SECONDS = 2;
 
-export function estimateVitestToolingFileSeconds(file: string): number {
-  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_TOOLING_STRIPE_FILE_SECONDS;
+export function estimateVitestToolingFileSeconds(
+  file: string,
+  measuredSeconds?: Readonly<Record<string, number>>,
+): number {
+  return (
+    measuredSeconds?.[file] ??
+    STRIPE_FILE_SECONDS_HINTS.get(file) ??
+    DEFAULT_TOOLING_STRIPE_FILE_SECONDS
+  );
 }
 
 export function estimateVitestTestFileSeconds(file: string): number {

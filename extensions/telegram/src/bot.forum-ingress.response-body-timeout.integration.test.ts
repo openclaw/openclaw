@@ -97,7 +97,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       accountId: "default",
       ownerAgentId: "main",
       bot,
-      cfg: {},
+      cfg: { messages: { inbound: { debounceMs: 0 } } },
       mediaMaxBytes: 1,
       opts: { token: "123456:integration-token", botInfo },
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
@@ -131,7 +131,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         effectiveDmAllow: emptyAllow,
         context: {
           commandAuthorizedByConfig: false,
-          cfg: {},
+          cfg: params.cfg,
           telegramCfg: {},
           allowFrom: [],
           dmPolicy: "open" as const,

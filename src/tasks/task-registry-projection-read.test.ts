@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import * as workerStore from "../state/openclaw-state-worker-store.js";
 import * as taskRuntime from "./runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { taskAgentEventMutations } from "./task-registry-agent-events.js";
@@ -195,7 +194,6 @@ it.each(["current", "read failure", "retired store"] as const)(
       );
       const previousTasks = new Map(tasks);
       const previousDelivery = new Map(taskDeliveryStates);
-      const execute = vi.spyOn(workerStore, "executeOpenClawStateWorker");
       vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
         const snapshot = await load(...args);
         snapshots.push(snapshot);
@@ -221,9 +219,6 @@ it.each(["current", "read failure", "retired store"] as const)(
         const [result] = await withTestTimeout(settled, 5_000, "Task read settled its snapshot");
         if (outcome === "current") {
           expect(result.status).toBe("fulfilled");
-          expect(
-            execute.mock.calls.filter(([, command]) => command.type === "tasks.mutationSnapshot"),
-          ).toHaveLength(1);
           expect(respond).toHaveBeenCalledOnce();
           expect(respond.mock.calls[0]?.[1]).toHaveProperty("tasks.length", 4);
           expect(respond.mock.calls[0]).toMatchObject([

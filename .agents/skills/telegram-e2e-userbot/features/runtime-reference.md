@@ -76,6 +76,33 @@ Keep one TDLib client per restored state directory. Run custom TDLib inspection
 before the recorder starts or after it exits, under the same live lease. Bot API
 inspection can use the scenario `command` action while recording.
 
+## QA Lab participant identity fixtures
+
+The QA Lab Telegram adapter accepts optional fields on one Convex-leased Test
+Server credential: `forumGroupId`, positive numeric `forumTopicId`, and
+`participants`. Each additional participant supplies a unique lowercase `alias`,
+`testerUserId`, `tdlibArchiveBase64`, `tdlibArchiveSha256`, and `tdlibVersion`.
+The pool owner provisions these independently authorized users under the same
+lease. The SUT bot and every participant must already belong to the selected
+group and forum, and the topic must exist. No credential is acquired by merely
+listing scenarios or running deterministic support tests.
+
+For mixed-user flows, use `senderId: primary` and the additional aliases. A
+single-user fixture binds its first scenario sender label to its leased user;
+changing that label cannot impersonate a second person. `conversation.kind:
+direct` sends to the SUT DM. A group/channel conversation uses `groupId`; adding
+a positive numeric `threadId` selects that forum topic in `forumGroupId` (or the
+existing group when it is itself a forum). Each native chat/topic belongs to one
+logical conversation until transport reset. Replies require a receipt observed
+by the sending participant in that chat; TDLib message IDs cannot cross accounts.
+
+Flow preparation exposes in-memory `telegramIdentityFixture.participantAliases`
+and `forumTopicId`. Set `execution.config.requireParticipantIdentityFixture:
+true` to require the complete mixed-user/forum fixture before sending. It also
+retains the existing `readTelegramMessages()` observer for native topic evidence.
+These inputs enable real Telegram identity proof; deterministic adapter tests do
+not claim that live transport or audit inspection has run.
+
 ## Backends
 
 | Backend      | Use                                                                     |

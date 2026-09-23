@@ -162,7 +162,15 @@ export function renderLogs(props: LogsProps) {
             `
           : nothing
       }
-      <div class="log-stream" @scroll=${props.onScroll}>${streamContent}</div>
+      <div
+        class="log-stream"
+        role="region"
+        aria-label=${t("gatewayLogs.title")}
+        tabindex="0"
+        @scroll=${props.onScroll}
+      >
+        ${streamContent}
+      </div>
     </div>
   `;
 }

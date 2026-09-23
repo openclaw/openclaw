@@ -16,6 +16,11 @@ import { describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -74,9 +79,15 @@ const EXECUTABLE_ENTRYPOINTS = [
 
 function runEntrypoint(entrypoint: (typeof EXECUTABLE_ENTRYPOINTS)[number]) {
   const script = path.resolve(entrypoint.script);
-  const args = script.endsWith(".mts")
-    ? ["--import", "tsx", script, ...entrypoint.args]
-    : [script, ...entrypoint.args];
+  const args =
+    entrypoint.script === "scripts/run-additional-boundary-checks.mts"
+      ? [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(scriptModuleEntrypoints.additionalBoundaryChecks),
+          ),
+          ...entrypoint.args,
+        ]
+      : [script, ...entrypoint.args];
   return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -466,11 +477,15 @@ process.exitCode = child.status ?? 1;
           String.raw`
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+const record = (stage, details = {}) => fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ stage, args, pid: process.pid, atMs: Date.now(), ...details }) + "\n");
+record("entered");
 const { readWindowsProcessStartTimeSync } = require(${JSON.stringify(path.resolve("src/infra/windows-process-start.ts"))});
-fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, pid: process.pid, startTimeMs: readWindowsProcessStartTimeSync(process.pid, 0) }) + "\n");
+record("identity-module-loaded");
+record("identity-read", { startTimeMs: readWindowsProcessStartTimeSync(process.pid, 0) });
 const response = ${JSON.stringify(responses)}[args.join(" ")];
 if (response === undefined) throw new Error("Unexpected fixture command: " + JSON.stringify(args));
 process.stdout.write(response + "\n");
+record("stdout-write-returned");
 `,
         );
         writeFileSync(
@@ -507,16 +522,26 @@ process.stdout.write(response + "\n");
           env,
           process.cwd(),
         );
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(result.status, formatShimResult(result)).toBe(0);
-        expect(result.stdout).toBe(`crabbox ${fixtureVersion}\n`);
-        const invocations = readFileSync(invocationLog, "utf8")
+        // Read before asserting: joined timeout cleanup removes the fixture even on failure.
+        // A returned stdout write records progress, not completed pipe drainage.
+        const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
+        const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
+        expect(result.error, details).toBeUndefined();
+        expect(result.status, details).toBe(0);
+        expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
+        const invocations = trace
           .trim()
           .split("\n")
           .map(
             (line) =>
-              JSON.parse(line) as { args: string[]; pid: number; startTimeMs: number | null },
-          );
+              JSON.parse(line) as {
+                stage: string;
+                args: string[];
+                pid: number;
+                startTimeMs?: number | null;
+              },
+          )
+          .filter(({ stage }) => stage === "identity-read");
         expect(invocations.map(({ args }) => args)).toEqual([
           ["--version"],
           ["run", "--help"],

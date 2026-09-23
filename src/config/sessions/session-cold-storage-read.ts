@@ -43,15 +43,22 @@ export async function readRestoredSessionTranscript<T>(
   if (options?.readOnly) {
     return read();
   }
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript(scope, options?.assertCurrent);
-  try {
-    return await read();
-  } catch (error) {
-    if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== scope.sessionId) {
-      throw error;
+  for (let restorations = 0; ; restorations++) {
+    options?.assertCurrent?.();
+    try {
+      return await read();
+    } catch (error) {
+      if (
+        !(error instanceof SessionTranscriptColdError) ||
+        error.sessionId !== scope.sessionId ||
+        restorations === 2
+      ) {
+        throw error;
+      }
+      // The atomic reader already checks cold storage. Keep one more restoration
+      // attempt if a peer archives again before the next read.
+      const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+      await restoreSessionColdTranscript(scope, options?.assertCurrent);
     }
-    await restoreSessionColdTranscript(scope, options?.assertCurrent);
-    return await read();
   }
 }

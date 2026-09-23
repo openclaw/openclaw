@@ -74,6 +74,7 @@ function renderPin(image: SnapshotImage, options: SnapshotRowOptions, previous =
   return html`<button
     class="btn btn--sm"
     type="button"
+    aria-label=${`${t(checkpoint.pinned ? "cloudWorkersPage.snapshots.unpin" : "cloudWorkersPage.snapshots.pin")}: ${checkpoint.checkpointId}`}
     title=${reason}
     ?disabled=${Boolean(reason) || options.busy}
     @click=${() => options.onPin?.(previous)}
@@ -133,6 +134,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
                   ? html`<button
                       class="btn btn--sm"
                       type="button"
+                      aria-label=${`${t("cloudWorkersPage.snapshots.rollback")}: ${image.previous.checkpointId}`}
                       title=${image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : ""}
                       ?disabled=${Boolean(image.capture || image.retirement) || options.busy}
                       @click=${options.onRollback}
@@ -172,6 +174,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
           ? html`<button
               class="btn btn--sm danger"
               type="button"
+              aria-label=${`${t("cloudWorkersPage.snapshots.delete")}: ${image.checkpointId}`}
               title=${options.deleteReason ?? ""}
               ?disabled=${Boolean(options.deleteReason) || options.busy}
               @click=${options.onDelete}
@@ -193,6 +196,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
           ? html`<button
               class="btn btn--sm"
               type="button"
+              aria-label=${`${t("cloudWorkersPage.snapshots.rebuild")}: ${image.projectLabel ?? image.projectRoot ?? image.projectKey ?? image.profileId ?? image.profileKey}`}
               ?disabled=${options.buildBusy}
               @click=${options.onRebuild}
             >
@@ -206,6 +210,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
               <button
                 class="btn btn--sm"
                 type="button"
+                aria-label=${`${t("cloudWorkersPage.snapshots.recover")}: ${image.capture?.selector}`}
                 ?disabled=${options.busy}
                 @click=${options.onRecover}
               >
@@ -242,6 +247,7 @@ export function renderSnapshotBuildRow(
         ? html`<button
             class="btn btn--sm"
             type="button"
+            aria-label=${`${t("cloudWorkersPage.snapshots.dismiss")}: ${environment.id}`}
             ?disabled=${options.busy}
             @click=${options.onDismiss}
           >
@@ -252,6 +258,7 @@ export function renderSnapshotBuildRow(
         ? html`<button
             class="btn btn--sm"
             type="button"
+            aria-label=${`${t("common.cancel")}: ${environment.id}`}
             ?disabled=${options.busy}
             @click=${options.onCancel}
           >

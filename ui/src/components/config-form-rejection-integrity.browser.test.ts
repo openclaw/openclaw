@@ -445,9 +445,9 @@ describe("config form rejection integrity", () => {
         "retained rejected port",
       ).value,
     ).toBe("18789");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
     await draft.updateComplete;
@@ -457,9 +457,9 @@ describe("config form rejection integrity", () => {
         "rerendered rejected host",
       ).value,
     ).toBe("gateway.local");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 
@@ -518,16 +518,16 @@ describe("config form rejection integrity", () => {
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
 
     renderValue();
     await draft.updateComplete;
     expect(draft.textContent).toContain("101 items");
-    expect(draft.querySelector<HTMLElement>("[role='alert']")?.textContent).toContain(
-      "draft is still here",
-    );
+    expect(
+      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
+    ).toContain("draft is still here");
     container.remove();
   });
 });

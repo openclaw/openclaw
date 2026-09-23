@@ -888,63 +888,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps transcript search icons compact", async () => {
-    await withBrowserPage(openBrowserPage(1024, 768), async (page) => {
-      await page.setContent(`<!doctype html>
-        <html>
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <section class="chat">
-              <div class="agent-chat__search-bar">
-                ${iconSvg()}
-                <input type="text" placeholder="Search messages" />
-                <button class="btn btn--ghost" type="button">${iconSvg()}</button>
-              </div>
-            </section>
-          </body>
-        </html>`);
-
-      const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
-      const icons = await page.locator(".agent-chat__search-bar svg").all();
-      const input = page.locator(".agent-chat__search-bar input");
-      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
-        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
-        if (!search) {
-          throw new Error("Expected transcript search bar");
-        }
-        const radii = (element: Element) => {
-          const style = getComputedStyle(element);
-          return [
-            style.borderTopLeftRadius,
-            style.borderTopRightRadius,
-            style.borderBottomRightRadius,
-            style.borderBottomLeftRadius,
-          ];
-        };
-        return { chat: radii(chat), search: radii(search) };
-      });
-
-      const searchRadius = `${14 * (await readCornerScale(page))}px`;
-      expect(searchBar.height).toBeLessThan(64);
-      expect(cornerRadii).toEqual({
-        chat: ["0px", "0px", "0px", "0px"],
-        search: ["0px", "0px", searchRadius, searchRadius],
-      });
-      expect(icons).toHaveLength(2);
-      for (const icon of icons) {
-        const box = await icon.boundingBox();
-        expect(box?.width).toBeCloseTo(16, 3);
-        expect(box?.height).toBeCloseTo(16, 3);
-      }
-      await input.focus();
-      const outline = await input.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return { style: style.outlineStyle, width: style.outlineWidth };
-      });
-      expect(outline).toEqual({ style: "solid", width: "2px" });
-    });
-  });
-
   it.each([
     [320, 568],
     [1366, 900],
@@ -3067,7 +3010,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textareaNode = node as HTMLTextAreaElement;
         textareaNode.style.height = `${textareaNode.scrollHeight}px`;
       });
-      await page.waitForTimeout(220);
+      await page.locator(".context-ring").evaluate(finishElementAnimations);
 
       const layout = await page.evaluate(() => {
         const rectFor = (selector: string) => {

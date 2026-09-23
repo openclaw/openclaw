@@ -62,7 +62,7 @@ internal fun prepareCompletedWorkSpans(
               .equals("user", ignoreCase = true) || item.message.isForwardedBoundary()
         }
 
-        is ChatTimelineItem.CompletedTools -> {
+        is ChatTimelineItem.ToolActivity -> {
           item.turnBoundary
         }
 
@@ -83,14 +83,14 @@ internal fun prepareCompletedWorkSpans(
   fun source(item: ChatTimelineItem): ChatMessage? =
     when (item) {
       is ChatTimelineItem.Message -> item.message
-      is ChatTimelineItem.CompletedTools -> sourceMessages[item.key]
+      is ChatTimelineItem.ToolActivity -> sourceMessages[item.key]
       else -> null
     }
 
   fun knownRunIds(item: ChatTimelineItem): Set<String> =
     when (item) {
       is ChatTimelineItem.Message -> item.knownRunIds
-      is ChatTimelineItem.CompletedTools -> item.knownRunIds
+      is ChatTimelineItem.ToolActivity -> item.knownRunIds
       else -> emptySet()
     }
 
@@ -98,7 +98,7 @@ internal fun prepareCompletedWorkSpans(
 
   fun isOutput(item: ChatTimelineItem): Boolean =
     when (item) {
-      is ChatTimelineItem.CompletedTools -> {
+      is ChatTimelineItem.ToolActivity -> {
         true
       }
 
@@ -119,7 +119,7 @@ internal fun prepareCompletedWorkSpans(
 
   fun hasUnresolvedWork(item: ChatTimelineItem): Boolean =
     when (item) {
-      is ChatTimelineItem.CompletedTools -> item.hasUnresolvedTools
+      is ChatTimelineItem.ToolActivity -> item.hasUnresolvedTools
       is ChatTimelineItem.Message -> item.message.isError || item.hasUnresolvedTools
       else -> false
     }
@@ -215,7 +215,7 @@ internal fun prepareCompletedWorkSpans(
         val owners = knownRunIds(item)
         val sourcePosition = message?.let { sourcePositions.getValue(it.id) } ?: -1
         val replyPosition = owners.mapNotNull(replyPositions::get).minOrNull() ?: terminalPosition
-        val unresolvedPosition = if (item is ChatTimelineItem.CompletedTools) maxOf(sourcePosition, item.lastFailureMessageIndex) else sourcePosition
+        val unresolvedPosition = if (item is ChatTimelineItem.ToolActivity) maxOf(sourcePosition, item.lastFailureMessageIndex) else sourcePosition
         val unansweredWork = hasUnresolvedWork(item) && unresolvedPosition >= replyPosition
         val replylessRun = owners.any { it !in replyPositions }
         if (index != finalIndex && isWork(item) && !unansweredWork && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)

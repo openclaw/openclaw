@@ -263,7 +263,7 @@ function renderLibrary(props: TranscriptsViewProps) {
   }
   return html` ${
       days.size
-        ? html`<div class="meetings-timeline" aria-label=${t("meetings.listLabel")}>
+        ? html`<section class="meetings-timeline" aria-label=${t("meetings.listLabel")}>
             <p class="transcripts-caption">${t("meetings.newestFirst")}</p>
             ${repeat(
               days,
@@ -279,7 +279,7 @@ function renderLibrary(props: TranscriptsViewProps) {
                 </ol>
               </section>`,
             )}
-          </div>`
+          </section>`
         : html`<div class="transcripts-notice" role="status">
             <h2>
               ${t(TRANSCRIPT_FILTER_KEYS.some((key) => new URLSearchParams(props.search).has(key)) ? "meetings.noResults" : "meetings.emptyTitle")}

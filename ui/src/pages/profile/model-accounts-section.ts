@@ -111,6 +111,7 @@ function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuth
       <button
         type="button"
         class="btn btn--sm profile-auth-link-unlink"
+        aria-label=${`${t("profilePage.modelAccounts.unlinkAction")}: ${providerDisplayLabel(link.provider)} · ${account?.label ?? link.authProfileId}`}
         ?disabled=${props.busy}
         @click=${() => props.onUnlink(link.provider)}
       >
@@ -134,6 +135,7 @@ function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserMo
         type="button"
         class="btn btn--sm profile-auth-account-select"
         data-auth-profile-id=${account.authProfileId}
+        aria-label=${`${t("profilePage.modelAccounts.selectAction")}: ${providerDisplayLabel(account.provider)} · ${account.label} (${account.authProfileId})`}
         ?disabled=${props.busy}
         @click=${() => props.onSelectAccount(account.authProfileId)}
       >

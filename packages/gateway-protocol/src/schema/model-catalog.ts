@@ -127,6 +127,36 @@ export const ModelsListResultSchema = closedObject({
         provider: NonEmptyString,
         name: NonEmptyString,
         pluginId: NonEmptyString,
+        capabilities: Type.Optional(
+          closedObject({
+            questionTypes: Type.Array(
+              Type.Union([Type.Literal("boolean"), Type.Literal("choice"), Type.Literal("score")]),
+              { minItems: 1, maxItems: 3, uniqueItems: true },
+            ),
+            maxQuestions: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxChoiceAlternatives: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxScoreLevels: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxInputTokens: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            inputTokenScope: Type.Optional(
+              Type.Union([
+                Type.Literal("encoded-question"),
+                Type.Literal("state-plus-each-criterion"),
+              ]),
+            ),
+            requiresBooleanCriteria: Type.Optional(Type.Boolean()),
+            confidence: Type.Optional(
+              Type.Union([Type.Literal("provider-specific"), Type.Literal("none")]),
+            ),
+          }),
+        ),
       }),
     ),
   ),

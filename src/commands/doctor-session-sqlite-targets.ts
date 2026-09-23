@@ -13,8 +13,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { createAgentDatabaseDeletionClassifier } from "../state/agent-deletion-discovery.js";
-import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { canonicalMigrationFilePath } from "./doctor-session-sqlite-migration-run.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
@@ -68,23 +67,24 @@ export function resolveDoctorSessionSqliteTargets(params: {
             }),
           )
         : [];
-    // Legacy-only installs can predate shared state; existing history owns retained-store admission.
-    const deletionSnapshot = readAgentDatabaseDeletionSnapshot(params.env);
-    const isRetained =
-      deletionSnapshot &&
-      createAgentDatabaseDeletionClassifier({
-        env: params.env,
-        retainedDeletions: deletionSnapshot.retainedDeletions,
-        registeredAgentDatabases: deletionSnapshot.registeredAgentDatabases,
-        configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(params.cfg, {
-          env: params.env,
-        }),
-      });
-    return [...legacyTargets, ...candidates].filter(
-      (target) =>
-        !isRetained?.(target.storePath, target.agentId) &&
-        !isRetained?.(resolveTargetSqlitePath(target, params.env), target.agentId),
+    const targets = [...legacyTargets, ...candidates].map((target) => ({
+      target,
+      sqlitePath: resolveTargetSqlitePath(target, params.env),
+    }));
+    const isRetained = createRetainedAgentDatabaseMatcher(
+      params.env,
+      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
+      {
+        kind: "legacy-database",
+        readDatabasePaths: () => targets.map(({ sqlitePath }) => sqlitePath),
+      },
     );
+    return targets
+      .filter(
+        ({ target, sqlitePath }) =>
+          !isRetained(target.storePath, target.agentId) && !isRetained(sqlitePath, target.agentId),
+      )
+      .map(({ target }) => target);
   }
   return resolveSessionStoreTargets(params.cfg, {}, { env: params.env });
 }

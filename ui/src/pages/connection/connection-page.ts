@@ -397,7 +397,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("connection")}</div>
+          <h1 class="page-title">${titleForRoute("connection")}</h1>
           <div class="page-subtitle">
             ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
           </div>

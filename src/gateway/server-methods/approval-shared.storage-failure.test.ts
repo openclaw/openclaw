@@ -7,11 +7,8 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import {
-  handleApprovalResolve,
-  handlePendingApprovalRequest,
-  registerPendingApprovalRecord,
-} from "./approval-shared.js";
+import { handlePendingApprovalRequest, registerPendingApprovalRecord } from "./approval-shared.js";
+import { handleApprovalResolve } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 vi.mock("../../infra/approval-turn-source.js", () => ({ hasApprovalTurnSourceRoute: () => false }));
