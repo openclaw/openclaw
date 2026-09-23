@@ -513,12 +513,7 @@ describe("runContextEngineMaintenance", () => {
           currentTokenCount: 1536,
         });
 
-        await waitForAssertion(() =>
-          expect(
-            getTaskById(expectDefined(queuedTasks[0], "queuedTasks[0] test invariant").taskId)
-              ?.status,
-          ).toBe("succeeded"),
-        );
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
         const completedTask = getTaskById(
           expectDefined(queuedTasks[0], "queuedTasks[0] test invariant").taskId,
         );
@@ -587,14 +582,13 @@ describe("runContextEngineMaintenance", () => {
           throw new Error("Expected maintenance release callback to be initialized");
         }
         releaseMaintenance();
-        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
-        await waitForAssertion(() =>
-          expect(
-            listTasksForOwnerKey(sessionKey)
-              .filter((task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND)
-              .map((task) => task.status),
-          ).toEqual(["succeeded", "succeeded"]),
-        );
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        expect(maintain).toHaveBeenCalledTimes(2);
+        expect(
+          listTasksForOwnerKey(sessionKey)
+            .filter((task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND)
+            .map((task) => task.status),
+        ).toEqual(["succeeded", "succeeded"]);
       } finally {
         vi.useRealTimers();
       }
@@ -612,6 +606,7 @@ describe("runContextEngineMaintenance", () => {
         const sessionKey = "agent:main:session-rerun";
         let releaseFirstMaintenance: (() => void) | undefined;
         let releaseSecondMaintenance: (() => void) | undefined;
+        const secondMaintenanceStarted = createDeferred();
         let maintenanceCalls = 0;
         const maintain = vi.fn(async () => {
           maintenanceCalls += 1;
@@ -621,6 +616,7 @@ describe("runContextEngineMaintenance", () => {
             });
           }
           if (maintenanceCalls === 2) {
+            secondMaintenanceStarted.resolve();
             await new Promise<void>((resolve) => {
               releaseSecondMaintenance = resolve;
             });
@@ -671,8 +667,8 @@ describe("runContextEngineMaintenance", () => {
           throw new Error("Expected first maintenance release callback to be initialized");
         }
         releaseFirstMaintenance();
-        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
-        await Promise.resolve();
+        await Promise.race([secondMaintenanceStarted.promise, secondDeferred]);
+        expect(maintain).toHaveBeenCalledTimes(2);
         expect(secondDeferredSettled).toBe(false);
 
         if (!releaseSecondMaintenance) {
@@ -1210,7 +1206,8 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
 
-        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        expect(maintain).toHaveBeenCalledTimes(1);
 
         const tasks = listTasksForOwnerKey(sessionKey).filter(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
@@ -1325,13 +1322,12 @@ describe("runContextEngineMaintenance", () => {
           expect(events).toEqual(["foreground-1-start", "maintenance-start"]),
         );
         expect(maintain).toHaveBeenCalledTimes(1);
-        await waitForAssertion(() =>
-          expect(
-            listTasksForOwnerKey(sessionKey).find(
-              (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
-            )?.status,
-          ).toBe("succeeded"),
-        );
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        expect(
+          listTasksForOwnerKey(sessionKey).find(
+            (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+          )?.status,
+        ).toBe("succeeded");
 
         if (!releaseFirstForeground) {
           throw new Error("Expected first foreground release callback to be initialized");
@@ -1425,20 +1421,17 @@ describe("runContextEngineMaintenance", () => {
           throw new Error("Expected maintenance rewrite release callback to be initialized");
         }
         allowRewrite();
-
-        await waitForAssertion(() =>
-          expect(events).toEqual([
-            "maintenance-start",
-            "foreground-before-read-checkpoint",
-            "maintenance-before-rewrite",
-            "rewrite",
-            "maintenance-after-rewrite",
-            "foreground-read",
-          ]),
-        );
+        await foregroundTurn;
+        expect(events).toEqual([
+          "maintenance-start",
+          "foreground-before-read-checkpoint",
+          "maintenance-before-rewrite",
+          "rewrite",
+          "maintenance-after-rewrite",
+          "foreground-read",
+        ]);
 
         expect(maintain).toHaveBeenCalledTimes(1);
-        await foregroundTurn;
       } finally {
         vi.useRealTimers();
       }
@@ -1483,7 +1476,7 @@ describe("runContextEngineMaintenance", () => {
         );
         expect(tasks).toHaveLength(1);
         const taskId = expectDefined(tasks[0], "tasks[0] test invariant").taskId;
-        await waitForAssertion(() => expect(getTaskById(taskId)?.status).toBe("succeeded"));
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
         const task = requireRecord(getTaskById(taskId), "maintenance task");
         expectRecordFields(task, {
           status: "succeeded",

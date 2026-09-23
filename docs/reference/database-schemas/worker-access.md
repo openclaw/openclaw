@@ -263,6 +263,16 @@ coordinator warnings include the caller stack as well as the operation label,
 captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
 are unchanged.
 
+Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
+through the shared-state worker. Failed deletions yield between bounded retries,
+retaining the original database admission and Git guard until deletion settles.
+Process exit retains its best-effort synchronous deletion because it cannot await
+a worker. Deferred context maintenance also awaits task completion and failure
+settlement before disposing its engine or releasing its process owner; its progress
+timer ends before terminal persistence. Worktree run admission, task creation and
+progress, and the remaining native cron transitions still need migration. This
+cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
+
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact
