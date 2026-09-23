@@ -5691,6 +5691,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
     const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
+    const laneWaiver = mode.fullReleasePreflight ? "Telegram lane blocked: operator approved" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5721,6 +5722,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
       "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
+      "${{ inputs.lane_waiver }}": laneWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5835,6 +5837,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
     expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
+    expect(dispatch).toContain(`-f lane_waiver=${laneWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -8444,6 +8447,7 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
         STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
+        LANE_WAIVER: "${{ inputs.lane_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
