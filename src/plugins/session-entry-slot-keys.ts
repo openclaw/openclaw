@@ -93,6 +93,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "cronRunContinuation",
   "fastMode",
   "toolOverrides",
+  "streamingMode",
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",

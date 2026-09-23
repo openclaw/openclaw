@@ -537,6 +537,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
         agentRuntimeOverride: "codex",
         providerOverride: "openai",
         modelOverride: "gpt-5.6-sol",
+        streamingMode: "block",
         modelSelectionLocked: true,
         pinnedAt: 1,
         sandbox: "required",
@@ -600,6 +601,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     modelOverride: "gpt-5.6-sol",
     previousSessionId: sourceSessionId,
     providerOverride: "openai",
+    streamingMode: "block",
     sandbox: "required",
     spawnedCwd: "/tmp/recovered-worktree",
   });

@@ -27,6 +27,7 @@ export function createTelegramPluginBase(params: {
   | "reload"
   | "configSchema"
   | "config"
+  | "streaming"
   | "setupContract"
   | "secrets"
 > {
