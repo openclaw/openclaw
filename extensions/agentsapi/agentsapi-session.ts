@@ -107,13 +107,31 @@ export function createAgentsApiSession(options: {
       if (!submitted || !settled) {
         return Promise.resolve([]);
       }
-      // Turn REST records include billing omitted by terminal stream events.
-      // The captured baseline excludes work paid for by earlier attempts.
-      return (usageTurns ??= cleanupClient.turns(
-        sessionId,
-        AbortSignal.timeout(10_000),
-        baselineTurnId,
-      ));
+      return (usageTurns ??= (async () => {
+        const usageSignal = AbortSignal.timeout(5_000);
+        let turns: AgentsApiTurn[] = [];
+        // Idle can precede the REST records and their usage. Give accounting
+        // a bounded settlement window, without treating unknown usage as zero.
+        try {
+          while (true) {
+            turns = await cleanupClient.turns(sessionId, usageSignal, baselineTurnId);
+            const recordedIds = new Set(turns.map((turn) => turn.id));
+            if (
+              turns.length > 0 &&
+              [...coordinatorTurnIds].every((id) => recordedIds.has(id)) &&
+              turns.every((turn) => turn.usage !== null)
+            ) {
+              return turns;
+            }
+            await delay(500, undefined, { signal: usageSignal });
+          }
+        } catch (error) {
+          if (!usageSignal.aborted) {
+            throw error;
+          }
+          return turns;
+        }
+      })());
     },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();

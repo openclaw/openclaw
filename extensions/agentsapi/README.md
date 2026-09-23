@@ -14,9 +14,10 @@ Successful assistant messages retain those totals in the OpenClaw transcript.
 Run results and completion hooks also retain usage reported for interrupted or
 failed work after native cleanup settles. Historical session usage is derived
 from transcript messages, so interrupted work without an assistant message is
-not included in that historical report. Counts are captured at settlement and
-are not refreshed later. Missing native usage remains unavailable; recorded
-counts can change as upstream accounting arrives. See the
+not included in that historical report. A bounded five-second settlement window
+waits for late turn records and usage. Counts are not refreshed after that
+snapshot. Missing native usage remains unavailable; native counts can change as
+upstream accounting arrives. See the
 [official usage guide](https://developers.openai.com/api/docs/guides/agents-api/observability).
 
 Native turn billing can sum multiple model calls. It does not establish the
