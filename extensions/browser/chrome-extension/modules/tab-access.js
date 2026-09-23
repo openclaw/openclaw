@@ -45,28 +45,26 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         invalidateTab(tab.id);
         return false;
       }
-      if (created.handedOff) {
-        if (created.groupFallbackRequiresOpenClawTitle) {
-          let currentGroup;
-          try {
-            currentGroup = await chromeApi.tabGroups.get(created.groupId);
-          } catch {
-            currentGroup = undefined;
-          }
-          if (
-            currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
-            currentGroup.windowId !== tab.windowId
-          ) {
-            created.groupFallback = false;
-            invalidateTab(tab.id);
-            return false;
-          }
+      if (created.groupFallbackRequiresOpenClawTitle) {
+        let currentGroup;
+        try {
+          currentGroup = await chromeApi.tabGroups.get(created.groupId);
+        } catch {
+          currentGroup = undefined;
+        }
+        if (
+          currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
+          currentGroup.windowId !== tab.windowId
+        ) {
+          created.groupFallback = false;
+          invalidateTab(tab.id);
+          return false;
         }
       }
       return true;
     }
     const selected = await isSelectedTab(tab);
-    if (created?.handedOff && !created.initialBlank) {
+    if (created?.handedOff && !created.initialBlank && !created.groupFallback) {
       if (selected) {
         createdTabs.delete(tab.id);
       }
@@ -141,7 +139,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         invalidateTab(tab.id);
       }
       created.initialBlank = false;
-      if (created.handedOff) {
+      if (created.handedOff && !created.groupFallback) {
         createdTabs.delete(tab.id);
         if (!created.isCurrent()) {
           invalidateTab(tab.id);
@@ -404,7 +402,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       throw error;
     } finally {
-      if (!created.handedOff || !created.initialBlank) {
+      if (!created.handedOff || (!created.initialBlank && !created.groupFallback)) {
         if (createdTabs.get(tab.id) === created) {
           createdTabs.delete(tab.id);
           if (!created.handedOff) {
