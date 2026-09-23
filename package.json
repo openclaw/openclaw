@@ -439,7 +439,8 @@
     "!dist/plugin-sdk/realtime-voice-playback.d.ts",
     "!dist/plugin-sdk/text-grapheme.d.ts",
     "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
-    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts"
+    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
+    "!dist/plugin-sdk/secret-egress-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -846,6 +847,9 @@
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
+    },
+    "./plugin-sdk/secret-egress-runtime": {
+      "default": "./dist/plugin-sdk/secret-egress-runtime.js"
     },
     "./plugin-sdk/secret-file-runtime": {
       "default": "./dist/plugin-sdk/secret-file-runtime.js"
