@@ -199,6 +199,30 @@ describe("closed session browser route", () => {
     expect(respond).not.toHaveBeenCalledWith(true, expect.anything());
   });
 
+  it.each([
+    { method: "GET", path: "/tabs" },
+    { method: "GET", path: "/snapshot" },
+    { method: "POST", path: "/screenshot" },
+  ])("publishes $path in the same authorized turn as its final check", async (params) => {
+    const entered = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<unknown>();
+    const operation = params.path === "/tabs" ? mocked.tabs : mocked.dispatch;
+    operation.mockImplementationOnce(() => {
+      entered.resolve();
+      return completed.promise;
+    });
+    const pending = request(params);
+    await entered.promise;
+    completed.resolve(params.path === "/tabs" ? [] : { status: 200, body: { private: true } });
+    const revoke = vi.fn(() => {
+      mocked.current = false;
+    });
+    queueMicrotask(revoke);
+    const respond = await pending;
+    expect(respond).toHaveBeenCalledWith(true, expect.anything());
+    expect(respond.mock.invocationCallOrder[0]).toBeLessThan(revoke.mock.invocationCallOrder[0]!);
+  });
+
   it("rejects conflicting nested and canonical session identities", async () => {
     const respond = await request({
       method: "POST",

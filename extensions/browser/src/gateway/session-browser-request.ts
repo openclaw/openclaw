@@ -129,14 +129,14 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
           );
         }
         const context = createBrowserControlContext();
-        const assertCurrent = async () => {
+        const assertCurrent = () => {
           assertInvocation();
           resource.assertCurrent();
         };
-        await assertCurrent();
+        assertCurrent();
         if (params.path === "/tabs") {
           const tabs = await context.forProfile(tab.profile).listTabs({ signal });
-          await assertCurrent();
+          assertCurrent();
           respond(true, {
             running: true,
             tabs: tabs.filter((entry) => entry.targetId === tab.targetId),
@@ -155,7 +155,7 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
           query,
           body,
           signal,
-          assertCurrent,
+          assertCurrent: async () => assertCurrent(),
           screencastAuthority: {
             signal: resource.signal,
             assertCurrent: resource.assertCurrent,
@@ -185,7 +185,8 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
             },
           },
         });
-        await assertCurrent();
+        // Publish in the same turn as the resident authority check; yielding can revoke access.
+        assertCurrent();
         if (result.status >= 400) {
           const payload = asNullableRecord(result.body);
           respond(
