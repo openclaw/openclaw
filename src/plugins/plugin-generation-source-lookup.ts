@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { isPathInside as isLexicallyInside } from "../infra/path-safety.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
@@ -11,14 +12,33 @@ function canonicalSource(rootDir: string, sourceRoot: string, source: string): s
   return relative === undefined ? lexical : path.join(sourceRoot, relative);
 }
 
+// Windows can name the capture directory through another spelling of the same
+// physical tree (8.3 short names such as C:\Users\SOVERE~1, or a different
+// letter case). Captured targets keep the spelling the capture was created with,
+// while safe opens report the long, canonical spelling. Rebase such a path onto
+// the capture's own spelling after proving both name the same directory.
+function capturedSpelling(boundaryRoot: string | undefined, source: string): string | undefined {
+  if (!boundaryRoot || isLexicallyInside(boundaryRoot, source)) {
+    return undefined;
+  }
+  const relative = relativePluginPathInsideRootSync(boundaryRoot, source);
+  return relative === undefined ? undefined : path.join(path.resolve(boundaryRoot), relative);
+}
+
 function getCapturedSource(
   sources: ReadonlyMap<string, string>,
   rootDir: string,
   sourceRoot: string,
   source: string,
+  boundaryRoot?: string,
 ): string | undefined {
   const lexical = path.resolve(source);
-  return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
+  const direct = sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
+  if (direct) {
+    return direct;
+  }
+  const rebased = capturedSpelling(boundaryRoot, lexical);
+  return rebased === undefined ? undefined : sources.get(rebased);
 }
 
 // A recovery resolver outlives its producer. Its closure contains copied path
@@ -27,9 +47,10 @@ function createRecoverySourceResolver(
   rootDir: string,
   sourceRoot: string,
   sources: ReadonlyMap<string, string>,
+  boundaryRoot: string,
 ) {
   return (source: string) => {
-    const captured = getCapturedSource(sources, rootDir, sourceRoot, source);
+    const captured = getCapturedSource(sources, rootDir, sourceRoot, source, boundaryRoot);
     if (!captured) {
       throw new Error("Plugin recovery entry is outside its captured source package");
     }
@@ -75,7 +96,7 @@ function captureRecoverySource({
     );
     return {
       rootDir: relocate(capturedRoot),
-      resolve: createRecoverySourceResolver(rootDir, sourceRoot, sources),
+      resolve: createRecoverySourceResolver(rootDir, sourceRoot, sources, boundaryRoot),
       ...createRecoverySourceDisposal(recovery),
     };
   } catch (error) {
@@ -106,7 +127,7 @@ export function createPluginGenerationSourceLookup({
   assertModuleAvailable: (filename: string) => void;
 }) {
   const resolveCaptured = (source: string) => {
-    const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
+    const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source, boundaryRoot);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
   return {
