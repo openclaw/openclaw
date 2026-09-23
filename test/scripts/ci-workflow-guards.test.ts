@@ -2493,6 +2493,7 @@ AFTER_CD
       [{ eventName: "push" }, 4],
       [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
       [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
+      [{ eventName: "pull_request", authorAssociation: "NONE" }, 2],
       [{ eventName: "push", runnerBackend: "github" }, 2],
       [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
       [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
@@ -3984,6 +3985,13 @@ setImmediate(() => {
     }
     expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
 
+    const androidRunStep = expectDefined(
+      workflow.jobs.android.steps.find(
+        (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+      ),
+      "Android task runner",
+    );
+    const androidRunEnv = expectDefined(androidRunStep.env, "Android task environment");
     const androidRoutes = [
       ["GitHub override", { runnerBackend: "github" }, "ubuntu-24.04"],
       ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
@@ -4012,6 +4020,11 @@ setImmediate(() => {
       expect(evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context), label).toBe(
         runner,
       );
+      if (runner === "ubuntu-24.04") {
+        expect(evaluateWorkflowExpression(androidRunEnv.CI_RUNNER_BACKEND, context), label).toBe(
+          "github",
+        );
+      }
       for (const task of [
         "build-play",
         "build-play-compat",
