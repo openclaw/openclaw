@@ -2805,8 +2805,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-approvals-effective.ts	3
-src/infra/exec-approvals-resolver.ts	2
 src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
@@ -2943,7 +2941,7 @@ src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
-src/infra/windows-gateway-firewall-diagnostics.ts	3
+src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
