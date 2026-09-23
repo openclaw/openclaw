@@ -346,6 +346,7 @@ export function buildQaToolSearchArgs(
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
+      expectsCompletionMessage: false,
     };
   }
   if (targetTool === "memory_recall") {
