@@ -33,7 +33,7 @@ const target = {
 };
 
 it.each(["resolve", "reject"] as const)(
-  "retains accepted participant work after its caller returns until persistence %ss",
+  "joins participant persistence without retaining its caller root when it %ss",
   async (outcome) => {
     const persistence = createDeferredCore<"inserted">();
     const started = createDeferredCore();
@@ -61,13 +61,14 @@ it.each(["resolve", "reject"] as const)(
         });
       });
       root.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       await started.promise;
       let drained = false;
       const drainage = work.drain().then(() => {
         drained = true;
       });
       await Promise.resolve();
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(drained).toBe(false);
       const failure = new Error("Participant persistence failed");
       if (outcome === "reject") {

@@ -25,6 +25,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { drainOpenClawAgentWriteQueuesForTest } from "../../state/openclaw-agent-write-admission.test-support.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -61,6 +62,8 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     }
     await Promise.all(releases);
   }
+  // Participant persistence outlives request roots; retain selectors until its FIFO settles.
+  await drainOpenClawAgentWriteQueuesForTest(ownsPath);
   if (testState.sessionStorePath && ownsPath(testState.sessionStorePath)) {
     testState.sessionStorePath = undefined;
   }
@@ -71,6 +74,7 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     setRuntimeConfigSnapshot({ ...cfg, session });
   }
   await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+  await drainOpenClawAgentWriteQueuesForTest(ownsPath);
   for (const database of listOpenClawRegisteredAgentDatabases()) {
     if (isPathInside(root, database.path)) {
       unregisterOpenClawAgentDatabase(database);

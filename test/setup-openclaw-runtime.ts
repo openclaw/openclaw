@@ -20,6 +20,7 @@ type WorkerRuntimeState = {
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
 type WorkerCleanupHelpers = {
+  drainOpenClawAgentWriteQueuesForTest: typeof import("../src/state/openclaw-agent-write-admission.test-support.js").drainOpenClawAgentWriteQueuesForTest;
   clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.test-support.js").drainSessionStoreWriterQueuesForTest;
@@ -57,6 +58,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       preparedModelRuntime,
       sessionStoreWriterState,
       sessionStoreWriterTestState,
+      agentWriteAdmission,
       fileLock,
     ] = await Promise.all([
       vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
@@ -74,9 +76,14 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/config/sessions/store-writer-state.test-support.js")>(
         "../src/config/sessions/store-writer-state.test-support.js",
       ),
+      vi.importActual<typeof import("../src/state/openclaw-agent-write-admission.test-support.js")>(
+        "../src/state/openclaw-agent-write-admission.test-support.js",
+      ),
       vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
     ]);
     return {
+      drainOpenClawAgentWriteQueuesForTest:
+        agentWriteAdmission.drainOpenClawAgentWriteQueuesForTest,
       clearSessionStoreCacheForTest: sessionStoreWriterState.clearSessionStoreCacheForTest,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
@@ -355,6 +362,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   const {
+    drainOpenClawAgentWriteQueuesForTest,
     clearSessionStoreCacheForTest,
     drainFileLockStateForTest,
     drainSessionStoreWriterQueuesForTest,
@@ -363,6 +371,7 @@ afterEach(async () => {
     resetModelsJsonReadyCacheForTest,
     resetPreparedModelRuntimeSnapshotsForTest,
   } = await loadWorkerCleanupHelpers();
+  await drainOpenClawAgentWriteQueuesForTest();
   await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
@@ -374,8 +383,14 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const { clearSessionStoreCacheForTest, drainFileLockStateForTest } =
-    await loadWorkerCleanupHelpers();
+  const {
+    clearSessionStoreCacheForTest,
+    drainFileLockStateForTest,
+    drainOpenClawAgentWriteQueuesForTest,
+    drainSessionStoreWriterQueuesForTest,
+  } = await loadWorkerCleanupHelpers();
+  await drainOpenClawAgentWriteQueuesForTest();
+  await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
 });

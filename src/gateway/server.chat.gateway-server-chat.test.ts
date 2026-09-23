@@ -32,6 +32,7 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -95,6 +96,7 @@ describe("gateway server chat", () => {
   });
   const settleGatewayFixture = async () => {
     await requestExecution.waitForCompletion();
+    await drainOpenClawAgentWriteQueuesForTest();
     await flushPendingSessionsChangedEvents();
     expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
   };
@@ -152,7 +154,6 @@ describe("gateway server chat", () => {
     } finally {
       // Dispatch can outlive its RPC; keep its store selected until retained work settles.
       await settleGatewayFixture();
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   };
@@ -915,7 +916,6 @@ describe("gateway server chat", () => {
     } finally {
       await settleGatewayFixture();
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -993,7 +993,6 @@ describe("gateway server chat", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       await settleGatewayFixture();
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -1031,7 +1030,6 @@ describe("gateway server chat", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       await settleGatewayFixture();
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -1187,6 +1185,7 @@ describe("gateway server chat", () => {
       await requestExecution.waitForCompletion("idem-2");
       expect(agentCommandMock).toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await drainOpenClawAgentWriteQueuesForTest();
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -2208,7 +2207,6 @@ describe("gateway server chat", () => {
       Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -2443,7 +2441,6 @@ describe("gateway server chat", () => {
     } finally {
       resolveAgentRun?.();
       await settleGatewayFixture();
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
