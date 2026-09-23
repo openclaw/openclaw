@@ -31,8 +31,6 @@ import {
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
-  buildCurrentRunRestartRecoveryClaim,
-  prepareCommandHarnessCompletionRecovery,
   bindCommandHarnessCompletionAssertion,
   resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
@@ -57,6 +55,7 @@ import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runt
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import {
   prepareCommandSessionDiffBaseline,
+  prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
@@ -168,6 +167,19 @@ async function agentCommandInternal(
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
   try {
+    const operatorSession =
+      opts.operatorAuthority && sessionKey
+        ? (await import("../gateway/operator-session-run.js")).prepareGatewayOperatorSessionRun({
+            authority: opts.operatorAuthority,
+            cfg,
+            agentId: sessionAgentId,
+            sessionKey,
+            assertSourceCurrent: () => {
+              opts.abortSignal?.throwIfAborted();
+              opts.assertSourceCurrent?.();
+            },
+          })
+        : undefined;
     if (
       sessionStateActor.actorType === "human" &&
       !isSubagentLaneTurn &&
@@ -215,6 +227,7 @@ async function agentCommandInternal(
         if (archivedSessionError) {
           throw new Error(archivedSessionError);
         }
+        operatorSession?.assertAuthorized(currentEntry);
         sessionEntry = currentEntry;
         if (sessionStore && sessionKey) {
           if (currentEntry) {
@@ -319,52 +332,42 @@ async function agentCommandInternal(
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         await prepareDeliveryForRun(entry);
-        const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
-          prepareCommandHarnessCompletionRecovery({
+        const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
+          prepareCommandSessionRecoveryEntry({
             entry,
             sessionId,
             sessionKey,
             runId,
             agentId: sessionAgentId,
             opts,
-            hasDeliveryContext: Boolean(currentRunDeliveryContext),
+            deliveryContext: currentRunDeliveryContext,
+            now,
+            isSessionRollover,
           });
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const next = {
-          ...entry,
-          sessionId,
-          updatedAt: now,
-          sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
-          lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-          ...buildCurrentRunRestartRecoveryClaim({
-            deliveryContext: currentRunDeliveryContext,
-            deliveryMediaUrls: opts.internalDeliveryMediaUrls,
-            disableMessageTool: opts.disableMessageTool,
-            entry,
-            forceRestartSafeTools: opts.forceRestartSafeTools,
-            runId,
-            harnessCompletion,
-            ...sourceOptions,
-            suppressTextDelivery: opts.internalDeliverySuppressText,
-          }),
-        };
         const persisted = await persistAgentSession({
           agentId: sessionAgentId,
           sessionStore,
           sessionKey,
           storePath,
           initialEntry,
-          entry: next,
-          shouldPersist: (current) =>
-            isCompletionCurrent(current) &&
-            (isSessionRollover
-              ? current?.sessionId === initialEntry.sessionId
-              : shouldPersistRestartRecoveryContextClaim(
-                  current,
-                  sessionId,
-                  runId,
-                  allowCreateRestartRecoveryEntry,
-                )),
+          entry: nextEntry,
+          creation: operatorSession?.creation,
+          assertCommitAllowed: operatorSession?.assertCurrent,
+          shouldPersist: (current) => {
+            operatorSession?.assertAuthorized(current);
+            return (
+              isCompletionCurrent(current) &&
+              (isSessionRollover
+                ? current?.sessionId === initialEntry.sessionId
+                : shouldPersistRestartRecoveryContextClaim(
+                    current,
+                    sessionId,
+                    runId,
+                    allowCreateRestartRecoveryEntry,
+                  ))
+            );
+          },
         });
         // The commit already happened. Cleanup must retain ownership even if
         // cancellation invalidates the task during the awaited session write.
@@ -377,6 +380,10 @@ async function agentCommandInternal(
           storePath,
           opts,
         });
+        if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
+          throw createSessionWorkStartChangedError(sessionKey);
+        }
+        operatorSession?.assertAuthorized(persisted);
       }
       if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
         sessionEntry = await prepareCommandSessionDiffBaseline({

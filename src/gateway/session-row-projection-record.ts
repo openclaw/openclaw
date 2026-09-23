@@ -41,6 +41,7 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  databaseFactsRevision: number;
   /** Current committed sharing facts remain usable while display materialization is dirty. */
   sharingEntry?: SessionEntry;
   entry?: SessionEntry;
@@ -140,10 +141,16 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      row.pendingDatabaseFacts = undefined;
+      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
+}
+
+/** Expire both accepted facts and worker replies still waiting to enter this row. */
+export function invalidateDatabaseFacts(row: Row) {
+  row.databaseFactsRevision++;
+  row.pendingDatabaseFacts = undefined;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -155,6 +162,7 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
     parents: new Set(),
     membership: new Set(),
     generation: Symbol("row"),
+    databaseFactsRevision: 0,
   };
 }
 
@@ -444,6 +452,7 @@ export function dematerialize(row: Row): Row {
     materializedSequence: undefined,
     facts: undefined,
     pendingDatabaseFacts: undefined,
+    databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
     fallbackModel: undefined,
@@ -544,6 +553,7 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
+    databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
     sharingEntry: entry,
     generation,

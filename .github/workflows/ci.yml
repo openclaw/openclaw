@@ -2183,18 +2183,16 @@ jobs:
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
-                      ...(androidTestTier ? { lint: true } : {}),
                     },
                     {
                       check_name: "android-test-third-party",
                       task: "test-third-party",
-                      ...(androidTestTier ? { lint: true } : {}),
                     },
                     ...(!useCompatibleAndroidCi
                       ? [{
                           check_name: "android-test-wear",
                           task: "test-wear",
-                          ...(androidTestTier ? { lint: true } : {}),
+                          ...(androidTestTier ? { lint: true, app_lint: "third-party" } : {}),
                         }]
                       : []),
                     ...(!androidTestTier
@@ -2209,6 +2207,7 @@ jobs:
                           {
                             check_name: "android-ktlint",
                             task: "ktlint",
+                            ...(androidTestTier ? { app_lint: "play" } : {}),
                             ...(androidTestTier && androidBenchmarkChanged ? { build_benchmark: true } : {}),
                           },
                         ]
@@ -6281,12 +6280,12 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    # Combined phone-flavor unit tests and lint need setup/cleanup headroom on both
-    # runner routes. Hosted build-play keeps its three-invocation budget on retries.
-    timeout-minutes: ${{ (matrix.task == 'test-play' || matrix.task == 'test-third-party') && matrix.lint && 35 || matrix.task == 'build-play' && ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
+    # Hosted build-play keeps its three-invocation budget on retries.
+    timeout-minutes: ${{ matrix.task == 'build-play' && ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
     strategy:
       fail-fast: false
-      max-parallel: 2
+      # All four normal rows have native work; avoid serializing a second heavy wave.
+      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && github.run_attempt == 1 && 4 || 2 }}
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
@@ -6337,7 +6336,7 @@ jobs:
           --config.side-effects-cache=true
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
-      # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
+      # build caches) on a Blacksmith sticky disk: the Actions Gradle cache
       # above is evicted so quickly under the repo quota that it rarely
       # restores, leaving every run to re-resolve the full dependency graph.
       # Fork PRs, manual dispatches, the GitHub backend, and hosted hybrid retries must never produce writable
@@ -6353,14 +6352,14 @@ jobs:
           # budget, 429-failing every mount. Task scope stays in the key: each
           # matrix task resolves a different dependency set, and a shared key
           # would let a light task (ktlint) pin a thin snapshot the heavy
-          # build lanes can never repair. Dependency-file changes live in the
-          # runtime fingerprint marker below instead of the key.
+          # build lanes can never repair. Gradle invalidates changed inputs and
+          # expires unused entries; dependency changes must not erase warm caches.
           key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
           path: /var/tmp/openclaw-gradle
           # Single semantic writer: only protected pushes commit, so
           # pull_request clones stay read-only and the snapshot tracks main.
           # Explicit true (not on-change) because the allocated-byte heuristic
-          # can miss a same-size refresh and strand the fingerprint marker;
+          # can miss a same-size refresh;
           # v1.4.0 still skips commit after failed/cancelled steps, so a
           # broken build cannot poison this key.
           commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
@@ -6368,31 +6367,9 @@ jobs:
       - name: Point Gradle at the sticky disk
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Gradle caches are content-addressed, so a stale snapshot is safe
-          # to restore (obsolete entries are simply ignored). The fingerprint
-          # only bounds disk growth: when dependency inputs change, the writer
-          # rebuilds its snapshot from scratch so retired dependency artifacts
-          # do not accumulate on the O(1) key forever.
-          GRADLE_DEPS_FINGERPRINT: ${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
-          STICKY_WRITER: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-gradle
-          marker="$sticky_root/.openclaw-gradle-deps-fingerprint"
-          disk_fingerprint=""
-          if [ -f "$marker" ]; then
-            disk_fingerprint="$(<"$marker")"
-          fi
-          if [ "$disk_fingerprint" != "$GRADLE_DEPS_FINGERPRINT" ]; then
-            if [ "$STICKY_WRITER" = "true" ]; then
-              echo "Gradle dependency inputs changed; rebuilding snapshot cold to drop retired artifacts"
-              rm -rf "$sticky_root/gradle-user-home"
-              printf '%s\n' "$GRADLE_DEPS_FINGERPRINT" > "$marker"
-            else
-              echo "Gradle dependency inputs changed since snapshot; content-addressed caches stay safe to reuse"
-            fi
-          fi
           mkdir -p "$sticky_root/gradle-user-home"
           echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
@@ -6422,7 +6399,7 @@ jobs:
               // Record the executing launcher; cached results do not prove this JVM ran tests.
               doFirst {
                 def metadata = javaLauncher.get().metadata
-                logger.lifecycle("Test JVM ${path}: runtime=${metadata.javaRuntimeVersion} vendor=${metadata.vendor} home=${metadata.installationPath.asFile}")
+                logger.lifecycle("Test JVM ${path}: runtime=${metadata.javaRuntimeVersion} vendor=${metadata.vendor} home=${metadata.installationPath.asFile} forks=${maxParallelForks}")
               }
             }
           }
@@ -6434,17 +6411,18 @@ jobs:
         working-directory: apps/android
         env:
           JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
-          CI_RUNNER_BACKEND: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
+          CI_RUNNER_BACKEND: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != 'openclaw/openclaw' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)))) && 'github' || 'blacksmith' }}
           CI_MAIN_QUALIFICATION: ${{ needs.preflight.outputs.ci_shape == 'main' && 'true' || 'false' }}
           TASK: ${{ matrix.task }}
           RUN_LINT: ${{ matrix.lint && 'true' || 'false' }}
+          APP_LINT: ${{ matrix.app_lint || '' }}
           BUILD_BENCHMARK: ${{ matrix.build_benchmark && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
           android_build_metadata=()
-          if [ "$RUN_LINT" = "true" ] && { [ "$TASK" = "test-play" ] || [ "$TASK" = "test-third-party" ]; }; then
-            # Separate unit/lint processes must not invalidate BuildConfig with a new timestamp.
+          if [ "$RUN_LINT" = "true" ] || [ -n "$APP_LINT" ]; then
+            # Repeated native invocations in one row must not invalidate BuildConfig by time alone.
             android_build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             android_build_metadata=("-PopenclawBuildTimestamp=$android_build_timestamp")
           fi
@@ -6453,9 +6431,6 @@ jobs:
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
-              if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
-              fi
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
@@ -6466,15 +6441,12 @@ jobs:
             test-third-party)
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
-              if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
-              fi
               ;;
             test-wear)
-              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :wear:testDebugUnitTest
               if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :wear:lintDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :wear:lintDebug
               fi
               ;;
             build-play)
@@ -6514,17 +6486,32 @@ jobs:
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
-              ./gradlew --no-daemon --build-cache \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache \
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
                 :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
               if [ "$BUILD_BENCHMARK" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :benchmark:assembleDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :benchmark:assembleDebug
               fi
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2
+              exit 1
+              ;;
+          esac
+
+          # Phone tests dominate their rows; the lighter rows own app lint without adding jobs.
+          case "$APP_LINT" in
+            third-party)
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
+              ;;
+            play)
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+              ;;
+            "") ;;
+            *)
+              echo "Unsupported Android app lint flavor: $APP_LINT" >&2
               exit 1
               ;;
           esac

@@ -1,3 +1,5 @@
+import type { AgentSessionEvent, AgentSessionItem } from "openai/resources/beta/agents/agents";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import {
   normalizeUsage,
   type AgentHarnessAttemptParamsV2,
@@ -5,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { AgentsApiEvent, AgentsApiItem, AgentsApiTurn } from "./agentsapi-client.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 type AgentsApiReply = {
@@ -42,7 +43,7 @@ export function createAgentsApiMessageProjection(
   };
   return {
     reply,
-    recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: AgentsApiTurn[]): void {
+    recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: Turn[]): void {
       const usage = emptyUsage();
       let observed = false;
       let reasoningTokens: number | undefined;
@@ -73,8 +74,14 @@ export function createAgentsApiMessageProjection(
       }
       reply.assistantUsage = usage;
     },
-    observe(event: AgentsApiEvent): void {
-      if (event.item?.type === "message" && event.item.role === "assistant") {
+    observe(event: AgentSessionEvent): void {
+      if (
+        (event.type === "agent.session.turn.item.added" ||
+          event.type === "agent.session.turn.item.done") &&
+        event.item.type === "message" &&
+        event.item.role === "assistant" &&
+        event.item.id
+      ) {
         assistantPhases.set(event.item.id, event.item.phase);
         if (event.type === "agent.session.turn.item.done") {
           const parts = new Map<number, string>();
@@ -104,9 +111,9 @@ export function createAgentsApiMessageProjection(
         const index = event.content_index ?? 0;
         parts.set(
           index,
-          event.type.endsWith(".done")
-            ? (event.text ?? "")
-            : (parts.get(index) ?? "") + (event.delta ?? ""),
+          event.type === "agent.session.turn.output_text.done"
+            ? event.text
+            : (parts.get(index) ?? "") + event.delta,
         );
         texts.set(event.item_id, parts);
         if (
@@ -116,7 +123,7 @@ export function createAgentsApiMessageProjection(
           emitAssistantSnapshot(
             `agentsapi:${remoteSessionId}:${event.item_id}`,
             joinTextParts(parts),
-            event.delta ?? "",
+            event.type === "agent.session.turn.output_text.delta" ? event.delta : "",
           );
         }
       }
@@ -124,8 +131,8 @@ export function createAgentsApiMessageProjection(
     complete,
     commit(
       params: AgentHarnessAttemptParamsV2,
-      turn: AgentsApiTurn | NonNullable<AgentsApiEvent["turn"]>,
-      items: AgentsApiItem[],
+      turn: Turn,
+      items: AgentSessionItem[],
       assertCurrent: () => void,
     ): Promise<void> {
       return commitAgentsApiReply(
@@ -144,8 +151,8 @@ export function createAgentsApiMessageProjection(
 async function commitAgentsApiReply(
   params: AgentHarnessAttemptParamsV2,
   remoteSessionId: string,
-  turn: AgentsApiTurn | NonNullable<AgentsApiEvent["turn"]>,
-  items: AgentsApiItem[],
+  turn: Turn,
+  items: AgentSessionItem[],
   assertCurrent: () => void,
   reply: AgentsApiReply,
   emitFinalReply: (turnId: string, text: string) => void | Promise<void>,
@@ -164,9 +171,9 @@ async function commitAgentsApiReply(
     throw new Error("Agents API requires a matching host-prepared session target");
   }
   const sessionTarget = { ...params.sessionTarget, agentId, sessionId, sessionKey, storePath };
-  const completedMessages = items.filter(
-    (item) => item.type === "message" && item.role === "assistant" && item.status === "completed",
-  );
+  const completedMessages = items
+    .filter((item) => item.type === "message")
+    .filter((item) => item.role === "assistant" && item.status === "completed");
   const finalItems = completedMessages.filter((item) => item.phase === "final_answer");
   const visibleItems = finalItems.length
     ? finalItems

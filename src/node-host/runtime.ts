@@ -412,6 +412,8 @@ export async function prepareNodeHostRuntime(params?: {
           await client.request("node.event", buildNodeEventParams(event, payload)),
         ...(workerWorkspace
           ? {
+              acquireManagedWorkspaceAsync: (request) =>
+                workerWorkspace.acquireManagedWorkspaceAsync(request),
               acquireManagedWorkspace: (request) =>
                 workerWorkspace.acquireManagedWorkspace(request),
             }

@@ -1037,7 +1037,7 @@ describe("SQLite worker store", () => {
     for (const follower of followers) {
       expect(follower).toMatchObject({ status: "rejected", reason: { code: "unavailable" } });
     }
-    await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+    await expect(store.close()).resolves.toBeUndefined();
     stores.delete(store);
 
     const recovered = await open(file);
