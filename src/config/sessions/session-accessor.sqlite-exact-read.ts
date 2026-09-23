@@ -19,6 +19,7 @@ import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sq
 import {
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
+  readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
   getSessionKysely,
@@ -48,6 +49,8 @@ export function resolveSessionEntry(
   scope: SessionAccessScope,
   options: {
     readOnly?: boolean;
+    keyFormat?: "agent-qualified";
+    allowCanonicalMove?: boolean;
     databaseAgentId?: string;
     projection?: SessionEntryReadScope["projection"];
   } = {},
@@ -59,15 +62,18 @@ export function resolveSessionEntry(
   const read = (
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   ): ResolvedSqliteSessionEntry => {
-    const selected = readSessionEntryRow(
-      database,
-      resolved.sessionKey,
-      options.readOnly ? options.projection : "full",
-    );
+    const projection = options.readOnly ? options.projection : "full";
+    const selected =
+      options.keyFormat === "agent-qualified"
+        ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
+            allowCanonicalMove: options.allowCanonicalMove,
+            projection,
+          })
+        : readSessionEntryRow(database, resolved.sessionKey, projection);
     return {
-      existing: selected?.entry,
+      existing: selected?.entry ?? undefined,
       legacyKeys: [],
-      normalizedKey: resolved.sessionKey,
+      normalizedKey: selected?.row.session_key ?? resolved.sessionKey,
     };
   };
   if (options.readOnly) {

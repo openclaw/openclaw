@@ -13,6 +13,7 @@ import {
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-output-spill-entrypoints.test-support.ts";
+import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
@@ -26,6 +27,7 @@ import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-ru
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
+import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
@@ -111,6 +113,7 @@ export const vitestWorkerBuildEntries = {
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,
+    ...Object.values(sqliteSnapshotStagingEntrypoints),
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
     authProfileScopeCwdEntrypoint,
@@ -119,6 +122,7 @@ export const vitestWorkerBuildEntries = {
     codeModeDescriptionRetentionEntrypoint,
     ...cliCompactionBackendEntrypoints,
     ...Object.values(bashOutputSpillEntrypoints),
+    managedWorktreeGcEntrypoint,
     ...publishedSdkBridgeEntrypoints,
     mcpProviderCatalogEntrypoint,
     mcpPluginToolsServeEntrypoint,
