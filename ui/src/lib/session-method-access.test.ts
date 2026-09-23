@@ -39,6 +39,26 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.write" });
   });
 
+  it("admits ordinary scoped creation before an owned row exists", () => {
+    const scoped = snapshot({ scopes: ["operator.sessions.write"] });
+    const request = { method: "sessions.create", params: { agentId: "main", message: "Hello" } };
+    expect(readSessionMethodAccess(scoped, request)).toMatchObject({ allowed: false });
+    expect(readSessionMethodAccess(scoped, { ...request, sessionScope: true })).toEqual({
+      allowed: true,
+      requiredScope: "operator.sessions.write",
+    });
+    for (const params of [
+      { incognito: true },
+      { permissionMode: "full" },
+      { execNode: "worker" },
+      { toolOverrides: {} },
+    ]) {
+      expect(
+        readSessionMethodAccess(scoped, { ...request, params, sessionScope: true }),
+      ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+    }
+  });
+
   it("requires admin for privileged create params", () => {
     const access = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
       method: "sessions.create",

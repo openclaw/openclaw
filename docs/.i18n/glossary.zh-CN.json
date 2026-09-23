@@ -3892,6 +3892,10 @@
     "target": "远程与托管浏览器"
   },
   {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
+  },
+  {
     "source": "Browser security",
     "target": "浏览器安全"
   },

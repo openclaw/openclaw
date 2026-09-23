@@ -325,12 +325,19 @@ export function createGatewayDispatchStartupTrace(
   };
 }
 
+export async function prepareGatewayStartupTraceConsoleFormatting(
+  trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
+): Promise<() => void> {
+  if (!trace.enabled) {
+    return () => {};
+  }
+  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+  return () =>
+    trace.setLineFormatter((message) => formatConsoleDiagnosticLine({ level: "info", message }));
+}
+
 export async function configureGatewayStartupTraceConsoleFormatting(
   trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<void> {
-  if (!trace.enabled) {
-    return;
-  }
-  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
-  trace.setLineFormatter((message) => formatConsoleDiagnosticLine({ level: "info", message }));
+  (await prepareGatewayStartupTraceConsoleFormatting(trace))();
 }

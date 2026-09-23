@@ -8,6 +8,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import * as sessionGroupCategories from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -419,6 +420,19 @@ describe("session groups catalog", () => {
 
   it("rechecks a missing category after another writer registers it", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
+    // This native kernel fixture interleaves the optimistic read and BEGIN.
+    // The real worker grants/refusals are covered in session-groups.registration.test.ts.
+    const stages: string[] = [];
+    vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(
+      (request) => {
+        stages.push(request.stage);
+        expect(request).toEqual(
+          request.stage === "transaction"
+            ? { stage: "transaction", facts: { names: expect.arrayContaining(["Work", "Travel"]) } }
+            : { stage: "commit", facts: undefined },
+        );
+      },
+    );
     const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
     vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(
       (operation, options, transactionOptions) => {
@@ -448,6 +462,7 @@ describe("session groups catalog", () => {
     expect(
       readSessionGroupCatalogSnapshot(openOpenClawStateDatabase({ env }).db).groups.at(-1),
     ).toEqual({ name: "Later", position: 2 });
+    expect(stages).toEqual(["transaction", "commit", "transaction", "commit"]);
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {

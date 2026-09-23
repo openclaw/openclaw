@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
+import { normalizeKnownFlakyJobs } from "./full-release-flake-policy.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
@@ -15,6 +16,7 @@ const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const packageName = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const coverageInputs = {
+  known_flaky_jobs_json: "knownFlakyJobsJson",
   provider: "provider",
   mode: "mode",
   live_suite_filter: "liveSuiteFilter",
@@ -217,13 +219,18 @@ export function publicationIntentInputs(intent) {
 }
 
 export function normalizePublicationLaneInputs(value) {
-  object(value, ["extension_test_exclude_patterns_json"], "source-admission lane inputs");
+  object(
+    value,
+    ["extension_test_exclude_patterns_json", "known_flaky_jobs_json"],
+    "source-admission lane inputs",
+  );
   return Object.fromEntries(
     Object.entries(value).map(([key, raw]) => {
       if (typeof raw !== "string" || raw.length > 4096) {
         throw new Error(`invalid ${key}`);
       }
-      const entries = JSON.parse(raw);
+      const entries =
+        key === "known_flaky_jobs_json" ? normalizeKnownFlakyJobs(raw) : JSON.parse(raw);
       if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
         throw new Error(`${key} must be a JSON array of strings`);
       }
@@ -288,7 +295,8 @@ function dispatchEnvelopeFromInputs(inputs) {
   if (
     Object.hasOwn(inputs, "validation_purpose") ||
     Object.hasOwn(inputs, "publication_selection_json") ||
-    Object.hasOwn(inputs, "extension_test_exclude_patterns_json")
+    Object.hasOwn(inputs, "extension_test_exclude_patterns_json") ||
+    Object.hasOwn(inputs, "known_flaky_jobs_json")
   ) {
     throw new Error("source intent must use only the trusted_workflow_json envelope");
   }
@@ -298,7 +306,12 @@ function dispatchEnvelopeFromInputs(inputs) {
 export function publicationSourceRequest(env) {
   const inputs = JSON.parse(env.PUBLICATION_INPUTS_JSON);
   const { trustedWorkflow, laneInputs, ...intent } = dispatchEnvelopeFromInputs(inputs);
-  const coverageSource = { ...inputs, extension_test_exclude_patterns_json: "[]", ...laneInputs };
+  const coverageSource = {
+    ...inputs,
+    extension_test_exclude_patterns_json: "[]",
+    known_flaky_jobs_json: "[]",
+    ...laneInputs,
+  };
   const tooling = JSON.parse(env.PUBLICATION_TOOLING_JSON);
   if (
     trustedWorkflow &&
@@ -421,7 +434,8 @@ function validatePublicationSourceFact(value, expected = {}) {
   if (
     coverageKeys.some(
       (key) =>
-        key !== "extension_test_exclude_patterns_json" && !Object.hasOwn(value.coverage, key),
+        !["extension_test_exclude_patterns_json", "known_flaky_jobs_json"].includes(key) &&
+        !Object.hasOwn(value.coverage, key),
     )
   ) {
     throw new Error("source admission coverage is incomplete");
@@ -589,10 +603,14 @@ export function validatePublicationSourceBinding(record, expected = {}) {
     }
     for (const [input, key] of Object.entries(coverageInputs)) {
       const historicalDefault = input === "extension_test_exclude_patterns_json" ? "[]" : "";
-      if (
-        String(record.validationInputs[key] ?? historicalDefault) !==
-        (fact.coverage[input] ?? historicalDefault)
-      ) {
+      const observed = String(record.validationInputs[key] ?? historicalDefault);
+      const retained = fact.coverage[input] ?? historicalDefault;
+      const matches =
+        input === "known_flaky_jobs_json"
+          ? JSON.stringify(normalizeKnownFlakyJobs(observed || [])) ===
+            JSON.stringify(normalizeKnownFlakyJobs(retained || []))
+          : observed === retained;
+      if (!matches) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
     }
@@ -1133,6 +1151,10 @@ if (invokedAsMain) {
       appendFileSync(
         process.env.GITHUB_OUTPUT,
         `extension_test_exclude_patterns_json=${envelope.laneInputs?.extension_test_exclude_patterns_json ?? "[]"}\n`,
+      );
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `known_flaky_jobs_json=${envelope.laneInputs?.known_flaky_jobs_json ?? "[]"}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);

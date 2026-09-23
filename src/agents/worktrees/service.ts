@@ -58,6 +58,7 @@ import { WorktreeSnapshotError, WorktreeRemovalLockError } from "./removal-error
 import {
   assertExactStateOwner,
   prepareSnapshotBranchDeletion,
+  removeManagedCheckout,
   requireExactManagedWorktreeHead,
   retireExactWorktree,
   requireManagedWorktreeHead,
@@ -1143,17 +1144,15 @@ export class ManagedWorktreeService {
             },
           });
         }
-        const removed = await git.run(
-          record.repoRoot,
-          ["worktree", "remove", ...(params.requireLossless ? [] : ["--force"]), "--", record.path],
-          { beforeRun: params.commitGuard, killProcessTree: true },
-        );
-        if (removed.code !== 0) {
-          throw commandError("git worktree remove", removed);
-        }
+        await removeManagedCheckout(record, git, params.requireLossless, params.commitGuard);
         return await finalize();
       },
     );
+  }
+
+  async recoverRemoval(params: { id: string; snapshot: string } & WorktreeMutationGuard) {
+    const { recoverManagedWorktreeRemoval } = await import("./removal-recovery.js");
+    return await recoverManagedWorktreeRemoval(params, { env: this.env, now: this.now });
   }
 
   async restore(

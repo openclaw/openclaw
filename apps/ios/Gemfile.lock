@@ -31,6 +31,7 @@ GEM
     base64 (0.3.0)
     benchmark (0.5.0)
     bigdecimal (4.1.3)
+    cgi (0.5.2)
     claide (1.1.0)
     colored (1.2)
     colored2 (3.1.2)
@@ -62,7 +63,7 @@ GEM
     faraday-retry (2.4.0)
       faraday (~> 2.0)
     fastimage (2.4.1)
-    fastlane (2.239.0)
+    fastlane (2.240.1)
       CFPropertyList (>= 2.3, < 5.0.0)
       abbrev (~> 0.1)
       addressable (>= 2.9.0, < 3.0.0)
@@ -72,6 +73,7 @@ GEM
       base64 (~> 0.2)
       benchmark (>= 0.1.0)
       bundler (>= 2.4.0, < 5.0.0)
+      cgi (~> 0.4)
       colored (~> 1.2)
       commander (~> 4.6)
       csv (~> 3.3)
@@ -86,7 +88,7 @@ GEM
       fastimage (>= 2.1.0, < 3.0.0)
       fastlane-sirp (>= 1.1.0)
       gh_inspector (>= 1.1.2, < 2.0.0)
-      google-apis-androidpublisher_v3 (~> 0.99.0)
+      google-apis-androidpublisher_v3 (~> 0.99)
       google-apis-playcustomapp_v1 (~> 0.1)
       google-cloud-env (>= 1.6.0, < 2.4.0)
       google-cloud-storage (~> 1.31)
@@ -104,8 +106,8 @@ GEM
       optparse (>= 0.1.1, < 1.0.0)
       ostruct (>= 0.1.0)
       plist (>= 3.1.0, < 4.0.0)
-      rubyzip (>= 2.0.0, < 3.0.0)
-      security (= 0.1.5)
+      rubyzip (>= 3.4.0, < 4.0.0)
+      security (~> 0.3)
       simctl (~> 1.6.3)
       terminal-notifier (>= 2.0.0, < 3.0.0)
       terminal-table (~> 4)
@@ -212,8 +214,8 @@ GEM
     retriable (4.2.0)
     rexml (3.4.4)
     rouge (3.28.0)
-    rubyzip (2.4.1)
-    security (0.1.5)
+    rubyzip (3.6.0)
+    security (0.3.0)
     signet (0.22.0)
       addressable (~> 2.8)
       faraday (>= 0.17.5, < 3.a)
@@ -255,7 +257,7 @@ PLATFORMS
   x86_64-darwin
 
 DEPENDENCIES
-  fastlane (= 2.239.0)
+  fastlane (= 2.240.1)
 
 CHECKSUMS
   CFPropertyList (3.0.8) sha256=2c99d0d980536d3d7ab252f7bd59ac8be50fbdd1ff487c98c949bb66bb114261
@@ -273,6 +275,7 @@ CHECKSUMS
   base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
   benchmark (0.5.0) sha256=465df122341aedcb81a2a24b4d3bd19b6c67c1530713fd533f3ff034e419236c
   bigdecimal (4.1.3) sha256=61ebe1e5e559bdc3cc6f2c0ee7f427321fc838f59611c294356eb04d6e21cf66
+  cgi (0.5.2) sha256=61ca30298171190fd4fa0d8018e57ada456eae9b7a2b78526debf7f0a0e6f8bb
   claide (1.1.0) sha256=6d3c5c089dde904d96aa30e73306d0d4bd444b1accb9b3125ce14a3c0183f82e
   colored (1.2) sha256=9d82b47ac589ce7f6cab64b1f194a2009e9fd00c326a5357321f44afab2c1d2c
   colored2 (3.1.2) sha256=b13c2bd7eeae2cf7356a62501d398e72fde78780bd26aec6a979578293c28b4a
@@ -292,7 +295,7 @@ CHECKSUMS
   faraday-net_http (3.4.4) sha256=0e78af151747ed1b00f33e25973b4bc220d7f16c00c39676817c8b12331eb588
   faraday-retry (2.4.0) sha256=7b79c48fb7e56526faf247b12d94a680071ff40c9fda7cf1ec1549439ad11ebe
   fastimage (2.4.1) sha256=c64bebd46b6fd8943ab70c1e6e85ff728f970f2e48f92ecd249b6bc3a540ad20
-  fastlane (2.239.0) sha256=6d99c0ea639f44fd4ebb53d442e5557e9a64159e6ca60ba1f38517cfe02c5689
+  fastlane (2.240.1) sha256=cf792bc99ec6af6574ea416cda6530f519c8b4b3a46b1a3b52488ebf1696aa5c
   fastlane-sirp (1.1.0) sha256=10bc94f9682efd8e1badfb31452a76dd8981f1f3a33717c765fde6d75b54d847
   gh_inspector (1.1.3) sha256=04cca7171b87164e053aa43147971d3b7f500fcb58177698886b48a9fc4a1939
   google-apis-androidpublisher_v3 (0.99.0) sha256=a0452fdd99cb7672cc95cac07429305f8aaee54c22e4875224cf675b1ab59729
@@ -340,8 +343,8 @@ CHECKSUMS
   retriable (4.2.0) sha256=90c3b257472a1c02f2a3dfa64dd35a420f7a624cef1a5981e20fdac5730f8cdc
   rexml (3.4.4) sha256=19e0a2c3425dfbf2d4fc1189747bdb2f849b6c5e74180401b15734bc97b5d142
   rouge (3.28.0) sha256=0d6de482c7624000d92697772ab14e48dca35629f8ddf3f4b21c99183fd70e20
-  rubyzip (2.4.1) sha256=8577c88edc1fde8935eb91064c5cb1aef9ad5494b940cf19c775ee833e075615
-  security (0.1.5) sha256=3a977a0eca7706e804c96db0dd9619e0a94969fe3aac9680fcfc2bf9b8a833b7
+  rubyzip (3.6.0) sha256=268994d44d62282d1cfd99bf10eae48d7267199158ad7ea3e1fee2da9458b695
+  security (0.3.0) sha256=bc9d06718258a96c8552ce4044bfe69144491b10d3403d74c4753a03a720ecf0
   signet (0.22.0) sha256=b76d495ccb07ad35dbc89f3e920665a9d8ed717141955034005d7843dcfe4780
   simctl (1.6.10) sha256=b99077f4d13ad81eace9f86bf5ba4df1b0b893a4d1b368bd3ed59b5b27f9236b
   terminal-notifier (2.0.0) sha256=7a0d2b2212ab9835c07f4b2e22a94cff64149dba1eed203c04835f7991078cea

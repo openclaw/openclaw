@@ -81,6 +81,8 @@ type RunIsolatedCompletionParams = {
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Adapt host authorization failures to the calling completion API's error contract. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
@@ -171,6 +173,7 @@ async function runCliIsolatedCompletion(params: {
           streamParams: params.request.streamParams,
           abortSignal: params.request.abortSignal,
           assertCurrent: params.request.assertCurrent,
+          mapOperatorAuthorizationError: params.request.mapOperatorAuthorizationError,
           executionMode: "side-question",
           cliToolAvailability: { native: [], openClaw: [] },
           disableTools: true,
@@ -332,7 +335,11 @@ async function runIsolatedCompletionOwned(
       throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
     input.assertCurrent?.();
-    assertOperatorModelAllowed(input.operatorAuthority, modelForAuthorization);
+    try {
+      assertOperatorModelAllowed(input.operatorAuthority, modelForAuthorization);
+    } catch (error) {
+      throw input.mapOperatorAuthorizationError?.(error) ?? error;
+    }
     input.abortSignal?.throwIfAborted();
   };
   const resolveAuthorizedModel: typeof resolveModelAsync = async (...args) => {
@@ -370,6 +377,7 @@ async function runIsolatedCompletionOwned(
   );
   const modelAuthority = createIsolatedCompletionModelAuthority({
     operatorAuthority: input.operatorAuthority,
+    mapOperatorAuthorizationError: input.mapOperatorAuthorizationError,
     abortSignal: input.abortSignal,
     assertCurrent,
     runtime: lease,

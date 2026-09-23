@@ -39,7 +39,7 @@ function inputValue(event: Event): string {
 type ProjectChipState = Readonly<{
   label: string;
   localProjects: readonly ProjectRecord[];
-  recents: readonly ProjectRecent[];
+  recents: readonly Exclude<ProjectRecent, { kind: "project" }>[];
   showWorkspace: boolean;
 }>;
 
@@ -135,12 +135,7 @@ export function renderProjectChip(params: {
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.displayName, [
     (recent) => (recent.kind === "folder" ? parentFolderDisplayName(recent.folder) : undefined),
     (recent) => (recent.kind === "folder" ? recent.folder : undefined),
-    (recent) =>
-      recent.kind === "folder"
-        ? recent.folder
-        : recent.kind === "repository"
-          ? recent.url
-          : recent.projectId,
+    (recent) => (recent.kind === "folder" ? recent.folder : recent.url),
   ]);
   const browseButton = html`
     <button
@@ -374,37 +369,26 @@ export function renderProjectChip(params: {
                           renderSessionMenuItem(
                             {
                               value:
-                                recent.kind === "project"
-                                  ? `recent-project:${recent.projectId}`
-                                  : recent.kind === "repository"
-                                    ? `repository:${recent.url}`
-                                    : `recent:${recent.folder}`,
+                                recent.kind === "repository"
+                                  ? `repository:${recent.url}`
+                                  : `recent:${recent.folder}`,
                               label: recent.displayName,
                               icon: recent.kind === "folder" ? icons.folder : icons.gitBranch,
                               sub: recentSuffixes[index],
                               checked:
-                                recent.kind === "project"
-                                  ? params.projectId === recent.projectId
-                                  : recent.kind === "repository"
-                                    ? params.selectedRemoteProject?.cloneUrl === recent.url
-                                    : !params.freshWorkspace &&
-                                      !params.projectId &&
-                                      folder === recent.folder,
-                              title:
-                                recent.kind === "project"
-                                  ? undefined
-                                  : recent.kind === "repository"
-                                    ? recent.url
-                                    : recent.folder,
+                                recent.kind === "repository"
+                                  ? params.selectedRemoteProject?.cloneUrl === recent.url
+                                  : !params.freshWorkspace &&
+                                    !params.projectId &&
+                                    folder === recent.folder,
+                              title: recent.kind === "repository" ? recent.url : recent.folder,
                               onSelect: () =>
-                                recent.kind === "project"
-                                  ? params.onSelectProject(recent.projectId)
-                                  : recent.kind === "repository"
-                                    ? params.onSelectRemoteProject({
-                                        identity: recent.displayName,
-                                        cloneUrl: recent.url,
-                                      })
-                                    : params.onApplyFolder(recent.folder),
+                                recent.kind === "repository"
+                                  ? params.onSelectRemoteProject({
+                                      identity: recent.displayName,
+                                      cloneUrl: recent.url,
+                                    })
+                                  : params.onApplyFolder(recent.folder),
                             },
                             params.submitting,
                           ),

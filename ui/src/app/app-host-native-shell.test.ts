@@ -320,29 +320,32 @@ describe("OpenClaw native shell", () => {
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: false });
   });
 
-  it("opens search and starts a session from native titlebar events", () => {
-    const navigate = vi.fn();
-    const openPalette = vi.fn();
-    const togglePalette = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-    Object.defineProperty(shell, "commandPalette", {
-      configurable: true,
-      value: { openPalette, togglePalette },
-    });
-    shell.runtime = {
-      context: nativeSessionContext(navigate, "agent/a"),
-    };
-    shell.handleNativeOpenSearch();
-    const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
-    shell.handleNativeToggleSearch(toggleEvent);
-    shell.handleNativeNewSession();
+  it.each(["operator.write", "operator.sessions.write"])(
+    "opens search and starts a session from native titlebar events with %s",
+    (scope) => {
+      const navigate = vi.fn();
+      const openPalette = vi.fn();
+      const togglePalette = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      Object.defineProperty(shell, "commandPalette", {
+        configurable: true,
+        value: { openPalette, togglePalette },
+      });
+      shell.runtime = {
+        context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
+      };
+      shell.handleNativeOpenSearch();
+      const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
+      shell.handleNativeToggleSearch(toggleEvent);
+      shell.handleNativeNewSession();
 
-    expect(openPalette).toHaveBeenCalledOnce();
-    expect(togglePalette).toHaveBeenCalledOnce();
-    // preventDefault is the handled signal for the native legacy fallback.
-    expect(toggleEvent.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
-  });
+      expect(openPalette).toHaveBeenCalledOnce();
+      expect(togglePalette).toHaveBeenCalledOnce();
+      // preventDefault is the handled signal for the native legacy fallback.
+      expect(toggleEvent.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+    },
+  );
 
   it.each(["MacIntel", "Win32", "Linux x86_64"])(
     "opens a draft from the composer on %s without taking New Window or modified Enter",
@@ -350,7 +353,11 @@ describe("OpenClaw native shell", () => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const navigate = vi.fn();
       const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
-      shell.runtime = { context: nativeSessionContext(navigate, "research") };
+      shell.runtime = {
+        context: nativeSessionContext(navigate, "research", {
+          scopes: ["operator.sessions.write"],
+        }),
+      };
       const textarea = document.createElement("textarea");
       textarea.value = "Keep this foreground draft";
       textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
@@ -531,6 +538,7 @@ describe("OpenClaw native shell", () => {
     for (const options of [
       { methods: ["sessions.list"], scopes: ["operator.write"] },
       { methods: ["sessions.create"], scopes: ["operator.read"] },
+      { methods: ["sessions.create"], scopes: ["operator.sessions.read"] },
     ]) {
       const navigate = vi.fn();
       const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;

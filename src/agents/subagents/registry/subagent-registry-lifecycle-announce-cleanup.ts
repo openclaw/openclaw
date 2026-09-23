@@ -8,11 +8,11 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
   resolveCleanupCompletionReason,
   resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
+  shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
@@ -53,11 +53,6 @@ type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type SubagentAnnounceFlowOutcome = Awaited<ReturnType<RunSubagentAnnounceFlow>>;
 
-const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
-  entry.expectsCompletionMessage === true &&
-  entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-  entry.execution.outcome?.status === "ok";
-
 export const finalizeResumedAnnounceGiveUp = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   giveUpParams: {
@@ -91,10 +86,13 @@ export const finalizeResumedAnnounceGiveUp = async (
     failedDelivery.attemptCount = retryCount;
     failedDelivery.lastAttemptAt = completedAt ?? Date.now();
   }
-  safeSetSubagentTaskDeliveryStatus(params, {
+  await safeSetSubagentTaskDeliveryStatus(params, {
     entry,
     deliveryStatus: "failed",
     deliveryError,
+    isCurrent: () =>
+      cleanupGeneration === undefined ||
+      context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
   });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
@@ -271,10 +269,11 @@ const finalizeSubagentCleanup = async (
       delivery.nextAttemptAt = undefined;
     }
     if (!options?.skipDeliveryStatus) {
-      safeSetSubagentTaskDeliveryStatus(params, {
+      await safeSetSubagentTaskDeliveryStatus(params, {
         entry,
         deliveryStatus: delivery.status,
         deliveryError: terminalNonDelivery ? getDeliveryLastError(entry) : undefined,
+        isCurrent: () => context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
       });
     }
     entry.wakeOnDescendantSettle = undefined;
@@ -636,7 +635,7 @@ export const startSubagentAnnounceCleanupFlow = (
             }
           }
         : undefined,
-    onDeliveryResult: (delivery) => {
+    onDeliveryResult: async (delivery) => {
       const previousDropReason = entry.delivery?.lastDropReason;
       if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
@@ -662,9 +661,10 @@ export const startSubagentAnnounceCleanupFlow = (
         // Identified platform delivery precedes best-effort transcript
         // mirroring; task ownership must become durable at that same edge.
         params.persist(runId);
-        safeSetSubagentTaskDeliveryStatus(params, {
+        await safeSetSubagentTaskDeliveryStatus(params, {
           entry,
           deliveryStatus: "delivered",
+          isCurrent: () => context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
         });
         latestDeliveryError = undefined;
         return;
