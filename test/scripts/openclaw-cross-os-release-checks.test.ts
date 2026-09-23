@@ -114,7 +114,15 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-m
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
-vi.mock("node:net", { spy: true });
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  // Keep native socket/stream prototypes intact across shared-worker files.
+  return {
+    ...actual,
+    createConnection: vi.fn(actual.createConnection),
+    createServer: vi.fn(actual.createServer),
+  };
+});
 
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
