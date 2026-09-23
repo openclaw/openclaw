@@ -10,7 +10,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-// Routing project: gateway-core; one Gateway for the file, no handler or transport mocks.
+// Registered in gatewayDatabaseWorkerTestFiles: only that project's forked pool gives this Gateway a
+// host SQLite broker. One Gateway for the file, no handler or transport mocks.
 it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",

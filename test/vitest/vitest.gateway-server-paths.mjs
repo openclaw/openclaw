@@ -37,6 +37,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway-route-model-reuse.test.ts",
   "src/gateway/gateway-ssh-upload-signal.test.ts",
   "src/gateway/gateway.chat-redaction.test.ts",
+  "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-publication-admission.test.ts",
