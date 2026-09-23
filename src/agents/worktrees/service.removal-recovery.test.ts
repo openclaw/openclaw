@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -24,7 +25,14 @@ const git = async (cwd: string, ...args: string[]) =>
   (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("interrupted ordinary worktree removal recovery", () => {
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    }),
+  );
   const initialize = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
@@ -70,10 +78,6 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
     updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
     await fs.unlink(path.join(record.path, ".git"));
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
   });
   const recover = () => service.recoverRemoval({ id: record.id, snapshot });
   const pinsPreserved = async () => {

@@ -5,7 +5,10 @@ import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -17,12 +20,15 @@ import {
 const execFileAsync = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
   (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const initialize = useManagedWorktreeTestRepository();
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
 
 // Included in the native Windows CI inventory; also exercises the POSIX path
 // locally. No simulated platform or filesystem mode stands in for Windows.
