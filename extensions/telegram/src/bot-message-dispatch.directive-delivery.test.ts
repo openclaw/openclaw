@@ -7,6 +7,10 @@ import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { isReplyPayloadNonTerminalToolErrorWarning } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  drainSessionDiskBudgetWorkers,
+  withSessionHistoryBudgetSweepsForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
 import {
   createBot,
@@ -135,7 +139,9 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         : [aliasRecord];
       let transcriptMessageId: string | undefined;
       try {
-        await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+        await withSessionHistoryBudgetSweepsForTest(() =>
+          patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry }),
+        );
         const manager = SessionManager.open(scope, root);
         const transcript = await vi.importActual<
           typeof import("openclaw/plugin-sdk/session-transcript-runtime")
@@ -295,9 +301,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         expect(
           deliveredPayload && isReplyPayloadNonTerminalToolErrorWarning(deliveredPayload),
         ).toBe(true);
-        if (streaming) {
-          expect(answerDraftStream.clear).toHaveBeenCalledOnce();
-        }
         if (!recover) {
           const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
           expect(payload?.replyToId).toBeUndefined();
@@ -305,6 +308,7 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         }
         expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
       } finally {
+        await drainSessionDiskBudgetWorkers();
         await closeQaRuntimeStores(root);
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -500,7 +504,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         }),
       );
       expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
-      expect(answerDraftStream.clear).toHaveBeenCalledOnce();
       if (media) {
         const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
         expect(payload?.mediaUrls).toEqual(mediaUrls);

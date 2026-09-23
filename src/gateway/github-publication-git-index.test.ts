@@ -96,6 +96,55 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
 }
 
 describe("GitHub publication index update", () => {
+  it.each(["reset", "created"] as const)(
+    "pins a conditional push when the remote branch was %s after admission",
+    async (change) => {
+      const fixture = await createFixture();
+      const remote = await makeDirectory("remote");
+      await git(remote, ["init", "--bare", "--initial-branch=main"]);
+      await fs.mkdir(path.join(fixture.cwd, ".github/workflows"), { recursive: true });
+      await fs.writeFile(
+        path.join(fixture.cwd, ".github/workflows/example.yml"),
+        "name: synthetic\non: workflow_dispatch\njobs: {}\n",
+      );
+      await git(fixture.cwd, ["add", "-A"]);
+      const workflowTree = await git(fixture.cwd, ["write-tree"]);
+      const observedHead = await git(
+        fixture.cwd,
+        ["commit-tree", workflowTree, "-p", fixture.previousHead],
+        "maintainer workflow\n",
+      );
+      await fs.writeFile(path.join(fixture.cwd, "artifact.txt"), "guest code\n");
+      await git(fixture.cwd, ["add", "artifact.txt"]);
+      const candidateTree = await git(fixture.cwd, ["write-tree"]);
+      const candidate = await git(
+        fixture.cwd,
+        ["commit-tree", candidateTree, "-p", observedHead],
+        "guest code\n",
+      );
+      await git(fixture.cwd, ["merge-base", "--is-ancestor", observedHead, candidate]);
+      if (change === "reset") {
+        await git(fixture.cwd, ["push", remote, `${observedHead}:refs/heads/publication`]);
+        await git(remote, ["update-ref", "refs/heads/publication", fixture.previousHead]);
+      } else {
+        await git(fixture.cwd, ["push", remote, `${fixture.previousHead}:refs/heads/publication`]);
+      }
+      const expectedHead = change === "reset" ? observedHead : "";
+      const push = githubPublicationPushArgs(remote, candidate, "publication", expectedHead).slice(
+        1,
+      );
+      await expect(git(fixture.cwd, push)).rejects.toThrow();
+      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(fixture.previousHead);
+      if (expectedHead) {
+        await git(remote, ["update-ref", "refs/heads/publication", expectedHead]);
+      } else {
+        await git(remote, ["update-ref", "-d", "refs/heads/publication"]);
+      }
+      await git(fixture.cwd, push);
+      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(candidate);
+    },
+  );
+
   it("accepts a linked worktree without a worktree config scope", async () => {
     const repository = await makeDirectory("worktree-config");
     await git(repository, ["init", "--initial-branch=main"]);
@@ -198,7 +247,7 @@ describe("GitHub publication index update", () => {
     await expect(fs.access(marker)).rejects.toThrow();
     await git(
       fixture.cwd,
-      githubPublicationPushArgs(remote, fixture.headCommit, "publication").slice(1),
+      githubPublicationPushArgs(remote, fixture.headCommit, "publication", "").slice(1),
       undefined,
       hookEnv,
     );

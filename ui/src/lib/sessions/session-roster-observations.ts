@@ -1,4 +1,3 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { projectSessionResultRows } from "./reconcile.ts";
 import type {
@@ -6,7 +5,12 @@ import type {
   SessionConnectionScope,
   SessionRowTarget,
   SessionRowEventListener,
+  SessionRowListener,
 } from "./session-capability.ts";
+import {
+  createSessionEventDelivery,
+  type SessionEventDelivery,
+} from "./session-event-observation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -33,7 +37,7 @@ type RegisteredSessionRow = {
     invalidatedRevision: number;
     retired: boolean;
   };
-  listener: (row: GatewaySessionRow | null) => void;
+  listener: SessionRowListener;
   onInvalidate?: (reason?: string) => void;
   onEvent?: SessionRowEventListener;
   isValid: (sessionId: string) => boolean;
@@ -48,13 +52,7 @@ type RowProjection = (entry: ObservedSessionRow) => {
 };
 
 type SessionRowAdmission = { row: GatewaySessionRow; revision: number };
-type RowEventDelivery = {
-  results: Map<
-    RegisteredSessionRow,
-    { snapshot: RegisteredSessionRow["snapshot"]; result: SessionChangedRowResult }
-  >;
-  deliver: (event: GatewayEventFrame) => void;
-};
+type RowEventDelivery = SessionEventDelivery<RegisteredSessionRow>;
 
 /** Metadata follows held rows; wire values stay in their existing roster owners. */
 export function createSessionRosterObservations(
@@ -81,10 +79,17 @@ export function createSessionRosterObservations(
     registrationIsAttached(entry) &&
     !entry.snapshot.retired &&
     (entry.snapshot.sessionId === null || entry.isValid(entry.snapshot.sessionId));
+  const captureEventDelivery = createSessionEventDelivery(
+    registeredRows,
+    host.connection,
+    registrationIsAttached,
+    registrationIsCurrent,
+    provenance.hasNewerFacts,
+  );
   const matchesTarget = (row: GatewaySessionRow, target: SessionRowTarget) => {
     const parsedAgent = parseAgentSessionKey(row.key)?.agentId;
     return (
-      identity(row, target.agentId) !== null &&
+      Boolean(row.sessionId?.trim()) &&
       areUiSessionKeysEquivalent(row.key, target.key) &&
       owner(row, target.agentId) === normalizeAgentId(target.agentId) &&
       (!parsedAgent ||
@@ -438,7 +443,12 @@ export function createSessionRosterObservations(
           (snapshot.retired || registrationIsCurrent(entry)) &&
           entry.snapshot === snapshot
         ) {
-          entry.listener(snapshot.visible);
+          // A captured recipient must finish this frame before replacing its binding.
+          if (snapshot.retired && entry.onEvent && event?.captures(entry)) {
+            entry.listener(snapshot.visible, { eventPending: true });
+          } else {
+            entry.listener(snapshot.visible);
+          }
           if (
             registrationIsCurrent(entry) &&
             entry.snapshot === snapshot &&
@@ -499,7 +509,7 @@ export function createSessionRosterObservations(
     registerRow(
       this: void,
       target: SessionRowTarget,
-      listener: (row: GatewaySessionRow | null) => void,
+      listener: SessionRowListener,
       options: Pick<RegisteredSessionRow, "isValid" | "decorate" | "onInvalidate" | "onEvent">,
     ) {
       const entry: RegisteredSessionRow = {
@@ -584,37 +594,7 @@ export function createSessionRosterObservations(
       rows.length === 0 ? [] : prepareProjection().projectRows(rows),
     stageObservedRows,
     stageManagedResults,
-    captureEventDelivery(scope: SessionConnectionScope | null, revision: number): RowEventDelivery {
-      const registrations = [...registeredRows];
-      const results: RowEventDelivery["results"] = new Map();
-      return {
-        results,
-        deliver(event) {
-          for (const entry of registrations) {
-            if (!scope || !host.connection.isCurrent(scope)) {
-              return;
-            }
-            if (!entry.onEvent || !registrationIsAttached(entry)) {
-              continue;
-            }
-            try {
-              const recorded = results.get(entry);
-              const result =
-                recorded &&
-                (registrationIsCurrent(entry) || recorded.result.deletedKey) &&
-                entry.snapshot === recorded.snapshot &&
-                (!recorded.result.admittedRow ||
-                  !provenance.hasNewerFacts(recorded.result.admittedRow, revision))
-                  ? recorded.result
-                  : { applied: false };
-              entry.onEvent(event, result);
-            } catch (error) {
-              console.error("[sessions] event observer error:", error);
-            }
-          }
-        },
-      };
-    },
+    captureEventDelivery,
     rowRevision,
     hasLiveObservation: (row: GatewaySessionRow) =>
       host.connection.capture() !== null && provenance.hasObservation(row),

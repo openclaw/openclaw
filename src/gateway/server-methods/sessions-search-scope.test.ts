@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
@@ -36,25 +37,30 @@ async function search(
   client: GatewayClient,
   params: Record<string, unknown>,
 ) {
-  await initializeSessionReadContext(context);
-  let response:
-    | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
-    | undefined;
-  const respond: RespondFn = (ok, payload, error) => {
-    response = { ok, payload: payload as SessionsSearchResult, error };
-  };
-  await expectDefined(
-    sessionReadHandlers["sessions.search"],
-    "search handler",
-  )({
-    req: { type: "req", id: "search-scope-test", method: "sessions.search" },
-    params,
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(response, "search response");
+  const releaseForeground = retainSessionListForegroundWork();
+  try {
+    await initializeSessionReadContext(context);
+    let response:
+      | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
+      | undefined;
+    const respond: RespondFn = (ok, payload, error) => {
+      response = { ok, payload: payload as SessionsSearchResult, error };
+    };
+    await expectDefined(
+      sessionReadHandlers["sessions.search"],
+      "search handler",
+    )({
+      req: { type: "req", id: "search-scope-test", method: "sessions.search" },
+      params,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return expectDefined(response, "search response");
+  } finally {
+    releaseForeground();
+  }
 }
 
 async function seed(
@@ -125,7 +131,7 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
       expect(result.payload).not.toHaveProperty("indexing");
       expect(result.payload).not.toHaveProperty("truncated");
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -224,7 +230,7 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         }),
       ).toMatchObject({ sessions: [], totalCount: 0 });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -273,7 +279,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
         payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -346,7 +352,7 @@ test("scope reports only authorized cold transcripts without restoring them", as
         }),
       ).toMatchObject({ hits: [], archivedTranscriptsExcluded: 2 });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -390,7 +396,7 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
         error: { code: "UNAVAILABLE", message: "FTS query failed" },
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -437,7 +443,7 @@ test("search discards hits and page metadata when sharing is revoked during its 
         }
       }
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });

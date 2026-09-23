@@ -1,7 +1,10 @@
 /** Builds doctor reports for session SQLite migration restore mode. */
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveSessionSqliteMigrationRunsDir } from "./doctor-session-sqlite-migration-run.js";
-import { readSqliteEntryCount, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { resolveSessionSqliteMigrationRunsDir } from "../infra/session-sqlite-migration-manifest.js";
+import {
+  readSqliteEntryCount,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import { restoreSessionSqliteMigrationRuns } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,

@@ -26,6 +26,7 @@ vi.mock("./cli-auth-seam.js", () => {
 
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
+import { claude5ContractCases } from "./model-contract-cases.test-support.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
@@ -69,17 +70,6 @@ function levelIds(profile: unknown): Array<unknown> {
   expect(Array.isArray(levels), "thinking levels").toBe(true);
   return (levels as Array<{ id?: unknown }>).map((level) => level.id);
 }
-
-type Claude5ContractCase = {
-  defaultLevel?: "medium" | "high";
-  name: string;
-  modelId: string;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  thinkingLevelMap: Record<string, string>;
-  checksMedia?: boolean;
-  restoresMissingCost?: boolean;
-  checksCliPolicy?: boolean;
-};
 
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
 
@@ -662,43 +652,6 @@ describe("anthropic provider replay hooks", () => {
     ).toBe(false);
   });
 
-  const claude5ContractCases: Claude5ContractCase[] = [
-    ...["claude-opus-5", "opus", "opus-5"].map((modelId) => ({
-      name: `resolves ${modelId} with its exact API contract`,
-      modelId,
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      checksMedia: true,
-      restoresMissingCost: true,
-    })),
-    {
-      name: "resolves Claude Fable 5 with its always-adaptive model contract",
-      defaultLevel: "medium",
-      modelId: "claude-fable-5",
-      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-      checksMedia: true,
-      checksCliPolicy: true,
-    },
-    {
-      name: "resolves Claude Fable 5.1 with its always-adaptive model contract",
-      defaultLevel: "medium",
-      modelId: "claude-fable-5-1",
-      cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-      checksMedia: true,
-      restoresMissingCost: true,
-      checksCliPolicy: true,
-    },
-    {
-      name: "resolves Claude Sonnet 5 with its exact API contract",
-      modelId: "claude-sonnet-5",
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      restoresMissingCost: true,
-    },
-  ];
-
   it.each(claude5ContractCases)(
     "$name",
     async ({
@@ -738,7 +691,7 @@ describe("anthropic provider replay hooks", () => {
         modelId,
       } as never);
       expect(levelIds(profile)).toStrictEqual(
-        checksCliPolicy
+        defaultLevel === "medium"
           ? ["low", "medium", "high", "xhigh", "max"]
           : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
       );

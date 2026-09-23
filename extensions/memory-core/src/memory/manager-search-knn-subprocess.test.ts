@@ -11,8 +11,13 @@ import {
   SQLITE_IDLE_HANDLE_TTL_MS,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { vectorKnnParentEntrypoint } from "./manager-search-knn-runtime.test-support.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
@@ -350,11 +355,7 @@ describe("memory vector KNN subprocess boundary", () => {
         const result = await promisify(childProcess.execFile)(
           process.execPath,
           [
-            "--import",
-            import.meta.resolve("tsx"),
-            fileURLToPath(
-              new URL("./fixtures/manager-search-knn-parent.fixture.mjs", import.meta.url),
-            ),
+            ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(vectorKnnParentEntrypoint)),
             JSON.stringify({
               expireIdle,
               databasePaths: fixtures.map((fixture) => fixture.databasePath),
@@ -608,12 +609,9 @@ describe("memory vector KNN subprocess boundary", () => {
   });
 
   it("fails vector recall closed when the subprocess is unavailable", async () => {
-    const prepare = vi.fn(() => {
-      throw new Error("same-thread SQLite must not run");
-    });
+    const runFallback = vi.fn(async () => []);
     await expect(
       searchVector({
-        db: { prepare } as unknown as DatabaseSync,
         vectorTable: "memory_index_chunks_vec",
         providerModel: "test-model",
         queryVec: [1, 0],
@@ -623,10 +621,10 @@ describe("memory vector KNN subprocess boundary", () => {
         runVectorKnn: async () => {
           throw new Error("subprocess unavailable");
         },
+        runFallback,
         sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
       }),
     ).rejects.toThrow("subprocess unavailable");
-    expect(prepare).not.toHaveBeenCalled();
+    expect(runFallback).not.toHaveBeenCalled();
   });
 });

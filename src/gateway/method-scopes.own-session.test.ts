@@ -97,8 +97,6 @@ describe("session-scoped method admission", () => {
     ["agent", { message: "/reset" }],
     ["users.setDisplayName", {}],
     ["tools.invoke", {}],
-    ["question.get", {}],
-    ["question.resolve", {}],
     ["plugins.sessionAction", { pluginId: "custom", actionId: "protected" }],
   ] as const)("does not turn the session grant into broader authority for %s", (method, params) => {
     expect(
@@ -114,8 +112,43 @@ describe("session-scoped method admission", () => {
     ).toEqual([]);
   });
 
+  it.each([
+    "question.request",
+    "question.get",
+    "question.list",
+    "question.waitAnswer",
+    "question.resolve",
+  ])(
+    "admits %s through the own-run question boundary without granting broader authority",
+    (method) => {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.write"])).toEqual({
+        allowed: true,
+        sessionScope: "operator.sessions.write",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.questions",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
+        allowed: true,
+      });
+      expect(
+        projectOperatorScopesForMethod({
+          method,
+          requestParams: {},
+          requestedScopes: ["operator.questions", "operator.approvals", "operator.admin"],
+          allowedScopes: ["operator.sessions.write"],
+        }),
+      ).toEqual(["operator.sessions.write"]);
+    },
+  );
+
   it("preserves a dispatch registry's stronger scope and does not borrow broad read for a write", () => {
-    for (const requiredScope of ["operator.admin", "operator.approvals"] as const) {
+    for (const requiredScope of [
+      "operator.admin",
+      "operator.approvals",
+      "operator.questions",
+    ] as const) {
       expect(
         projectOperatorScopesForMethod({
           method: "sessions.patch",

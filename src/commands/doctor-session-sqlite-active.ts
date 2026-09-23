@@ -1,18 +1,18 @@
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
-import { readActiveSqliteTranscriptFiles } from "./doctor-session-sqlite-diagnostics.js";
-import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
-import { canonicalMigrationFilePath } from "./doctor-session-sqlite-migration-run.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
 import {
   createTranscriptEventReader,
   readLegacyPrimaryTranscriptIdentity,
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { verifyCanonicalSessionTranscriptSources } from "../infra/session-sqlite-transcript-verification.js";
+import { readActiveSqliteTranscriptFiles } from "./doctor-session-sqlite-diagnostics.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
-import { verifyCanonicalSessionTranscriptSources } from "./doctor-session-sqlite-verification.js";
 
 /** Old imports can leave active originals outside a later plugin receipt. Never replay their index. */
 export async function prepareActiveSqliteTranscriptSettlement(params: {

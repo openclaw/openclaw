@@ -6,8 +6,13 @@ import * as nodeRuntime from "../../commands/node-runtime-diagnostics.js";
 import * as container from "../../infra/container-environment.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
@@ -155,6 +160,13 @@ it.each([true, false])(
     expect(output[0]).not.toHaveProperty("recovery");
     expect(output[0]).not.toHaveProperty("runId");
     expect(triage).not.toHaveBeenCalled();
+    const result = output[0] as UpdateRunResult;
+    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+      containerized ? "Pull or build" : "Reinstall",
+    );
+    await expect(
+      prepareUpdateFailureReport({ attemptId: "untouched-install", result }),
+    ).rejects.toThrow("Only a final failed update");
     await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
       code: "ENOENT",
     });

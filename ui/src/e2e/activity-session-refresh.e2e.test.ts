@@ -213,11 +213,11 @@ suite.define(() => {
           await page.clock.runFor(10);
         }
         expect(await activityRequests()).toBe(initialRequests + 1);
-        // The completed catch-up owns a 1-second cooldown; the burst consumed 100 ms.
-        await page.clock.runFor(899);
+        // The first visible event starts a five-second window; the burst consumed 100 ms.
+        await page.clock.runFor(4_899);
         expect(await activityRequests()).toBe(initialRequests + 1);
         expect(await row.textContent()).toContain("Caught up activity");
-        // Cross the cooldown boundary and deliver the queued mock response.
+        // Cross the event window and deliver the queued mock response.
         await page.clock.runFor(2);
         await expect.poll(() => row.textContent()).toContain("Latest activity");
         expect(await activityRequests()).toBe(initialRequests + 2);

@@ -129,6 +129,7 @@ export function trackSqliteStatementExecutions<Key extends string>(
 /** Observe host data SQL while allowing only the captured state's lifecycle control database. */
 export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   calls: Mock[];
+  queries: string[];
   restore: () => void;
 } {
   // Validate the real runtime once before measurement. The owner's capability
@@ -152,6 +153,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
     }
   };
   const databases = new WeakMap<StatementSync, DatabaseSync>();
+  const queries: string[] = [];
   const prepare = vi.fn();
   const exec = vi.fn();
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
@@ -164,6 +166,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
       .mockImplementation(function (this: DatabaseSync, sql) {
         if (!isControl(this)) {
           prepare(sql);
+          queries.push(sql);
         }
         const statement = originalPrepare.call(this, sql);
         databases.set(statement, this);
@@ -174,6 +177,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
       .mockImplementation(function (this: DatabaseSync, sql) {
         if (!isControl(this)) {
           exec(sql);
+          queries.push(sql);
         }
         return originalExec.call(this, sql);
       }),
@@ -186,6 +190,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
         apply(target, receiver: StatementSync, args) {
           if (!isControl(databases.get(receiver))) {
             called(...args);
+            queries.push(receiver.sourceSQL);
           }
           return Reflect.apply(target, receiver, args);
         },
@@ -195,6 +200,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   });
   return {
     calls: [prepare, exec, ...statements.map(({ called }) => called)],
+    queries,
     restore: () => {
       spies.forEach((spy) => spy.mockRestore());
       statements.forEach(({ spy }) => spy.mockRestore());

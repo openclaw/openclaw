@@ -1,6 +1,6 @@
 import {
-  selectWorkspaceSeedsToPrune,
   WORKSPACE_SEED_RETENTION,
+  WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
 import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
 
@@ -36,7 +36,7 @@ const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const input = ${JSON.stringify(input)};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
-const selectSeedsToPrune = ${selectWorkspaceSeedsToPrune.toString()};
+${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
@@ -65,7 +65,7 @@ const ownedDirectory = (parent, target) => {
     const entries = fs.readdirSync(namespace, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => ({ name: entry.name, mtimeMs: ownedDirectory(namespace, path.join(namespace, entry.name)).mtimeMs }));
-    for (const entry of selectSeedsToPrune(entries, retention, Date.now(), input.seedKey)) {
+    for (const entry of selectWorkspaceSeedsToPrune(entries, retention, Date.now(), input.seedKey)) {
       const target = path.join(namespace, entry.name);
       if (ownedDirectory(namespace, target).mtimeMs === entry.mtimeMs) fs.rmSync(target, { recursive: true });
     }

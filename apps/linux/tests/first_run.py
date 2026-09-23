@@ -166,6 +166,9 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
         calls = Path("cli-calls.log").read_text().splitlines()
         if calls.count("gateway install --json") != 2:
             raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
+        setup = "browser extension setup --action install --json --wait-ms 1000"
+        if calls.count(setup) != 1:
+            raise RuntimeError(f"Expected one automatic local Chrome setup, observed {calls!r}")
         print("PASS: failed local startup reports its error and stays retryable", flush=True)
         return
     click("Get started")
@@ -452,6 +455,8 @@ def main():
                 "with Path('cli-calls.log').open('a') as log: log.write(command + '\\n')\n"
                 "if command == '--version':\n"
                 "    print('OpenClaw fixture')\n"
+                "elif command == 'browser extension setup --action install --json --wait-ms 1000':\n"
+                "    print(json.dumps({'action': 'install', 'target': {'kind': 'local-host', 'platform': 'linux', 'hostname': 'fixture', 'profile': 'chrome', 'relayPort': 18799}, 'phase': 'needs_browser_action', 'reason': 'extension_missing', 'installation': {'nativeHostRegistered': True, 'installRequested': False, 'installedProfiles': 0, 'discoveredProfiles': 0, 'awaitingApproval': False, 'automaticBootstrapSupported': True}, 'connection': {'state': 'not_checked'}, 'nextAction': 'install_from_store'}))\n"
                 "elif command == 'gateway status --json':\n"
                 "    print(json.dumps({'service': {'loaded': False}, 'rpc': {'ok': False}}))\n"
                 "elif command == 'gateway install --json':\n"

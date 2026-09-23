@@ -30,7 +30,7 @@ beforeAll(() => {
   );
 });
 
-async function createDoctorFixture() {
+async function createDoctorFixture(withExistingInstall = false) {
   const root = fs.realpathSync(tempDirs.createTempDir("doctor-plugin-config-"));
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
@@ -56,19 +56,22 @@ async function createDoctorFixture() {
   };
   fs.writeFileSync(configPath, JSON.stringify(config));
   // Start from current config and an existing index; the cases below own Doctor execution.
-  await seedInstalledPluginIndex({}, { stateDir, env, config });
-  return { root, stateDir, configPath, env, config };
+  const durable = { source: "path" as const, installPath: path.join(root, "current-plugin") };
+  await seedInstalledPluginIndex(withExistingInstall ? { existing: durable } : {}, {
+    stateDir,
+    env,
+    config,
+  });
+  return { root, stateDir, configPath, env, config, durable };
 }
 
 describe("Doctor retired plugin install config", () => {
   it.each(["empty", "populated", "included", "empty-included"] as const)(
     "removes %s legacy records after preserving the canonical install index",
     async (kind) => {
-      const { root, stateDir, configPath, env, config } = await createDoctorFixture();
+      const { root, stateDir, configPath, env, config, durable } = await createDoctorFixture(true);
       const empty = kind === "empty" || kind === "empty-included";
       const included = kind === "included" || kind === "empty-included";
-      const durable = { source: "path" as const, installPath: path.join(root, "current-plugin") };
-      await seedInstalledPluginIndex({ existing: durable }, { stateDir, env, config });
       const legacy = { source: "path" as const, installPath: path.join(root, "missing-plugin") };
       config.plugins = {
         ...(kind === "empty-included" ? {} : config.plugins),

@@ -68,6 +68,7 @@ import {
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
+import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { resolveGatewayServiceRecovery } from "./update-managed-service-handoff-service.js";
@@ -135,9 +136,6 @@ function recordRunWarnings(ledger) {
       runWarnings.delete(step);
     } catch { /* The candidate runtime records warnings after state migration. */ }
   }
-}
-function parentIdentityCurrent() {
-  return leaseStore.isProcessIdentityCurrent({ pid: params.parentPid, startIdentity: params.parentStartIdentity }, params.parentPid === process.ppid && !process.stdin.destroyed && !process.stdin.readableEnded);
 }
 let managedUpdateLease = null;
 let triageRequesterAuthority;
@@ -1002,27 +1000,7 @@ async function prepareTransferredGateway() {
   transferPrepared = true;
 }
 
-async function activateTransferredGateway() {
-  await waitForTransferredRestartDelay();
-  // Validation has its own budget. The shutdown reserve starts only at activation.
-  params.parentExitDeadlineAt = Date.now() + params.parentExitTimeoutMs;
-  await parkGatewayService();
-  if (requiresRequesterAcknowledgement && !transferPrepared)
-    throw new Error("Profile update has no accepted park operation");
-  while (isPidAlive(params.parentPid)) {
-    if (!ownsManagedUpdateLease()) throw new Error("managed update activation ownership lost");
-    if (!parentIdentityCurrent()) {
-      if (!isPidAlive(params.parentPid)) break;
-      throw new Error("managed update parent identity changed during activation");
-    }
-    if (Date.now() >= params.parentExitDeadlineAt) {
-      try { process.kill(params.parentPid, "SIGKILL"); } catch {}
-      throw new Error("managed update parent exit exceeded the activation deadline");
-    }
-    await sleep(Math.min(25, Math.max(0, params.parentExitDeadlineAt - Date.now())));
-  }
-  await finishGatewayServicePark();
-}
+${MANAGED_HANDOFF_PARENT_SOURCE}
 
 function killOwnedCommand(child) {
   if (process.platform === "win32") {
@@ -1466,7 +1444,7 @@ async function spawnManagedServiceUpdateHandoff(
     );
   owner.leaseDatabaseIdentity = updateLeaseDatabaseIdentity;
   const identityStore = createManagedHandoffLeaseStore({
-    databasePath: updateLeaseDatabasePath,
+    databasePath: updateLeaseDatabaseIdentity.databasePath,
     existingIdentity: updateLeaseDatabaseIdentity,
     serviceManagerEnv: resolveServiceManagerEnv(serviceEnv),
     onProcessIdentityWarning: (pid, message) => {

@@ -117,7 +117,6 @@ test("catalog reload releases the agent writer while preserving same-session ord
     );
     let metadataPatch: ReturnType<typeof patch> | undefined;
     let successorPatch: ReturnType<typeof patch> | undefined;
-    let blockedMetadata: Error | undefined;
     try {
       await Promise.race([entered.promise, catalogPatch]);
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
@@ -126,13 +125,9 @@ test("catalog reload releases the agent writer while preserving same-session ord
         patch({ key: catalogKey, pinned: true }, successorResponse),
       );
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
-      await vi
-        .waitFor(() =>
-          expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined),
-        )
-        .catch((error: unknown) => {
-          blockedMetadata = error instanceof Error ? error : new Error(String(error));
-        });
+      // Join independent work before advancing the diagnostic clock or releasing the catalog.
+      await metadataPatch;
+      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
       expect(
@@ -180,9 +175,6 @@ test("catalog reload releases the agent writer while preserving same-session ord
         phaseDurationsMs: expect.objectContaining({ lifecycleAdmission: 1_500 }),
       }),
     );
-    if (blockedMetadata) {
-      throw blockedMetadata;
-    }
   });
 });
 
@@ -257,7 +249,8 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
                       contextWindow: undefined,
                     },
               ).then(() => changed());
-        await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+        await mutation;
+        expect(changed).toHaveBeenCalledOnce();
       } finally {
         if (change === "alias") {
           catalog.resolve([]);
@@ -333,7 +326,13 @@ test("patchMany prepares singleton agent groups without blocking another session
     );
     const catalog =
       createDeferredCore<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
-    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    const entered = createDeferredCore();
+    const loadGatewayModelCatalog = vi.fn(() => {
+      if (loadGatewayModelCatalog.mock.calls.length === targets.length) {
+        entered.resolve();
+      }
+      return catalog.promise;
+    });
     const context = patchContext(loadGatewayModelCatalog, {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
@@ -360,11 +359,11 @@ test("patchMany prepares singleton agent groups without blocking another session
     const metadataResponse = vi.fn();
     let metadataPatch: Promise<void> | void = undefined;
     try {
-      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2));
+      await Promise.race([entered.promise, batch]);
+      expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
       metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
-      await vi.waitFor(() =>
-        expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined),
-      );
+      await metadataPatch;
+      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(respond).not.toHaveBeenCalled();
     } finally {
       clock += 1_500;
@@ -526,8 +525,8 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         committed();
       })();
       void replacement.catch(() => {});
-      await vi.waitFor(() => expect(committed).toHaveBeenCalledOnce());
       await replacement;
+      expect(committed).toHaveBeenCalledOnce();
       release.resolve();
       await request;
       expect(respond).toHaveBeenCalledWith(

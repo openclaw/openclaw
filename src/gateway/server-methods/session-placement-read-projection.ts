@@ -1,5 +1,6 @@
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -30,6 +31,7 @@ export function readSessionRowFacts(params: {
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
+  databaseFacts?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
   const { cfg, entry, placementFactsReader } = params;
   // The board callback shares a closure context with present; never capture a resident row.
@@ -78,9 +80,10 @@ export function readSessionRowFacts(params: {
     cfg,
     entry,
     enabled: params.activitySummaryEnabled,
+    watermark: params.databaseFacts?.activitySummaryWatermark,
   });
   return {
-    hasBoard: readSessionRowHasBoard({ key, storeTarget }),
+    hasBoard: params.databaseFacts?.hasBoard ?? readSessionRowHasBoard({ key, storeTarget }),
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
       if (currentSource !== placementSource) {

@@ -63,41 +63,78 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
-  it("carries a bounded failing check through history responses", () => {
-    const fact = {
-      check: "readyz",
-      code: "readyz-unhealthy",
-      message: "Readiness returned HTTP 503.",
-      errorName: "Error",
-      location: "src/infra/update-runner-git.ts:42:7",
-    };
-    const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
-    const failed = {
-      ...run,
-      target: { ...run.target, installationMethod: "git-checkout" },
-      verification: {
-        ...run.verification,
-        rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
-        recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "2026.8.1" },
-      },
-      steps: [step],
-    };
-    expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
-    expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
-    expect(
-      validateUpdateRunsGetResult({
-        run: {
-          ...failed,
-          steps: [
-            {
-              ...step,
-              failureFacts: Array.from({ length: 6 }, () => fact),
-            },
-          ],
+  it.each([
+    undefined,
+    {
+      ownership: "foreign",
+      cause: "package-mismatch",
+      destinationKind: "npm-global",
+      prefix: "/other-prefix",
+      packageRoot: "/other-prefix/lib/node_modules/openclaw",
+      runningRoot: "~/.npm-global/lib/node_modules/openclaw",
+      runningPrefix: "~/.npm-global",
+      launcher: "/other-prefix/bin/openclaw",
+      launcherTarget: null,
+    },
+  ])(
+    "carries a bounded failing check through history responses (destination=%j)",
+    (destination) => {
+      const fact = {
+        check: destination ? "package-install" : "readyz",
+        code: destination ? "global-install-foreign-destination" : "readyz-unhealthy",
+        message: "Readiness returned HTTP 503.",
+        errorName: "Error",
+        location: "src/infra/update-runner-git.ts:42:7",
+        ...(destination ? { destination } : {}),
+      };
+      const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
+      const failed = {
+        ...run,
+        target: { ...run.target, installationMethod: "git-checkout" },
+        verification: {
+          ...run.verification,
+          rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.8.1",
+          },
         },
-      }),
-    ).toBe(false);
-  });
+        steps: [step],
+      };
+      expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
+      expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
+      if (destination) {
+        for (const invalid of [
+          { ownership: "private-owner" },
+          { prefix: "x".repeat(241) },
+          { extra: "private-text" },
+        ]) {
+          const malformed = {
+            ...failed,
+            steps: [
+              { ...step, failureFacts: [{ ...fact, destination: { ...destination, ...invalid } }] },
+            ],
+          };
+          expect(LedgerRecordSchema.safeParse(malformed).success).toBe(false);
+          expect(validateUpdateRunsGetResult({ run: malformed })).toBe(false);
+        }
+      }
+      expect(
+        validateUpdateRunsGetResult({
+          run: {
+            ...failed,
+            steps: [
+              {
+                ...step,
+                failureFacts: Array.from({ length: 6 }, () => fact),
+              },
+            ],
+          },
+        }),
+      ).toBe(false);
+    },
+  );
 
   it.each([null, { serviceRestartSafe: false, reason: "source-rollback-failed" }])(
     "carries nullable failure evidence and recovery through history (%j)",

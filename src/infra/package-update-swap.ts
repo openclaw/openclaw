@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import {
   collectPackageDistInventory,
@@ -694,6 +695,9 @@ export async function swapStagedPackageInstall(
       postVerifyStep,
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError

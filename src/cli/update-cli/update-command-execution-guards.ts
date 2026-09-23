@@ -11,18 +11,25 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
   const runId = run?.runId;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
+  let stateHandedOff = false;
   const assertInvocation = () => {
+    if (opts.recovery || !stateHandedOff) {
+      assertUpdateCommandRecoveryState(opts);
+    }
     if (
       opts.run !== run ||
       run?.runId !== runId ||
       run?.executorFence !== executor ||
       run?.requesterAuthority !== requester ||
-      requester?.isCurrent() === false
+      (!stateHandedOff && requester?.isCurrent() === false)
     ) {
       throw new UpdateRequesterRevokedError();
     }
   };
   return {
+    onStateHandoff: () => {
+      stateHandedOff = true;
+    },
     // Only the mutable-preparation owner calls this, immediately after enter().
     // Never infer admission from a newly observed mutable run.executorFence.
     admitExecutor: (acquired: UpdateRecoveryFence) => {
@@ -41,13 +48,9 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
     assertCurrent: () => {
       assertInvocation();
       executor?.assertCurrent();
-      assertUpdateCommandRecoveryState(opts);
     },
     // This is not native authority. The Doctor caller must first bind its child
     // through the real executor, which checks both retained and candidate owners.
-    assertBoundChildCurrent: () => {
-      assertInvocation();
-      assertUpdateCommandRecoveryState(opts);
-    },
+    assertBoundChildCurrent: assertInvocation,
   };
 }

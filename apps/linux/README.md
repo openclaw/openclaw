@@ -58,6 +58,29 @@ only while its dashboard is focused. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
 
+## Chrome setup bridge
+
+The selected main dashboard can explicitly inspect, install, or verify Chrome
+setup on the computer running the companion, including when the dashboard's
+Gateway is remote. Loading the dashboard does not run setup. Chrome retains its
+extension installation approval; the companion does not ask for a pairing key.
+
+The dashboard adapter is
+`window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
+where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
+to the canonical CLI setup JSON, including pending and blocked results, and
+rejects on transport, invalid-action, or CLI execution errors. It shares the
+existing native browser document token, origin/path, and generation checks;
+reading tabs and other dashboard windows do not receive this bridge.
+
+The adapter invokes only
+`openclaw browser extension setup --action ACTION --json --wait-ms 1000`
+through the companion's local CLI owner. Profile selection is left to the CLI so
+a saved profile is not overridden. Callers cannot choose commands, paths,
+profiles, or URLs. Platform bootstrap support comes from the CLI result rather
+than the app platform: a Windows app build alone does not establish that native
+host bootstrap is supported or verified.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.

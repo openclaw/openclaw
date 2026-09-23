@@ -52,7 +52,11 @@ describe("running update status", () => {
               updatedAtMs: 900,
             }),
             updateStatusRefreshing: true,
-            updateStatusCheckBanner: { tone: "warn", text: "Could not fetch upstream" },
+            updateStatusCheckBanner: {
+              mode: "manual",
+              tone: "warn",
+              text: "Could not fetch upstream",
+            },
             updateSchedule: {
               channel: "dev",
               autoEnabled: true,

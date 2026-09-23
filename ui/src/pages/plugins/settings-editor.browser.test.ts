@@ -432,14 +432,15 @@ describe("grouped editor field discovery", () => {
     });
     for (const name of ["Enabled", "Timeout", "Storage: Path"]) {
       const input = editor.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!;
-      const id = input.getAttribute("aria-describedby");
-      expect(id).toBeTruthy();
-      expect(document.getElementById(id!)?.textContent?.trim()).toBe(
-        input
-          .closest(".plugin-editor__row")
-          ?.querySelector(".plugin-editor__copy p")
-          ?.textContent?.trim(),
-      );
+      const ids = input.getAttribute("aria-describedby")?.trim().split(/\s+/u) ?? [];
+      const instructions = input
+        .closest(".plugin-editor__row")
+        ?.querySelector(".plugin-editor__copy p");
+      expect(instructions?.textContent?.trim()).toBeTruthy();
+      expect(ids).toContain(instructions?.id);
+      const descriptions = ids.map((id) => document.getElementById(id));
+      expect(descriptions).toContain(instructions);
+      expect(descriptions).not.toContain(null);
     }
   });
 

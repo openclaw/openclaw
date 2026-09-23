@@ -30,7 +30,6 @@ import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
-  runRestartScript: vi.fn(async () => true),
   runUpdatedInstallGatewayCommand: vi.fn<
     typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
   >(async (_params, action) => (action === "restart" ? "accepted" : "unverified")),
@@ -63,11 +62,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness: mocks.waitForGatewayHttpReadiness,
   inspectGatewayRestart: mocks.inspectGatewayRestart,
-}));
-
-vi.mock("./restart-helper.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./restart-helper.js")>()),
-  runRestartScript: mocks.runRestartScript,
 }));
 
 vi.mock("./update-command-config-snapshot.js", () => ({
@@ -658,21 +652,20 @@ describe("maybeRestartService", () => {
           serviceEnv: { HOME: "/home/operator" },
           serviceInstallEnv: {},
           gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
           timeoutMs: 1_000,
         }),
       ).resolves.toBe("ok");
 
-      expect(mocks.runRestartScript).toHaveBeenCalledWith(
-        "/tmp/openclaw-configured-ui-restart.sh",
-        1_000,
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ result, timeoutMs: 1_000 }),
+        "restart",
       );
       expect(mocks.waitForGatewayHealthyRestart.mock.lastCall?.[0].expectedBuildId).toBe(buildId);
     },
   );
 
-  it("does not infer activation from a detached script when the expected Git build is never observed", async () => {
-    mocks.runRestartScript.mockResolvedValueOnce(false);
+  it("does not infer activation from an unverified restart when the expected Git build is never observed", async () => {
+    mocks.runUpdatedInstallGatewayCommand.mockResolvedValueOnce("unverified");
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "stopped" },
       portUsage: {
@@ -703,7 +696,6 @@ describe("maybeRestartService", () => {
         serviceEnv: { HOME: "/home/operator" },
         serviceInstallEnv: {},
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe("failed");
@@ -734,16 +726,15 @@ describe("maybeRestartService", () => {
         refreshServiceEnv,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-verification.sh",
         timeoutMs: 1_000,
         onVerified,
         onVerificationFailure,
       });
       expect(actual).toBe(verified ? "ok" : "restart-health-failed");
       expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
-      expect(mocks.runRestartScript).toHaveBeenCalledTimes(refreshServiceEnv ? 0 : 1);
-      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(
-        refreshServiceEnv ? 1 : 0,
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        refreshServiceEnv ? "install" : "restart",
       );
       expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
       expect(onVerificationFailure).toHaveBeenCalledTimes(verified ? 0 : 1);
@@ -773,7 +764,6 @@ describe("maybeRestartService", () => {
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-verification.sh",
         timeoutMs: 1_000,
         onVerificationFailure,
       }),

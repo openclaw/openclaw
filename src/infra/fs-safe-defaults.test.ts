@@ -2,6 +2,11 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const defaultsUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeDefaults);
+const memoryUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils);
 
 type NativeMode = "auto" | "off" | "require";
 
@@ -23,8 +28,7 @@ function inspectNativeDefaults(params: {
   const output = execFileSync(
     process.execPath,
     [
-      "--import",
-      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+      ...resolveRuntimeWorkerArgv(defaultsUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
@@ -40,9 +44,8 @@ function inspectNativeDefaults(params: {
     `,
       JSON.stringify({
         ...params,
-        defaultsUrl: new URL("./fs-safe-defaults.ts", import.meta.url).href,
-        memoryUrl: new URL("../../packages/memory-host-sdk/src/host/fs-utils.ts", import.meta.url)
-          .href,
+        defaultsUrl: defaultsUrl.href,
+        memoryUrl: memoryUrl.href,
       }),
     ],
     {

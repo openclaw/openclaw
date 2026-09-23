@@ -460,6 +460,11 @@ it.each([
     expect(() =>
       recordUpdateRunStep(created.runId, { step: "old writer", status: "completed" }, { env }),
     ).toThrow(/newer schema version/);
+    const rollbackOutcome = {
+      status: "not-attempted" as const,
+      reason: "state-migrated-no-rollback",
+    };
+    expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
     expect(() =>
       progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
     ).not.toThrow();
@@ -574,6 +579,7 @@ it.each([
           result: {
             status: "error",
             reason: "doctor-failed",
+            rollbackOutcome,
             mode: "npm",
             root,
             steps: [],
@@ -685,9 +691,12 @@ it.each([
     const inspected = new DatabaseSync(database.path, { readOnly: true });
     try {
       const row = inspected
-        .prepare("SELECT status, reason, origin_json, steps_json FROM update_runs WHERE run_id = ?")
+        .prepare(
+          "SELECT status, reason, origin_json, steps_json, verification_json FROM update_runs WHERE run_id = ?",
+        )
         .get(created.runId);
       expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
       expect(JSON.parse(String(row?.steps_json))).toEqual(
         expect.arrayContaining([progress.pendingSteps.at(-1)]),
       );

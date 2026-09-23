@@ -104,8 +104,8 @@ it.concurrent.each([
       policyScenario,
       (root) => {
         const workspace = path.join(root, "workspace");
-        if (scenario.startsWith("cancel-")) {
-          // Inject slow startup before fetch, beyond the former cancellation readiness deadline.
+        if (scenario === "cancel-SIGTERM") {
+          // One slow-start proof per policy; all signals share the same readiness path.
           writeFileSync(
             path.join(root, "fixture-config.json"),
             JSON.stringify({ initDelayMs: 4_100 }),

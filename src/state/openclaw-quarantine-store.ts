@@ -19,6 +19,12 @@ import {
 } from "../infra/sqlite-file-generation.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  OpenClawQuarantineReadCleanupError,
+  type OpenClawDatabaseKind,
+  type OpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
 
@@ -26,8 +32,6 @@ const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_QUARANTINE_DIR_MODE = 0o700;
 const OPENCLAW_QUARANTINE_FILE_MODE = 0o600;
-
-type OpenClawDatabaseKind = "agent" | "state";
 
 function resolveAgentIntegrityPath(pathname: string): string {
   try {
@@ -114,12 +118,11 @@ export function canReuseOpenClawAgentIntegrityVerification(
   pathname: string,
   record: OpenClawAgentIntegrityVerification | undefined,
   migrationPending: boolean,
-  reuseRuntimeIntegrity = false,
 ): boolean {
   if (
     migrationPending ||
     !record ||
-    (!reuseRuntimeIntegrity && record.clean_close !== 1) ||
+    record.clean_close !== 1 ||
     record.app_version !== VERSION ||
     record.path !== resolveAgentIntegrityPath(pathname)
   ) {
@@ -176,15 +179,23 @@ export function recordOpenClawAgentIntegrityVerification(
 export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
+  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
+  if (runtimeProof === "revoke") {
+    invalidateOpenClawAgentDatabaseValidation(pathname);
+  }
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(database, () =>
-      deleteAgentIntegrityVerification(database, pathname),
+      deleteAgentIntegrityVerification(database, pathname, runtimeProof),
     ),
   );
 }
 
-function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
+function deleteAgentIntegrityVerification(
+  database: DatabaseSync,
+  pathname: string,
+  runtimeProof: "revoke" | "retain" = "revoke",
+): void {
   const query = getNodeSqliteKysely<IntegrityDatabase>(database);
   const stored = executeSqliteQueryTakeFirstSync(
     database,
@@ -194,6 +205,13 @@ function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: stri
       .where("path", "=", resolveAgentIntegrityPath(pathname)),
   );
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
+  if (runtimeProof === "revoke") {
+    for (const file of [stored, current]) {
+      if (file) {
+        invalidateOpenClawAgentDatabaseValidation(pathname, `${file.dev}:${file.ino}`);
+      }
+    }
+  }
   executeSqliteQuerySync(
     database,
     query
@@ -236,22 +254,8 @@ export function markOpenClawAgentIntegrityClean(
   });
 }
 
-type OpenClawDatabaseQuarantine = {
-  kind: OpenClawDatabaseKind;
-  quarantinedAt: number;
-  reason: string;
-};
-
-/** Reading quarantine metadata is best effort; unfinished native cleanup is a separate fact. */
-export class OpenClawQuarantineReadCleanupError extends AggregateError {
-  constructor(errors: unknown[]) {
-    super(errors, "OpenClaw quarantine reader cleanup failed.", { cause: errors[0] });
-    this.name = "OpenClawQuarantineReadCleanupError";
-  }
-}
-
 // Read admission needs this error without importing schema migrations.
-export function createOpenClawDatabaseVerificationError(
+function createOpenClawDatabaseVerificationError(
   kind: "agent" | "state",
   pathname: string,
   storedError: string | null,
@@ -356,7 +360,7 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
 }
 
 /** Read one authoritative quarantine decision without creating the store. */
-export function readOpenClawDatabaseQuarantine(
+function readOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): OpenClawDatabaseQuarantine | undefined {
@@ -377,6 +381,7 @@ export function readOpenClawDatabaseQuarantine(
   } catch (closeError) {
     throw new OpenClawQuarantineReadCleanupError(
       "error" in outcome ? [outcome.error, closeError] : [closeError],
+      "value" in outcome ? outcome.value : undefined,
     );
   }
   if ("error" in outcome) {
@@ -393,20 +398,16 @@ export function assertOpenClawStateDatabaseNotQuarantined(
 ): void {
   let quarantineFailure: Error | undefined;
   try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
-    }
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
   } catch (error) {
-    // A broken quarantine store must not brick every state read.
-    // The process latch and daily verifier still cover known damage.
-    if (error instanceof OpenClawQuarantineReadCleanupError) {
-      onNativeCleanupFailure?.(error);
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      throw error;
     }
+    onNativeCleanupFailure?.(error);
+    return;
+  }
+  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
+    onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
     throw quarantineFailure;
@@ -472,6 +473,37 @@ function readQuarantineDecision(
     }
   }
   return { kind: row.kind, quarantinedAt: row.quarantined_at, reason: row.reason };
+}
+
+/** Runtime opens refuse recorded damage while tolerating a broken quarantine index. */
+export function readOpenClawDatabaseQuarantineFailure(
+  kind: OpenClawDatabaseKind,
+  pathname: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Error | undefined {
+  let quarantine: OpenClawDatabaseQuarantine | undefined;
+  let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
+  try {
+    quarantine = readOpenClawDatabaseQuarantine(pathname, options);
+  } catch (error) {
+    // Unreadable metadata stays best effort; unfinished cleanup retains its disposal owner.
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      return undefined;
+    }
+    if (!error.quarantine) {
+      throw error;
+    }
+    quarantine = error.quarantine;
+    cleanupFailure = error;
+  }
+  if (!quarantine) {
+    return undefined;
+  }
+  const failure = createOpenClawDatabaseVerificationError(kind, pathname, quarantine.reason);
+  if (cleanupFailure) {
+    failure.cause = cleanupFailure;
+  }
+  return failure;
 }
 
 /** Persist one authoritative quarantine decision. */

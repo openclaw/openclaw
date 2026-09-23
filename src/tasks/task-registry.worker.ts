@@ -50,8 +50,6 @@ import {
   listTaskRecordsForOwnerReadInDatabase,
   listTaskRecordsByOwnerKeyInDatabase,
   readTaskViewRecordInDatabase,
-  readTaskRegistryMutationSnapshotInDatabase,
-  readTaskRegistrySnapshot,
   readTaskRecord,
   summarizeTaskRecordsForFlowInDatabase,
 } from "./task-registry.store.kernel.js";
@@ -96,6 +94,8 @@ export function executeTaskRegistryCommand(
     return observeTaskAgentEventInDatabase(open(), command.input);
   }
   if (
+    command.type === "tasks.bindRunOwner" ||
+    command.type === "tasks.updateNotificationDelivery" ||
     command.type === "tasks.acknowledgeStateChange" ||
     command.type === "tasks.createRecord" ||
     command.type === "tasks.finalizeActive" ||
@@ -240,10 +240,6 @@ export function executeTaskRegistryCommand(
     switch (command.type) {
       case "flows.snapshot":
         return readTaskFlowRegistrySnapshot(db);
-      case "tasks.mutationSnapshot":
-        return command.input === undefined
-          ? readTaskRegistrySnapshot(database)
-          : readTaskRegistryMutationSnapshotInDatabase(db, command.input);
       case "tasks.get":
         return readTaskViewRecordInDatabase(db, command.input.taskId);
       case "tasks.findByRunId":

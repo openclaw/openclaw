@@ -330,9 +330,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
     projection = await createSessionRowProjection({ cfg });
-    expect(readonly).toHaveBeenCalledWith(
-      expect.objectContaining({ projection: "list", clone: false }),
-    );
+    expect(readonly.mock.calls[0]?.[0]).toMatchObject({ projection: "list", clone: false });
     expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
     const resident = projection.describe({ agentId: "main", key: stored.session_key });
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();

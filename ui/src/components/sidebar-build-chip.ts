@@ -37,6 +37,7 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}
+          role=${this.variant === "identity" ? "menuitem" : nothing}
           aria-label=${
             this.updateAttentionDismissed
               ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`

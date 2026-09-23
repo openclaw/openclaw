@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 // Verifies one-way child coordination at the sessions_send tool boundary.
 import type { OpenClawConfig } from "../config/config.js";
@@ -9,6 +9,10 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -52,16 +56,28 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const continuations = observeSessionSendContinuations({ trackAllWork: true });
+
+async function settleSessionWork() {
+  await continuations.settle();
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+}
+
+afterAll(() => {
+  continuations.restore();
+});
 
 type GatewayCall = { method?: string; params?: Record<string, unknown> };
 type AgentCallParams = {
@@ -117,7 +133,7 @@ describe("sessions_send child coordination", () => {
     });
   });
   afterEach(async () => {
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await settleSessionWork();
     resetGatewayWorkAdmission();
     await agentStepTesting.setDepsForTest();
     closeOpenClawStateDatabaseForTest();
@@ -187,7 +203,7 @@ describe("sessions_send child coordination", () => {
         message: "Return the requested result",
         timeoutSeconds: 1,
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleSessionWork();
       expect.soft(result.details).toMatchObject({
         status: "ok",
         reply: "Requested result",
@@ -199,6 +215,10 @@ describe("sessions_send child coordination", () => {
         .toBe(direction === "requester" && child ? "subagent" : undefined);
       expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
       if (direction === "target") {
+        await runOpenClawAgentWriteAdmission(
+          toDatabaseOptions(resolveSqliteScope(alternateScope)),
+          () => undefined,
+        );
         expect
           .soft(listSessionParticipantsReadOnly(alternateScope).get(alternateKey) ?? [])
           .toEqual([
@@ -325,7 +345,7 @@ describe("sessions_send child coordination", () => {
         message: "Return the requested result",
         timeoutSeconds: 1,
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleSessionWork();
       expect(result.details).toMatchObject({
         status: "ok",
         reply: "Requested result",
@@ -418,7 +438,7 @@ describe("sessions_send child coordination", () => {
         message: "Share the requested result",
         timeoutSeconds: 1,
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleSessionWork();
       expect(result.details).toMatchObject({
         status: "ok",
         reply: "Requested result",
