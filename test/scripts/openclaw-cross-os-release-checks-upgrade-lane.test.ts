@@ -6,7 +6,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:net", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:net")>();
-  // Keep native socket and stream prototypes intact across shared-worker files.
+  // Native socket prototypes outlive a test file in shared workers.
   return { ...actual, createServer: vi.fn(actual.createServer) };
 });
 
@@ -151,6 +151,16 @@ function arrangeSuccessfulLane() {
 }
 
 describe("cross-OS manual gateway lane evidence", () => {
+  it("preserves native socket implementations for later shared-worker consumers", () => {
+    const nativeNet = process.getBuiltinModule("node:net");
+    expect(vi.isMockFunction(nativeNet.Socket)).toBe(false);
+    expect(vi.isMockFunction(nativeNet.Server)).toBe(false);
+    expect(nativeNet.Socket.prototype).toHaveProperty(
+      "write",
+      expect.toSatisfy((method) => !vi.isMockFunction(method)),
+    );
+  });
+
   beforeEach(() => {
     logsDir = createTempDir("openclaw-upgrade-lane-test-");
     mocks.ensureLocalNpmShim.mockImplementation(({ rootDir }) => trackTempDir(rootDir));

@@ -1765,6 +1765,32 @@ export function releaseWaivedJobs(children, { releaseProfile, workflowRef, laneW
   );
 }
 
+// Failed advisory lanes of a sealed state artifact, for the Release Decision
+// warning that names each lane so it is fixed in parallel with publication.
+export function releaseAdvisoryJobFailures(payload) {
+  return Object.entries(payload.children ?? {}).flatMap(([childKey, child]) => {
+    const jobs = child.timing?.jobs ?? [];
+    return jobs
+      .filter(
+        (job) =>
+          isFailedJob(job) &&
+          isReleaseJobAdvisory({
+            childKey,
+            jobName: stringValue(job.name),
+            releaseProfile: payload.releaseProfile,
+            workflowRef: payload.workflowRef,
+            laneWaiver: payload.laneWaiver ?? "",
+            jobs,
+          }),
+      )
+      .map((job) => ({ child: childKey, conclusion: job.conclusion, job: job.name, url: job.url }));
+  });
+}
+
+export function formatAdvisoryJobFailure(failure) {
+  return `${failure.child} advisory lane ${failure.job} ended ${failure.conclusion}; fix it in parallel, it does not block npm/ClawHub publication${failure.url ? ` (${failure.url})` : ""}`;
+}
+
 export function terminalPolicyPass(child, releaseProfile, workflowRef, laneWaiver = "") {
   if (child.status !== "completed") {
     return false;
@@ -2718,6 +2744,9 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
     Math.max(0, payload.errors.length - normalizedMax);
   if (omitted > 0) {
     lines.push(`- ${omitted} additional blocker/error item(s) omitted`);
+  }
+  for (const failure of releaseAdvisoryJobFailures(payload)) {
+    lines.push(`- Advisory: ${formatAdvisoryJobFailure(failure)}`);
   }
   return lines;
 }
