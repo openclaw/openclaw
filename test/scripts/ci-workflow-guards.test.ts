@@ -6917,8 +6917,10 @@ server.listen(0, "127.0.0.1", () => {
       },
     });
     expect(job["timeout-minutes"]).toBe(30);
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "write" });
-    expect(workflow.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(job.permissions).toEqual({ actions: "read", contents: "write" });
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
     expect(steps[5]).toEqual({
       name: "Run Codex docs agent",
       if: "steps.gate.outputs.run_agent == 'true'",

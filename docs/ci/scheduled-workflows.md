@@ -72,9 +72,10 @@ PR required-check names and security-review enforcement are unchanged.
 Publishing and its prerequisite checks stay event-driven: docs mirror and
 website installer synchronization, runner-image publication, locale-generation
 PRs, release closeout, and ClawSweeper activity forwarding are unchanged.
-The CI `workflow_run` consumers are unchanged too: Docs Agent still handles
-successful main push runs with its own hourly/current-main guard, while Security
-Review handles PR and manual CI completion. Release/tag and PR-only workflows
+Docs Agent now verifies the exact successful full-CI attempt before admitting
+its write job: opted-in main pushes and hourly full-CI children qualify, while
+security-only pushes do not. Its hourly/current-main guard remains in place.
+Security Review still handles PR and manual CI completion. Release/tag and PR-only workflows
 retain their existing triggers; this change adds no merge-queue support where
 none existed and changes no repository rulesets.
 
@@ -380,7 +381,9 @@ site renderer or cross-page link validation.
 
 ### Docs Agent
 
-The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another eligible Docs Agent workflow-run invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
+The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule: an opted-in full main-push CI run or an hourly full-CI child can trigger it, and explicit non-bot manual dispatch retains its direct admission. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for security-only pushes, failed full CI, and manual validation of another target or reduced scope. The hourly child may run as `github-actions[bot]`; ordinary bot pushes remain excluded.
+
+Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending hourly/manual work. Workflow-run invocations recheck main freshness and skip when another eligible Docs Agent invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
 
 History eligibility tracks workflow attempts, not completed docs reviews: a gate-rejected attempt that finishes successfully remains eligible history.
 

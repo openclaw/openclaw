@@ -6777,3 +6777,9 @@ jobs:
           done <<< "$JOB_RESULTS"
 
           exit "$failures"
+
+      # Downstream write-capable consumers inspect this step in the exact run
+      # attempt. A green workflow with skipped full CI is not validation evidence.
+      - name: Confirm validated workflow revision
+        if: success() && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        run: echo "Full CI validated the immutable workflow revision."

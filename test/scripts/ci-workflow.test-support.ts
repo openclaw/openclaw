@@ -61,6 +61,7 @@ export function evaluateWorkflowExpression(
       | "issues"
       | "push"
       | "workflow_dispatch"
+      | "workflow_run"
       | "repository_dispatch"
       | "schedule";
     failed?: boolean;
@@ -72,6 +73,7 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    additionalNeeds?: Record<string, { outputs: Record<string, string> }>;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
@@ -191,6 +193,7 @@ export function evaluateWorkflowExpression(
       ...context.steps,
     },
     needs: {
+      ...context.additionalNeeds,
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       preflight: {
         outputs: {
