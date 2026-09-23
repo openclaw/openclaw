@@ -19,6 +19,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import type { InternalSessionEntry } from "./types.js";
 
 it("publishes row changes after the complete entry transaction and discards rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -176,7 +177,7 @@ it("keeps Incognito publications committed and free of connection capabilities",
       updatedAt: 1,
       label: "Private label must not enter lifetime facts",
       incognito: true,
-    };
+    } satisfies InternalSessionEntry;
     replaceSessionEntrySync(scope, entry);
     const projections: SessionRowChange[] = [];
     const notifications: SessionRowChange[] = [];
