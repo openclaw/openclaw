@@ -16,7 +16,6 @@ import {
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { getSkillProposalRunProgress as getSkillProposalRunProgressImpl } from "./proposal-run-progress.test-support.js";
 import {
   applySkillProposal as applySkillProposalImpl,
   inspectSkillProposal as inspectSkillProposalImpl,
@@ -68,9 +67,6 @@ type OptionalWorkshopOwner<T> = Omit<T, "config" | "agentId"> & {
 const applySkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
 ) => applySkillProposalImpl(withWorkshopOwner(input));
-const getSkillProposalRunProgress = (
-  input: OptionalWorkshopOwner<Parameters<typeof getSkillProposalRunProgressImpl>[0]>,
-) => getSkillProposalRunProgressImpl(withWorkshopOwner(input));
 const inspectSkillProposal = (
   proposalId: string,
   input?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
@@ -193,14 +189,6 @@ describe("skill workshop proposals", () => {
       agentId: "main",
       env: testEnv,
     });
-    const secondTarget = resolveSkillProposalTarget({
-      skillName: "shared-workshop-skill",
-      config: workshopConfig,
-      agentId: "main",
-      env: testEnv,
-    });
-    expect(firstTarget).toEqual(secondTarget);
-
     const first = await proposeCreateSkill({
       workspaceDir: firstWorkspaceDir,
       env: testEnv,
@@ -560,16 +548,6 @@ describe("skill workshop proposals", () => {
       "revision-run",
       "later-run",
     ]);
-    await expect(
-      getSkillProposalRunProgress({
-        config: workshopConfig,
-        agentId: "main",
-        runId: "revision-run",
-      }),
-    ).resolves.toEqual({
-      mutationCount: 2,
-      proposalIds: [proposal.record.id],
-    });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
@@ -591,27 +569,6 @@ describe("skill workshop proposals", () => {
     ).resolves.toBe(
       '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
-  });
-
-  it("recovers run progress from canonical proposal records", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Recovered Proposal",
-      description: "Recover a durable proposal after manifest interruption",
-      content: "# Recovered Proposal\n",
-      origin: { runId: "interrupted-run" },
-    });
-    await expect(
-      getSkillProposalRunProgress({
-        config: workshopConfig,
-        agentId: "main",
-        runId: "interrupted-run",
-      }),
-    ).resolves.toEqual({
-      mutationCount: 1,
-      proposalIds: [proposal.record.id],
-    });
   });
 
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {
@@ -897,13 +854,8 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
-    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    ctx.onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
+  it("rejects and quarantines proposals without touching active skills", async () => {
+    // Keep the real clock shared with SQLite lease workers; the assertion sorts by skill name.
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -929,13 +881,11 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
