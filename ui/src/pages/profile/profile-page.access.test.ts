@@ -111,10 +111,13 @@ it("reconnects through the existing connection owner without requesting broader 
   await page.updateComplete;
 
   const reconnect = page.querySelector<HTMLButtonElement>("#settings-profile-access button");
+  const personalEditor = page.querySelector("openclaw-personal-instructions");
+  expect(personalEditor).not.toBeNull();
   expect(reconnect?.textContent?.trim()).toBe("Reconnect");
   reconnect?.click();
   expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
   await page.updateComplete;
   expect(page.querySelector("#settings-profile-access")).toBeNull();
   expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+  expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 });
