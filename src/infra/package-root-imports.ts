@@ -116,6 +116,7 @@ export function collectPackageRootImports(
   const { default: traverse } = require("@babel/traverse") as typeof import("@babel/traverse");
   const file = parse(source, {
     sourceType: "unambiguous",
+    allowUndeclaredExports: true,
     allowReturnOutsideFunction: true,
     createImportExpressions: true,
   });

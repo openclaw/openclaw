@@ -12,7 +12,10 @@ import {
   collectNativeTypeScriptDiagnostics,
   formatNativeTypeScriptDiagnostics,
 } from "./native-typescript-diagnostics.mts";
-import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import {
+  createNativeTypeScriptProject,
+  resolveInstalledNativeTypeScriptCompiler,
+} from "./native-typescript.mts";
 
 export type NativeDeclaration = {
   code: string;
@@ -37,7 +40,7 @@ export async function emitNativeDeclarations({
   roots,
   compilerOptions,
   diagnostics = "all",
-  compilerRoot = path.resolve(import.meta.dirname, "../.."),
+  compilerRoot,
   assertInput,
   producedFiles,
 }: DeclarationEmitOptions) {
@@ -57,7 +60,16 @@ export async function emitNativeDeclarations({
     const output = path.join(stage, "out");
     const config = path.join(stage, "tsconfig.json");
     const buildInfo = path.join(stage, "compiler.tsbuildinfo");
-    const binary = resolveRepoToolBinPath("tsgo", { cwd: compilerRoot });
+    const compiler =
+      compilerRoot === undefined
+        ? resolveInstalledNativeTypeScriptCompiler()
+        : {
+            executable: resolveRepoToolBinPath("tsgo", { cwd: compilerRoot }),
+            packageJson: createRequire(path.join(compilerRoot, "package.json")).resolve(
+              "typescript/package.json",
+            ),
+          };
+    const binary = compiler.executable;
     const args = [
       "-p",
       config,
@@ -222,8 +234,7 @@ export async function emitNativeDeclarations({
     ) {
       throw new Error("Invalid native declaration compiler membership");
     }
-    const require = createRequire(path.join(compilerRoot, "package.json"));
-    const compilerPackage = admit(require.resolve("typescript/package.json"));
+    const compilerPackage = admit(compiler.packageJson);
     const platformPackage = admit(
       createRequire(compilerPackage).resolve(
         `@typescript/typescript-${process.platform}-${process.arch}/package.json`,

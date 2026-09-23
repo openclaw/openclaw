@@ -10,9 +10,11 @@ import {
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
-import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
+import {
+  createNativeTypeScriptProject,
+  resolveInstalledNativeTypeScriptCompiler,
+} from "../../scripts/lib/native-typescript.mts";
 import {
   pluginSdkDocMetadata,
   type PluginSdkDocCategory,
@@ -394,7 +396,7 @@ export async function renderPluginSdkApiBaseline(params?: {
     validateMetadata();
   }
   const configPath = path.join(repoRoot, "tsconfig.json");
-  const binary = resolveRepoToolBinPath("tsgo", { cwd: resolveRepoRoot() });
+  const { executable: binary } = resolveInstalledNativeTypeScriptCompiler();
   const snapshot = () =>
     new CompilerInputSnapshot(repoRoot, { toolchainFiles: [binary], generatorInputs: [] });
   const before = snapshot();

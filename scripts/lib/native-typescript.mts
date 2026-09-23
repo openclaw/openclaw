@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { SourceFile } from "typescript/unstable/ast";
 import {
@@ -18,6 +19,16 @@ type ProjectOptions = {
   files?: Readonly<Record<string, string>>;
   fs?: FileSystem;
 };
+
+/** Select the same installed compiler as the native API, including in relocated tooling. */
+export function resolveInstalledNativeTypeScriptCompiler() {
+  const require = createRequire(import.meta.url);
+  const packageJson = require.resolve("typescript/package.json");
+  const getExePath: { default: () => string } = require(
+    path.join(path.dirname(packageJson), "lib/getExePath.js"),
+  );
+  return { executable: getExePath.default(), packageJson };
+}
 
 function compilerFileName(cwd: string, file: string) {
   return path.resolve(cwd, file).split(path.sep).join("/");

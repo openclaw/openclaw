@@ -122,8 +122,11 @@ the job's uploaded artifacts.
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
-Bun. Those Node files still execute; they are not excluded from CI. The complete
-fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
+Bun. Those Node files still execute; they are not excluded from CI.
+TypeScript compiler analysis suites also stay on Node because the synchronous
+native compiler API requires Node child-process pipe handles. This includes
+compiler assertions in mixed runtime suites; their cases remain enabled.
+The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
 files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
 Other families retain Node until they pass on the pinned fork within their

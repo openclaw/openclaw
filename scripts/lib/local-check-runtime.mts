@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createDeclarationInputBoundary } from "./tsdown-declaration-boundary.mts";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
@@ -88,9 +89,6 @@ export function resolveRepoToolBinPath(
   if (toolName === "tsgo") {
     // Resolve this checkout's native compiler independently of the ambient tsc bin link.
     const require = createRequire(import.meta.url);
-    const {
-      createDeclarationInputBoundary,
-    }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
     const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));

@@ -286,7 +286,8 @@ function createNativeDeclarationPlugin(
       },
     },
     resolveId(id) {
-      return emitted.has(id) ? id : undefined;
+      const source = path.isAbsolute(id) ? boundary.resolve(id) : id;
+      return emitted.has(source) ? boundary.assert(id) : undefined;
     },
     transform: {
       order: "pre",
@@ -315,10 +316,10 @@ function createNativeDeclarationPlugin(
     load: {
       order: "pre",
       handler(id) {
-        if (path.isAbsolute(id) && /\.(?:[cm]?ts|tsx|json)$/u.test(id)) {
-          boundary.assert(id);
-        }
-        return emitted.get(id);
+        // Upstream resolution can retain a declared checkout alias on virtual IDs.
+        const source =
+          path.isAbsolute(id) && /\.(?:[cm]?ts|tsx|json)$/u.test(id) ? boundary.assert(id) : id;
+        return emitted.get(source);
       },
     },
     generateBundle: emitOnly

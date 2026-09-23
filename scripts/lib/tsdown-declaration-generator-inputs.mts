@@ -58,6 +58,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       },
     ],
     [
+      "scripts/lib/native-typescript.mts",
+      {
+        expressions: ['path.join(path.dirname(packageJson), "lib/getExePath.js")'],
+        targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
       "scripts/lib/tsdown-declaration-writer.mts",
       {
         expressions: ['pathToFileURL(path.join(root, "tsdown.config.ts")).href'],
