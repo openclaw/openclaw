@@ -77,6 +77,8 @@ export class ProfilePage extends OpenClawLightDomElement {
   private canWrite = false;
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
+  private displayNameEditedDuringLoad = false;
+  private reconnectDraft: { userId: string; profileId: string; displayName: string } | null = null;
   private subscriptions: Array<() => void> = [];
 
   override connectedCallback() {
@@ -95,6 +97,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
+    this.reconnectDraft = null;
+    this.displayNameEditedDuringLoad = false;
     this.client = null;
     this.connected = false;
     this.canWrite = false;
@@ -113,6 +117,28 @@ export class ProfilePage extends OpenClawLightDomElement {
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     const identitySourceChanged =
       clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
+    if (
+      clientChanged ||
+      (nextConnected && (!nextCanWrite || nextSelfUser?.id !== this.reconnectDraft?.userId))
+    ) {
+      this.reconnectDraft = null;
+    }
+    // Retain only local intent. Live identity and pending operations still retire below.
+    if (
+      !clientChanged &&
+      connectionChanged &&
+      !nextConnected &&
+      this.selfUser &&
+      this.ownProfile &&
+      (this.displayNameEditedDuringLoad ||
+        this.displayName.trim() !== (this.ownProfile.displayName ?? ""))
+    ) {
+      this.reconnectDraft = {
+        userId: this.selfUser.id,
+        profileId: this.ownProfile.id,
+        displayName: this.displayName,
+      };
+    }
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.canWrite = nextCanWrite;
@@ -123,6 +149,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.requestUpdate();
     if (identitySourceChanged) {
       this.identityRequestId += 1;
+      this.displayNameEditedDuringLoad = false;
       this.ownProfile = null;
       this.displayName = "";
       this.gitCoauthorEnabled = true;
@@ -152,9 +179,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     const requestId = ++this.identityRequestId;
     const currentProfile = this.ownProfile;
-    const displayNameDraft = this.displayName;
-    const hasUnsavedDisplayName =
-      currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
+    this.displayNameEditedDuringLoad = false;
     this.identityLoading = true;
     this.identityError = null;
     try {
@@ -163,8 +188,18 @@ export class ProfilePage extends OpenClawLightDomElement {
         return;
       }
       const profile = result.profile;
+      const hasUnsavedDisplayName =
+        currentProfile?.id === profile.id &&
+        (this.displayNameEditedDuringLoad ||
+          this.displayName.trim() !== (currentProfile.displayName ?? ""));
       this.ownProfile = profile;
-      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
+      if (!hasUnsavedDisplayName) {
+        this.displayName =
+          this.reconnectDraft?.profileId === profile.id
+            ? this.reconnectDraft.displayName
+            : (profile.displayName ?? "");
+      }
+      this.reconnectDraft = null;
       this.gitCoauthorEnabled = true;
       if (profile.githubIdentity) {
         const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
@@ -188,6 +223,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     } finally {
       if (requestId === this.identityRequestId) {
         this.identityLoading = false;
+        this.displayNameEditedDuringLoad = false;
       }
     }
   }
@@ -346,6 +382,9 @@ export class ProfilePage extends OpenClawLightDomElement {
       error: this.identityError,
       onDisplayNameInput: (value) => {
         this.displayName = value;
+        if (this.identityLoading) {
+          this.displayNameEditedDuringLoad = true;
+        }
       },
       onSaveDisplayName: () => void this.saveIdentity({ kind: "display-name" }),
       onAvatarSelect: (file) => void this.saveIdentity({ kind: "avatar", file }),

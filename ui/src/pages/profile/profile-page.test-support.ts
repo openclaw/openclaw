@@ -89,6 +89,12 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
+      snapshot = { ...snapshot, ...patch };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     emitConnected(connected: boolean) {
       snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
