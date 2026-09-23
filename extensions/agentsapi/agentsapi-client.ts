@@ -22,6 +22,8 @@ export class AgentsApiClient {
       apiKey,
       // Ignore OPENAI_BASE_URL while retaining the SDK's official endpoint default.
       baseURL: null,
+      // SDK retry backoff ignores aborts; preserve the harness's operation deadlines.
+      maxRetries: 0,
       fetch: async (input, init) => {
         this.assertCurrent();
         const guarded = await fetchWithSsrFGuard({
