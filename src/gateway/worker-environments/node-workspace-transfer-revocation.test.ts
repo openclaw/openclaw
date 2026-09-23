@@ -213,6 +213,10 @@ describe("attachment transfer revocation", () => {
     { boundary: "inside-final-create", revoke: false },
     { boundary: "inside-final-create", revoke: true },
   ] as const)("$boundary revoked=$revoke", async ({ boundary, revoke }) => {
+    if (boundary.startsWith("inside-")) {
+      // These boundaries intercept the Node fallback's exclusive create syscall.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+    }
     const root = await fs.realpath(tempDirs.make("attachment-revocation-"));
     const workspaceDir = path.join(root, "workspace");
     const source = path.join(root, "source");

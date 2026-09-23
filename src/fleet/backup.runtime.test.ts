@@ -200,6 +200,8 @@ describe("fleet backup runtime", () => {
   });
 
   it("publishes a complete archive through the copy fallback", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const archivePath = path.join(root, "copy.tgz");
     vi.spyOn(fs, "link").mockRejectedValue(
       Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
@@ -217,6 +219,8 @@ describe("fleet backup runtime", () => {
   });
 
   it("removes an interrupted owned copy and allows a backup retry", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const archivePath = path.join(root, "interrupted.tgz");
     const legacyCopy = interruptCopy(archivePath, (targetPath) =>
       fs.writeFile(targetPath, "partial archive"),
@@ -234,6 +238,8 @@ describe("fleet backup runtime", () => {
   });
 
   it("reports the original failure when an interrupted archive cannot be removed", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const archivePath = path.join(root, "cleanup-unknown.tgz");
     interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));
     const remove = fs.rm.bind(fs);
@@ -258,6 +264,8 @@ describe("fleet backup runtime", () => {
   });
 
   it("preserves a foreign archive that replaces the interrupted publication", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const archivePath = path.join(root, "raced.tgz");
     interruptCopy(archivePath, async (targetPath) => {
       await fs.rename(targetPath, `${targetPath}.displaced`);
@@ -287,6 +295,8 @@ describe("fleet backup runtime", () => {
   });
 
   it("rejects and removes a copy that fails publication content verification", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const archivePath = path.join(root, "integrity-failure.tgz");
     vi.spyOn(fs, "link").mockRejectedValue(
       Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),

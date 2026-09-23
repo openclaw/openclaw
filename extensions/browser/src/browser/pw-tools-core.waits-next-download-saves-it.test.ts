@@ -278,7 +278,9 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        await expect(p).rejects.toThrow(/directory changed/u);
+        await expect(p).rejects.toThrow(
+          /directory changed|directory component must be a directory/u,
+        );
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
         await expectPathMissing(outsideTargetPath);

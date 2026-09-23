@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
@@ -11,25 +11,33 @@ const windowsAuditEnv = {
   USERDOMAIN: "DESKTOP-TEST",
 };
 
-function isStateDirectoryTarget(target: string): boolean {
-  return /(?:^|[\\/])state$/u.test(target);
-}
-
-function windowsOwnerQueryResult(command: string): { stdout: string; stderr: string } | undefined {
-  if (!command.toLowerCase().endsWith("powershell.exe")) {
-    return undefined;
-  }
+function windowsOwnerQueryResult(
+  command: string,
+  args: string[],
+  untrusted?: { targetPath: string; sid: string; mask: number },
+): { stdout: string; stderr: string } {
+  expect(command.toLowerCase()).toMatch(/powershell\.exe$/u);
+  const query = Buffer.from(
+    expectDefined(args.at(-1), "encoded Windows ACL query"),
+    "base64",
+  ).toString("utf16le");
   const currentUserSid = "S-1-5-21-1-2-3-1001";
+  const aces = ["S-1-5-18", currentUserSid].map((sid) => ({
+    sid,
+    mask: 0x001f_01ff,
+    deny: false,
+    inheritOnly: false,
+  }));
+  if (untrusted && query.includes(`'${Buffer.from(untrusted.targetPath).toString("base64")}'`)) {
+    aces.push({ sid: untrusted.sid, mask: untrusted.mask, deny: false, inheritOnly: false });
+  }
   return {
     stdout: JSON.stringify({
       ownerSid: currentUserSid,
       currentUserSid,
-      principalSids: [
-        { name: "NT AUTHORITY\\SYSTEM", sid: "S-1-5-18" },
-        { name: "BUILTIN\\Users", sid: "S-1-5-32-545" },
-        { name: "DESKTOP-TEST\\Tester", sid: currentUserSid },
-      ],
-      principalTranslationFailed: false,
+      daclPresent: true,
+      complete: true,
+      aces,
       remote: false,
     }),
     stderr: "",
@@ -48,6 +56,8 @@ describe("security audit filesystem Windows findings", () => {
   });
 
   it("evaluates Windows ACL-derived filesystem findings", async () => {
+    // Exercise the injected PowerShell ACL fixtures instead of the host's native ACLs.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     await Promise.all([
       (async () => {
         const tmp = await tempCases.makeTmpDir("win");
@@ -64,11 +74,7 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) =>
-              windowsOwnerQueryResult(cmd) ?? {
-                stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              },
+            execIcacls: async (cmd: string, args: string[]) => windowsOwnerQueryResult(cmd, args),
           },
         );
         const forbidden = new Set([
@@ -101,23 +107,12 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) => {
-              const ownerResult = windowsOwnerQueryResult(cmd);
-              if (ownerResult) {
-                return ownerResult;
-              }
-              const target = expectDefined(args[0], "args[0] test invariant");
-              if (isStateDirectoryTarget(target)) {
-                return {
-                  stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
-                  stderr: "",
-                };
-              }
-              return {
-                stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              };
-            },
+            execIcacls: async (cmd: string, args: string[]) =>
+              windowsOwnerQueryResult(cmd, args, {
+                targetPath: stateDir,
+                sid: "S-1-5-32-545",
+                mask: 0x8000_0000,
+              }),
           },
         );
         expect(
@@ -142,23 +137,12 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) => {
-              const ownerResult = windowsOwnerQueryResult(cmd);
-              if (ownerResult) {
-                return ownerResult;
-              }
-              const target = expectDefined(args[0], "args[0] test invariant");
-              if (isStateDirectoryTarget(target)) {
-                return {
-                  stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
-                  stderr: "",
-                };
-              }
-              return {
-                stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              };
-            },
+            execIcacls: async (cmd: string, args: string[]) =>
+              windowsOwnerQueryResult(cmd, args, {
+                targetPath: stateDir,
+                sid: "S-1-5-7",
+                mask: 0x001f_01ff,
+              }),
           },
         );
         expect(

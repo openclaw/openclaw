@@ -70,7 +70,7 @@ if (sealed) {
   assert.equal(resolveRuntimeProcessEntrypointUrl("githubExec").href, new URL("./github-exec-launcher.mjs", pathToFileURL(entry)).href);
 }
 const { configureFsSafeNative, getFsSafeNativeConfig, FsSafeError } = await import(pathToFileURL(observer).href);
-assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "off" : mode);
+assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "auto" : mode);
 if (mode === "configured") configureFsSafeNative({ mode: "require" });
 const scoped = await root(rootDir);
 if (outcome === "missing") {
@@ -450,7 +450,7 @@ describe("tsdown config", () => {
               probe(key, "require", "native", { [key]: "require" }),
             ),
             probe("shared-config", "configured", "native"),
-            probe("default", "off", "fallback"),
+            probe("default", "auto", "native"),
           ]);
           for (const nativePackage of nativePackages) {
             fs.rmSync(path.join(relocatedRoot, path.relative(sourceRoot, nativePackage.root)), {

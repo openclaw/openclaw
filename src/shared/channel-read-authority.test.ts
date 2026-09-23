@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  captureChannelReadAuthority,
-  captureChannelReadScope,
-  withChannelReadAuthority,
-} from "./channel-read-authority.js";
+import { captureChannelReadScope, withChannelReadAuthority } from "./channel-read-authority.js";
 
 const logError = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", () => ({
@@ -25,13 +21,13 @@ describe("channel read completion ownership", () => {
         await withChannelReadAuthority(
           () => {},
           async () => {
-            innerAssertion = captureChannelReadAuthority();
+            innerAssertion = captureChannelReadScope()?.assertCurrent;
             captureChannelReadScope()!.registerResource({ key: "created-media", settle });
           },
         );
         expect(() => innerAssertion!()).toThrow("no longer active");
         expect(settle).not.toHaveBeenCalled();
-        expect(() => captureChannelReadAuthority()!()).not.toThrow();
+        expect(() => captureChannelReadScope()!.assertCurrent()).not.toThrow();
       },
     );
     expect(settle).toHaveBeenCalledExactlyOnceWith(true);
@@ -171,9 +167,9 @@ describe("channel read completion ownership", () => {
     await withChannelReadAuthority(
       () => {},
       async () => {
-        retained = otherChunk.captureChannelReadAuthority();
+        retained = otherChunk.captureChannelReadScope()?.assertCurrent;
         expect(typeof retained).toBe("function");
-        expect(retained).toBe(captureChannelReadAuthority());
+        expect(retained).toBe(captureChannelReadScope()?.assertCurrent);
         retained!();
         otherChunk.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
       },
@@ -183,7 +179,6 @@ describe("channel read completion ownership", () => {
   });
 
   it("leaves calls without a read scope unchanged", async () => {
-    expect(captureChannelReadAuthority()).toBeUndefined();
     expect(captureChannelReadScope()).toBeUndefined();
     await expect(withChannelReadAuthority(undefined, async () => "direct result")).resolves.toBe(
       "direct result",

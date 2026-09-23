@@ -7,7 +7,7 @@ import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-chec
 import {
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveChmod,
   FIRST_AUDIT_SCRUB_BYTE,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -190,11 +190,11 @@ describe("legacy audit recovery byte handling", () => {
       await audit.writeJsonLines(source, [systemAuditEvent("before archive")]);
       await audit.migrate();
       await audit.appendJsonLines(raw, [systemAuditEvent("later row")]);
-      // fs-safe applies the write mode before the migration's explicit hardening check.
-      const chmodSpy = await failChmodCall(
+      // Inject failure only on the published archive's explicit hardening.
+      const chmodSpy = await failArchiveChmod(
         audit,
         "recovery-chmod-probe",
-        3,
+        sanitized,
         "simulated recovery chmod failure",
       );
 

@@ -156,6 +156,8 @@ describe("backupCreateCommand atomic archive write", () => {
   });
 
   it("does not overwrite an archive created after readiness checks complete", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-race-",
     });
@@ -182,6 +184,8 @@ describe("backupCreateCommand atomic archive write", () => {
   });
 
   it("fails closed when hard-link publication is unsupported", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-no-hardlink-",
     });

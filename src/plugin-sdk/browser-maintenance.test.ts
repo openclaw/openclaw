@@ -156,7 +156,7 @@ describe("browser maintenance", () => {
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
     const target = writeTrashTarget();
-    const expected = path.join(homeDir, ".Trash", "demo-123-secure", "demo");
+    const expected = path.join(homeDir, ".Trash", ".fs-safe-trash-123-secure", "demo");
 
     await expect(movePathToTrash(target)).resolves.toBe(expected);
     expect(runExec).not.toHaveBeenCalled();
@@ -164,7 +164,7 @@ describe("browser maintenance", () => {
       recursive: true,
       mode: 0o700,
     });
-    expect(mkdtempSync).toHaveBeenCalledWith(path.join(homeDir, ".Trash", "demo-123-"));
+    expect(mkdtempSync).toHaveBeenCalledWith(path.join(homeDir, ".Trash", ".fs-safe-trash-123-"));
     expect(renameSync).toHaveBeenCalledWith(target, expected);
     expect(cpSync).not.toHaveBeenCalled();
     expect(rmSync).not.toHaveBeenCalled();
@@ -191,10 +191,10 @@ describe("browser maintenance", () => {
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
     const target = writeTrashTarget();
-    const expected = path.join(resolvedTrashDir, "demo-123-secure", "demo");
+    const expected = path.join(resolvedTrashDir, ".fs-safe-trash-123-secure", "demo");
 
     await expect(movePathToTrash(target)).resolves.toBe(expected);
-    expect(mkdtempSync).toHaveBeenCalledWith(path.join(resolvedTrashDir, "demo-123-"));
+    expect(mkdtempSync).toHaveBeenCalledWith(path.join(resolvedTrashDir, ".fs-safe-trash-123-"));
     expect(renameSync).toHaveBeenCalledWith(target, expected);
   });
 
@@ -242,7 +242,7 @@ describe("browser maintenance", () => {
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
     const target = writeTrashTarget();
-    const expected = path.join(homeDir, ".Trash", "demo-123-secure", "demo");
+    const expected = path.join(homeDir, ".Trash", ".fs-safe-trash-123-secure", "demo");
 
     await expect(movePathToTrash(target)).resolves.toBe(expected);
     expect(cpSync).toHaveBeenCalledWith(target, expected, {
@@ -273,8 +273,8 @@ describe("browser maintenance", () => {
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
     const target = writeTrashTarget();
-    const first = path.join(homeDir, ".Trash", "demo-123-first", "demo");
-    const second = path.join(homeDir, ".Trash", "demo-123-second", "demo");
+    const first = path.join(homeDir, ".Trash", ".fs-safe-trash-123-first", "demo");
+    const second = path.join(homeDir, ".Trash", ".fs-safe-trash-123-second", "demo");
 
     await expect(movePathToTrash(target)).resolves.toBe(second);
     expect(cpSync).toHaveBeenNthCalledWith(1, target, first, {
@@ -304,8 +304,8 @@ describe("browser maintenance", () => {
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
     const target = writeTrashTarget();
-    const first = path.join(homeDir, ".Trash", "demo-123-first", "demo");
-    const second = path.join(homeDir, ".Trash", "demo-123-second", "demo");
+    const first = path.join(homeDir, ".Trash", ".fs-safe-trash-123-first", "demo");
+    const second = path.join(homeDir, ".Trash", ".fs-safe-trash-123-second", "demo");
 
     await expect(movePathToTrash(target)).resolves.toBe(second);
     expect(renameSync).toHaveBeenNthCalledWith(1, target, first);

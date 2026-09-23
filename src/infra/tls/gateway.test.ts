@@ -214,6 +214,8 @@ describe("loadGatewayTlsServerRuntime", () => {
   });
 
   it("syncs generated certificate data before linking final paths", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
@@ -271,6 +273,8 @@ describe("loadGatewayTlsServerRuntime", () => {
   });
 
   it("preserves the published certificate when key publication loses a race", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
@@ -339,6 +343,8 @@ describe("loadGatewayTlsServerRuntime", () => {
   );
 
   it("publishes best-effort and warns once when hard links are unavailable", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
@@ -405,6 +411,8 @@ describe("loadGatewayTlsServerRuntime", () => {
   });
 
   it("reports atomic and durability degradations independently", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");

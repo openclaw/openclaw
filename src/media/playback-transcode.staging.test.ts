@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { root as fsRoot, type Root } from "@openclaw/fs-safe";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -103,7 +104,8 @@ describe("playback input staging", () => {
   it("rejects a moved input that no longer names its staging descriptor", async () => {
     const source = await createSource("replaced-staging.caf", "stable-source");
     const open = fs.open.bind(fs);
-    const rename = fs.rename.bind(fs);
+    const rootPrototype = Object.getPrototypeOf(await fsRoot(tempHome.home)) as Root;
+    const move = Reflect.get(rootPrototype, "move") as Root["move"];
     let writer: FileHandle | undefined;
     let writerWasOpenAtMove = false;
     let replaced = false;
@@ -118,21 +120,21 @@ describe("playback input staging", () => {
       }
       return handle;
     });
-    const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (
-        path.basename(String(from)) === ".input.caf.stage" &&
-        path.basename(String(to)) === "input.caf"
-      ) {
-        // Observe the producer's handle without opening another one that would pin the inode.
-        writerWasOpenAtMove = writer !== undefined && writer.fd >= 0;
-        await rename(from, to);
-        await fs.unlink(to);
-        await fs.writeFile(to, "stable-source", { mode: 0o600 });
-        replaced = true;
-      } else {
-        await rename(from, to);
-      }
-    });
+    const spy = vi
+      .spyOn(rootPrototype, "move")
+      .mockImplementation(async function (this: Root, from, to, options) {
+        if (from === ".input.caf.stage" && to === "input.caf") {
+          // Keep the real native move, then replace its published inode.
+          writerWasOpenAtMove = writer !== undefined && writer.fd >= 0;
+          await move.call(this, from, to, options);
+          const targetPath = path.join(this.rootReal, to);
+          await fs.unlink(targetPath);
+          await fs.writeFile(targetPath, "stable-source", { mode: 0o600 });
+          replaced = true;
+        } else {
+          await move.call(this, from, to, options);
+        }
+      });
     try {
       expect(
         await playback.resolvePlaybackTranscode({
@@ -166,12 +168,11 @@ describe("playback input staging", () => {
     const cleanupError = new Error("synthetic workspace cleanup failure");
     const remove = fs.rm.bind(fs);
     let quarantine: string | undefined;
-    const spy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (path.basename(String(target)).startsWith(".fs-safe-workspace-cleanup-")) {
-        quarantine = String(target);
+    __setFsSafeTestHooksForTest({
+      beforeTempWorkspaceNativeRemoval: (target) => {
+        quarantine = target;
         throw cleanupError;
-      }
-      return remove(target, options);
+      },
     });
     runFfmpeg.mockImplementationOnce(async (args: string[]) => {
       await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
@@ -190,7 +191,7 @@ describe("playback input staging", () => {
       expect(quarantine).toBeDefined();
       expect(await playback.resolvePlaybackTranscode(params)).toEqual({ kind: "fallback" });
     } finally {
-      spy.mockRestore();
+      __setFsSafeTestHooksForTest(undefined);
       await settlePlaybackTranscodeJobsForTest();
       if (quarantine) {
         await remove(quarantine, { recursive: true, force: true });

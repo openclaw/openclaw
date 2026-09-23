@@ -1,6 +1,7 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -46,7 +47,10 @@ export async function openGatewayNodeDuplex(options: {
   const record = scope.pluginRegistry?.plugins.find((plugin) => plugin.id === scope.pluginId);
   const isPluginCurrent =
     scope.pluginRegistry && record
-      ? capturePluginLifecycleAuthority(scope.pluginRegistry, record)
+      ? capturePluginLifecycleAuthority(scope.pluginRegistry, record, {
+          // Prepared harnesses own scoped registries without activating the Gateway root.
+          scopedRuntime: scope.pluginRegistry !== getActivePluginRegistry(),
+        })
       : undefined;
   const callerIdentity = scope.client?.internal?.agentRuntimeIdentity;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);

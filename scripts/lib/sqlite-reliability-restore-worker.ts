@@ -31,6 +31,9 @@ async function main(argv: string[]): Promise<void> {
   const resolvedTargetPath = canonicalPathWithExistingParent(targetPath);
 
   if (crashPoint === "before-publish") {
+    // This crash seam intercepts the fallback hard-link syscall; link-required
+    // publication still forbids copying or overwriting the destination.
+    process.env.FS_SAFE_NATIVE_MODE = "off";
     const originalLink = fs.link.bind(fs);
     Object.defineProperty(fs, "link", {
       configurable: true,

@@ -331,6 +331,8 @@ describe("acquireFileLock", () => {
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
+    // The synthetic handle exercises the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const filePath = path.join(tempDir, "write-fails");
     const writeError = new Error("owner write failed");
     const close = vi.fn().mockResolvedValue(undefined);

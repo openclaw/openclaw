@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
@@ -170,27 +171,27 @@ async function fileHandlePrototype<T>(
   return prototype;
 }
 
-export async function failChmodCall(
+export async function failArchiveChmod(
   fixture: AuditMigrationFixture,
   probeName: string,
-  callNumber: number,
+  archivePath: string,
   message: string,
 ) {
-  const prototype = await fileHandlePrototype<{ chmod(mode: number): Promise<void> }>(
-    fixture,
-    probeName,
-  );
+  const prototype = await fileHandlePrototype<{
+    chmod(mode: number): Promise<void>;
+    stat(): Promise<Stats>;
+  }>(fixture, probeName);
   const original = Reflect.get(prototype, "chmod") as typeof prototype.chmod;
-  let calls = 0;
-  return vi.spyOn(prototype, "chmod").mockImplementation(function (
+  return vi.spyOn(prototype, "chmod").mockImplementation(async function (
     this: typeof prototype,
     mode: number,
   ) {
-    calls += 1;
-    if (calls === callNumber) {
-      return Promise.reject(new Error(message));
+    const archive = await fs.stat(archivePath).catch(() => undefined);
+    const opened = await this.stat();
+    if (archive && opened.dev === archive.dev && opened.ino === archive.ino) {
+      throw new Error(message);
     }
-    return original.call(this, mode);
+    await original.call(this, mode);
   });
 }
 

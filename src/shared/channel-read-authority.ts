@@ -23,12 +23,7 @@ const authorityScope = resolveGlobalSingleton(
   () => new AsyncLocalStorage<ScopedReadAuthority>(),
 );
 
-/** Capture at request submission; retain this exact check through queues and retries. */
-export function captureChannelReadAuthority(): (() => void) | undefined {
-  return authorityScope.getStore();
-}
-
-/** Internal media ownership; the SDK continues to expose only the callable assertion. */
+/** Capture internal media ownership and its exact assertion through queues and retries. */
 export function captureChannelReadScope(): ChannelReadScope | undefined {
   return authorityScope.getStore()?.[completionKey];
 }

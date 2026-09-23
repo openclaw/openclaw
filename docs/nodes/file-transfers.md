@@ -69,9 +69,18 @@ Unary reads and writes retain the 16 MiB transfer limit; directory reads consume
 the existing `dir.list` pages. `file.write.expectedSha256` verifies the submitted bytes, not
 the previous file version. Owner-document conflict checks remain in the Gateway.
 
-This mapping covers workspace files only. Memory search, skill management, and
-attachment staging require their respective workspace capabilities; this mapping
-alone does not enable a complete storage split or launch an agent harness.
+The mapping routes workspace documents and outbound attachment reads to the
+node. When the Gateway has duplex node transport, it also registers remote
+Memory-file access, Skills discovery and management, and input-attachment
+staging. Memory search and its index remain on the Gateway; the node supplies
+the source files. The mapping does not launch an agent harness.
+
+Run the same OpenClaw version on the Gateway and node so their workspace workers
+and transfer protocol match. Grant read access to the Memory files, Skills
+directories, and output files you intend to use, and write access to the
+attachment-staging and Skills installation paths. The `AGENTS.md`-only policy
+above does not grant those additional paths; each operation still enforces the
+node's command and file-path policies.
 
 ### Binary transfers for services
 

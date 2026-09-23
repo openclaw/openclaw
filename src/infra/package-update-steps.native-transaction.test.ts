@@ -1,4 +1,4 @@
-import { unlinkSync } from "node:fs";
+import fsSync, { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -463,9 +463,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               }
             }
           });
-          const lstat = fs.lstat.bind(fs);
-          const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const copyResult = await lstat(...args);
+          const lstat = fsSync.lstatSync.bind(fsSync);
+          const observation = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+            const copyResult = lstat(...args);
             if (rollbackFailure === "copy-cleanup" && published && String(args[0]) === backupRoot) {
               current = false;
             }

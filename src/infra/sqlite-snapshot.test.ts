@@ -701,6 +701,8 @@ describe("createVerifiedSqliteSnapshot", () => {
   it.runIf(process.platform !== "win32")(
     "preserves unowned target bytes linked from a replaced staging pathname",
     async () => {
+      // This fault injection targets the Node filesystem fallback.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const originalLink = fs.link.bind(fs);
       let replacementBytes: Buffer | undefined;
       vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
@@ -768,6 +770,8 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it("removes a fallback target whose copied bytes fail verification", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
       if (path.resolve(String(target)) === targetPath) {
         await fs.appendFile(source, "changed-before-fallback");
@@ -782,6 +786,8 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it("removes its hard link when opening the published target fails", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const originalLink = fs.link.bind(fs);
     const originalOpen = fs.open.bind(fs);
     let linked = false;
@@ -849,37 +855,60 @@ describe("createVerifiedSqliteSnapshot", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a transient publication directory replacement during sync",
     async () => {
-      const displacedPath = `${tempDir}.displaced`;
-      const replacementPath = `${tempDir}.replacement`;
+      const publicationDir = path.join(tempDir, "publication");
+      await fs.mkdir(publicationDir);
+      const publicationTarget = path.join(publicationDir, "snapshot.sqlite");
+      const displacedPath = `${publicationDir}.displaced`;
+      const replacementPath = `${publicationDir}.replacement`;
       const originalOpen = fs.open.bind(fs);
-      let targetDirectoryOpenCount = 0;
+      const originalFstat = fsSync.fstatSync.bind(fsSync);
+      let publicationHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      let replacementHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      let syncReached = false;
       let replaced = false;
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-        const resolvedPath = path.resolve(String(filePath));
-        if (isDirectoryOpen(flags) && resolvedPath === tempDir) {
-          targetDirectoryOpenCount += 1;
-          if (targetDirectoryOpenCount === 2) {
-            replaced = true;
-            await fs.rename(tempDir, displacedPath);
-            await fs.mkdir(tempDir);
-            const replacementHandle = await originalOpen(filePath, flags, mode);
-            await fs.rename(tempDir, replacementPath);
-            await fs.rename(displacedPath, tempDir);
-            return replacementHandle;
-          }
+        const handle = await originalOpen(filePath, flags, mode);
+        if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === publicationDir) {
+          publicationHandle = handle;
         }
-        return await originalOpen(filePath, flags, mode);
+        return handle;
+      });
+      __setFsSafeTestHooksForTest({
+        beforePublishDirectorySync: async (_method, publishedPath) => {
+          if (publishedPath !== publicationTarget) {
+            return;
+          }
+          syncReached = true;
+          await fs.rename(publicationDir, displacedPath);
+          await fs.mkdir(publicationDir);
+          replacementHandle = await originalOpen(publicationDir, fsSync.constants.O_RDONLY);
+          await fs.rename(publicationDir, replacementPath);
+          await fs.rename(displacedPath, publicationDir);
+        },
+      });
+      vi.spyOn(fsSync, "fstatSync").mockImplementation((fd, options) => {
+        if (syncReached && !replaced && fd === publicationHandle?.fd && replacementHandle) {
+          // The publisher retains its handle before this hook. Substitute only
+          // its sync-time descriptor observation with the real replacement's.
+          replaced = true;
+          return originalFstat(replacementHandle.fd, options);
+        }
+        return originalFstat(fd, options);
       });
 
       try {
-        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-          /handle changed during directory sync/u,
-        );
+        await expect(
+          createVerifiedSqliteSnapshot({ sourcePath, targetPath: publicationTarget }),
+        ).rejects.toMatchObject({
+          cause: expect.objectContaining({ code: "path-mismatch" }),
+        });
+        expect(syncReached).toBe(true);
         expect(replaced).toBe(true);
-        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(publicationTarget)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
+        await replacementHandle?.close();
         await fs.rm(replacementPath, { recursive: true, force: true });
-        await fs.rename(displacedPath, tempDir).catch(() => undefined);
+        await fs.rename(displacedPath, publicationDir).catch(() => undefined);
       }
     },
   );

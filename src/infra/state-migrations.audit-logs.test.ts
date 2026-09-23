@@ -13,7 +13,7 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveChmod,
   failSecondScrubWrite,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -484,8 +484,8 @@ describe("legacy core audit log migration", () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, sanitized, source } = audit.config;
       await audit.writeJsonLines(source, [configAuditRecord("must-redact")]);
-      // fs-safe applies the write mode before the migration's explicit hardening checks.
-      const chmodSpy = await failChmodCall(audit, "chmod-probe", 4, "simulated chmod failure");
+      // Inject failure only on the published archive's explicit hardening.
+      const chmodSpy = await failArchiveChmod(audit, "chmod-probe", raw, "simulated chmod failure");
 
       let failed: Awaited<ReturnType<typeof audit.migrate>>;
       try {

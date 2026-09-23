@@ -493,6 +493,8 @@ describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform !== "win32")(
     "publishes payload only after the pending directory is durable",
     async () => {
+      // This fault injection targets the Node filesystem fallback.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture({
         now: () => new Date("2026-07-24T16:00:00.000Z"),
       });
@@ -1120,6 +1122,8 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("preserves both restore and cleanup failures", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, restorePath, snapshot } =
       await createGenericSnapshotFixture("combined-failure");
     const linkSpy = vi
@@ -1226,6 +1230,8 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("rejects an artifact changed after entering the final directory", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, sourcePath } = await createGenericRepositoryFixture();
     const originalLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
@@ -1306,6 +1312,8 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("cleans a linked entry when post-link inspection fails", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const originalLink = fs.link.bind(fs);
     const originalLstat = fs.lstat.bind(fs);
@@ -1342,6 +1350,8 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("cleans an entry linked from a replaced staging pathname", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const originalLink = fs.link.bind(fs);
     let raced = false;
@@ -1369,6 +1379,8 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("never overwrites a file raced into the final snapshot directory", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const originalLink = fs.link.bind(fs);
     let racedPath: string | undefined;
@@ -1657,6 +1669,8 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("fails closed when fresh restore cannot publish atomically", async () => {
+    // This fault injection targets the Node filesystem fallback.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { provider, restorePath, snapshot } =
       await createGenericSnapshotFixture("atomic-restore");
     const linkSpy = vi
@@ -1797,6 +1811,8 @@ describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform !== "win32")(
     "removes only its restored target when a sidecar races publication",
     async () => {
+      // This fault injection targets the Node filesystem fallback.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const { provider, restorePath, snapshot, tempDir } =
         await createGenericSnapshotFixture("restore-race");
       const canonicalRestorePath = path.join(

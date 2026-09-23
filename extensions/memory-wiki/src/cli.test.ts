@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { root as fsRoot, type Root } from "@openclaw/fs-safe";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1008,17 +1009,18 @@ cli note
     const concurrentSave = "Concurrent editor save during rollback.\n";
     let recreated = false;
     const recoveryDestinations: string[] = [];
-    const realRename = fs.rename;
+    const rootPrototype = Object.getPrototypeOf(await fsRoot(path.dirname(pagePath))) as Root;
+    const move = Reflect.get(rootPrototype, "move") as Root["move"];
     const renameSpy = vi
-      .spyOn(fs, "rename")
-      .mockImplementation(async (from: Parameters<typeof fs.rename>[0], to) => {
-        await realRename(from, to);
-        if (!recreated && String(to).includes("recovered")) {
+      .spyOn(rootPrototype, "move")
+      .mockImplementation(async function (this: Root, from, to, options) {
+        await move.call(this, from, to, options);
+        if (!recreated && to.includes("recovered")) {
           recreated = true;
-          await fs.writeFile(from, concurrentSave, "utf8");
+          await fs.writeFile(path.join(this.rootReal, from), concurrentSave, "utf8");
         }
-        if (path.basename(String(to)) === "content") {
-          recoveryDestinations.push(String(to));
+        if (path.basename(to) === "content") {
+          recoveryDestinations.push(path.join(this.rootReal, to));
         }
       });
     const rollback = JSON.parse(

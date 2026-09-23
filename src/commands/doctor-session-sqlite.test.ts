@@ -4546,6 +4546,8 @@ describe("runDoctorSessionSqlite", () => {
   )(
     "preserves a late-created $destination during historical v$version restore without SQLite",
     async ({ version, destination }) => {
+      // This fault injection targets the Node filesystem fallback.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const { store, manifestPath, manifest, archivePath } = createHistoricalRestoreStore(version);
       const original = fs.readFileSync(archivePath);
       const sourcePath = expectDefined(
@@ -4998,6 +5000,8 @@ describe("runDoctorSessionSqlite", () => {
   it.each([1, 2] as const)(
     "protects historical v%s restore metadata and its retained transcript dependency from cleanup",
     async (version) => {
+      // This fault injection targets the Node filesystem fallback.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const { store, manifestPath, manifest, archivePath } = createHistoricalRestoreStore(version);
       const target = expectDefined(manifest.targets[0], "historical cleanup target");
       const index = expectDefined(

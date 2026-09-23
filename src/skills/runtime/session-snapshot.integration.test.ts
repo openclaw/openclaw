@@ -7,8 +7,10 @@ import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-
 import { createReplySessionEntryHandle } from "../../auto-reply/reply/session-entry-handle.js";
 import { ensureSkillSnapshot } from "../../auto-reply/reply/session-updates.js";
 import {
+  appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
+  loadTranscriptEventsSync,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -16,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db-cache.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import type { SkillSnapshot } from "../types.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
@@ -59,6 +62,105 @@ async function fixture() {
 }
 
 describe("asynchronous runtime skill preparation", () => {
+  it("upgrades a saved release format-5 snapshot on continuation without replacing its session or history", async () => {
+    const params = await fixture();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    params.config.skills = { load: { watch: false } };
+    params.config.tools = { exec: { security: "deny" } };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:release-upgrade",
+      sessionId: "saved-release-session",
+      storePath: path.join(
+        path.dirname(params.workspaceDir),
+        "state",
+        "agents",
+        "main",
+        "openclaw-agent.sqlite",
+      ),
+    };
+    // Release 29afcd49 persists format 5 with these fields. Its SQLite session
+    // owner/schema is unchanged by this backport; only the prompt format advances.
+    const savedSnapshot: SkillSnapshot = {
+      prompt: [
+        "\n\nThe following skills provide specialized instructions for specific tasks.",
+        "Read a skill's file at its listed location when the task matches its description.",
+        "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+        "",
+        "<available_skills>",
+        "  <skill>",
+        "    <name>visible</name>",
+        "    <description>Release-format instructions</description>",
+        `    <location>${params.visibleFile}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      skills: [{ name: "visible", skillKey: "visible" }],
+      skillFilter: ["visible"],
+      skillOverrides: { visible: true },
+      nodeSkillsEligibility: { canExec: false },
+      // Keep every other invalidation input current so the format change must
+      // refresh this persisted snapshot even before a watcher sees a change.
+      version: getSkillsSnapshotVersion(params.workspaceDir),
+      promptFormatVersion: 5,
+    };
+    const saved: SessionEntry = {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "saved-release-lifecycle",
+      updatedAt: 1,
+      systemSent: true,
+      label: "Existing conversation",
+      compactionCount: 2,
+      skillsSnapshot: savedSnapshot,
+    };
+    replaceSessionEntrySync(scope, saved);
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Keep this existing conversation", timestamp: 1 },
+    });
+    const history = JSON.stringify(loadTranscriptEventsSync(scope));
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const sessionEntry = expectDefined(loadSessionEntry(scope), "saved release session");
+    expect(sessionEntry.skillsSnapshot).toEqual(saved.skillsSnapshot);
+    const sessionStore = { [scope.sessionKey]: sessionEntry };
+    const result = await ensureSkillSnapshot({
+      ...scope,
+      sessionEntry,
+      sessionStore,
+      isFirstTurnInSession: false,
+      workspaceDir: params.workspaceDir,
+      cfg: params.config,
+      skillFilter: ["visible"],
+      skillOverrides: { visible: true },
+    });
+    expect(result.skillsSnapshot).toMatchObject({
+      promptFormatVersion: 6,
+      skills: [{ name: "visible", skillKey: "visible" }],
+      skillFilter: ["visible"],
+      skillOverrides: { visible: true },
+    });
+    expect(result.skillsSnapshot?.prompt).toContain("Original instructions");
+    expect(result.skillsSnapshot?.prompt).not.toContain("Release-format instructions");
+    expect(result.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toBe(params.visibleFile);
+    expect(result.systemSent).toBe(true);
+    closeOpenClawAgentDatabasesForTest();
+    const reopened = expectDefined(loadSessionEntry(scope), "upgraded release session");
+    expect(reopened).toMatchObject({
+      sessionId: saved.sessionId,
+      lifecycleRevision: saved.lifecycleRevision,
+      systemSent: true,
+      label: saved.label,
+      compactionCount: 2,
+      skillsSnapshot: {
+        promptFormatVersion: 6,
+        prompt: result.skillsSnapshot?.prompt,
+        skillFilter: ["visible"],
+        skillOverrides: { visible: true },
+      },
+    });
+    expect(JSON.stringify(loadTranscriptEventsSync(scope))).toBe(history);
+  });
+
   const replyCases = (
     [
       [true, true, false],

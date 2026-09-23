@@ -65,7 +65,7 @@ describe("browser trash", () => {
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
     const target = path.join(configDir, "browser", "constructor");
     realMkdirSync(target, { recursive: true });
-    const expected = path.join(homeDir, ".Trash", "constructor-123-secure", "constructor");
+    const expected = path.join(homeDir, ".Trash", ".fs-safe-trash-123-secure", "constructor");
 
     await expect(movePathToTrash(target)).resolves.toBe(expected);
     expect(renameSync).toHaveBeenCalledWith(target, expected);
