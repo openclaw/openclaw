@@ -1,7 +1,7 @@
 // ClawHub release policy tests execute the real npm and ClawHub release checks.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../../helpers/temp-dir.js";
 import { writeJsonFile } from "../../../helpers/temp-repo.js";
@@ -18,6 +18,10 @@ type FixtureOptions = {
   includeBuildVersion?: boolean;
   includePluginApi?: boolean;
   repositoryUrl?: string;
+  requiredLatestDependency?: {
+    packageName: string;
+    version: string;
+  };
   version?: string;
 };
 
@@ -34,10 +38,18 @@ function git(cwd: string, args: string[]) {
 
 function packageManifest(options: FixtureOptions = {}) {
   const version = options.version ?? INITIAL_VERSION;
+  const requiredLatestDependency = options.requiredLatestDependency;
   return {
     name: PACKAGE_NAME,
     version,
     type: "module",
+    ...(requiredLatestDependency
+      ? {
+          dependencies: {
+            [requiredLatestDependency.packageName]: requiredLatestDependency.version,
+          },
+        }
+      : {}),
     repository: {
       type: "git",
       url: options.repositoryUrl ?? REPOSITORY_URL,
@@ -64,6 +76,9 @@ function packageManifest(options: FixtureOptions = {}) {
       release: {
         publishToClawHub: true,
         publishToNpm: true,
+        ...(requiredLatestDependency
+          ? { requireLatestDependencies: [requiredLatestDependency.packageName] }
+          : {}),
       },
     },
   };
@@ -110,15 +125,30 @@ function commitFixture(repoDir: string, message: string) {
   return git(repoDir, ["rev-parse", "HEAD"]);
 }
 
-function runCheck(scriptPath: string, cwd: string, args: string[] = []) {
+function runCheck(
+  scriptPath: string,
+  cwd: string,
+  args: string[] = [],
+  env: NodeJS.ProcessEnv = process.env,
+) {
   return spawnSync(process.execPath, ["--import", tsxImport, scriptPath, ...args], {
     cwd,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...env,
       NO_COLOR: "1",
     },
   });
+}
+
+function writeNpmLatestFixture(repoDir: string, latestVersion: string): NodeJS.ProcessEnv {
+  const binDir = join(repoDir, "bin");
+  mkdirSync(binDir);
+  const npmPath = join(binDir, "npm");
+  writeFileSync(npmPath, `#!/bin/sh\nprintf '%s\\n' '"${latestVersion}"'\n`, "utf8");
+  chmodSync(npmPath, 0o755);
+  writeFileSync(join(binDir, "npm.cmd"), `@echo off\r\necho "${latestVersion}"\r\n`, "utf8");
+  return { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` };
 }
 
 function expectValidPackage(result: ReturnType<typeof runCheck>, command: string, version: string) {
@@ -138,6 +168,28 @@ describe("ClawHub release policy contracts", () => {
       INITIAL_VERSION,
     );
     expectValidPackage(runCheck(NPM_CHECK, repoDir), "plugin-npm-release-check", INITIAL_VERSION);
+  });
+
+  it("keeps npm dependency freshness advisory while ClawHub remains strict", () => {
+    const dependency = { packageName: "demo-runtime", version: "1.2.3" };
+    const repoDir = createPluginRepo({ requiredLatestDependency: dependency });
+    const env = writeNpmLatestFixture(repoDir, "1.2.4");
+
+    const npmResult = runCheck(NPM_CHECK, repoDir, [], env);
+    expect(npmResult.status, npmResult.stderr).toBe(0);
+    expect(npmResult.stdout).toContain(
+      "plugin-npm-release-check: publishable plugin metadata looks OK.",
+    );
+    expect(npmResult.stderr).toContain(
+      `${dependency.packageName} pinned "${dependency.version}", npm latest is "1.2.4". Freshness is advisory; retain the release-validated pin.`,
+    );
+
+    const clawHubResult = runCheck(CLAWHUB_CHECK, repoDir, [], env);
+    expect(clawHubResult.status).toBe(1);
+    expect(clawHubResult.stdout).toBe("");
+    expect(clawHubResult.stderr).toContain(
+      `${dependency.packageName} must match npm latest for release; found "${dependency.version}", latest is "1.2.4".`,
+    );
   });
 
   it("requires the canonical repository provenance for ClawHub and npm publishing", () => {

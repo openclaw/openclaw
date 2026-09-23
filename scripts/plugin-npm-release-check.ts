@@ -3,13 +3,13 @@
 
 import { pathToFileURL } from "node:url";
 import {
-  assertPluginReleaseDependencyFreshness,
   assertPluginReleaseVersionFloors,
   collectPluginNpmGitRangeSelection,
   collectPublishablePluginPackages,
   parsePluginNpmReleaseArgs,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
+  warnPluginReleaseDependencyFreshness,
 } from "./lib/plugin-npm-release.ts";
 
 function runPluginNpmReleaseCheck(argv: string[]) {
@@ -51,7 +51,7 @@ function runPluginNpmReleaseCheck(argv: string[]) {
   if (selectionMode !== undefined || selection.length > 0) {
     assertPluginReleaseVersionFloors(selected, "plugin-npm-release-check");
   }
-  assertPluginReleaseDependencyFreshness(selected, "plugin-npm-release-check");
+  warnPluginReleaseDependencyFreshness(selected, "plugin-npm-release-check");
 
   console.log("plugin-npm-release-check: publishable plugin metadata looks OK.");
   if (baseRef && headRef && selected.length === 0) {
