@@ -131,8 +131,6 @@ const unrelatedGatewayFixturePid = process.pid + 2;
 
 const suspendScheduledTaskAutoStartForUpdate = vi.fn();
 const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
-const prepareRestartScript = vi.fn();
-const runRestartScript = vi.fn();
 const managedUpdateHandoff = vi.hoisted(() => ({
   start: vi.fn(),
   transfer: vi.fn(),
@@ -239,11 +237,22 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
-// Runtime generation and publication have real owner/process coverage; CLI
-// orchestration must not rebuild the checkout behind its simulated updater.
+// Runtime retention and publication have real owner/process coverage; CLI
+// orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", () => ({
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
+vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-retained-runtime.js")>();
+  const withRetainedUpdateRuntime: typeof actual.withRetainedUpdateRuntime = (
+    moduleUrl,
+    operation,
+  ) =>
+    actual.withRetainedUpdateRuntime(moduleUrl, () =>
+      operation(async ({ assertCurrent }) => assertCurrent()),
+    );
+  return { withRetainedUpdateRuntime };
+});
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-candidate-state.js")>()),
   readUpdateStateSchemaVersions: stateSchemaVersions,
@@ -648,11 +657,6 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
   callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
-vi.mock("./update-cli/restart-helper.js", () => ({
-  prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
-  runRestartScript: (...args: unknown[]) => runRestartScript(...args),
-}));
-
 vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon-cli/restart-health.js")>();
   return {
@@ -709,16 +713,13 @@ vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
-const { mockUpdateStateSnapshotWorker } =
+const { createUpdateStateProfileInitializer, mockUpdateStateSnapshotWorker } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
-const {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} = await import("../state/openclaw-state-db.js");
+const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+  await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
@@ -819,12 +820,10 @@ describe("update-cli", () => {
     return dir;
   };
 
-  // Ordinary update cases model the existing schema advertised by their inspection fixture.
-  const initializeExistingUpdateProfile = (env: NodeJS.ProcessEnv = process.env) => {
-    const database = openOpenClawStateDatabase({ env });
-    fixtureStateDatabases.add(database.path);
-    closeOpenClawStateDatabaseForTest();
-  };
+  const initializeExistingUpdateProfile = createUpdateStateProfileInitializer(
+    fixtureRoot,
+    fixtureStateDatabases,
+  );
 
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
@@ -1148,6 +1147,18 @@ describe("update-cli", () => {
     );
   };
 
+  const useNativeScheduledTaskControl = async () => {
+    const nativeTaskControl = await vi.importActual<typeof import("../daemon/schtasks-control.js")>(
+      "../daemon/schtasks-control.js",
+    );
+    suspendScheduledTaskAutoStartForUpdate.mockImplementation(
+      nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
+    );
+    resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+      nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
+    );
+  };
+
   const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
     vi.clearAllMocks();
     await testCase.run();
@@ -1162,7 +1173,6 @@ describe("update-cli", () => {
     if (params.daemonInstall === "fail") {
       mockGatewayInstallFailure(entrypoint);
     }
-    prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
 
     await updateCommand({});
@@ -1314,7 +1324,7 @@ describe("update-cli", () => {
   const expectFailedManagedGitRestart = (message: string) => {
     const logs = getLogOutput();
     expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runRestartScript).toHaveBeenCalledTimes(1);
+    expect(freshRestartCalls()).toHaveLength(1);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect([logs, ...vi.mocked(defaultRuntime.error).mock.calls.flat()].join("\n")).toContain(
       message,
@@ -1414,15 +1424,16 @@ describe("update-cli", () => {
         );
         primeServiceCommand([argv[0], updatedEntrypoint, "gateway", "run"], env);
       }
+      if (argv[2] === "gateway" && argv[3] === "restart" && result.code === 0) {
+        expect(argv[1]).toBe(updatedEntrypoint);
+        serviceReadRuntime.mockResolvedValue({
+          status: "running",
+          pid: gatewayFixturePid,
+          state: "running",
+        });
+        mockGatewayHealth(VERSION, "updated-work");
+      }
       return result;
-    });
-    runRestartScript.mockImplementationOnce(async () => {
-      serviceReadRuntime.mockResolvedValue({
-        status: "running",
-        pid: gatewayFixturePid,
-        state: "running",
-      });
-      mockGatewayHealth(VERSION, "updated-work");
     });
     return updatedEntrypoint;
   };
@@ -1715,8 +1726,6 @@ describe("update-cli", () => {
         : { status: "stopped", state: "stopped", missingUnit: true },
     );
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
-    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
-    runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
@@ -1825,9 +1834,11 @@ describe("update-cli", () => {
         "gateway",
         "run",
       ]);
-      vi.mocked(updateGitCheckout).mockImplementation(async () => {
+      vi.mocked(updateGitCheckout).mockImplementation(async ({ opts }) => {
         expect(getActiveSessionWorkAdmissionCount()).toBe(1);
-        return makeOkUpdateResult();
+        await opts.inspectGitTarget({});
+        await expectDefined(opts.beforeGitMutation, "Git mutation admission")({});
+        return makeOkUpdateResult({ root: process.cwd() });
       });
       await invokeUpdateCli(yes ? { yes: true } : {});
       expect(updateGitCheckout).toHaveBeenCalledOnce();
@@ -2063,9 +2074,8 @@ describe("update-cli", () => {
         serviceRestart,
         runDaemonInstall,
         runDaemonRestart,
-        prepareRestartScript,
-        runRestartScript,
       );
+      expect(freshRestartCalls()).toHaveLength(0);
       expect(getErrorOutput()).not.toContain("inspection-secret-canary");
     },
   );
@@ -2116,7 +2126,8 @@ describe("update-cli", () => {
       }
       await updateCommand({ yes: true, json: true, restart: false });
       expect(packageInstallCommandCall()).toBeDefined();
-      expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
     },
   );
 
@@ -2168,13 +2179,7 @@ describe("update-cli", () => {
       expect(serviceStop).toHaveBeenCalledTimes(restart ? 1 : 0);
       expect(freshRestartCalls().length).toBe(restart ? 1 : 0);
       expect(serviceStart).not.toHaveBeenCalled();
-      expectNoSideEffects(
-        managedUpdateHandoff.start,
-        runDaemonInstall,
-        runDaemonRestart,
-        prepareRestartScript,
-        runRestartScript,
-      );
+      expectNoSideEffects(managedUpdateHandoff.start, runDaemonInstall, runDaemonRestart);
       expect(getErrorOutput()).toContain("service definition left unchanged");
       expect(getErrorOutput()).not.toContain("definition-owner-secret-canary");
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -2290,7 +2295,7 @@ describe("update-cli", () => {
 
     expect(freshRestartCalls().length).toBe(1);
     expect(serviceStart).not.toHaveBeenCalled();
-    expectNoSideEffects(runRestartScript, runDaemonInstall, runDaemonRestart, serviceRestart);
+    expectNoSideEffects(runDaemonInstall, runDaemonRestart, serviceRestart);
   });
 
   it("reads the initial update config without schema validation or observation", async () => {
@@ -2536,7 +2541,7 @@ describe("update-cli", () => {
 
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
-      expect(runRestartScript).toHaveBeenCalledOnce();
+      expect(freshRestartCalls()).toHaveLength(1);
       expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       expect(spawnCall()?.[2]?.env).toMatchObject({
         OPENCLAW_PROFILE: "work",
@@ -2548,9 +2553,12 @@ describe("update-cli", () => {
       expect(spawnCall()?.[2]?.env?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
       expect(handedConfig).toEqual({ sourceConfig: managedConfig, authoredConfig: managedConfig });
       expect(handedRecords).toEqual(managedRecords);
-      expect(runRestartScript.mock.invocationCallOrder[0]).toBeGreaterThan(
-        requireValue(spawn.mock.invocationCallOrder[0], "post-core handoff"),
+      const restartIndex = commandCalls().findIndex(
+        ([argv]) => argv[2] === "gateway" && argv[3] === "restart",
       );
+      expect(
+        vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[restartIndex],
+      ).toBeGreaterThan(requireValue(spawn.mock.invocationCallOrder[0], "post-core handoff"));
     },
   );
 
@@ -2656,7 +2664,7 @@ describe("update-cli", () => {
     expect(convergenceProfiles).toEqual(["work"]);
     expect(spawn).not.toHaveBeenCalled();
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
-    expect(runRestartScript).toHaveBeenCalledOnce();
+    expect(freshRestartCalls()).toHaveLength(1);
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     const freshCalls = vi
       .mocked(runExec)
@@ -2702,7 +2710,6 @@ describe("update-cli", () => {
       pid: gatewayFixturePid,
       state: "running",
     });
-    prepareRestartScript.mockResolvedValue(null);
     mockGatewayHealth(VERSION, "updated-gateway");
 
     initializeExistingUpdateProfile({
@@ -4416,7 +4423,7 @@ describe("update-cli", () => {
       const config = stableConfig({ plugins: { entries: { [pluginId]: { enabled: true } } } });
       vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
       mockOwnedGitService();
-      mockGitUpdateAfterMutation();
+      mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
       serviceLoaded.mockResolvedValue(true);
       if (source === "bridge") {
         const install = await import("../plugins/install.js");
@@ -4474,7 +4481,8 @@ describe("update-cli", () => {
         expect(serviceRestart).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ preserveDefinition: true }),
         );
-        expectNoSideEffects(runDaemonRestart, runRestartScript);
+        expectNoSideEffects(runDaemonRestart);
+        expect(freshRestartCalls()).toHaveLength(0);
       }
       expect(runUpdateFailureTriage).not.toHaveBeenCalled();
     },
@@ -4746,7 +4754,8 @@ describe("update-cli", () => {
     await updateCommand({ yes: true, restart: false });
 
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expectNoSideEffects(runDaemonInstall, runDaemonRestart, runRestartScript);
+    expectNoSideEffects(runDaemonInstall, runDaemonRestart);
+    expect(freshRestartCalls()).toHaveLength(0);
     expect(getErrorOutput()).not.toContain("Update failed during plugin post-update sync.");
     const logs = getLogOutput();
     expect(logs).toContain('Plugin "demo" could not be updated.');
@@ -5022,10 +5031,10 @@ describe("update-cli", () => {
           replaceConfigFile,
           updateGitCheckout,
           runDaemonInstall,
-          runRestartScript,
           runDaemonRestart,
           launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
         );
+        expect(freshRestartCalls()).toHaveLength(0);
 
         const logs = getLogOutput();
         expect(logs).toContain("Update dry-run");
@@ -5185,12 +5194,12 @@ describe("update-cli", () => {
         serviceStop,
         serviceStart,
         serviceRestart,
-        runRestartScript,
         doctorCommand,
         syncPluginsForUpdateChannel,
         updateNpmInstalledPlugins,
         launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
       );
+      expect(freshRestartCalls()).toHaveLength(0);
       expect(packageInstallCommandCall()).toBeUndefined();
     },
   );
@@ -5305,7 +5314,6 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
         path.join(process.cwd(), "dist", "index.js"),
       );
-      prepareRestartScript.mockResolvedValue(null);
       try {
         await updateCommand({ yes: true, json });
       } catch (error) {
@@ -6793,7 +6801,6 @@ describe("update-cli", () => {
       serviceStop,
       serviceStart,
       serviceRestart,
-      prepareRestartScript,
     },
   });
 
@@ -7427,7 +7434,8 @@ describe("update-cli", () => {
       });
       expect(phases.mock.calls.every(([params]) => params.phase === "inspect")).toBe(true);
       expect(phases.mock.calls.length).toBeGreaterThan(1);
-      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript);
+      expectNoSideEffects(serviceStop, serviceRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
       expect(updateGitCheckout).toHaveBeenCalledTimes(git ? 1 : 0);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -8493,7 +8501,8 @@ describe("update-cli", () => {
       } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(events).toEqual(["validate"]);
-        expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
+        expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+        expect(freshRestartCalls()).toHaveLength(0);
         expect(
           JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
         ).toMatchObject({
@@ -8640,7 +8649,7 @@ describe("update-cli", () => {
     await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
     expect(doctorCommandCall()).toBeDefined();
-    expectNoSideEffects(serviceStart, serviceRestart, runRestartScript, runDaemonRestart);
+    expectNoSideEffects(serviceStart, serviceRestart, runDaemonRestart);
     expect(freshRestartCalls()).toEqual([]);
     expect(lastWriteJsonCall()).toMatchObject({
       status: "error",
@@ -9015,8 +9024,7 @@ describe("update-cli", () => {
     expect(serviceReadCommand).not.toHaveBeenCalled();
     expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(prepareRestartScript).not.toHaveBeenCalled();
-    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(freshRestartCalls()).toHaveLength(0);
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeDefined();
   });
@@ -9080,8 +9088,7 @@ describe("update-cli", () => {
       expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
       expect(serviceStop).not.toHaveBeenCalled();
       expect(serviceRestart).not.toHaveBeenCalled();
-      expect(prepareRestartScript).not.toHaveBeenCalled();
-      expect(runRestartScript).not.toHaveBeenCalled();
+      expect(freshRestartCalls()).toHaveLength(0);
       expect(runDaemonRestart).not.toHaveBeenCalled();
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -9206,15 +9213,7 @@ describe("update-cli", () => {
           OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
         },
       );
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = vi.mocked(runCommandWithTimeout).getMockImplementation();
       if (!configuredRunCommand) {
         throw new Error("Expected installed package command fixture");
@@ -9327,7 +9326,6 @@ describe("update-cli", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const root = process.cwd();
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
-      prepareRestartScript.mockResolvedValue(null);
       mockGitUpdateAfterMutation(
         makeOkUpdateResult({
           mode: "git",
@@ -9347,15 +9345,7 @@ describe("update-cli", () => {
         expectedVersion: "1.0.0",
         probeError: fault === "none" ? undefined : "candidate readiness failed",
       };
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "native update command fixture",
@@ -9519,20 +9509,8 @@ describe("update-cli", () => {
         version: "1.0.0",
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-        {
-          phase: "finished",
-          status: "failed",
-          reason: "runtime-verification-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: "post-install-verify",
-              status: "failed",
-              detail: expect.stringContaining("interrupted lifecycle"),
-            }),
-          ]),
-        },
-      ]);
+      expect(serviceRestart).not.toHaveBeenCalled();
+      runtimeRecovery.expectInterruptedDoctorPackageRollback(listUpdateRuns({ limit: 1 }));
     } finally {
       platformSpy.mockRestore();
       processOnSpy.mockRestore();
@@ -9597,15 +9575,7 @@ describe("update-cli", () => {
     async ({ verified, compensationFails }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const runFixture = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "managed task command fixture",
@@ -9968,16 +9938,23 @@ describe("update-cli", () => {
   it("stops a running managed gateway when git checkout rebuild starts", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
     mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
-    const mutationAdmitted = mockGitUpdateAfterMutation();
+    const mutationAdmitted = mockGitUpdateAfterMutation(
+      makeOkUpdateResult({ root: process.cwd() }),
+    );
 
     await updateCommand({ yes: true });
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(updateGitCheckout).toHaveBeenCalledTimes(1);
-    expect(prepareRestartScript).toHaveBeenCalledWith(expect.anything(), expect.any(Number), [
-      "node",
+    expect(freshRestartCalls()).toHaveLength(1);
+    expect(freshRestartCalls()[0]?.[0]).toEqual([
+      process.execPath,
       serviceEntrypoint,
       "gateway",
+      "restart",
+      "--preserve-definition",
+      "--json",
+      "--update-executor",
       "run",
     ]);
     const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
@@ -10130,11 +10107,10 @@ describe("update-cli", () => {
           serviceStop,
           serviceStart,
           serviceRestart,
-          prepareRestartScript,
-          runRestartScript,
           runDaemonInstall,
           runDaemonRestart,
         );
+        expect(freshRestartCalls()).toHaveLength(0);
         return;
       }
       expect(getErrorOutput()).toContain("service definition left unchanged");
@@ -10145,12 +10121,7 @@ describe("update-cli", () => {
         wrapperPath,
       );
       expect(serviceStart).not.toHaveBeenCalled();
-      expectNoSideEffects(
-        prepareRestartScript,
-        runRestartScript,
-        runDaemonInstall,
-        runDaemonRestart,
-      );
+      expectNoSideEffects(runDaemonInstall, runDaemonRestart);
     },
   );
 
@@ -10170,7 +10141,7 @@ describe("update-cli", () => {
       waitOutcome: "timeout",
       elapsedMs: 60_000,
     };
-    mockGitUpdateAfterMutation();
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
@@ -10181,8 +10152,17 @@ describe("update-cli", () => {
 
   it("fails managed git restart when the stopped service cannot be restarted", async () => {
     mockStoppedManagedGitGateway();
-    runRestartScript.mockRejectedValueOnce(new Error("restart unavailable"));
-    mockGitUpdateAfterMutation();
+    const runFixtureCommand = requireValue(
+      vi.mocked(runCommandWithTimeout).getMockImplementation(),
+      "default command fixture",
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (argv[2] === "gateway" && argv[3] === "restart") {
+        throw new Error("restart unavailable");
+      }
+      return runFixtureCommand(argv, options);
+    });
+    mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
@@ -10193,7 +10173,6 @@ describe("update-cli", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     await setupManagedGitRootRefresh();
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    prepareRestartScript.mockResolvedValue(null);
     const runFixtureCommand = requireValue(
       vi.mocked(runCommandWithTimeout).getMockImplementation(),
       "default command fixture",
@@ -10207,7 +10186,6 @@ describe("update-cli", () => {
     await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(runRestartScript).not.toHaveBeenCalled();
     expect(freshRestartCalls()).toHaveLength(1);
     expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
     expect(getErrorOutput()).toContain("native owner refused");
@@ -10402,7 +10380,7 @@ describe("update-cli", () => {
         .toHaveBeenCalledTimes(serviceOwnership === "owned" ? 1 : 0);
       expect.soft(updateGitCheckout).toHaveBeenCalledTimes(1);
       expect.soft(mutationAdmitted).toHaveBeenCalledOnce();
-      expect(runRestartScript).toHaveBeenCalledTimes(serviceOwnership === "owned" ? 1 : 0);
+      expect(freshRestartCalls()).toHaveLength(serviceOwnership === "owned" ? 1 : 0);
       expect(defaultRuntime.exit, getErrorOutput() + getLogOutput()).not.toHaveBeenCalledWith(1);
       const updateCall = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
       expect(updateCall?.gitRoot).toBe(canonicalGitRoot);
@@ -10514,7 +10492,7 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
     await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("export {};\n");
     expect(freshRestartCalls()).toEqual([]);
-    expectNoSideEffects(serviceStart, serviceRestart, runRestartScript, replaceConfigFile);
+    expectNoSideEffects(serviceStart, serviceRestart, replaceConfigFile);
     expect(lastWriteJsonCall()).toMatchObject({
       status: "error",
     });
@@ -10576,7 +10554,7 @@ describe("update-cli", () => {
       expect(replaceConfigFile).not.toHaveBeenCalled();
       expect(serviceStop).not.toHaveBeenCalled();
       expect(freshRestartCalls()).toEqual([]);
-      expectNoSideEffects(serviceStart, serviceRestart, runRestartScript);
+      expectNoSideEffects(serviceStart, serviceRestart);
       expect(lastWriteJsonCall()).toMatchObject({
         status: "error",
       });
@@ -10682,9 +10660,11 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    expectNoSideEffects(serviceStop, prepareRestartScript, serviceRestart, runDaemonRestart);
+    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
     expect(updateGitCheckout).toHaveBeenCalledTimes(1);
     expect(mutationAdmitted).toHaveBeenCalledOnce();
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(gatewayCommandCall(otherEntrypoint, "install")).toBeUndefined();
   });
 
   it("never starts the candidate after plugin post-update invalidates config", async () => {
@@ -10713,7 +10693,7 @@ describe("update-cli", () => {
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expectNoSideEffects(serviceRestart, runDaemonRestart);
-    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(freshRestartCalls()).toHaveLength(0);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(runExec).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
@@ -12458,7 +12438,8 @@ describe("update-cli", () => {
         updateNpmInstalledPlugins,
       );
       expect(completionCacheSpy).toHaveBeenCalledWith(gitRoot, false);
-      expectNoSideEffects(runRestartScript, runDaemonRestart);
+      expectNoSideEffects(runDaemonRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
@@ -12677,8 +12658,8 @@ describe("update-cli", () => {
         await updateCommand({ restart: false });
       },
       assert: () => {
-        expectNoSideEffects(runDaemonInstall, runRestartScript, runDaemonRestart);
-        expect(freshRestartCalls()).toEqual([]);
+        expectNoSideEffects(runDaemonInstall, runDaemonRestart);
+        expect(freshRestartCalls()).toHaveLength(0);
         expect(
           gatewayCommandCall(path.join(process.cwd(), "dist", "index.js"), "install"),
         ).toBeUndefined();
@@ -12717,7 +12698,6 @@ describe("update-cli", () => {
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(serviceStart).not.toHaveBeenCalled();
     expect(freshRestartCalls().length).toBe(0);
-    expectNoSideEffects(prepareRestartScript, runRestartScript);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
@@ -12741,7 +12721,6 @@ describe("update-cli", () => {
         "run",
       ]);
       expect(restartCall?.[1].cwd).toBe(updatedRoot);
-      expect(runRestartScript).not.toHaveBeenCalled();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       if (json) {
         expect(getErrorOutput()).toContain(
@@ -12781,7 +12760,6 @@ describe("update-cli", () => {
 
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeDefined();
-    expect(runRestartScript).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -12809,21 +12787,15 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(gatewayCommandCall(updatedEntrypoint, "install")?.[0]).toContain("--force");
-    expect(Boolean(gatewayCommandCall(updatedEntrypoint, "restart"))).toBe(false);
-    expect({
-      stop: serviceStop.mock.calls.length,
-      start: serviceStart.mock.calls.length,
-      restart: serviceRestart.mock.calls.length,
-      prepareRestart: prepareRestartScript.mock.calls.length,
-      runRestart: runRestartScript.mock.calls.length,
-    }).toEqual({ stop: 0, start: 0, restart: 0, prepareRestart: 1, runRestart: 0 });
+    expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+    expect(freshRestartCalls()).toHaveLength(0);
     expect(getErrorOutput()).toContain(`Failed to reconcile gateway service with ${updatedRoot}`);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("fails a JSON package update when fallback restart leaves the old gateway running", async () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
-    prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
     mockGatewayHealth("2026.4.23", "old-gateway");
 
@@ -12831,7 +12803,7 @@ describe("update-cli", () => {
       new ExitError(1),
     );
 
-    expectNoSideEffects(runRestartScript, runDaemonRestart);
+    expectNoSideEffects(runDaemonRestart);
     const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
     expect(restartCall?.[0][0]).toContain("node");
     expect(restartCall?.[0].slice(4)).toEqual([
@@ -12853,7 +12825,6 @@ describe("update-cli", () => {
 
   it("shows the matching-version probe failure when a JSON package update restart stays unhealthy", async () => {
     setupNpmUpdatedRootRefresh();
-    prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
     restartHealthTestControl.snapshot = {
       runtime: { status: "running", pid: gatewayFixturePid },
@@ -12889,7 +12860,7 @@ describe("update-cli", () => {
     expect(diagnostics).not.toContain("Gateway version mismatch");
   });
 
-  it("skips the post-refresh restart script when LaunchAgent already serves the expected package version", async () => {
+  it("skips the post-refresh restart when LaunchAgent already serves the expected package version", async () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     serviceLoaded.mockResolvedValue(true);
     mockGatewayHealth("2026.4.24", "updated-gateway");
@@ -12911,8 +12882,7 @@ describe("update-cli", () => {
     ]);
     expect(installCall?.[1].cwd).toBe(updatedRoot);
     expect(installCall?.[1].timeoutMs).toBe(30 * 60_000);
-    expect(Boolean(gatewayCommandCall(updatedEntrypoint, "restart"))).toBe(false);
-    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -13055,7 +13025,6 @@ describe("update-cli", () => {
         options: { yes: true, json: true },
         beforeUpdate: async () => {
           setupNpmUpdatedRootRefresh();
-          prepareRestartScript.mockResolvedValue(null);
           serviceLoaded.mockResolvedValue(true);
           mockGatewayHealth("2026.4.23", "old-gateway");
           if (consumed) {
@@ -13133,7 +13102,6 @@ describe("update-cli", () => {
 
       expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
       expect(freshRestartCalls()).toHaveLength(0);
-      expect(runRestartScript).not.toHaveBeenCalled();
       expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       if (json) {
@@ -13227,7 +13195,7 @@ describe("update-cli", () => {
         expect(runDaemonInstall).not.toHaveBeenCalled();
         // Install already serves the target version; verify that boot without
         // issuing a redundant second restart.
-        expect(runRestartScript).not.toHaveBeenCalled();
+        expect(freshRestartCalls()).toHaveLength(0);
       },
     },
     {
@@ -13343,7 +13311,6 @@ describe("update-cli", () => {
             return makeOkUpdateResult({ root: process.cwd() });
           });
         }
-        prepareRestartScript.mockResolvedValue(null);
         vi.mocked(defaultRuntime.log).mockClear();
 
         await updateCommand({});

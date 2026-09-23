@@ -8,7 +8,7 @@ import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.useRealTimers());
 
-it("does not amplify a reader-held WAL on repeated periodic maintenance", () => {
+it("does not amplify a reader-held WAL on repeated periodic maintenance", async () => {
   vi.useFakeTimers();
   const pathname = path.join(dirs.make("openclaw-wal-reclamation-"), "agent.sqlite");
   const { DatabaseSync } = requireNodeSqlite();
@@ -34,14 +34,14 @@ it("does not amplify a reader-held WAL on repeated periodic maintenance", () => 
     const walBytes = fs.statSync(`${pathname}-wal`).size;
     expect(before).toBeGreaterThan(512);
     for (let pass = 0; pass < 3; pass++) {
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(maintenance.health?.state).toBe("blocked");
       expect(freePages()).toBe(before);
       expect(fs.statSync(`${pathname}-wal`).size).toBe(walBytes);
     }
     expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(50);
     reader.exec("ROLLBACK");
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
     expect(maintenance.health?.state).toBe("complete");
     expect(before - freePages()).toBeGreaterThan(0);
     expect(before - freePages()).toBeLessThanOrEqual(512);
@@ -75,7 +75,7 @@ it("reports bounded page progress and retains the native checkpoint outcome", ()
       DELETE FROM payload;`);
     const observed: string[] = [];
     const result = maintenance.reclaimFreePages({
-      maxPages: 31,
+      maxPages: 5,
       beforeMutation: () => observed.push(`before:${database.isTransaction}`),
       onCommit: () => observed.push(`commit:${database.isTransaction}`),
       afterCommit: () => observed.push(`settled:${database.isTransaction}`),
@@ -93,10 +93,10 @@ it("reports bounded page progress and retains the native checkpoint outcome", ()
       checkpointCalls: 2,
       checkpointIncomplete: 0,
       vacuumPasses: 1,
-      vacuumPagesRequested: 31,
+      vacuumPagesRequested: 5,
     });
     expect(result.freePagesBefore! - result.remainingFreePages!).toBeGreaterThan(0);
-    expect(result.freePagesBefore! - result.remainingFreePages!).toBeLessThanOrEqual(31);
+    expect(result.freePagesBefore! - result.remainingFreePages!).toBeLessThanOrEqual(5);
     admitted = false;
     expect(() => maintenance.reclaimFreePages()).toThrow("reclamation owner is unavailable");
   } finally {

@@ -70,6 +70,7 @@ import {
   createIosPushDelivery,
   createWebPushDelivery,
   defaultExecApprovalRequestParams,
+  expectRejectedExecApprovalRequest,
   getExecApproval,
   getRequestedExecApprovalPayload,
   listExecApprovals,
@@ -2397,27 +2398,12 @@ describe("gateway chat transcript writes (guardrail)", () => {
 });
 
 describe("exec approval handlers", () => {
-  async function expectRejectedExecApprovalRequest(
-    testContext: TestContext,
-    params: Record<string, unknown>,
-    message: string,
-  ) {
-    const fixture = createExecApprovalFixture(testContext);
-    return await fixture.run(async () => {
-      const { handlers, respond, context } = fixture;
-      await requestExecApproval({ handlers, respond, context, params });
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      expectRecordFields(mockCallArg(respond, 0, 2), { message });
-    });
-  }
-
   async function expectUnavailableAllowAlways(
     testContext: TestContext,
     requestParams: Record<string, unknown>,
     fallbackDecision: "allow-once" | "deny",
   ) {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { handlers, broadcasts, respond, context } = fixture;
       const { pending: requestPromise } = await waitForApprovalRequested(
@@ -2507,7 +2493,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval requests when the command display would be truncated", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, broadcasts, respond, context } = fixture;
       await requestExecApproval({
@@ -2535,7 +2521,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
       context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
@@ -2568,7 +2554,7 @@ describe("exec approval handlers", () => {
   });
 
   it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
       const { pending: requestPromise } = await waitForApprovalRequested(
@@ -2835,9 +2821,13 @@ describe("exec approval handlers", () => {
         },
       },
       async ({ manager, handlers, requestPromise }) => {
-        expect(
-          (await manager.getSnapshot("approval-reviewer-untrusted"))?.approvalReviewerDeviceIds,
-        ).toBeUndefined();
+        const pending = await manager.getSnapshot("approval-reviewer-untrusted");
+        expect(pending).toMatchObject({
+          id: "approval-reviewer-untrusted",
+          requestedByDeviceId: "device-gateway-runtime",
+        });
+        expect(pending!.resolvedAtMs).toBeUndefined();
+        expect(pending!.approvalReviewerDeviceIds).toBeUndefined();
 
         const listRespond = vi.fn();
         await listExecApprovals({
@@ -3190,7 +3180,7 @@ describe("exec approval handlers", () => {
   });
 
   it("treats duplicate same-decision exec resolves as idempotent during grace", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
 
@@ -3492,8 +3482,7 @@ describe("exec approval handlers", () => {
   });
 
   it("accepts resolve during broadcast", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const handlers = createExecApprovalHandlers(manager);
+    const { handlers } = await createExecApprovalFixture(testContext);
     const respond = vi.fn();
     const resolveRespond = vi.fn();
 
@@ -3569,7 +3558,7 @@ describe("exec approval handlers", () => {
   ])(
     "rejects an unsafe explicit approval id containing an %s",
     async ([_label, id], testContext) => {
-      const fixture = createExecApprovalFixture(testContext);
+      const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
       return await fixture.run(async () => {
         const { manager, handlers, broadcasts, respond, context } = fixture;
 
@@ -3596,34 +3585,23 @@ describe("exec approval handlers", () => {
   );
 
   it("accepts an explicit approval id with a leading dash", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
+    await withAcceptedExecApproval(
+      testContext,
+      { request: { id: "-approval-123", host: "gateway", twoPhase: true } },
+      async ({ manager, respond, requestPromise, id }) => {
+        expect(id).toBe("-approval-123");
+        expect(await manager.getSnapshot(id)).not.toBeNull();
+        expect(mockCallArg(respond)).toBe(true);
 
-      const { pending: requestPromise } = await waitForApprovalRequested(
-        context,
-        "exec.approval.requested",
-        () =>
-          fixture.track(
-            requestExecApproval({
-              handlers,
-              respond,
-              context,
-              params: { id: "-approval-123", host: "gateway", twoPhase: true },
-            }),
-          ),
-      );
-
-      const { id } = getRequestedExecApprovalPayload(broadcasts);
-      await requestPromise;
-      expect(id).toBe("-approval-123");
-      expect(await manager.getSnapshot(id)).not.toBeNull();
-      expect(mockCallArg(respond)).toBe(true);
-    });
+        expect(await manager.resolve(id, "allow-once")).toBe(true);
+        await requestPromise;
+        expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
+      },
+    );
   });
 
   it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 
@@ -3697,7 +3675,7 @@ describe("exec approval handlers", () => {
   });
 
   it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 
@@ -3745,9 +3723,9 @@ describe("exec approval handlers", () => {
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async (testContext) => {
-    vi.useFakeTimers();
     try {
-      const fixture = createForwardingExecApprovalFixture(testContext);
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { handlers, forwarder, respond, context } = fixture;
         const forwardedRequest = createDeferredCore();
@@ -3794,7 +3772,7 @@ describe("exec approval handlers", () => {
   });
 
   it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { handlers, forwarder, respond, context } = fixture;
       const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -3867,7 +3845,7 @@ describe("exec approval handlers", () => {
   });
 
   it("fast-fails approvals when no approver clients and no forwarding targets", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, forwarder, respond, context } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
@@ -3892,7 +3870,7 @@ describe("exec approval handlers", () => {
 
   it("keeps approvals pending when iOS push delivery accepted the request", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery();
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -3948,7 +3926,7 @@ describe("exec approval handlers", () => {
           }) ?? true,
       ),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -3993,7 +3971,7 @@ describe("exec approval handlers", () => {
         return true;
       }),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -4038,7 +4016,7 @@ describe("exec approval handlers", () => {
         return true;
       }),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       webPushDelivery,
     });
     return await fixture.run(async () => {
@@ -4076,7 +4054,6 @@ describe("exec approval handlers", () => {
   });
 
   it("sends iOS cleanup delivery on expiration", async (testContext) => {
-    vi.useFakeTimers();
     try {
       const delivered = createDeferredCore();
       const iosPushDelivery = createIosPushDelivery(
@@ -4085,9 +4062,10 @@ describe("exec approval handlers", () => {
           return true;
         }),
       );
-      const fixture = createForwardingExecApprovalFixture(testContext, {
+      const fixture = await createForwardingExecApprovalFixture(testContext, {
         iosPushDelivery,
       });
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { handlers, respond, context } = fixture;
 
@@ -4125,9 +4103,9 @@ describe("exec approval handlers", () => {
   });
 
   it("keeps approvals pending when the originating chat can handle /approve directly", async (testContext) => {
-    vi.useFakeTimers();
     try {
-      const fixture = createForwardingExecApprovalFixture(testContext);
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { manager, handlers, forwarder, respond, context } = fixture;
         const expireSpy = vi.spyOn(manager, "expire");
@@ -4171,7 +4149,7 @@ describe("exec approval handlers", () => {
   });
 
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, forwarder, respond, context } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");

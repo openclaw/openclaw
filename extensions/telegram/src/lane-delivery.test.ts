@@ -35,14 +35,13 @@ describe("createLaneTextDeliverer", () => {
       error: historyFailure,
     });
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.answer?.clear).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("claims an equal visible preview and survives a cleanup-only crash", async () => {
     const events: string[] = [];
     const answer = createTestDraftStream({ messageId: 999 });
-    answer.lastDeliveredText.mockReturnValue(HELLO_FINAL);
+    answer.update(HELLO_FINAL);
+    answer.update.mockClear();
     const harness = createHarness({ answerStream: answer });
     harness.stopDraftLane.mockImplementationOnce(async () => {
       events.push("finalize");
@@ -54,7 +53,7 @@ describe("createLaneTextDeliverer", () => {
 
     // The preview text is already on screen: custody must be claimed, and a
     // cleanup crash must not convert the accepted preview into a send failure.
-    await harness.deliverLaneText({
+    const result = await harness.deliverLaneText({
       laneName: "answer",
       text: HELLO_FINAL,
       payload: { text: HELLO_FINAL },
@@ -65,7 +64,10 @@ describe("createLaneTextDeliverer", () => {
     expect(events).toEqual(["custody", "finalize"]);
     expect(answer.update).not.toHaveBeenCalled();
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-    expect(harness.lanes.answer.finalized).toBe(true);
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.messageId).toBe(999);
+    expect(delivery.content).toBe(HELLO_FINAL);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("streams block and final text through the same lane", async () => {
@@ -89,8 +91,6 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(2);
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("keeps reasoning block text in an updatable draft lane", async () => {
@@ -108,7 +108,6 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.reasoning.update).toHaveBeenCalledWith("Checking source");
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.stopDraftLane).not.toHaveBeenCalled();
-    expect(harness.lanes.reasoning.finalized).toBe(false);
   });
 
   it("uses normal final delivery when the stream edit leaves stale text", async () => {
@@ -120,10 +119,7 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result.kind).toBe("sent");
     expect(answer.update).toHaveBeenCalledWith("done");
-    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
     expectSentPayload(harness, { text: "done" }, true);
-    expect(harness.markDelivered).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("keeps media fallback non-durable when materializing an intermediate preview", async () => {
@@ -142,7 +138,6 @@ describe("createLaneTextDeliverer", () => {
     const delivery = expectPreviewFinalized(result);
     expect(delivery.content).toBe("visible block");
     expectSentPayload(harness, { mediaUrls: ["file:///site-a.png"] }, false);
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("does not use final transcript recovery when materializing an intermediate block preview", async () => {
@@ -171,7 +166,6 @@ describe("createLaneTextDeliverer", () => {
     expect(result.kind).toBe("sent");
     expect(answer.update).toHaveBeenCalledWith(previousBlock);
     expect(answer.update).not.toHaveBeenCalledWith(nextAssistantBlock);
-    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
     expectSentPayload(harness, { text: previousBlock }, false);
     expect(harness.sendPayload).not.toHaveBeenCalledWith(
       { text: nextAssistantBlock },
@@ -194,10 +188,7 @@ describe("createLaneTextDeliverer", () => {
     expect(result.kind).toBe("preview-updated");
     expect(answer.update).toHaveBeenCalledWith("done");
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
-    expect(harness.clearDraftLane).not.toHaveBeenCalled();
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.lanes.answer.finalized).toBe(false);
   });
 
   it("resets the stream after discarding an unmaterialized block preview", async () => {
@@ -233,7 +224,6 @@ describe("createLaneTextDeliverer", () => {
     expect(answer.update).toHaveBeenNthCalledWith(2, "tool progress after fallback");
     expect(harness.sendPayload).toHaveBeenCalledTimes(1);
     expectSentPayload(harness, { text: "short" }, false);
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a longer partial preview when the final payload is an ellipsis-truncated snapshot", async () => {
@@ -254,8 +244,6 @@ describe("createLaneTextDeliverer", () => {
     expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("keeps a longer delivered stream preview when transcript lookup misses", async () => {
@@ -276,7 +264,6 @@ describe("createLaneTextDeliverer", () => {
     expect(delivery.content).toBe(fullAnswer);
     expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a longer pending partial preview before it is delivered", async () => {
@@ -303,7 +290,6 @@ describe("createLaneTextDeliverer", () => {
     expect(delivery.content).toBe(fullAnswer);
     expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("materializes a pending retained preview before reading the message id", async () => {
@@ -331,7 +317,6 @@ describe("createLaneTextDeliverer", () => {
     expect(delivery.messageId).toBe(999);
     expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("falls back when the retained pending preview does not land", async () => {
@@ -347,7 +332,6 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, truncatedFinal);
 
     expect(result.kind).toBe("sent");
-    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
     expectSentPayload(harness, { text: truncatedFinal }, true);
   });
 
@@ -417,7 +401,6 @@ describe("createLaneTextDeliverer", () => {
       finalPart: true,
     });
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to normal delivery when no stream exists", async () => {
@@ -427,8 +410,6 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result.kind).toBe("sent");
     expectSentPayload(harness, { text: HELLO_FINAL }, true);
-    expect(harness.clearDraftLane).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("keeps streamed final text in place when late media arrives", async () => {
@@ -445,8 +426,6 @@ describe("createLaneTextDeliverer", () => {
     const delivery = expectPreviewFinalized(result);
     expect(delivery.content).toBe("photo");
     expect(delivery.messageId).toBe(999);
-    expect(harness.clearDraftLane).not.toHaveBeenCalled();
-    expect(harness.answer?.clear).not.toHaveBeenCalled();
     expect(harness.answer?.update).toHaveBeenCalledWith("photo");
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
     expectSentPayload(
@@ -484,8 +463,6 @@ describe("createLaneTextDeliverer", () => {
       },
       error: mediaError,
     });
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.answer?.clear).not.toHaveBeenCalled();
   });
 
   it("keeps throwing late media failures without a concrete preview receipt", async () => {
@@ -504,7 +481,6 @@ describe("createLaneTextDeliverer", () => {
         infoKind: "final",
       }),
     ).rejects.toBe(mediaError);
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("uses normal media final delivery when no preview has streamed", async () => {
@@ -518,7 +494,6 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result.kind).toBe("sent");
-    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
     expectSentPayload(
       harness,
       {
@@ -540,7 +515,6 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result.kind).toBe("sent");
-    expect(harness.clearDraftLane).not.toHaveBeenCalled();
     expectSentPayload(
       harness,
       {
@@ -807,7 +781,7 @@ describe("createLaneTextDeliverer", () => {
           text: telegramHtmlToPlainTextFallback(fallbackPayload.text ?? ""),
         });
         await options?.promptContextSequence?.finish();
-        return true;
+        return { visibleReplySent: true };
       });
       const deliveryPromise = deliverProjectedFinalAnswer(harness, fullAnswer);
 
@@ -986,11 +960,15 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(result.kind).toBe("preview-retained");
+    expect(result).toMatchObject({
+      kind: "preview-retained",
+      deliveryResult: {
+        visibleReplySent: false,
+        suppression: { reason: "adapter_returned_no_identity" },
+      },
+    });
     expect(answer.update).toHaveBeenCalledWith(HELLO_FINAL);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("attaches buttons to the stream message without sending a second reply", async () => {

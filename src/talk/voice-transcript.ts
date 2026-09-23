@@ -1,6 +1,38 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 
+/** Transcript row identity shared by persistence and live relay captions. */
+export function voiceTranscriptEventId(voiceSessionId: string, entryId: string): string {
+  return `voice:${voiceSessionId}:${entryId}`;
+}
+
+export function buildPersistedVoiceMessage(params: {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: number;
+  provider: string;
+}): Record<string, unknown> {
+  const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
+  if (params.role === "user") {
+    return {
+      role: "user",
+      content: [{ type: "text", text: params.text }],
+      timestamp: params.timestamp,
+      provenance,
+    };
+  }
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: params.text }],
+    api: "realtime",
+    provider: params.provider,
+    model: "realtime-voice",
+    stopReason: "stop",
+    timestamp: params.timestamp,
+    provenance,
+  };
+}
+
 const VOICE_TRANSCRIPT_MAX_CHARS = 8_000;
 const VOICE_TRANSCRIPT_QUEUE_MAX_PENDING = 40;
 export const VOICE_TRANSCRIPT_MAX_UNRESOLVED = VOICE_TRANSCRIPT_QUEUE_MAX_PENDING + 1;

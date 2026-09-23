@@ -27,6 +27,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
 const rolloutSha = "c".repeat(40);
+const mergeBaseSha = "d".repeat(40);
+const comparisonPath = `/repos/openclaw/openclaw/compare/${staleSha}...${headSha}`;
 const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -87,6 +89,10 @@ function runDependencyGuard(
           base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
         },
         [`GET ${pullPath}/files`]: [{ filename: "pnpm-workspace.yaml" }],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: staleSha },
+        },
         [`GET ${issuePath}/comments`]: [],
         [`GET ${issuePath}/labels`]: [],
         "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: "write" },
@@ -304,6 +310,74 @@ describe("dependency guard script", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.statuses.at(-1)?.body?.state).toBe("success");
+  });
+
+  it.each([
+    { role: "write", headVersion: "1", expected: "success", notice: false },
+    { role: "admin", headVersion: "1", expected: "success", notice: false },
+    { role: "write", headVersion: "2", expected: "failure", notice: true },
+  ])(
+    "evaluates PR manifest changes from the merge base ($role author, version $headVersion)",
+    ({ role, headVersion, expected, notice }) => {
+      const content = (version: string, test: string) => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(
+          JSON.stringify({ devDependencies: { example: version }, scripts: { test } }),
+        ).toString("base64"),
+      });
+      const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
+      const result = runDependencyGuard({
+        [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: mergeBaseSha },
+        },
+        [`GET ${manifestPath}?ref=${mergeBaseSha}`]: content("1", "old"),
+        [`GET ${manifestPath}?ref=${staleSha}`]: content("2", "old"),
+        [`GET ${manifestPath}?ref=${headSha}`]: content(headVersion, "new"),
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: role },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.statuses.at(-1)?.body?.state).toBe(expected);
+      expect(result.calls.some((call) => call.body?.body)).toBe(notice);
+      if (notice) {
+        expect(result.stdout).toContain("/allow-dependencies-change");
+      }
+    },
+  );
+
+  it.each(["added", "removed"])("still detects a manifest that is %s", (status) => {
+    const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
+    const content = {
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(JSON.stringify({ dependencies: { example: "1" } })).toString("base64"),
+    };
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [{ filename: "package.json", status }],
+      [`GET ${manifestPath}?ref=${staleSha}`]: status === "added" ? { httpError: 404 } : content,
+      [`GET ${manifestPath}?ref=${headSha}`]: status === "removed" ? { httpError: 404 } : content,
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.stdout).toContain("/allow-dependencies-change");
+  });
+
+  it.each([
+    { base_commit: { sha: headSha }, merge_base_commit: { sha: mergeBaseSha } },
+    { base_commit: { sha: staleSha }, merge_base_commit: { sha: "invalid" } },
+  ])("fails closed when the manifest merge base is invalid: %j", (comparison) => {
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
+      [`GET ${comparisonPath}`]: comparison,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("merge base");
+    expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    expect(result.calls.some((call) => call.path === "/graphql")).toBe(false);
   });
 
   it.each([

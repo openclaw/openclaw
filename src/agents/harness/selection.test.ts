@@ -2687,7 +2687,7 @@ describe("selectAgentHarness", () => {
       }).modelProvider,
     ).toMatchObject({
       requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
     });
   });
 
@@ -2751,11 +2751,11 @@ describe("selectAgentHarness", () => {
   );
 
   it.each([
-    ["Platform", "openai-responses", "https://api.openai.com/v1"],
-    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+    ["Platform", "openai-responses", "https://api.openai.com/v1", ["agentsapi"]],
+    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", []],
   ] as const)(
     "keeps authored reasoning metadata and native controls on %s Codex",
-    (_label, api, baseUrl) => {
+    (_label, api, baseUrl, additionalRuntimes) => {
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -2818,7 +2818,7 @@ describe("selectAgentHarness", () => {
         }).modelProvider,
       ).toMatchObject({
         requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        runtimePolicy: { compatibleIds: ["openclaw", "codex", ...additionalRuntimes] },
       });
     },
   );

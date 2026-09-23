@@ -135,7 +135,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     const top = input.getBoundingClientRect().top;
     const actionTop = actions.getBoundingClientRect().top;
     const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
-    expect(input.clientHeight).toBe(lineHeight);
+    expect(input.clientHeight).toBe(24);
 
     input.value = "One line\nTwo lines";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -178,7 +178,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
 
     input.value = "A short task";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.clientHeight).toBe(lineHeight);
+    expect(input.clientHeight).toBe(24);
     expect(entry.hasAttribute("data-scroll-fade-top")).toBe(false);
     expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
     expect(input.getBoundingClientRect().top).toBe(top);

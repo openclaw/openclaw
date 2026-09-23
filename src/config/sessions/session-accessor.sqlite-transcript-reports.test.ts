@@ -1,6 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -17,6 +19,7 @@ import { prepareTranscriptPayload } from "./transcript-payload.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -129,6 +132,108 @@ describe("SQLite report payload selection", () => {
     },
   );
 
+  it("reselects after another connection changes the report branch before commit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const db = await seedReports();
+      const hostTransactions = vi.spyOn(db, "exec");
+      const { path } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const other = new DatabaseSync(path);
+      const competitor = {
+        customType: "status",
+        content: "concurrent report",
+        details: { revision: 2 },
+      };
+      const selectReport = vi.fn((latest: { content: unknown } | undefined) => {
+        if (selectReport.mock.calls.length === 1) {
+          // Force the actual selection-to-commit race without a timer or worker test hook.
+          other
+            .prepare(
+              "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 6, ?, 1)",
+            )
+            .run(
+              scope.sessionId,
+              JSON.stringify({
+                type: "custom_message",
+                id: "competitor",
+                parentId: "tail",
+                ...competitor,
+                display: true,
+              }),
+            );
+        }
+        return { customType: "status", content: String(latest?.content), display: true };
+      });
+      try {
+        await expect(
+          appendSessionTranscriptReport(scope, {
+            kind: "custom",
+            customTypes: ["status"],
+            selectReport,
+          }),
+        ).resolves.toEqual({ ok: true, value: undefined });
+      } finally {
+        other.close();
+      }
+      expect(selectReport).toHaveBeenNthCalledWith(1, selected);
+      expect(selectReport).toHaveBeenNthCalledWith(2, competitor);
+      expect(selectReport).toHaveBeenCalledTimes(2);
+      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
+        false,
+      );
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(8);
+      expect(events[7]).toMatchObject({
+        type: "custom_message",
+        parentId: "competitor",
+        content: competitor.content,
+      });
+    });
+  });
+
+  it("preserves custom report JSON serialization before worker transfer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seedReports();
+      const serializedKeys: string[] = [];
+      class NestedDetails {
+        toJSON(key: string) {
+          serializedKeys.push(key);
+          return { revision: 3 };
+        }
+      }
+      const details = {
+        toJSON(key: string) {
+          serializedKeys.push(key);
+          return { nested: new NestedDetails(), omitted: undefined };
+        },
+      };
+      await expect(
+        appendSessionTranscriptReport(scope, {
+          kind: "custom",
+          customTypes: ["status"],
+          selectReport: () => ({
+            customType: "status",
+            content: "serialized report",
+            display: true,
+            details,
+            toJSON(key: string): unknown {
+              serializedKeys.push(key);
+              return { ...this, toJSON: undefined };
+            },
+          }),
+        }),
+      ).resolves.toEqual({ ok: true, value: undefined });
+      expect(serializedKeys).toEqual(["", "details", "nested"]);
+      const events = await loadTranscriptEvents(scope);
+      expect(events.at(-1)).toMatchObject({
+        type: "custom_message",
+        parentId: "tail",
+        content: "serialized report",
+        details: { nested: { revision: 3 } },
+      });
+      expect(JSON.stringify(events.at(-1))).not.toContain("omitted");
+    });
+  });
+
   it("refuses malformed stored facts before selecting or appending a report", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const db = await seedReports();
@@ -177,16 +282,27 @@ describe("SQLite report payload selection", () => {
           )
           .get(scope.sessionId),
       ).toEqual({ encoded: 1 });
+      const secret = "synthetic-report-redaction-registered-value";
+      registerSecretValueForRedaction(secret);
+      const reportMessage = {
+        ...assistant,
+        content: [{ type: "text" as const, text: `${body}${secret}` }],
+      };
       await expect(
-        appendSessionTranscriptReport(scope, { kind: "assistant", message: assistant }),
+        appendSessionTranscriptReport(scope, { kind: "assistant", message: reportMessage }),
       ).resolves.toMatchObject({ ok: true });
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
+      expect(JSON.stringify(events[2])).not.toContain(secret);
+      expect(JSON.stringify(events[2])).toContain("synthe…alue");
       expect(events[2]).toMatchObject({
         type: "message",
         parentId: "unreadable",
-        message: { responseId: assistant.responseId, content: assistant.content },
+        message: {
+          responseId: assistant.responseId,
+          content: [{ type: "text", text: expect.stringContaining(body) }],
+        },
       });
     });
   });

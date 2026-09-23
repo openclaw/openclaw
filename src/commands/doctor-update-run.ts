@@ -72,7 +72,28 @@ export async function noteStaleUpdateRuns(options: {
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    const warnings = updateRunWarningMessages(latest.steps);
+    let warningSteps = latest.steps;
+    const migrationWarning =
+      /^Plugin "([^"]+)" (?:state migration is pending|data\/settings upgrade is unfinished):/u;
+    if (warningSteps.some((step) => step.detail && migrationWarning.test(step.detail))) {
+      const { readDeferredPluginMigrationCompletionsAsync } =
+        await import("../infra/deferred-plugin-migrations.js");
+      const completions = new Map(
+        (await readDeferredPluginMigrationCompletionsAsync()).map(({ pluginId, completedAtMs }) => [
+          pluginId,
+          completedAtMs,
+        ]),
+      );
+      warningSteps = warningSteps.filter((step) => {
+        const pluginId = step.detail && migrationWarning.exec(step.detail)?.[1];
+        const completedAtMs = pluginId ? completions.get(pluginId) : undefined;
+        return (
+          completedAtMs === undefined ||
+          completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
+        );
+      });
+    }
+    const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(
         `Recorded warnings from update ${latest.runId} (a later repair may have resolved them):\n${warnings.slice(-3).join("\n")}`,

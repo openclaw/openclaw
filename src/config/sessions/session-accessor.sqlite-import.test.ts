@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { createTranscriptEventReader } from "../../commands/doctor-session-sqlite-readers.js";
+import { createTranscriptEventReader } from "../../infra/session-sqlite-migration-readers.js";
 import * as sqliteDirectories from "../../infra/sqlite-private-directory.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {

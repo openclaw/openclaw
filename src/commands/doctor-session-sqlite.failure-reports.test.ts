@@ -3,13 +3,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { prepareGithubIssue } from "../infra/github-issue.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   clearSessionSqliteMigrationGithubIssueClaim,
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -130,6 +130,86 @@ describe("runDoctorSessionSqlite", () => {
     }
     expect(recover.supportIssue).not.toHaveProperty("url");
   });
+
+  it("keeps a support report for a restore conflict without replacing the current source", async () => {
+    const store = createLegacyStore();
+    const imported = await importLegacyStore(store);
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    manifest.failedAt = "2030-01-01T00:00:00.000Z";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    const replacement = '{"type":"event","id":"newer-source"}\n';
+    fs.writeFileSync(store.transcriptPath, replacement, { mode: 0o600 });
+
+    const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+
+    expect(recover.targets[0]?.restore?.conflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourcePath: canonicalTestPaths([store.transcriptPath])[0] }),
+      ]),
+    );
+    expect(recover.targets[0]?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "restore_conflict" })]),
+    );
+    expect(recover.supportIssue?.body).toContain("restore_conflict");
+    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(replacement);
+  });
+
+  it.each([false, true])(
+    "does not prepare failure reports for clean recovery (existing reports=%s)",
+    async (existingReports) => {
+      const store = createLegacyStore();
+      for (const file of [
+        store.storePath,
+        store.transcriptPath,
+        store.trajectoryPath,
+        store.unreferencedJsonlPath,
+      ]) {
+        fs.rmSync(file);
+      }
+      const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
+      fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+      const manifestPath = path.join(runsDir, "clean-recovery.json");
+      const manifest: SessionSqliteMigrationManifest = {
+        failedAt: "2030-01-01T00:00:00.000Z",
+        manifestVersion: 3,
+        openClawVersion: "test",
+        runId: "clean-recovery",
+        startedAt: "2030-01-01T00:00:00.000Z",
+        targets: [
+          {
+            ...trustedMigrationTarget(store),
+            completedMoves: [],
+            issues: [],
+            plannedMoves: [],
+            validationBeforeArchive: "not_run",
+          },
+        ],
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      const previousReports = existingReports
+        ? writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "Earlier recovery" })
+        : undefined;
+      const previousBytes = previousReports
+        ? [previousReports.jsonPath, previousReports.markdownPath].map((file) =>
+            fs.readFileSync(file),
+          )
+        : undefined;
+
+      const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+
+      expect(recover.totals.issues).toBe(0);
+      expect(recover.migrationRun).toEqual({ manifestPath, runId: "clean-recovery" });
+      expect(recover.supportIssue).toBeUndefined();
+      if (previousReports && previousBytes) {
+        expect(fs.readFileSync(previousReports.jsonPath)).toEqual(previousBytes[0]);
+        expect(fs.readFileSync(previousReports.markdownPath)).toEqual(previousBytes[1]);
+      } else {
+        expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.json"))).toBe(false);
+        expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.md"))).toBe(false);
+      }
+    },
+  );
 
   it.each(["replaced", "missing"] as const)(
     "refuses a support claim when the saved report is %s during consent",

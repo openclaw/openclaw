@@ -9,16 +9,21 @@ import type {
   CodeModeWorkerContinuation,
   CodeModeOutputSource,
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
-import { WorkerTaskPool, type WorkerTaskResponse } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeWorkerUrl,
+  WorkerTaskPool,
+  type WorkerTaskResponse,
+} from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createQuickJsTestConfig,
   runQuickJsExecutor as runCodeModeWorker,
 } from "./executor.test-support.js";
+import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
 
 const config = createQuickJsTestConfig();
 const sleep = "await new Promise(resolve => setTimeout(resolve, 0));";
-const workerUrl = new URL("./code-mode.worker.ts", import.meta.url);
+const workerUrl = resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint);
 const pools: WorkerTaskPool<unknown, CodeModeWorkerResult>[] = [];
 const resolveModule = createRequire(import.meta.url).resolve;
 const modules = Promise.all([
@@ -262,27 +267,54 @@ describe("Code Mode live VM", () => {
   it("checkpoints a slow host waiter under contention so queued cells can run within the same capacity", async () => {
     const workers = pool();
     const entered = Promise.withResolvers<void>();
-    const yielded = vi.fn();
-    const start = performance.now();
-    const waiting = workers.run(await payload(`${sleep} return 1;`), {
-      timeoutMs: 15_000,
-      onRequest: async (_value, { yieldSignal }) => {
-        entered.resolve();
-        if (!yieldSignal.aborted) {
-          await new Promise<void>((resolve) => {
-            yieldSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        }
-        yielded();
-        return response({ kind: "checkpoint" });
-      },
+    const releaseHost = Promise.withResolvers<void>();
+    const events: string[] = [];
+    const hostCompleted = releaseHost.promise.then(() => {
+      events.push("host completed");
     });
+    const waiting = workers
+      .run(await payload(`${sleep} return 1;`), {
+        timeoutMs: 15_000,
+        onRequest: async (value, { yieldSignal }) => {
+          entered.resolve();
+          const checkpoint = new Promise<WorkerTaskResponse>((resolve) => {
+            const yieldVm = () => resolve(response({ kind: "checkpoint" }));
+            if (yieldSignal.aborted) {
+              yieldVm();
+            } else {
+              yieldSignal.addEventListener("abort", yieldVm, { once: true });
+            }
+          });
+          return Promise.race([
+            checkpoint,
+            hostCompleted.then(() => response(resume(boundary(value), performance.now() + 1000))),
+          ]);
+        },
+      })
+      .then((result) => {
+        events.push(`waiter ${result.status}`);
+        return result;
+      });
     await entered.promise;
-    const quick = workers.run(await payload("return 2;"), { timeoutMs: 2000 });
-    expect(await waiting).toMatchObject({ status: "waiting" });
-    expect(await quick).toMatchObject({ status: "completed", value: { json: "2" } });
-    expect(yielded).toHaveBeenCalledTimes(1);
-    expect(performance.now() - start).toBeLessThan(2000);
+    const quick = workers.run(await payload("return 2;"), { timeoutMs: 2000 }).then((result) => {
+      events.push(`queued ${result.status}`);
+      return result;
+    });
+    try {
+      const [parked, completed] = await Promise.all([waiting, quick]);
+      expect(events).toEqual(["waiter waiting", "queued completed"]);
+      expect(parked).toMatchObject({
+        status: "waiting",
+        pendingRequests: [{ method: "sleep" }],
+        settlementMode: { kind: "awaiting" },
+      });
+      expect(completed).toMatchObject({ status: "completed", value: { json: "2" } });
+    } finally {
+      releaseHost.resolve();
+      await hostCompleted;
+      await workers.close();
+      await Promise.allSettled([waiting, quick]);
+    }
   });
 
   it("bounds concurrent live heaps to admitted worker capacity and keeps each cell isolated", async () => {
@@ -398,7 +430,8 @@ describe("Code Mode live VM", () => {
     const firstEntered = Promise.withResolvers<void>();
     const firstPressured = Promise.withResolvers<void>();
     const releaseFirst = Promise.withResolvers<void>();
-    const prepareSecond = Promise.withResolvers<unknown>();
+    const secondEntered = Promise.withResolvers<void>();
+    let secondBoundaries = 0;
     const first = workers.run(await payload(`${sleep} return 1;`), {
       timeoutMs: 15_000,
       onRequest: async (_value, { yieldSignal }) => {
@@ -409,9 +442,14 @@ describe("Code Mode live VM", () => {
       },
     });
     await firstEntered.promise;
-    const second = workers.run(() => prepareSecond.promise, {
+    const second = workers.run(await payload(`${sleep} ${sleep} return 2;`), {
       timeoutMs: 15_000,
-      onRequest: async (_value, { signal, yieldSignal }) => {
+      onRequest: async (value, { signal, yieldSignal }) => {
+        if (++secondBoundaries === 1) {
+          secondEntered.resolve();
+          await firstPressured.promise;
+          return response(resume(boundary(value), performance.now() + config.timeoutMs));
+        }
         if (!yieldSignal.aborted && !signal.aborted) {
           await new Promise<void>((resolve) => {
             yieldSignal.addEventListener("abort", () => resolve(), { once: true });
@@ -421,13 +459,15 @@ describe("Code Mode live VM", () => {
         return response({ kind: "checkpoint" });
       },
     });
+    // Cold worker startup completes before measuring queued work under pressure.
+    await secondEntered.promise;
     const quick = workers.run(await payload("return 3;"), { timeoutMs: 2000 });
     const outcomes = Promise.allSettled([first, second, quick]);
     try {
       await firstPressured.promise;
-      prepareSecond.resolve(await payload(`${sleep} return 2;`));
       await expect(quick).resolves.toMatchObject({ status: "completed", value: { json: "3" } });
       expect(await second).toMatchObject({ status: "waiting" });
+      expect(secondBoundaries).toBe(2);
     } finally {
       releaseFirst.resolve();
       await workers.close();

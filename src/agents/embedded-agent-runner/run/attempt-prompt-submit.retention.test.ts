@@ -136,6 +136,7 @@ it("submits deferred child results after canonical archive pruning without poiso
         databaseOptions: toDatabaseOptions(scope),
         highWaterBytes: 0,
         storePath: archived.target.storePath,
+        withArchiveWrite: (write) => write(),
       }),
     "session.history.archive-prune",
   );

@@ -413,6 +413,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       providerReviewNotice: this.providerReview.notice(),
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
+      progressCardLifetime: progressPresentation?.lifetime,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,

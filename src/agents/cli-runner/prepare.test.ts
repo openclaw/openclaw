@@ -5447,7 +5447,7 @@ describe("prepareCliRunContext", () => {
         config: createCliBackendConfig(),
       });
       cleanup = context.preparedBackend.cleanup;
-      expect(context.params.cliToolAvailability).toBeUndefined();
+      expect(context.managedMcpToolTimeoutMs).toBe(3_610_000);
       const args = context.preparedBackend.backend.args ?? [];
       const generatedConfigPath = expectDefined(
         args[args.indexOf("--mcp-config") + 1],

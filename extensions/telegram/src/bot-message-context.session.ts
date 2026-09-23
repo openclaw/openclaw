@@ -321,8 +321,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const replyTarget = describeReplyTarget(msg);
   const bufferedMessages = options?.bufferedMessages ?? [];
   const hasMultiMessageBatch = bufferedMessages.length > 1;
-  const shouldRenderBufferedBody =
-    hasMultiMessageBatch && options?.ingressBuffer !== "text-fragment";
+  const shouldRenderBufferedBody = hasMultiMessageBatch && options?.ingressBuffer !== "text-batch";
   const forwardOrigin = shouldRenderBufferedBody ? null : normalizeForwardedContext(msg);
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
@@ -710,9 +709,7 @@ export async function buildTelegramInboundContextPayload(params: {
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
     },
     route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
+      ...route,
       routeSessionKey: route.sessionKey,
       mainSessionKey: route.mainSessionKey,
     },

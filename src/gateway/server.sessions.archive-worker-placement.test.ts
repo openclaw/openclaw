@@ -31,8 +31,14 @@ import { createWorkerEnvironmentService } from "./worker-environments/service.js
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const pendingArchiveCleanups = new Set<() => Promise<void>>();
 
 afterEach(async () => {
+  // Join gated requests even when a runner timeout leaves the test body suspended.
+  for (const cleanup of pendingArchiveCleanups) {
+    await cleanup();
+  }
+  pendingArchiveCleanups.clear();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
@@ -297,7 +303,9 @@ test.each([false, true])(
   },
 );
 
-test("sessions.patch reclaims the exact active cloud placement before archive metadata commits", async () => {
+test("sessions.patch reclaims the exact active cloud placement before archive metadata commits", async ({
+  signal,
+}) => {
   const { storePath } = await createSessionStoreDir();
   const requestedKey = "archive-cloud-active";
   const sessionKey = `agent:main:${requestedKey}`;
@@ -324,18 +332,35 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
     },
   );
 
-  await reclaimStarted.promise;
-  expect(reclaim).toHaveBeenCalledOnce();
-  expect(reclaim).toHaveBeenCalledWith(
-    { sessionId, sessionKey, agentId: "main" },
-    expect.any(Function),
-    expect.any(Function),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-  reclaimGate.resolve();
+  const settledArchive = Promise.allSettled([archive]);
+  const cleanup = async () => {
+    reclaimGate.resolve();
+    await settledArchive;
+  };
+  pendingArchiveCleanups.add(cleanup);
+  try {
+    await Promise.race([
+      reclaimStarted.promise,
+      archive.then((result) => {
+        throw new Error(`Archive settled before reclaim: ${result.error?.message ?? "no reclaim"}`);
+      }),
+    ]);
+    signal.throwIfAborted();
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(reclaim).toHaveBeenCalledWith(
+      { sessionId, sessionKey, agentId: "main" },
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    reclaimGate.resolve();
 
-  await expect(archive).resolves.toMatchObject({ ok: true });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+    await expect(archive).resolves.toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+  } finally {
+    await cleanup();
+    pendingArchiveCleanups.delete(cleanup);
+  }
 });
 
 test.each(["rejected", "unavailable"] as const)(
@@ -438,49 +463,70 @@ test("sessions.patch rejects a reclaimed return when its authoritative placement
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test.each(["active", "failed"] as const)(
+test.for(["active", "failed"] as const)(
   "sessions.patch rejects a %s placement identity changed during the runtime drain",
-  async (state) => {
+  async (state, { signal }) => {
     const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:archive-cloud-fresh-placement";
     const sessionId = "session-archive-cloud-fresh-placement";
     await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
     let placement = workerPlacement({ sessionId, sessionKey, state });
     const drainGate = createDeferredCore();
-    const drainStarted = vi.fn();
+    const drainEntered = createDeferredCore();
     const release = vi.fn();
     const reclaim = vi.fn();
+    const drainStarted = vi.fn(() => {
+      drainEntered.resolve();
+      return { drained: drainGate.promise, hasWork: () => false, release };
+    });
 
     const archive = directSessionReq(
       "sessions.patch",
       { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
-          workerEnvironmentService: createWorkerInferenceDrainService(() => {
-            drainStarted();
-            return { drained: drainGate.promise, hasWork: () => false, release };
-          }),
+          workerEnvironmentService: createWorkerInferenceDrainService(drainStarted),
           workerSessionPlacementService: placementReader(() => placement),
           workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
         },
       },
     );
 
-    await vi.waitFor(() => expect(drainStarted).toHaveBeenCalledOnce());
-    placement = workerPlacement({
-      sessionId,
-      sessionKey: "agent:main:replacement-placement",
-      state: "active",
-    });
-    drainGate.resolve();
+    const settledArchive = Promise.allSettled([archive]);
+    const cleanup = async () => {
+      drainGate.resolve();
+      await settledArchive;
+    };
+    pendingArchiveCleanups.add(cleanup);
+    try {
+      await Promise.race([
+        drainEntered.promise,
+        archive.then((result) => {
+          throw new Error(
+            `Archive settled before its runtime drain: ${result.error?.message ?? "no drain"}`,
+          );
+        }),
+      ]);
+      signal.throwIfAborted();
+      expect(drainStarted).toHaveBeenCalledOnce();
+      placement = workerPlacement({
+        sessionId,
+        sessionKey: "agent:main:replacement-placement",
+        state: "active",
+      });
+      drainGate.resolve();
 
-    await expect(archive).resolves.toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true },
-    });
-    expect(reclaim).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+      await expect(archive).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: true },
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    } finally {
+      await cleanup();
+      pendingArchiveCleanups.delete(cleanup);
+    }
   },
 );
 

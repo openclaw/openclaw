@@ -22,6 +22,24 @@ import {
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
+const pnpmPack = vi.hoisted(() => ({
+  calls: [] as Array<{ args: string[]; env: NodeJS.ProcessEnv }>,
+  impl: undefined as ((directory: string, destination: string) => unknown) | undefined,
+}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const execFileSyncMock = (file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    if (file !== "pnpm") {
+      return (actual.execFileSync as (...params: unknown[]) => unknown)(file, args, options);
+    }
+    pnpmPack.calls.push({ args, env: options.env ?? {} });
+    const value = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
+    return pnpmPack.impl?.(value("--dir"), value("--pack-destination"));
+  };
+  return { ...actual, execFileSync: execFileSyncMock };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repository = "openclaw/openclaw";
 const sourceSha = "a".repeat(40);
@@ -564,6 +582,26 @@ describe("prepared npm bundle", () => {
       }
     },
   );
+
+  it("packs bundled dependencies under the hoisted linker with prepack scripts enabled", () => {
+    const { runPack, ...fixture } = packageSourceFixture("2026.9.6");
+    pnpmPack.impl = runPack;
+    try {
+      expect(prepareNpmPackageBundle(fixture).packageVersion).toBe("2026.9.6");
+    } finally {
+      pnpmPack.impl = undefined;
+    }
+    expect(pnpmPack.calls).toHaveLength(1);
+    expect(pnpmPack.calls[0]?.args).toEqual([
+      "--dir",
+      fixture.sourceDir,
+      "pack",
+      "--config.node-linker=hoisted",
+      "--pack-destination",
+      fixture.outputDir,
+    ]);
+    expect(pnpmPack.calls[0]?.env.OPENCLAW_PREPACK_PREPARED).toBe("1");
+  });
 
   it.each([true, false])(
     "prepares a legacy root shrinkwrap before sealing (has shrinkwrap=%s)",

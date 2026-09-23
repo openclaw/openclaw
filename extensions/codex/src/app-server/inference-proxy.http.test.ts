@@ -175,6 +175,71 @@ describe("inference HTTP transport ownership", () => {
     },
   );
 
+  it.each([false, true])("preserves unchanged native request bytes with zstd=%s", async (zstd) => {
+    const registration = proxy.context.register({
+      threadId: "root",
+      text: "",
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    let forwarded: Buffer | undefined;
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        expect(Number(req.headers["content-length"])).toBe(bytes.length);
+        expect(req.headers["content-encoding"]).toBe(zstd ? "zstd" : undefined);
+        forwarded = bytes;
+        res.end("synthetic completion");
+      });
+    };
+    for (const metadata of [
+      { request_kind: "turn", thread_id: "child", parent_thread_id: "root" },
+      { request_kind: "turn", subagent_kind: "review" },
+      { request_kind: "compaction" },
+      { request_kind: "memory" },
+      { request_kind: "prewarm" },
+      {
+        request_kind: "turn",
+        thread_id: "root",
+        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+      },
+    ]) {
+      // Native serde keeps integer precision, escape spelling and existing tool JSON.
+      const source = Buffer.from(
+        '{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\\u0061", "client_metadata": ' +
+          JSON.stringify({ "x-codex-turn-metadata": JSON.stringify(metadata) }) +
+          " }",
+      );
+      const wire = zstd ? zstdCompressSync(source) : source;
+      const upload = post(wire, zstd ? { "content-encoding": "zstd" } : {});
+      const response = await upload.response;
+      expect(response.statusCode).toBe(200);
+      await readBody(response);
+      expect(forwarded).toEqual(wire);
+      await Promise.all([upload.closed, waitForUpstreamClose()]);
+    }
+  });
+
+  it("keeps replacement decoding for malformed UTF-8 instead of forwarding invalid bytes", async () => {
+    const received = createDeferred<Buffer>();
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        received.resolve(bytes);
+        res.end("synthetic completion");
+      }, received.reject);
+    };
+    const source = Buffer.concat([
+      Buffer.from('{"input":"'),
+      Buffer.from([0xff]),
+      Buffer.from('","client_metadata":' + JSON.stringify(child.client_metadata) + "}"),
+    ]);
+    const upload = post(source);
+    const response = await upload.response;
+    expect(response.statusCode).toBe(200);
+    await readBody(response);
+    expect((await received.promise).toString()).toBe(JSON.stringify(JSON.parse(source.toString())));
+    await Promise.all([upload.closed, waitForUpstreamClose()]);
+  });
+
   it("runs a 17th guarded HTTP inference before the first 16 responses complete", async () => {
     const waiting: ServerResponse[] = [];
     const admitted = createDeferred<void>();

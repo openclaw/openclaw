@@ -24,6 +24,7 @@ export type RealtimeTalkTranscript = {
   /** Literal fragments append; complete snapshots replace without inferred turn boundaries. */
   textMode?: "verbatim" | "snapshot";
   itemId?: string;
+  transcriptId?: string;
   order?: number;
 };
 

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import {
@@ -10,7 +11,6 @@ import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
   listContextEngineQuarantines,
   registerContextEngineInRegistry,
-  resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../../../context-engine/registry.test-support.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
@@ -52,6 +52,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
 import {
@@ -72,11 +73,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import {
-  resetSubagentRegistryRuntimeLoadersForTests,
-  setSubagentRegistryDepsForTest,
-  subagentRegistryDeps,
-} from "./subagent-registry-deps.js";
+import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import { registerDetachedCleanupAuthorityTest } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
   mockBlockedCompletionDeliveryOwner,
@@ -110,6 +107,12 @@ type AnnounceFlowOutcome = Awaited<
   ReturnType<LifecycleControllerParams["runSubagentAnnounceFlow"]>
 >;
 type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
+
+vi.mock("../../../config/config.js", { spy: true });
+vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
+}));
 
 describe("subagent recovery session-effect ownership", () => {
   it("does not treat an ordinary run generation as a recovery suppression receipt", () => {
@@ -5222,15 +5225,12 @@ describe("requester settle wake trigger", () => {
       });
       registerContextEngineInRegistry(registry, "cleanup-owned", factory, "plugin:fixture");
       registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
-      setSubagentRegistryDepsForTest({
-        getRuntimeConfig: () => ({ plugins: { slots: { contextEngine: "cleanup-owned" } } }),
-        loadAgentRuntimePluginRegistryHandle: () => registry,
-        ensureContextEnginesInitialized: vi.fn(),
-        resolveContextEngine,
+      vi.mocked(getRuntimeConfig).mockReturnValue({
+        plugins: { slots: { contextEngine: "cleanup-owned" } },
       });
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
-        deps: () => subagentRegistryDeps,
         persist: vi.fn(),
         warn,
       });
@@ -5311,7 +5311,8 @@ describe("requester settle wake trigger", () => {
         descendantGate.resolve();
         await resources.release();
         await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        setSubagentRegistryDepsForTest();
+        vi.mocked(getRuntimeConfig).mockReset();
+        vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
         resetSubagentRegistryRuntimeLoadersForTests();
         resetContextEngineRuntimeQuarantineForTests();
         resetGatewayWorkAdmission();

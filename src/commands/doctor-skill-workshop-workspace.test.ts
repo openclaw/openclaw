@@ -31,7 +31,7 @@ import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -229,7 +229,7 @@ describe("Workshop relocation and workspace survival", () => {
 
   it("captures a new attestation only for remaining filesystem moves", async () => {
     const fixture = await createLegacyWorkspace();
-    repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env });
+    await prepareOpenClawStateDatabaseSchema({ env: state.env });
     await deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
     const before = await readWorkspaceStateSnapshot(fixture.workspaceDir);
     expect(before.attestation).toBeUndefined();

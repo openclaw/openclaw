@@ -19,7 +19,10 @@ import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
-import { loadExecApprovalsReadOnlyAsync } from "./exec-approvals-store.js";
+import {
+  loadExecApprovalsReadOnlyAsync,
+  readExecApprovalsPolicyReadOnlyAsync,
+} from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -236,6 +239,25 @@ it("reads current policy on the next call while inherited snapshots retain their
   expect(await loadMcpToolGrants("main", { env })).toEqual([{ ...grant, tool: "updated-tool" }]);
 });
 
+it("binds assessment revisions to both policy bytes and their database owner", async () => {
+  const original = fixture();
+  const foreign = fixture();
+  seed(original.env);
+  seed(foreign.env);
+  const first = await readExecApprovalsPolicyReadOnlyAsync({ env: original.env });
+  expect(first.revision).toBeTypeOf("string");
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: original.env })).revision).toBe(
+    first.revision,
+  );
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: foreign.env })).revision).not.toBe(
+    first.revision,
+  );
+  seed(original.env, "changed-tool");
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: original.env })).revision).not.toBe(
+    first.revision,
+  );
+});
+
 it("joins an admitted policy read before its disposable source is released", async () => {
   const { env, databasePath } = fixture();
   seed(env);
@@ -302,6 +324,7 @@ it("fails closed without a native retry when the worker read fails", async () =>
   const calls = watchNativeSql();
   expect(await loadMcpToolGrants("main", { env })).toEqual([]);
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env })).revision).toBeUndefined();
   expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
   expect(loggerWarn).toHaveBeenCalledTimes(1);
   expect(loggerWarn.mock.calls[0]?.[0]).toContain("unavailable");

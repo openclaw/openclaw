@@ -83,7 +83,7 @@ const publications: Array<TaskProgressPublication & { messageId: string }> = [];
 const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
 vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage,
-  resolveTaskControlUiSessionUrl: () => undefined,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 const notifications: Array<Parameters<typeof SendMessage>[0]> = [];
 const runContextClaims: Array<{ runId: string; claim: string }> = [];

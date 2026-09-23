@@ -96,6 +96,9 @@ and alpha defer Parallels to `pnpm release:beta-smoke`; stable/full run it befor
 publication. Override with `--run-parallels`/`--skip-parallels` only on explicit
 operator direction. Optional `--windows-node-tag <exact-source-tag>` records
 its approved installer digest map; stable candidates do not require Windows.
+A stable tag validated with the beta profile and no soak needs the operator's
+`--stable-soak-waiver '<reason>'`; the helper forwards it to the embedded
+preflight and the printed publish command.
 
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.

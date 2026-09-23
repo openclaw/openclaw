@@ -4101,24 +4101,11 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx.resolveUserName = async () => ({ name: "Alice" });
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-      const prepared =
-        rootText === undefined
-          ? await prepareThreadMessage(slackCtx, {
-              channel: "C123",
-              text: "bound reply",
-              ts: "101.000",
-              thread_ts: "100.000",
-            })
-          : await prepareMessageWith(
-              slackCtx,
-              createThreadAccount(),
-              createSlackMessage({
-                channel: "C123",
-                channel_type: "channel",
-                text: rootText,
-                ts: "100.000",
-              }),
-            );
+      const prepared = await prepareThreadMessage(slackCtx, {
+        text: rootText ?? "bound reply",
+        ts: rootText === undefined ? "101.000" : "100.000",
+        thread_ts: rootText === undefined ? "100.000" : undefined,
+      });
 
       expect(resolveByConversation).toHaveBeenCalledWith({
         channel: "slack",
@@ -4136,6 +4123,11 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared.route.agentId).toBe("review");
       expect(prepared.ctxPayload.SessionKey).toBe(targetSessionKey);
       expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
+      const routeMetadataKeys = Object.getOwnPropertySymbols(prepared.route);
+      expect(routeMetadataKeys).not.toHaveLength(0);
+      for (const key of routeMetadataKeys) {
+        expect(Reflect.get(prepared.ctxPayload, key)).toBe(Reflect.get(prepared.route, key));
+      }
       expect(touch).toHaveBeenCalledWith("test-binding", undefined);
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });

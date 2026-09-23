@@ -210,6 +210,11 @@ class ReviewPass(NamedTuple):
     evidence_batch: int = 1
 
 
+class ReviewResult(NamedTuple):
+    report: dict[str, Any]
+    complete: bool
+
+
 class MixedContextCapacityError(SystemExit):
     """A pack may fit after rebatching evidence, never by detaching source."""
 
@@ -487,6 +492,16 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
+# Completion belongs to the provider boundary, not the published report format.
+PROVIDER_SCHEMA = {
+    **SCHEMA,
+    "required": [*SCHEMA["required"], "review_completion"],
+    "properties": {
+        **SCHEMA["properties"],
+        "review_completion": {"type": "string", "enum": ["complete", "incomplete"]},
+    },
+}
+
 
 def run(
     args: list[str],
@@ -537,6 +552,12 @@ def safe_git_env(repo: Path) -> dict[str, str]:
         for key in platform_keys
         if key in os.environ
     }
+    if developer := env.get("DEVELOPER_DIR"):
+        bases = (Path(developer), Path(developer) / "Contents" / "Developer")
+        paths = (base / suffix for base in bases for suffix in (".", "usr/bin/xcrun", "usr/bin/git"))
+        if any(not path.is_absolute() or is_within(Path(os.path.abspath(path)), repo.resolve())
+               or not external_env_path(repo, str(path)) for path in paths):
+            raise SystemExit("Git refuses relative or repository-owned DEVELOPER_DIR")
     env.update({
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -549,9 +570,19 @@ def safe_git_env(repo: Path) -> dict[str, str]:
         "HOME": caller_home if caller_home is not None else str(Path.home()),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
-        "PATH": safe_engine_path(repo),
+        "PATH": safe_git_path(repo),
     })
     return env
+
+
+def safe_git_path(repo: Path) -> str:
+    # Trusted Git wrappers can search PATH again for their native backend.
+    # Exclude unsafe later candidates as well as the initially selected Git.
+    return os.pathsep.join(
+        directory for directory in safe_engine_path(repo).split(os.pathsep)
+        if (candidate := first_executable_candidate(Path(directory) / "git")) is None
+        or external_env_path(repo, candidate)
+    )
 
 
 def git_line_ending_args(repo: Path) -> list[str]:
@@ -1754,9 +1785,65 @@ def detect_pr_base(repo: Path) -> str | None:
     gh_bin = find_command("gh", repo)
     if not gh_bin:
         return None
-    result = run([gh_bin, "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
+    env = safe_gh_env(repo)
+    result = run(
+        [gh_bin, "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"],
+        repo, check=False, env=env,
+    )
     base = result.stdout.strip()
     return f"origin/{base}" if result.returncode == 0 and base else None
+
+
+def safe_gh_env(repo: Path) -> dict[str, str]:
+    env = safe_git_env(repo)
+    git_bin = resolve_git(repo)
+    env["PATH"] = os.pathsep.join((str(Path(git_bin).parent), env["PATH"]))
+    # gh resolves Git itself: an external PATH directory can still contain a
+    # repository-owned executable symlink. Require the approved Git to win.
+    env["NoDefaultCurrentDirectoryInExePath"] = "1"
+    found = next((candidate for directory in env["PATH"].split(os.pathsep)
+                  if (candidate := first_executable_candidate(Path(directory) / "git"))), None)
+    if found is None or Path(found).resolve() != Path(git_bin).resolve():
+        raise SystemExit("PR-base discovery cannot select the approved Git; pass --base explicitly")
+    for key in ("HOME", "USERPROFILE", "APPDATA", "GH_CONFIG_DIR", "XDG_CONFIG_HOME",
+                "SSL_CERT_FILE", "SSL_CERT_DIR"):
+        if key not in os.environ:
+            continue
+        raw = os.environ[key]
+        if not raw and key in {"GH_CONFIG_DIR", "XDG_CONFIG_HOME", "SSL_CERT_FILE", "SSL_CERT_DIR"}:
+            continue
+        values = raw.split(os.pathsep) if key == "SSL_CERT_DIR" else [raw]
+        if any(not Path(value).is_absolute() for value in values):
+            raise SystemExit(f"PR-base discovery refuses relative {key}; pass --base explicitly")
+        if any(is_within(Path(os.path.abspath(value)), repo.resolve()) for value in values):
+            raise SystemExit(f"PR-base discovery refuses repository-owned {key}; pass --base explicitly")
+        normalized = normalize_external_env_path_value(repo, key, raw)
+        if normalized is None:
+            raise SystemExit(f"PR-base discovery refuses repository-owned {key}; pass --base explicitly")
+        env[key] = normalized
+    if env.get("GH_CONFIG_DIR"):
+        config_dir = Path(env["GH_CONFIG_DIR"])
+    elif env.get("XDG_CONFIG_HOME"):
+        config_dir = Path(env["XDG_CONFIG_HOME"]) / "gh"
+    elif os.name == "nt" and env.get("APPDATA"):
+        config_dir = Path(env["APPDATA"]) / "GitHub CLI"
+    else:
+        home_key = "USERPROFILE" if os.name == "nt" else "HOME"
+        if not env.get(home_key):
+            raise SystemExit("PR-base discovery has no GitHub CLI home; pass --base explicitly")
+        config_dir = Path(env[home_key]) / ".config" / "gh"
+    for path in (config_dir, config_dir / "config.yml", config_dir / "hosts.yml"):
+        if (is_within(Path(os.path.abspath(path)), repo.resolve())
+                or not external_env_path(repo, str(path))):
+            raise SystemExit("PR-base discovery refuses repository-owned GitHub CLI configuration; pass --base explicitly")
+    env["GH_CONFIG_DIR"] = str(config_dir.resolve())
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                "GH_HOST", "NO_PROXY", "no_proxy", *PROXY_ENV_KEYS):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.update(codex_tool_git_env())
+    env["GH_PROMPT_DISABLED"] = "1"
+    return env
 
 
 def resolve_command(name: str, repo: Path) -> str:
@@ -1776,13 +1863,14 @@ def preflight_git() -> bool:
     selected = os.environ.get("AUTOREVIEW_GIT", "git")
     try:
         selected = resolve_git(repo)
+        git_env = safe_git_env(repo)
     except SystemExit:
-        reason = "executable missing or untrusted"
+        reason = "executable or environment missing or untrusted"
     else:
         try:
             with deferred_owned_process_signals():
                 proc = subprocess.Popen(
-                    [selected, "--version"], cwd=repo, env=safe_git_env(repo),
+                    [selected, "--version"], cwd=repo, env=git_env,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, **process_group_popen_kwargs(),
                 )
@@ -1901,6 +1989,10 @@ def git_bytes(
         if env is None and args and args[0] in {"diff", "status"}
         else []
     )
+    child_env = env if env is not None else safe_git_env(repo)
+    filters_disabled = False
+    if args and args[0] in {"diff", "status"}:
+        child_env, filters_disabled = disable_git_filters(repo, child_env)
     result = subprocess.run(
         [
             resolve_git(repo),
@@ -1912,7 +2004,7 @@ def git_bytes(
         cwd=repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=env if env is not None else safe_git_env(repo),
+        env=child_env,
     )
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).decode(
@@ -1922,8 +2014,57 @@ def git_bytes(
         raise SystemExit(
             f"Git failed while reading review data ({result.returncode}): "
             f"{display_escape(detail, 1000, multiline=True)}"
+            + ("\nExecutable Git filters are disabled; use branch or commit mode if conversion is required."
+               if filters_disabled else "")
         )
     return result
+
+
+def disable_git_filters(repo: Path, env: dict[str, str]) -> tuple[dict[str, str], bool]:
+    result = git_result(
+        repo, "config", "--includes", "--null", "--name-only", "--get-regexp", r"^filter\.",
+        env=env, check=False,
+    )
+    if result.returncode == 1:
+        return env, False
+    if result.returncode != 0 or not result.stdout.endswith("\0"):
+        raise SystemExit("cannot establish executable Git filter configuration")
+    drivers: set[str] = set()
+    active_key: str | None = None
+    for key in dict.fromkeys(result.stdout.split("\0")[:-1]):
+        if not key.startswith("filter."):
+            raise SystemExit("invalid Git filter configuration key")
+        driver, separator, field = key.removeprefix("filter.").rpartition(".")
+        if not separator or field not in {"clean", "process"}:
+            continue
+        value = git_result(
+            repo, "config", "--includes", "--null", "--get", key, env=env, check=False,
+        )
+        if value.returncode != 0 or not value.stdout.endswith("\0") or value.stdout.count("\0") != 1:
+            raise SystemExit("cannot establish effective Git filter command")
+        if value.stdout.removesuffix("\0"):
+            drivers.add(driver)
+            active_key = key
+    if not drivers:
+        return env, False
+    child_env = {key: value for key, value in env.items()
+                 if key not in {"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"}
+                 and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    overrides = [(f"filter.{driver}.{field}", value)
+                 for driver in sorted(drivers)
+                 for field, value in (("clean", ""), ("process", ""), ("required", "true"))]
+    child_env["GIT_CONFIG_COUNT"] = str(len(overrides))
+    for index, (key, value) in enumerate(overrides):
+        # Keep arbitrary driver names separate from values, including '='.
+        child_env[f"GIT_CONFIG_KEY_{index}"] = key
+        child_env[f"GIT_CONFIG_VALUE_{index}"] = value
+    assert active_key is not None
+    applied = git_result(repo, "config", "--includes", "--null", "--get", active_key,
+                         env=child_env, check=False)
+    if applied.returncode != 0 or applied.stdout != "\0":
+        # Git versions without command-env configuration must fail closed.
+        raise SystemExit("Git cannot apply executable-filter protection")
+    return child_env, True
 
 
 def bounded_field(text: str, limit: int) -> str:
@@ -2871,46 +3012,46 @@ def branch_bundle(repo: Path, base_ref: str) -> CapturedBundle:
     base_label = base_ref
     base_ref = validate_git_ref(repo, base_ref, "base", pin=True)
     head_ref = validate_git_ref(repo, "HEAD", "commit", pin=True)
-    diff_range = f"{base_ref}...{head_ref}"
+    merge_base = git(repo, "merge-base", base_ref, head_ref).strip()
     branch_patch = git(
         repo,
-        "diff",
-        *SAFE_DIFF_FLAGS,
+        "diff-tree",
+        *COMMIT_DIFF_FLAGS,
         "--patch",
         "--end-of-options",
-        diff_range,
+        merge_base, head_ref,
     )
     branch_paths = git_path_list(
         repo,
-        "diff",
-        *SAFE_DIFF_FLAGS,
+        "diff-tree",
+        *COMMIT_DIFF_FLAGS,
         "--name-only",
         "-z",
         "--end-of-options",
-        diff_range,
+        merge_base, head_ref,
     )
     require_no_binary_diff(
         "branch diff",
         git(
             repo,
-            "diff",
-            *SAFE_DIFF_FLAGS,
+            "diff-tree",
+            *COMMIT_DIFF_FLAGS,
             "--numstat",
             "-z",
             "--end-of-options",
-            diff_range,
+            merge_base, head_ref,
         ),
     )
     require_no_gitlink_diff(
         "branch diff",
         git(
             repo,
-            "diff",
-            *SAFE_DIFF_FLAGS,
+            "diff-tree",
+            *COMMIT_DIFF_FLAGS,
             "--raw",
             "-z",
             "--end-of-options",
-            diff_range,
+            merge_base, head_ref,
         ),
     )
     omitted_tracked = bool(tracked_sensitive_paths(branch_paths))
@@ -2927,11 +3068,11 @@ def branch_bundle(repo: Path, base_ref: str) -> CapturedBundle:
                 if omitted_tracked
                 else git(
                     repo,
-                    "diff",
-                    *SAFE_DIFF_FLAGS,
+                    "diff-tree",
+                    *COMMIT_DIFF_FLAGS,
                     "--stat",
                     "--end-of-options",
-                    diff_range,
+                    merge_base, head_ref,
                 )
             ),
             branch_patch,
@@ -3524,10 +3665,16 @@ def render_review_prompt(
 
         This review is noninteractive. Complete it from the available evidence;
         describe material uncertainty in overall_explanation instead of asking questions.
+
+        This pass is an independent, complete assignment for the supplied change and evidence.
+        There is no shared conversation or future evidence batch for you to wait for.
+        Set review_completion to complete only after finishing this assignment.
+        If you defer judgment or leave the assessment unfinished, set it to incomplete.
+
         Return one JSON object matching this schema, without Markdown fences.
         Pin each finding to the smallest file/line location that demonstrates it.
         If no actionable defects meet the requested threshold, return no findings and mark the patch correct.
-        {json.dumps(SCHEMA)}
+        {json.dumps(PROVIDER_SCHEMA)}
 
         Review target: {target_line}
         Current branch: {branch}
@@ -4968,7 +5115,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
     ensure_codex_isolation_supported(args, repo)
     temp_root = safe_temp_root(repo, engine="codex")
-    schema_path = write_json_temp(SCHEMA, temp_root)
+    schema_path = write_json_temp(PROVIDER_SCHEMA, temp_root)
     with tempfile.NamedTemporaryFile(
         "w",
         suffix=".json",
@@ -5079,7 +5226,7 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         "--output-format",
         "stream-json" if args.stream_engine_output else "json",
         "--json-schema",
-        json.dumps(SCHEMA),
+        json.dumps(PROVIDER_SCHEMA),
     ]
     if args.tools:
         allowed_tools = claude_allowed_tools(args)
@@ -5143,7 +5290,7 @@ def amp_review_plugin_source(
     structured_schema = {
         "name": "autoreview_report",
         "description": "A security-focused code-review report for the supplied patch.",
-        "fields": SCHEMA["properties"],
+        "fields": PROVIDER_SCHEMA["properties"],
     }
     return textwrap.dedent(
         f"""
@@ -6332,8 +6479,8 @@ def number_in_range(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
 
 
-def review_status(report: dict[str, Any]) -> str:
-    if (report.get("scope_rejected_findings") or report.get("missing_required_findings")
+def review_status(report: dict[str, Any], *, complete: bool) -> str:
+    if (not complete or report.get("scope_rejected_findings") or report.get("missing_required_findings")
             or report.get("attribution_rejected_findings")):
         return "incomplete"
     if report["findings"]:
@@ -6371,7 +6518,7 @@ def print_findings(findings: list[dict[str, Any]]) -> None:
 def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     findings = report["findings"]
     display_label = display_escape(label, 200)
-    status = review_status(report)
+    status = report["review_status"]
     if status == "incomplete":
         print(f"{display_label} incomplete: selected scope could not be certified")
     elif status == "filtered":
@@ -6399,11 +6546,12 @@ def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
             print_findings(report[key])
     for needle in report.get("missing_required_findings", []):
         print(f"required finding text not found: {display_escape(needle, 2000)}")
-    print(f"overall: {report['overall_correctness']} ({report['overall_confidence']})")
+    observation = "provider observation (incomplete review): " if status == "incomplete" else ""
+    print(f"{observation}overall: {report['overall_correctness']} ({report['overall_confidence']})")
     print(display_escape(report["overall_explanation"], 3000, multiline=True))
     for entry in report.get("pass_reports", []):
         provider = entry["report"]
-        print(f"{display_escape(entry['label'], 200)} overall: "
+        print(f"{display_escape(entry['label'], 200)} {observation}overall: "
               f"{provider['overall_correctness']} ({provider['overall_confidence']})")
         print(display_escape(provider["overall_explanation"], 3000, multiline=True))
 
@@ -6839,7 +6987,7 @@ def run_reviewer(
     changed_paths: set[str] | CapturedBundle,
     required: list[str],
     evidence: list[EvidenceFile] | None = None,
-) -> dict[str, Any]:
+) -> ReviewResult:
     mixed = changed_paths.mixed if isinstance(changed_paths, CapturedBundle) else ()
     paths = changed_paths.paths if isinstance(changed_paths, CapturedBundle) else changed_paths
     available = {record.identity for record in prompt.chunk.sources} if isinstance(prompt, ReviewPass) else set()
@@ -6854,6 +7002,9 @@ def run_reviewer(
     raw = run_engine(args, repo, outgoing)
     try:
         report = extract_json(raw)
+        completion = report.pop("review_completion", None)
+        if not isinstance(completion, str) or completion not in {"complete", "incomplete"}:
+            raise SystemExit("review engine returned missing or invalid review_completion")
         provider_report = copy.deepcopy(report)
         validate_report(report, repo, paths, [], mixed, available)
     except (SystemExit, ValueError, RecursionError) as exc:
@@ -6865,7 +7016,7 @@ def run_reviewer(
     if mixed:
         report["available_source_records"] = sorted(available)
     require_findings(report, required)
-    return report
+    return ReviewResult(report, completion == "complete")
 
 
 def merge_chunk_reports(reports: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
@@ -6944,8 +7095,8 @@ def run_review_passes(
     prompts: list[str] | list[ReviewPass],
     changed_paths: set[str] | CapturedBundle,
     evidence: list[EvidenceFile] | None = None,
-) -> list[tuple[str, dict[str, Any]]]:
-    chunk_reports: list[tuple[str, dict[str, Any]]] = []
+) -> list[tuple[str, ReviewResult]]:
+    chunk_reports: list[tuple[str, ReviewResult]] = []
     for index, prompt in enumerate(prompts, start=1):
         if len(prompts) > 1:
             print(
@@ -7114,7 +7265,7 @@ def main_impl() -> int:
                 "rerun autoreview against the updated tree"
             )
     try:
-        chunk_reports = run_review_passes(
+        pass_results = run_review_passes(
             args,
             reviewers,
             repo,
@@ -7125,6 +7276,7 @@ def main_impl() -> int:
     except ReviewerUnavailable as exc:
         write_review_status(args, "reviewer_unavailable", 1, exc)
         raise
+    chunk_reports = [(label, result.report) for label, result in pass_results]
     if len(chunk_reports) == 1 and not captured.mixed:
         report = chunk_reports[0][1]
     else:
@@ -7132,7 +7284,9 @@ def main_impl() -> int:
     missing = missing_required_findings(report, args.require_finding)
     if missing:
         report["missing_required_findings"] = missing
-    report["review_status"] = review_status(report)
+    report["review_status"] = review_status(
+        report, complete=all(result.complete for _, result in pass_results),
+    )
     label = "autoreview"
     if len(chunk_reports) > 1:
         label += " chunked"

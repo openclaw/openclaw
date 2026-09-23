@@ -22,6 +22,11 @@ HOST_BUILD="${OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
+AUDIT_IDENTITY="${OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY:-0}"
+case "$AUDIT_IDENTITY" in
+  0|1) ;;
+  *) echo "OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY must be 0 or 1" >&2; exit 1 ;;
+esac
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
 CODEX_PLUGIN_REGISTRY_PACKAGE=""
@@ -214,6 +219,7 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY="$AUDIT_IDENTITY" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE="$CODEX_PLUGIN_REGISTRY_PACKAGE" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL="$CODEX_PLUGIN_REGISTRY_TARBALL" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION="$CODEX_PLUGIN_REGISTRY_VERSION" \
@@ -295,6 +301,7 @@ dump_debug_logs() {
     /tmp/openclaw-codex-agent-turn1.err \
     /tmp/openclaw-codex-agent-turn2.json \
     /tmp/openclaw-codex-agent-turn2.err \
+    /tmp/openclaw-codex-audit-gateway.log \
     /tmp/openclaw-codex-followthrough.json \
     /tmp/openclaw-codex-followthrough.log \
     /tmp/openclaw-codex-followthrough.err \
@@ -305,12 +312,14 @@ dump_debug_logs() {
 }
 
 registry_pid=""
+audit_gateway_pid=""
 debug_logs_dumped=0
 cleanup_scenario() {
   local status=$?
   trap - EXIT
   set +e
   openclaw_e2e_stop_process "${registry_pid:-}"
+  openclaw_e2e_stop_process "${audit_gateway_pid:-}"
   if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then
     dump_debug_logs "$status"
   fi
@@ -455,6 +464,17 @@ run_agent_turn \
   /tmp/openclaw-codex-agent.err
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$SESSION_ID" "$MODEL_REF"
+
+if [ "${OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY:-0}" = "1" ]; then
+  echo "Inspecting persisted Codex execution identity through the installed package Gateway..."
+  audit_package_root="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
+  audit_package_entry="$(openclaw_e2e_package_entrypoint "$audit_package_root")"
+  audit_gateway_pid="$(openclaw_e2e_start_gateway "$audit_package_entry" 18789 /tmp/openclaw-codex-audit-gateway.log)"
+  openclaw_e2e_wait_gateway_ready "$audit_gateway_pid" /tmp/openclaw-codex-audit-gateway.log
+  node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-audit "$SUCCESS_MARKER"
+  openclaw_e2e_stop_process "$audit_gateway_pid"
+  audit_gateway_pid=""
+fi
 
 FOLLOWTHROUGH_SESSION_ID="${SESSION_ID}-followthrough"
 FOLLOWTHROUGH_PROGRESS_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-PROGRESS"

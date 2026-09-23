@@ -109,6 +109,7 @@ it("does not invent an admission mode when a warm database rejects a different o
       wrongOwner,
       async () =>
         pruneAllSessionTranscriptArchivesToHighWater({
+          withArchiveWrite: (write) => write(),
           archiveDirectory: state.sessionsDir(),
           databaseOptions: wrongOwner,
           diagnostics: archivePruning,
@@ -272,11 +273,11 @@ it("bounds background page reclamation and checks authority before resuming it",
     Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
   const before = freePages();
   expect(before).toBeGreaterThan(512);
-  await reclaimSqliteFreePages(options, undefined, { maxPasses: 1 });
+  await reclaimSqliteFreePages(options, undefined, { maxPages: 31 });
   const remaining = freePages();
   expect(remaining).toBeGreaterThan(0);
   expect(remaining).toBeLessThan(before);
-  expect(before - remaining).toBeLessThanOrEqual(512);
+  expect(before - remaining).toBe(31);
   await expect(
     reclaimSqliteFreePages(options, undefined, {
       maxPasses: 1,
@@ -490,6 +491,7 @@ it.each([
             return boundary === "drain"
               ? await reclaimSqliteFreePages(options, archivePruning)
               : await pruneAllSessionTranscriptArchivesToHighWater({
+                  withArchiveWrite: (write) => write(),
                   archiveDirectory: path.dirname(archivePath),
                   diagnostics: archivePruning,
                   databaseOptions: options,

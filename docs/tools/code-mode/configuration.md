@@ -10,13 +10,15 @@ read_when:
 
 ## Configuration
 
-`tools.codeMode.enabled` sets the global activation default. It defaults to
-`false`, including when the Code Mode object configures other fields. Set
-`true` or `"auto"` explicitly, or use an [agent or model override](/tools/code-mode/quickstart#override-one-model).
+An absent global `tools.codeMode` setting defaults to `"auto"`. If you author a
+Code Mode object, its activation stays off unless that object explicitly sets
+`enabled`; this lets you stage executor or limit settings without enabling the
+feature. Shorthand `false` also disables it. Agent and model overrides retain
+their existing precedence.
 
 | Field                 | Default    | Clamp                                           |
 | --------------------- | ---------- | ----------------------------------------------- |
-| `enabled`             | `false`    | `false`, `true`, or `"auto"` (per-model)        |
+| `enabled`             | See above  | `false`, `true`, or `"auto"` (per-model)        |
 | `executor`            | `"node"`   | `"node"` or `"quickjs"`                         |
 | `mode`                | `"only"`   | exposes control/direct tools, catalogs the rest |
 | `timeoutMs`           | `10000`    | `100`-`60000`                                   |
@@ -60,14 +62,16 @@ tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off unless an agent or model override enables it.
+- `false`: code mode is off unless an agent or model override enables it.
 - `true`: code mode engages for tool-capable runs unless an override disables it.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.
 
-These values supply the default when no agent or model override takes
-precedence. `"auto"` uses catalog capability; an explicit per-model boolean
-bypasses that capability preference.
+When the global setting is completely absent, OpenClaw behaves as if it were
+`"auto"`. An authored object without `enabled` behaves as `false`. These values
+supply the default when no agent or model override takes precedence. `"auto"`
+uses catalog capability; an explicit per-model boolean bypasses that capability
+preference.
 
 ### The `compat.codeMode` catalog flag
 
@@ -89,7 +93,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 
 | Provider  | Models                                                                                                                                                           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                                                   |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                                       |
 | deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
 | google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
 | kimi      | `k3`, `k3-256k`                                                                                                                                                  |
@@ -98,6 +102,9 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
 | xiaomi    | `mimo-v2.6-pro`, `mimo-v2.6-flash`                                                                                                                               |
 | zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
+
+`claude-haiku-4-5` is marked `"capable"`: it remains available through an
+explicit `true` agent or model setting, but `"auto"` does not engage it.
 
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.
@@ -133,14 +140,13 @@ changes that routing decision.
 
 ### Choosing when to enable
 
-In A/B evaluations on the preferred models above, code mode reduced total
-token usage by roughly 30-50% at equal-or-better task pass rates, mostly by
-replacing many full tool schemas and per-tool round trips with one compact
-program surface. Models below the preferred tier showed no consistent win and
-sometimes regressed, which is why `"auto"` leaves them on direct tools.
+Code Mode can reduce token use by replacing repeated full tool schemas and
+intermediate model turns with a compact catalog and one program. Results depend
+on the model and workload. Compare correctness and full root-plus-descendant
+token use on representative tasks before forcing it broadly.
 
-Use `"auto"` when agents switch between models: strong models get the compact
-surface, weaker or local ones keep the exposure they handle best. Use `true`
+Use `"auto"` when agents switch between models: preferred models get the compact
+surface, while other models keep normal tool exposure. Use `true`
 on an exact model entry when you have verified an unflagged model performs well
 with code mode. For open-weight or uncached serving where every prompt token is billed or
 recomputed, prefer enabling per model (via `"auto"` or an explicit model override)

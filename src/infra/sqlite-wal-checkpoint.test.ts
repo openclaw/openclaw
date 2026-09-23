@@ -23,7 +23,7 @@ import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", () => {
+  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
@@ -46,7 +46,7 @@ describe("SQLite WAL checkpoint observations", () => {
       }
       const oversized = fs.statSync(`${databasePath}-wal`).size;
       expect(oversized).toBeGreaterThan(64 * 1024 * 1024);
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
       reader = new DatabaseSync(databasePath, { readOnly: true });
       reader.exec("BEGIN");
@@ -55,12 +55,13 @@ describe("SQLite WAL checkpoint observations", () => {
       );
       admitted = true;
       const started = performance.now();
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(performance.now() - started).toBeLessThan(1_000);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
+      expect(maintenance.health?.state).toBe("blocked");
       expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
       reader.exec("ROLLBACK");
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBeLessThanOrEqual(64 * 1024 * 1024);
       expect(maintenance.health?.state).toBe("complete");
       expect(writer.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(

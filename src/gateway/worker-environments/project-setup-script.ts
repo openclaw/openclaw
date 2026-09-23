@@ -23,8 +23,17 @@ const ownedDirectory = (parent, name, create = false) => {
   return target;
 };
 const git = (root, args) => {
-  const result = spawnSync("git", ["-C", root, ...args], { env, encoding: "utf8", timeout: 30000, maxBuffer: 262144 });
-  if (result.status !== 0) throw new Error("Prepared project Git verification failed");
+  // Full object verification on cold snapshot storage needs the same budget as seed verification.
+  const timeout = 600000;
+  const maxBuffer = 262144;
+  const result = spawnSync("git", ["-C", root, ...args], { env, encoding: "utf8", timeout, maxBuffer });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.code === "ETIMEDOUT" ? "timed out after " + timeout + " ms"
+      : result.error?.code === "ENOBUFS" ? "output exceeded " + maxBuffer + " bytes"
+      : result.error?.code ?? (result.signal ? "signal " + result.signal : "exit " + result.status);
+    // Git output and full arguments can contain private repository paths or contents.
+    throw new Error("Prepared project Git verification failed (git " + args[0] + ": " + reason + ")");
+  }
   return result.stdout.trim();
 };
 const manifest = (root, baseCommit = input.baseCommit, priorRefs = [], manifestHome = machineHome) => {

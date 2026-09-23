@@ -73,10 +73,19 @@ async function expectQuietDefault(row: Locator) {
 }
 
 async function expectDefaultInfo(row: Locator, explanation: string) {
-  const info = row.locator('wa-radio[value=""] .model-providers__segment-info');
+  const info = row
+    .locator(".settings-row__title")
+    .getByRole("button", { name: /^About (thinking|fast mode) defaults$/u });
   await info.waitFor();
-  await expect.poll(() => info.getAttribute("aria-label")).toBe(explanation);
   await expect.poll(() => info.locator("svg").count()).toBe(1);
+  const tooltip = info.locator("..");
+  const tooltipIsOpen = () =>
+    tooltip.locator("wa-tooltip").evaluate((node) => Boolean(Reflect.get(node, "open")));
+  await info.click();
+  await expect.poll(tooltipIsOpen).toBe(true);
+  await expect.poll(() => tooltip.textContent()).toContain(explanation);
+  await info.press("Escape");
+  await expect.poll(tooltipIsOpen).toBe(false);
 }
 
 async function selectDefault(row: Locator) {
@@ -114,7 +123,7 @@ suite.define(() => {
         const afterLabsReset = {
           agents: initialConfig.agents,
           browser: initialConfig.browser,
-          tools: { profile: "minimal" },
+          tools: { codeMode: {}, profile: "minimal" },
         };
         const afterThinkingReset = {
           agents: {
@@ -357,7 +366,7 @@ suite.define(() => {
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("false");
+        ).toBe("true");
 
         if (captureUiProofEnabled) {
           await page.screenshot({

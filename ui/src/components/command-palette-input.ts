@@ -21,7 +21,6 @@ type CommandPaletteInputProps = {
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-  expanded?: boolean;
 };
 
 function updatePaletteInputOverflow(textarea: HTMLTextAreaElement) {
@@ -143,10 +142,10 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
           class="cmd-palette__input"
           aria-label=${props.placeholder}
           aria-autocomplete=${props.controls ? "list" : nothing}
+          aria-haspopup=${props.controls ? "listbox" : nothing}
           aria-controls=${props.controls ?? nothing}
           aria-activedescendant=${props.activeDescendant ?? nothing}
           aria-describedby=${props.describedBy ?? nothing}
-          aria-expanded=${props.expanded === undefined ? nothing : String(props.expanded)}
           placeholder=${props.placeholder}
           .value=${props.value}
           ?disabled=${props.disabled}

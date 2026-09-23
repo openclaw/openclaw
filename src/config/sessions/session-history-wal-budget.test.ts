@@ -34,6 +34,7 @@ import {
   measureSessionPhysicalDiskUsage,
 } from "./disk-budget-runtime.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -192,6 +193,73 @@ DatabaseSync.prototype.exec = function(statement) {
     },
   };
 }
+
+it("admits a queued foreground write before draining all vacuum batches", async () => {
+  state = await createOpenClawTestState({
+    prefix: "wal-budget-fairness-",
+    layout: "state-only",
+    scenario: "minimal",
+  });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  database.db.exec(`CREATE TABLE vacuum_fairness_fixture (payload BLOB);
+    INSERT INTO vacuum_fairness_fixture VALUES (zeroblob(262144));
+    DROP TABLE vacuum_fairness_fixture;`);
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  const freePages = () =>
+    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  const before = freePages();
+  expect(before).toBeGreaterThan(8);
+  fs.mkdirSync(state.sessionsDir(), { recursive: true });
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const usage = await measureSessionPhysicalDiskUsage(storePath);
+  const maintenance = resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxDiskBytes: usage.totalBytes - 1,
+    highWaterBytes: usage.totalBytes - 1,
+  });
+  let foreground: Promise<void> | undefined;
+  let observedFreePages = 0;
+  const writes = channel("openclaw.session.write");
+  const observe = (message: unknown) => {
+    if (
+      !foreground &&
+      isRecord(message) &&
+      message.operation === "session.reclamation.worker-commit"
+    ) {
+      foreground = runExclusiveSqliteSessionWrite(
+        options,
+        async () => {
+          observedFreePages = freePages();
+          database.db
+            .prepare("INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES (?,?,?,?)")
+            .run("fairness", "foreground", Buffer.from("committed"), 1);
+        },
+        "session.entry-replacements",
+      );
+    }
+  };
+  writes.subscribe(observe);
+  try {
+    await enforceSqliteSessionHistoryDiskBudget({
+      ...options,
+      storePath,
+      mode: "enforce",
+      maintenance,
+    });
+    expect(foreground).toBeDefined();
+    await foreground;
+    expect(observedFreePages).toBeGreaterThan(0);
+    expect(observedFreePages).toBeLessThan(before);
+    expect(freePages()).toBe(0);
+    expect(
+      database.db.prepare("SELECT blob FROM cache_entries WHERE scope='fairness'").get()?.blob,
+    ).toEqual(new Uint8Array(Buffer.from("committed")));
+  } finally {
+    writes.unsubscribe(observe);
+    await foreground;
+  }
+});
 
 it.each(["transaction", "iterator"] as const)(
   "defers WAL-only pressure without deleting archives, names the %s, and resumes after checkpoint recovery",

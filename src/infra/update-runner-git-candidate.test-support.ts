@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
+import type { UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 
 const { runCommandWithTimeout } = processExec;
 
@@ -112,11 +116,13 @@ export async function expectCancelledGitCandidateCleanup({
       opts: {
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
         inspectGitTarget: async () => {},
-        validateCandidate: async () => {},
+        validateCandidate: async () => {
+          throw new Error("cancelled update reached validation");
+        },
+        beforeGitMutation,
         runGitDoctor: async () => {
           throw new Error("cancelled update reached Doctor");
         },
-        beforeGitMutation,
       },
     });
     expect(controller.signal.reason).toBe(stopped);
@@ -134,7 +140,7 @@ export async function expectCancelledGitCandidateCleanup({
   expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
 }
 
-const runtimeImports = [
+export const runtimeImports = [
   "../dist-runtime/identity.cjs",
   "../packages/runtime/dist-runtime/identity.cjs",
   "../node_modules/identity.cjs",
@@ -145,6 +151,16 @@ const runtimeImports = [
   "../packages/runtime/node_modules/external-runtime",
   "virtual-runtime",
 ];
+
+export type VirtualStoreLayout =
+  | "node_modules/.pnpm"
+  | "node_modules/.cache/jiti"
+  | "node_modules/.vite/deps"
+  | ".pnpm"
+  | "cache/deps"
+  | "../store"
+  | "external"
+  | "symlink";
 
 export async function writeRuntime(directory: string, sha: string, store: string, layout: string) {
   const root = await fs.realpath(directory);
@@ -226,4 +242,127 @@ export async function expectRuntime(root: string, sha: string) {
   );
   expect(child.code, child.stderr).toBe(0);
   expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
+}
+
+export function registerGitActivationDoctorOutcomeTests(
+  getFixture: () => {
+    root: string;
+    beforeSha: string;
+    events: string[];
+    isStopped: () => boolean;
+    advanceRemote: () => Promise<string>;
+    git: (root: string, ...args: string[]) => Promise<string>;
+    update: (opts: Pick<UpdateRunnerOptions, "runGitDoctor">) => Promise<UpdateRunResult>;
+    expectNoRuntimeStagingPaths: () => Promise<void>;
+  },
+) {
+  it.each([
+    ["success", undefined],
+    ["config-refused", "repair-requires-config-change"],
+    ["requester-revoked", "requester-revoked"],
+    ["doctor-error", "doctor-failed"],
+    ["doctor-zero-exit-timeout", "doctor-failed"],
+    ["doctor-zero-exit-output-limit", "doctor-failed"],
+    ["doctor-throw", "unexpected-error"],
+    ["cleanup-uncertain", undefined],
+    ["missing", "doctor-entry-missing"],
+  ] as const)(
+    "uses the CLI activation Doctor and preserves its outcome: %s",
+    async (outcome, reason) => {
+      const {
+        root,
+        beforeSha,
+        events,
+        isStopped,
+        advanceRemote,
+        git,
+        update,
+        expectNoRuntimeStagingPaths,
+      } = getFixture();
+      const targetSha = await advanceRemote();
+      const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
+      const cleanupError = new Error("Doctor child cleanup remains unresolved", {
+        cause: new CommandProcessCleanupError(),
+      });
+      const runGitDoctor = vi.fn(async (doctorRoot: string) => {
+        expect(isStopped()).toBe(true);
+        await expectRuntime(doctorRoot, targetSha);
+        events.push("owned-doctor");
+        if (outcome === "requester-revoked") {
+          throw new UpdateRequesterRevokedError();
+        }
+        if (outcome === "doctor-throw") {
+          throw new Error("Doctor failed after starting migration");
+        }
+        if (outcome === "cleanup-uncertain") {
+          throw cleanupError;
+        }
+        if (outcome === "missing") {
+          return null;
+        }
+        return {
+          name: "openclaw doctor",
+          command: "candidate doctor",
+          cwd: doctorRoot,
+          durationMs: 1,
+          exitCode: outcome === "success" || outcome.startsWith("doctor-zero-exit-") ? 0 : 1,
+          ...(outcome === "doctor-zero-exit-timeout" ? { termination: "timeout" as const } : {}),
+          ...(outcome === "doctor-zero-exit-output-limit" ? { outputLimitExceeded: true } : {}),
+          configChanges,
+          ...(outcome === "config-refused"
+            ? {
+                configWriteRefusal: {
+                  reason: "include-ownership",
+                  message: "An included file owns the pending config change.",
+                  keys: ["agents"],
+                },
+              }
+            : {}),
+        };
+      });
+
+      const running = update({ runGitDoctor });
+      if (outcome === "cleanup-uncertain") {
+        await expect(running).rejects.toBe(cleanupError);
+        expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root, []);
+        expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
+        expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+        await expectRuntime(root, targetSha);
+        const backups = (await fs.readdir(root)).filter(
+          (entry) => entry.startsWith("dist.openclaw-update-") && entry.endsWith(".tmp"),
+        );
+        expect(backups).toHaveLength(1);
+        const backup = backups[0];
+        assert(backup);
+        expect(
+          JSON.parse(
+            await fs.readFile(path.join(root, backup, "previous", "build-info.json"), "utf8"),
+          ),
+        ).toMatchObject({ commit: beforeSha, buildId: beforeSha });
+        return;
+      }
+      const result = await running;
+
+      expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root, []);
+      expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
+      expect(result.status).toBe(outcome === "success" ? "ok" : "error");
+      expect(result.reason).toBe(reason);
+      const expectedSha = outcome === "missing" ? beforeSha : targetSha;
+      expect(await git(root, "rev-parse", "HEAD")).toBe(expectedSha);
+      await expectRuntime(root, expectedSha);
+      await expectNoRuntimeStagingPaths();
+      if (outcome !== "success") {
+        expect(result.recovery).toMatchObject(
+          outcome === "missing"
+            ? { serviceRestartSafe: true, buildId: beforeSha }
+            : { serviceRestartSafe: false, reason: "state-migration-started" },
+        );
+      }
+      if (outcome !== "requester-revoked" && outcome !== "doctor-throw" && outcome !== "missing") {
+        expect(result.steps.find((step) => step.name === "openclaw doctor")?.configChanges).toEqual(
+          configChanges,
+        );
+      }
+    },
+  );
 }

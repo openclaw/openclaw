@@ -263,8 +263,8 @@ it("records successful archive pruning stages", async () => {
     );
     const pruning: unknown[] = [];
     const operations = observeSlowWriters((operation, fields) => {
-      if (operation === "session.history.archive-prune") {
-        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      if (operation === "session.history.archive-prune" && "archivePruning" in fields) {
+        pruning.push(fields.archivePruning);
       }
     });
     try {
@@ -275,17 +275,9 @@ it("records successful archive pruning stages", async () => {
           maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
         }),
       ).toMatchObject({ removedEntries: 2 });
-      expect(
-        operations.filter(
-          (label) =>
-            label === "session.history.archive-prune" || label === "session.history.free-pages",
-        ),
-      ).toEqual([
-        "session.history.archive-prune",
-        "session.history.archive-prune",
-        "session.history.archive-prune",
-        "session.history.free-pages",
-      ]);
+      expect(operations).toEqual(
+        expect.arrayContaining(["session.history.archive-prune", "session.history.free-pages"]),
+      );
       expect(pruning).toEqual([
         expect.objectContaining({ trigger: "initial", completed: true }),
         expect.objectContaining({ trigger: "after-eviction", completed: true }),

@@ -4,6 +4,7 @@ import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snaps
 import type { SessionEntry } from "../../config/sessions/types.js";
 /** Parameters for merging and persisting a session entry update. */
 type PersistSessionEntryParams = {
+  agentId: string;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
@@ -18,7 +19,7 @@ export async function persistAgentSession(
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;
   const persisted = await patchSessionEntryCore(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
       if (!context.existingEntry && shouldPersistCurrent !== true) {

@@ -11,6 +11,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -64,7 +65,10 @@ export async function finishUpdate(
   { candidateRuntime = false } = {},
 ): Promise<UpdateRunResult> {
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
-  const assertCurrent = createUpdateCommandFinalizationFence(params);
+  const fence = createUpdateCommandFinalizationFence(params);
+  const assertCurrent = params.opts.run?.requesterAuthority
+    ? createUpdateCommandAuthority({ opts: params.opts, assertCurrent: fence }).assertCurrent
+    : fence;
   const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
 
   // Final publication follows restoration of the caller's environment. Retain
@@ -503,7 +507,6 @@ export async function finishUpdate(
           serviceEnv: restartContext.gatewayServiceEnv,
           serviceInstallEnv: restartContext.gatewayServiceInstallEnv,
           gatewayPort: restartContext.gatewayPort,
-          restartScriptPath: restartContext.restartScriptPath,
           invocationCwd: params.invocationCwd,
           nodeRunner: params.packageUpdateNodeRunner,
           skipLegacyServiceRestart: restartContext.skipLegacyServiceRestart,
@@ -610,7 +613,6 @@ export async function finishUpdate(
           postUpdateConfigSnapshot ?? restartConfigSnapshot,
         );
         pendingRestartAtMs ??= Date.now();
-        restartContext.restartScriptPath = null;
         if (!params.serviceRuntimeRefreshRequired && !requiresInstallRootRefresh) {
           restartContext.refreshGatewayServiceEnv = false;
         }
