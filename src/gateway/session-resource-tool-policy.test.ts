@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
-import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 
 const { storageRead, runtimeOwnership } = vi.hoisted(() => ({
   storageRead: vi.fn(() => {
@@ -27,7 +25,6 @@ vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
 }));
 
 const sessionKey = "agent:main:dashboard:resource";
-const target = { agentId: "main", sessionKey, sessionId: "session-1" };
 const client = {
   connect: { scopes: ["operator.write"], client: { id: "openclaw-control-ui", mode: "webchat" } },
   authenticatedUserProfile: { profileId: "reviewer", displayName: "Reviewer" },
@@ -41,36 +38,25 @@ function fixture(
   const entries = new Map<string, SessionEntry>([
     [key, { sessionId: "session-1", updatedAt: 1, ...options.entry }],
   ]);
-  const context = bindSessionRowProjection(
-    { getRuntimeConfig: () => config } as GatewayRequestContext,
-    () => projection,
-  );
-  const projection = {
-    prepareMembership: async () => undefined,
-    sharingTarget(query: { key: string; agentId: string }) {
-      const entry = entries.get(query.key);
-      return entry
-        ? {
-            agentId: query.agentId,
-            canonicalKey: query.key,
-            entry,
-            storeKey: query.key,
-            storeKeys: [query.key],
-            storePath: `/test/${query.agentId}/sessions`,
-          }
-        : null;
-    },
-  } as SessionRowProjection;
   return {
     entries,
     setConfig(next: OpenClawConfig) {
       config = next;
     },
-    prepare: (toolName = "browser") =>
-      prepareSessionResourceToolPolicy({
-        context,
+    resolve: (toolName = "browser") =>
+      resolveSessionResourceToolPolicy({
+        config,
         client,
-        target: { ...target, sessionKey: key },
+        current: {
+          agentId: "main",
+          canonicalKey: key,
+          entry: entries.get(key)!,
+          generation: Symbol("database"),
+          storeKey: key,
+          storeKeys: [key],
+          storePath: "/test/main/sessions",
+        },
+        readSessionEntry: (query) => entries.get(query.key),
         toolName,
       }),
   };
@@ -97,42 +83,42 @@ describe("session resource tool policy", () => {
       },
     },
     { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },
-  ])("honors each canonical configured restriction: %j", async (config) => {
-    await expect(fixture({ config }).prepare()).rejects.toThrow("current tool policy");
+  ])("honors each canonical configured restriction: %j", (config) => {
+    expect(() => fixture({ config }).resolve()).toThrow("current tool policy");
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("keeps a permitted resource across ordinary row updates and retires it after a policy denial", async () => {
+  it("evaluates current row and policy facts without owning resource lifetime", () => {
     const test = fixture({ config: { tools: { profile: "minimal", alsoAllow: ["browser"] } } });
-    const policy = await test.prepare();
+    test.resolve();
     test.entries.set(sessionKey, { ...test.entries.get(sessionKey)!, updatedAt: 2 });
-    expect(() => policy.assertCurrent()).not.toThrow();
+    expect(() => test.resolve()).not.toThrow();
     test.setConfig({ tools: { deny: ["browser"] } });
-    expect(() => policy.assertCurrent()).toThrow("current tool policy");
+    expect(() => test.resolve()).toThrow("current tool policy");
     test.setConfig({});
-    expect(() => policy.assertCurrent()).toThrow("current tool policy");
+    expect(() => test.resolve()).not.toThrow();
   });
 
-  it("rechecks selected model policy when the stored provider changes", async () => {
+  it("rechecks selected model policy when the stored provider changes", () => {
     const test = fixture({
       config: {
         agents: { defaults: { model: "anthropic/test-model" } },
         tools: { byProvider: { openai: { deny: ["browser"] } } },
       },
     });
-    const policy = await test.prepare();
+    test.resolve();
     test.entries.set(sessionKey, {
       ...test.entries.get(sessionKey)!,
       providerOverride: "openai",
       modelOverride: "test-model",
     });
-    expect(() => policy.assertCurrent()).toThrow("current tool policy");
+    expect(() => test.resolve()).toThrow("current tool policy");
     expect(storageRead).not.toHaveBeenCalled();
   });
 
   it.each(["agent:main:dashboard:child", "agent:main:acp:child"])(
     "honors persisted inherited denial for %s",
-    async (key) => {
+    (key) => {
       const test = fixture({
         key,
         entry: {
@@ -144,13 +130,13 @@ describe("session resource tool policy", () => {
           inheritedToolDeny: ["browser"],
         },
       });
-      await expect(test.prepare()).rejects.toThrow("current tool policy");
-      await expect(test.prepare("portal")).resolves.toMatchObject({ sandboxRequired: false });
+      expect(() => test.resolve()).toThrow("current tool policy");
+      expect(test.resolve("portal")).toMatchObject({ sandboxRequired: false });
       expect(storageRead).not.toHaveBeenCalled();
     },
   );
 
-  it("uses a prepared cross-agent ACP parent without falling through to SQLite", async () => {
+  it("uses a prepared cross-agent ACP parent without falling through to SQLite", () => {
     const key = "agent:main:acp:child";
     const test = fixture({ key, entry: { spawnedBy: "agent:other:acp:parent" } });
     test.entries.set("agent:other:acp:parent", {
@@ -159,53 +145,44 @@ describe("session resource tool policy", () => {
       subagentRole: "orchestrator",
       spawnDepth: 1,
     });
-    await expect(test.prepare()).resolves.toMatchObject({ sandboxRequired: false });
+    expect(test.resolve()).toMatchObject({ sandboxRequired: false });
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("denies a missing parent rather than acquiring unprepared database facts", async () => {
+  it("denies a missing parent rather than acquiring unprepared database facts", () => {
     const test = fixture({
       key: "agent:main:acp:child",
       entry: { spawnedBy: "agent:other:acp:missing" },
     });
-    await expect(test.prepare()).rejects.toThrow("current tool policy");
+    expect(() => test.resolve()).toThrow("current tool policy");
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("keeps sandbox requirements and sandbox tool restrictions visible to the resource owner", async () => {
+  it("keeps sandbox requirements and sandbox tool restrictions visible to the resource owner", () => {
     const test = fixture({
       entry: { sandbox: "required" },
       config: { tools: { sandbox: { tools: { allow: ["browser"], deny: [] } } } },
     });
-    await expect(test.prepare()).resolves.toMatchObject({ sandboxRequired: true, sandboxed: true });
-    await expect(fixture({ entry: { sandbox: "required" } }).prepare()).rejects.toThrow(
+    expect(test.resolve()).toMatchObject({ sandboxRequired: true, sandboxed: true });
+    expect(() => fixture({ entry: { sandbox: "required" } }).resolve()).toThrow(
       "current tool policy",
     );
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("rejects locked native sessions before asking their storage-backed ownership resolver", async () => {
+  it("rejects locked native sessions before asking their storage-backed ownership resolver", () => {
     const test = fixture({
       entry: { agentHarnessId: "test-harness", modelSelectionLocked: true },
     });
-    await expect(test.prepare()).rejects.toThrow("sessions with locked model selection");
+    expect(() => test.resolve()).toThrow("sessions with locked model selection");
     expect(runtimeOwnership).not.toHaveBeenCalled();
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("supports ordinary unlocked native-harness sessions without native ownership reads", async () => {
+  it("supports ordinary unlocked native-harness sessions without native ownership reads", () => {
     const test = fixture({ entry: { agentHarnessId: "test-harness" } });
-    await expect(test.prepare()).resolves.toMatchObject({ sandboxRequired: false });
+    expect(test.resolve()).toMatchObject({ sandboxRequired: false });
     expect(runtimeOwnership).not.toHaveBeenCalled();
     expect(storageRead).not.toHaveBeenCalled();
-  });
-
-  it("retires authority when the session incarnation changes", async () => {
-    const test = fixture();
-    const policy = await test.prepare();
-    test.entries.set(sessionKey, { sessionId: "replacement", updatedAt: 2 });
-    expect(() => policy.assertCurrent()).toThrow("current tool policy");
-    test.entries.set(sessionKey, { sessionId: "session-1", updatedAt: 3 });
-    expect(() => policy.assertCurrent()).toThrow("current tool policy");
   });
 });

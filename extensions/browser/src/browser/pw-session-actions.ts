@@ -531,11 +531,17 @@ export async function createPageViaPlaywright(
     url: string;
     cdpPolicy?: SsrFPolicy;
     signal?: AbortSignal;
+    /** Caller authority is checked at each effect boundary, independently of cancellation. */
+    assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
-  opts.signal?.throwIfAborted();
+  const assertCurrent = () => {
+    opts.signal?.throwIfAborted();
+    opts.assertCurrent?.();
+  };
+  assertCurrent();
   const targetUrl = opts.url.trim() || "about:blank";
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
@@ -545,20 +551,20 @@ export async function createPageViaPlaywright(
     ...navigationPolicy,
     signal: opts.signal,
   });
-  opts.signal?.throwIfAborted();
+  assertCurrent();
   const { browser, engine } = await connectBrowser(
     opts.cdpUrl,
     opts.cdpPolicy ?? opts.ssrfPolicy,
     undefined,
     opts.engine,
   );
-  opts.signal?.throwIfAborted();
+  assertCurrent();
   if (engine === "lightpanda" && (await getAllPages(browser)).length > 0) {
     throw new Error(
       "Lightpanda supports one page per connection. Navigate the existing tab, or close it before opening another.",
     );
   }
-  opts.signal?.throwIfAborted();
+  assertCurrent();
   const context = opts.isolatedContext
     ? await browser.newContext({ acceptDownloads: false })
     : (browser.contexts()[0] ?? (await browser.newContext()));
@@ -574,14 +580,14 @@ export async function createPageViaPlaywright(
   };
   let navigationClosedBlockedTarget = false;
   try {
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     ensureContextState(context);
     page = await context.newPage();
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     ensurePageState(page);
     clearBlockedPageRef(opts.cdpUrl, page);
     const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
     if (targetUrl !== "about:blank") {
@@ -594,14 +600,14 @@ export async function createPageViaPlaywright(
           timeoutMs: 30_000,
           ...navigationPolicy,
           targetId: createdTargetId ?? undefined,
-          assertPageCurrent: () => opts.signal?.throwIfAborted(),
+          assertPageCurrent: assertCurrent,
         });
       } catch (error) {
         // Guarded navigation already owns close/quarantine for a policy denial.
         navigationClosedBlockedTarget = isPolicyDenyNavigationError(error);
         throw error;
       }
-      opts.signal?.throwIfAborted();
+      assertCurrent();
       await assertPageNavigationCompletedSafely({
         cdpUrl: opts.cdpUrl,
         page,
@@ -612,12 +618,12 @@ export async function createPageViaPlaywright(
     }
 
     const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     if (!tid) {
       throw new Error("Failed to get targetId for new page");
     }
     const title = await page.title().catch(() => "");
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     const retainedPage = page;
     return {
       targetId: tid,

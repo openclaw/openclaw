@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   profileCurrent: true,
   prepare: vi.fn(),
   toolAllowed: true,
+  sandboxRequired: false,
+  sandboxed: false,
   ambient: undefined as unknown,
   assertAmbient: vi.fn(),
 }));
@@ -43,14 +45,12 @@ vi.mock("../agents/tools/gateway-caller-context.js", async (original) => ({
   captureGatewayToolCallerAssertion: () => mocks.assertAmbient,
 }));
 vi.mock("./session-resource-tool-policy.js", () => ({
-  prepareSessionResourceToolPolicy: async () => ({
-    sandboxRequired: false,
-    assertCurrent: () => {
-      if (!mocks.toolAllowed) {
-        throw new Error("tool denied");
-      }
-    },
-  }),
+  resolveSessionResourceToolPolicy: () => {
+    if (!mocks.toolAllowed) {
+      throw new Error("tool denied");
+    }
+    return { sandboxRequired: mocks.sandboxRequired, sandboxed: mocks.sandboxed };
+  },
 }));
 
 const key = "agent:main:dashboard:review";
@@ -128,6 +128,8 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
 beforeEach(() => {
   mocks.profileCurrent = true;
   mocks.toolAllowed = true;
+  mocks.sandboxRequired = false;
+  mocks.sandboxed = false;
   mocks.ambient = undefined;
   mocks.assertAmbient.mockReset();
   mocks.prepare.mockReset().mockImplementation(async () => ({
@@ -231,6 +233,68 @@ describe("session resource admission", () => {
         expect(() => admitted!.retainSession()).toThrow();
         expect(() => resource!.assertCurrent()).not.toThrow();
       }
+    },
+  );
+
+  it.each(["receipt", "profile selection"])(
+    "fences %s expiry without attaching it to retained actor or session lifetime",
+    async (kind) => {
+      const test = fixture();
+      let invocationActive = true;
+      let viewer: ReturnType<Awaited<ReturnType<typeof test.prepare>>["retain"]> | undefined;
+      let resource: typeof viewer;
+      const method = "fixture.session.open";
+      const handler: GatewayRequestHandler = async ({ sessionAccessAuthority, respond }) => {
+        const authority = sessionAccessAuthority!;
+        viewer = hold(authority.retain());
+        resource = hold(authority.retainSession());
+        await Promise.resolve();
+        invocationActive = false;
+        expect(() => authority.assertCurrent()).toThrow("receipt expired");
+        expect(() => authority.retain()).toThrow("receipt expired");
+        expect(() => authority.retainSession()).toThrow("receipt expired");
+        expect(() => viewer!.assertCurrent()).not.toThrow();
+        expect(() => resource!.assertCurrent()).not.toThrow();
+        respond(true, {});
+      };
+      const methodRegistry = createGatewayMethodRegistry([
+        createPluginGatewayMethodDescriptor({
+          pluginId: "fixture",
+          name: method,
+          handler,
+          scope: "operator.write",
+          sessionAccess: { mode: "write", requiredTool: "browser" },
+        }),
+      ]);
+      await handleGatewayRequest({
+        req: { type: "req", id: "one", method, params: { sessionKey: key } },
+        respond: vi.fn(),
+        client: test.client,
+        context: test.context,
+        methodRegistry,
+        isWebchatConnect: () => false,
+        sessionMutationCommitGuard: () => {
+          if (kind === "receipt" && !invocationActive) {
+            throw new Error("receipt expired");
+          }
+        },
+        ...(kind === "profile selection"
+          ? {
+              expectedProfileBinding: {
+                assertCurrent: () => {
+                  if (!invocationActive) {
+                    throw new Error("receipt expired");
+                  }
+                },
+                assertMatchesResolvedProfile: () => {},
+                markInvoked: () => {},
+                guardResponse: (respond) => respond,
+              },
+            }
+          : {}),
+      });
+      expect(() => viewer!.assertCurrent()).not.toThrow();
+      expect(() => resource!.assertCurrent()).not.toThrow();
     },
   );
 
@@ -416,6 +480,21 @@ describe("session resource admission", () => {
     expect(resource.signal.aborted).toBe(true);
     expect(() => authority.assertCurrent()).toThrow();
   });
+
+  it.each(["sandboxRequired", "sandboxed"] as const)(
+    "retires the original actor when its %s policy changes, even if later restored",
+    async (field) => {
+      const test = fixture();
+      const authority = await test.prepare();
+      const viewer = hold(authority.retain());
+      const resource = hold(authority.retainSession());
+      mocks[field] = true;
+      expect(() => viewer.assertCurrent()).toThrow("current tool policy");
+      mocks[field] = false;
+      expect(() => viewer.assertCurrent()).toThrow();
+      expect(() => resource.assertCurrent()).not.toThrow();
+    },
+  );
 
   it("rechecks sharing and effective tool policy on retained viewer use", async () => {
     const test = fixture();

@@ -19,7 +19,7 @@ import {
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { prepareSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
+import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { authorizeOwnSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionSharing } from "./session-sharing-read.js";
@@ -79,7 +79,10 @@ export async function prepareGatewaySessionAccessAuthority(params: {
   context: GatewayRequestContext;
   ownSessionOnly: boolean;
   hasCurrentClientAuthority?: () => boolean;
+  assertInvocationCurrent?: () => void;
 }): Promise<GatewaySessionAccessAuthority> {
+  const assertInvocationCurrent = params.assertInvocationCurrent;
+  assertInvocationCurrent?.();
   const input = params.requestParams;
   const sessionKey =
     isRecord(input) && typeof input.sessionKey === "string" ? input.sessionKey : "";
@@ -209,14 +212,17 @@ export async function prepareGatewaySessionAccessAuthority(params: {
       connect: { ...client.connect, scopes: originalScopes },
       internal: { ...client.internal, operatorRoleActor: actor },
     };
-    const toolPolicy = params.policy.requiredTool
-      ? await prepareSessionResourceToolPolicy({
-          context: params.context,
-          client: policyClient,
-          target,
-          toolName: params.policy.requiredTool,
-        })
-      : undefined;
+    const resolveToolPolicy = (current: typeof original) =>
+      params.policy.requiredTool
+        ? resolveSessionResourceToolPolicy({
+            config: params.context.getRuntimeConfig(),
+            client: policyClient,
+            current,
+            readSessionEntry: (sourceQuery) => projection.sharingTarget(sourceQuery)?.entry,
+            toolName: params.policy.requiredTool,
+          })
+        : undefined;
+    const toolPolicy = resolveToolPolicy(original);
     const currentRole = () =>
       actor?.kind === "system"
         ? undefined
@@ -270,7 +276,13 @@ export async function prepareGatewaySessionAccessAuthority(params: {
           denied();
         }
         const current = assertSession();
-        toolPolicy?.assertCurrent();
+        const currentToolPolicy = resolveToolPolicy(current);
+        if (
+          currentToolPolicy?.sandboxRequired !== toolPolicy?.sandboxRequired ||
+          currentToolPolicy?.sandboxed !== toolPolicy?.sandboxed
+        ) {
+          denied("The session's current tool policy does not allow this operation.");
+        }
         const sharing = prepareSessionSharing(
           { cfg: params.context.getRuntimeConfig(), client: policyClient },
           {
@@ -305,6 +317,7 @@ export async function prepareGatewaySessionAccessAuthority(params: {
       if (invocationClosed) {
         denied();
       }
+      assertInvocationCurrent?.();
       assertRun();
       assertActor();
     };

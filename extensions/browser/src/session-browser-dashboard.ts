@@ -196,6 +196,10 @@ async function createResource(
         cdpUrl: profileContext.profile.cdpUrl,
         url: definition.url,
         isolatedContext: true,
+        assertCurrent: () => {
+          authority.assertCurrent();
+          assertCurrent();
+        },
         ...browserNavigationPolicyForProfile(context, profileContext),
         cdpPolicy: resolveCdpControlPolicy(profileContext.profile, state.resolved.ssrfPolicy),
         signal: signal

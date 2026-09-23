@@ -234,6 +234,22 @@ describe("isolated session browser owner", () => {
     expect(mocked.create).not.toHaveBeenCalled();
   });
 
+  it("carries invocation and resource authority into the page creation effect boundary", async () => {
+    const owner = authority();
+    mocked.create.mockImplementationOnce(async ({ assertCurrent }) => {
+      assertCurrent();
+      await Promise.resolve();
+      owner.revokeActor();
+      assertCurrent();
+      throw new Error("revoked authority reached page allocation");
+    });
+    await expect(
+      accessSessionBrowserDashboard(request, owner.value, { operation: "open" }),
+    ).rejects.toThrow("actor revoked");
+    expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
+    expect(owner.release).toHaveBeenCalledOnce();
+  });
+
   it("compensates context creation when actor revocation wins an awaited allocation", async () => {
     const owner = authority();
     const allocated = page("late-page");

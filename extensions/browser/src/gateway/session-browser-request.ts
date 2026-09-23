@@ -53,13 +53,7 @@ const selectors = ["targetId", "profile", "target", "node"];
 export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] = async (
   options,
 ) => {
-  const {
-    respond,
-    sessionAccessAuthority: authority,
-    signal: requestSignal,
-    client,
-    hasCurrentClientAuthority,
-  } = options;
+  const { respond, sessionAccessAuthority: authority, signal: requestSignal, client } = options;
   try {
     if (!authority) {
       throw new Error("Session browser access requires Gateway session admission.");
@@ -82,10 +76,6 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
         }
         const assertInvocation = () => {
           signal?.throwIfAborted();
-          if (client?.invalidated || hasCurrentClientAuthority?.() === false) {
-            throw new Error("Browser requester is no longer active.");
-          }
-          options.sessionMutationCommitGuard?.();
           authority.assertCurrent();
         };
         assertInvocation();
