@@ -4103,6 +4103,13 @@ setImmediate(() => {
       const runner = expectedHybridFirstAttemptRunners[jobName];
       for (const [label, overrides, expected] of [
         ["main", { eventName: "push" }, runner],
+        [
+          "heavy packed core stripe",
+          { runnerProfile: "hybrid", matrix: { stripe: 1 } },
+          jobName === "ci-gate" ? runner : "blacksmith-16vcpu-ubuntu-2404",
+        ],
+        ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
+        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
         ["noncanonical", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
         ["manual", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
         [

@@ -213,9 +213,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
 - Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class and the two packed core-lint rows to the 8-class after hosted assignment
+  4-class and the packed core-lint rows to the 16/8-classes after hosted assignment
   added 416 seconds to main's critical chain. Admitted qualifications use the
-  same route. The gate has no checkout or dependency setup; retries, ordinary
+  same route. The first packed lint row took 621s on the 8-class; retain four
+  actual CPUs for that row. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, untrusted contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. The gate adds
   one registration to the conservative potentially eligible inventory; the two
@@ -233,6 +234,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   hybrid first attempt when optional hosted admission is closed, one when admitted,
   and one per normal Blacksmith run. Both jobs already occur in the retained
   conservative non-Node inventory, preserving the 5,010-registration cap model.
+  Optional compiler/check offloads reject observed hosted assignment waits at
+  sixty seconds; the former three-minute cutoff exceeded the latency objective.
+  API and job deadlines remain unchanged.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - Automatic canonical hybrid first attempts count every selected hosted row in

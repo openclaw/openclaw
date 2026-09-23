@@ -87,15 +87,25 @@ That chain spends 130 seconds in hosted queueing, two in creation, 632 executing
 and 16 in Blacksmith queueing. No test depends on the artifact build in either
 chain. Changing matrix shape would not remove the gate's serial queue.
 
-Trusted hybrid first attempts therefore request the 8-class for the two packed
-core-lint rows and the 4-class for the gate. The logical lint partitions, single
-lint thread, type-check admission, extension-lint rows, main parity slots,
+Trusted hybrid first attempts therefore request the 16-class for the heavier
+first packed core-lint row, the 8-class for the second, and the 4-class for the gate. The logical lint partitions, single
+lint thread, extension-lint rows, main parity slots,
 workflow dependencies, and deadlines stay unchanged. Hosted remains the route
 for independent cheap work. RunsOn's cron evidence does not qualify lint or a
 Bash-only gate, so those workloads retain the measured Blacksmith route.
-At the historical list rates, two lint rows totaling 721 seconds would cost
-about $0.1923 on the 8-class, plus $0.0003 for a two-second gate at $0.008/minute;
-these unrounded estimates hold runtime constant and exclude minimum billing or ancillary charges. They are not a provider benchmark or invoice.
+The existing health owner also rejects optional check offloads after observed
+hosted waits reach sixty seconds, replacing its former three-minute threshold.
+This protects the central type and dependency rows when assignment consumes
+their execution slack without changing API deadlines or test coverage.
+The first native candidate used the 8-class for both lint rows. Its PR run
+`35813098351` passed in 785 seconds, but core lint 1 took 621 seconds (568 in
+lint itself), versus the 398-second hosted baseline (350 in lint). Core lint 2
+took 353 seconds versus 323 hosted. Retaining four actual CPUs only for the
+heavier row avoids spending the queue saving on slower execution. At the
+historical list rates and old hosted runtimes held constant, the 16/8 split
+costs about $0.2984 instead of $0.1923 for two 8-class rows. These unrounded
+estimates exclude minimum billing and ancillary charges; native measurements,
+rather than that forecast, own the final cost and wall comparison.
 
 The change adds three actual Blacksmith registrations to an eligible hybrid
 run. The two lint rows already occur in the conservative potentially eligible
