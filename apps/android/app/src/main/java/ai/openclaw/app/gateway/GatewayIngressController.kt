@@ -15,20 +15,32 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLException
 
 internal data class GatewayAccessAttention(
   val stableId: String,
   val message: String,
+  val attemptId: UUID? = null,
+)
+
+internal data class GatewayAccessBrowserLaunch(
+  val attemptId: UUID,
+  val url: String,
 )
 
 internal data class GatewayAccessPresentation(
   val attention: GatewayAccessAttention? = null,
+  val browserLaunch: GatewayAccessBrowserLaunch? = null,
   val browserRequired: Set<String> = emptySet(),
 )
 
@@ -43,6 +55,8 @@ internal class GatewayIngressController(
   private val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = ::routeClient,
   // This observer must queue delivery; inline dispatch would invert Registry and ingress monitors.
   registryObserverDispatcher: CoroutineDispatcher = Dispatchers.Default,
+  authenticate: suspend (CloudflareAccessApplication, suspend (String) -> Unit) -> CloudflareAccessSession =
+    { application, browser -> CloudflareAccessTransfer().signIn(application, browser) },
 ) {
   private class Registration(
     val endpoint: GatewayEndpoint,
@@ -51,11 +65,17 @@ internal class GatewayIngressController(
   ) {
     val origin = CloudflareAccessOrigin.from(url)
 
-    // null is unclassified; false is a verified managed challenge.
+    // null is unclassified; false is a verified managed challenge, including pending sign-in.
     var ordinaryAdmission: Boolean? = null
     val url: String
       get() = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath)
   }
+
+  private class BrowserParticipant(
+    val registration: Registration,
+    val context: kotlin.coroutines.CoroutineContext,
+    val isCurrent: () -> Boolean,
+  )
 
   private class DiscoveryOperation(
     val registration: Registration,
@@ -63,15 +83,30 @@ internal class GatewayIngressController(
     val task: Deferred<CloudflareAccessApplication?>,
   )
 
+  private class BrowserIntent(
+    val id: UUID,
+    val application: CloudflareAccessApplication,
+  ) {
+    val canceled = AtomicBoolean(false)
+    val participants = mutableSetOf<BrowserParticipant>()
+
+    // Caller withdrawal ends eligibility, not explicit-departure custody of a pending Store task.
+    val registrationOwners = mutableSetOf<Registration>()
+
+    @Volatile var task: Deferred<CloudflareAccessSessionStore.Snapshot>? = null
+  }
+
   private val lock = Any()
+  private val browserMutex = Mutex()
   private val registrations = mutableMapOf<String, Registration>()
   private val leases = mutableMapOf<String, Lease>()
   private val expiryJobs = mutableMapOf<CloudflareAccessOrigin, Job>()
   private val discoveries = mutableSetOf<DiscoveryOperation>()
+  private var browserIntent: BrowserIntent? = null
   private val mutablePresentation = MutableStateFlow(GatewayAccessPresentation(browserRequired = requiredBrowserProfiles()))
   val presentation = mutablePresentation.asStateFlow()
   private val store =
-    CloudflareAccessSessionStore(scope, persistence, now = now) { origin ->
+    CloudflareAccessSessionStore(scope, persistence, authenticate, now) { origin ->
       val expiry =
         synchronized(lock) {
           leases.values.filter { it.origin == origin }.forEach { it.active.set(false) }
@@ -100,11 +135,12 @@ internal class GatewayIngressController(
   suspend fun prepare(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams,
+    userInitiated: Boolean,
     admissionCheckpoint: Long,
     isCurrent: () -> Boolean,
   ): GatewayIngressAuthorization? {
     kotlin.coroutines.coroutineContext.ensureActive()
-    return prepareRegistered(register(endpoint, tls, isCurrent), admissionCheckpoint, isCurrent)
+    return prepareRegistered(register(endpoint, tls, isCurrent), userInitiated, admissionCheckpoint, isCurrent)
   }
 
   private suspend fun register(
@@ -113,7 +149,7 @@ internal class GatewayIngressController(
     isCurrent: () -> Boolean,
   ): Registration {
     val context = kotlin.coroutines.coroutineContext
-    val registration =
+    val (registration, replacedIntent) =
       synchronized(lock) {
         context.ensureActive()
         if (!isCurrent() || registry.entries.value.none { it.stableId == endpoint.stableId }) {
@@ -123,13 +159,16 @@ internal class GatewayIngressController(
         val current =
           previous?.takeIf { it.endpoint == endpoint && it.tls == tls }
             ?: Registration(endpoint, tls, clientForRoute(endpoint, tls))
+        var retired: BrowserIntent? = null
         if (current !== previous) {
           leases.remove(endpoint.stableId)?.active?.set(false)
           registrations[endpoint.stableId] = current
+          retired = previous?.let(::retireBrowserParticipationLocked)
           publishLocked()
         }
-        current
+        current to retired
       }
+    replacedIntent?.let { finishCancellation(it, it.task).join() }
     retireDiscoveries { it.registration.endpoint.stableId == endpoint.stableId && it.registration !== registrations[endpoint.stableId] }
     checkRegistration(registration, isCurrent)
     return registration
@@ -137,6 +176,7 @@ internal class GatewayIngressController(
 
   private suspend fun prepareRegistered(
     registration: Registration,
+    userInitiated: Boolean,
     admissionCheckpoint: Long,
     isCurrent: () -> Boolean,
   ): GatewayIngressAuthorization? {
@@ -192,15 +232,29 @@ internal class GatewayIngressController(
           if (registration.ordinaryAdmission != preCommitOrdinary || revision != preCommitRevision) {
             throw CancellationException("Gateway admission superseded")
           }
-          // A new identity retires pending admissions tied to the old route classification.
+          // A new identity permanently retires old browser waiters, even after a peer
+          // settles their shared intent and this profile later becomes managed again.
           val ordinary =
             registration.takeIf { it.ordinaryAdmission == true }
               ?: Registration(endpoint, registration.tls, registration.client).also { registrations[endpoint.stableId] = it }
           ordinary.ordinaryAdmission = true
           leases.remove(endpoint.stableId)?.active?.set(false)
           val pending = discoveries.filter { it.registration === registration }
+          val intent = browserIntent
+          val participant = intent?.let(::liveParticipantLocked)
+          // Participant predicates can reenter admission. Do not publish over their successor.
           if (!isRegisteredLocked(ordinary) || ordinary.ordinaryAdmission != true) throw CancellationException("Gateway admission superseded")
-          publishLocked(attention = mutablePresentation.value.attention.takeUnless { it?.stableId == endpoint.stableId })
+          val presentation = mutablePresentation.value
+          val ownsIntent = intent != null && browserIntent === intent
+          publishLocked(
+            attention =
+              when {
+                ownsIntent && presentation.attention?.attemptId == intent.id -> participant?.let { presentation.attention.copy(stableId = it.registration.endpoint.stableId) }
+                presentation.attention?.stableId == endpoint.stableId -> null
+                else -> presentation.attention
+              },
+            browserLaunch = presentation.browserLaunch.takeUnless { ownsIntent && participant == null && it?.attemptId == intent.id },
+          )
           ordinary to pending
         }
       retireDiscoveries(pending)
@@ -237,8 +291,13 @@ internal class GatewayIngressController(
     // Signed application discovery (or cached verified grant above) owns this fact, before
     // signIn can persist. Canceling browser return must not leave a grant without a Forget owner.
     associate(registration, managedIsCurrent)
-    showRequired(registration, managedIsCurrent)
-    throw GatewayExternalAuthorizationException()
+    if (!userInitiated) {
+      showRequired(registration, managedIsCurrent)
+      throw GatewayExternalAuthorizationException()
+    }
+    val snapshot = signIn(registration, application, admissionCheckpoint, managedIsCurrent)
+    checkRegistration(registration, managedIsCurrent)
+    return admit(registration, snapshot, admissionCheckpoint, managedIsCurrent)
   }
 
   private suspend fun discover(
@@ -314,8 +373,20 @@ internal class GatewayIngressController(
 
   fun blocksAutomaticReconnect(stableId: String): Boolean =
     synchronized(lock) {
+      val intent = browserIntent
+      val participant = intent?.let { liveParticipantLocked(it, stableId) }
+      // Browser attention can outlive a suspended caller's eligibility; only its live participant blocks.
       registrations[stableId]?.ordinaryAdmission != true &&
-        (mutablePresentation.value.attention?.stableId == stableId || leases[stableId]?.active?.get() == false)
+        (
+          (participant != null && browserIntent === intent) ||
+            mutablePresentation.value.attention?.let { it.stableId == stableId && it.attemptId == null } == true ||
+            leases[stableId]?.active?.get() == false
+        )
+    }
+
+  fun needsEmbeddedBrowserSignIn(stableId: String): Boolean =
+    synchronized(lock) {
+      registrations[stableId]?.ordinaryAdmission != true && registry.entries.value.any { it.stableId == stableId && it.accessOrigin != null }
     }
 
   private fun requiredBrowserProfiles(): Set<String> =
@@ -324,9 +395,108 @@ internal class GatewayIngressController(
       .map { it.stableId }
       .toSet()
 
-  private fun publishLocked(attention: GatewayAccessAttention? = mutablePresentation.value.attention) {
+  private fun publishLocked(
+    attention: GatewayAccessAttention? = mutablePresentation.value.attention,
+    browserLaunch: GatewayAccessBrowserLaunch? = mutablePresentation.value.browserLaunch,
+  ) {
     // One emission is the commit boundary for UI observers that can resume inline.
-    mutablePresentation.value = GatewayAccessPresentation(attention, requiredBrowserProfiles())
+    // Never publish a second field after an observer has canceled or replaced its owner.
+    mutablePresentation.value = GatewayAccessPresentation(attention, browserLaunch, requiredBrowserProfiles())
+  }
+
+  fun consumeBrowserLaunch(id: UUID): String? =
+    synchronized(lock) {
+      val launch = mutablePresentation.value.browserLaunch ?: return@synchronized null
+      val intent = browserIntent ?: return@synchronized null
+      if (launch.attemptId != id || intent.id != id || !isLiveIntentLocked(intent)) return@synchronized null
+      publishLocked(browserLaunch = null)
+      launch.url.takeIf { isLiveIntentLocked(intent) }
+    }
+
+  fun cancel(
+    id: UUID,
+    message: String = "Sign-in canceled. Sign in again to reconnect.",
+  ): Job? {
+    val intent =
+      synchronized(lock) {
+        browserIntent?.takeIf { it.id == id }?.also {
+          // Retire the consumer synchronously, even if the store already committed and
+          // its waiter has not resumed. A queued browser launch must retire with it.
+          val current = liveParticipantLocked(it)
+          it.canceled.set(true)
+          publishLocked(
+            attention = if (current != null) GatewayAccessAttention(current.registration.endpoint.stableId, message) else mutablePresentation.value.attention.takeUnless { attention -> attention?.attemptId == it.id },
+            browserLaunch = mutablePresentation.value.browserLaunch.takeUnless { launch -> launch?.attemptId == it.id },
+          )
+        }
+      } ?: return null
+    return finishCancellation(intent, intent.task)
+  }
+
+  private fun retireBrowserParticipationLocked(registration: Registration): BrowserIntent? {
+    val intent = browserIntent ?: return null
+
+    fun departed(candidate: Registration): Boolean =
+      candidate.endpoint.stableId == registration.endpoint.stableId &&
+        (candidate === registration || !isRegisteredLocked(candidate))
+    // Ordinary admission can rotate this profile's registration without canceling
+    // its Store task. Explicit departure must also retire that obsolete generation.
+    if (intent.registrationOwners.none(::departed) && intent.participants.none { departed(it.registration) }) return null
+    intent.registrationOwners.removeAll(::departed)
+    intent.participants.removeAll { departed(it.registration) }
+    // A profile departure does not own a peer's shared task, including terminal
+    // results whose waiters have not resumed. Only the last explicit owner cancels it.
+    val participant = liveParticipantLocked(intent)
+    if (browserIntent !== intent) return null
+    if (participant == null) intent.canceled.set(true)
+    reconcileBrowserPresentationLocked(intent, participant)
+    return intent.takeIf { participant == null }
+  }
+
+  private fun reconcileBrowserPresentationLocked(
+    intent: BrowserIntent,
+    participant: BrowserParticipant?,
+  ) {
+    val presentation = mutablePresentation.value
+    publishLocked(
+      attention =
+        if (presentation.attention?.attemptId == intent.id) {
+          participant?.let { presentation.attention.copy(stableId = it.registration.endpoint.stableId) }
+        } else {
+          presentation.attention
+        },
+      browserLaunch = presentation.browserLaunch.takeUnless { participant == null && it?.attemptId == intent.id },
+    )
+  }
+
+  private fun finishCancellation(
+    intent: BrowserIntent,
+    task: Deferred<CloudflareAccessSessionStore.Snapshot>?,
+  ): Job {
+    task?.cancel()
+    return scope.launch {
+      browserMutex.withLock {
+        val ownsAttempt =
+          synchronized(lock) {
+            if (browserIntent !== intent) return@synchronized false
+            browserIntent = null
+            true
+          }
+        if (ownsAttempt) store.cancelSignIn(intent.application.origin)
+      }
+    }
+  }
+
+  fun cancelPending(stableId: String? = null) {
+    val id =
+      synchronized(lock) {
+        browserIntent
+          ?.takeIf { intent ->
+            stableId == null || intent.registrationOwners.any { it.endpoint.stableId == stableId } ||
+              intent.participants.any { it.registration.endpoint.stableId == stableId }
+          }?.id
+      } ?: return
+    cancel(id)
   }
 
   private suspend fun completeDeparture(
@@ -391,6 +561,126 @@ internal class GatewayIngressController(
       checkRegistrationLocked(registration, isCurrent)
       publishLocked()
     }
+  }
+
+  private suspend fun signIn(
+    registration: Registration,
+    application: CloudflareAccessApplication,
+    admissionCheckpoint: Long,
+    isCurrent: () -> Boolean,
+  ): CloudflareAccessSessionStore.Snapshot {
+    val participant = BrowserParticipant(registration, kotlin.coroutines.coroutineContext, isCurrent)
+    var joinedIntent: BrowserIntent? = null
+    try {
+      val (intent, task) =
+        browserMutex.withLock {
+          checkRegistration(registration, isCurrent)
+          synchronized(lock) { browserIntent }?.let { cancelExisting(it) }
+          checkRegistration(registration, isCurrent)
+          val intent =
+            synchronized(lock) {
+              checkRegistrationLocked(registration, isCurrent)
+              BrowserIntent(UUID.randomUUID(), application).also {
+                it.participants.add(participant)
+                it.registrationOwners.add(registration)
+                joinedIntent = it
+                browserIntent = it
+              }
+            }
+          val task =
+            store.signIn(application, admissionCheckpoint) { url ->
+              synchronized(lock) {
+                val current = liveParticipantLocked(intent) ?: throw CancellationException()
+                publishLocked(
+                  attention =
+                    GatewayAccessAttention(
+                      current.registration.endpoint.stableId,
+                      "After approving sign-in, close the browser tab to return to OpenClaw.",
+                      intent.id,
+                    ),
+                  browserLaunch = GatewayAccessBrowserLaunch(intent.id, url),
+                )
+              }
+            }
+          intent.task = task
+          // Terminal tasks no longer need detached owners; attached waiters still own queued cancellation.
+          task.invokeOnCompletion { synchronized(lock) { intent.registrationOwners.clear() } }
+          if (intent.canceled.get()) task.cancel()
+          intent to task
+        }
+      try {
+        val result = task.await()
+        kotlin.coroutines.coroutineContext.ensureActive()
+        synchronized(lock) {
+          checkRegistrationLocked(registration, isCurrent)
+          if (intent.canceled.get()) throw CancellationException("Gateway sign-in canceled")
+          if (result.session.application != application) throw CloudflareAccessException(CloudflareAccessException.Kind.InvalidSession)
+          // Completion belongs to the shared intent; any current waiter can settle it
+          // even after the caller that originally presented its browser has retired.
+          if (browserIntent === intent && intent.task === task) {
+            browserIntent = null
+            publishLocked(attention = null, browserLaunch = null)
+          }
+        }
+        return result
+      } catch (error: Exception) {
+        val context = kotlin.coroutines.coroutineContext
+        synchronized(lock) {
+          val callerCurrent =
+            try {
+              context.ensureActive()
+              isCurrent()
+            } catch (_: CancellationException) {
+              false
+            }
+          // A shared task's retired waiter cannot clear the surviving browser owner
+          // or publish a retry action for a forgotten/replaced profile.
+          if (browserIntent === intent && intent.task === task && !intent.canceled.get() && task.isCompleted && callerCurrent &&
+            isRegisteredLocked(registration)
+          ) {
+            browserIntent = null
+            publishLocked(
+              attention =
+                GatewayAccessAttention(
+                  registration.endpoint.stableId,
+                  when (error) {
+                    is CancellationException -> "Sign-in canceled. Sign in again to reconnect."
+                    is SSLException -> "TLS connection failed: ${error.message ?: "certificate validation failed"}"
+                    is IOException -> "Connection failed: ${error.message ?: "network unavailable"}"
+                    else -> error.message ?: "Sign-in failed. Try again."
+                  },
+                ),
+              browserLaunch = null,
+            )
+          }
+        }
+        throw error
+      }
+    } finally {
+      // Keep Store task custody for explicit Cancel, but project only live browser participants.
+      synchronized(lock) {
+        joinedIntent?.let { intent ->
+          intent.participants.remove(participant)
+          val current = liveParticipantLocked(intent)
+          if (browserIntent === intent) reconcileBrowserPresentationLocked(intent, current)
+        }
+      }
+    }
+  }
+
+  private suspend fun cancelExisting(intent: BrowserIntent) {
+    synchronized(lock) {
+      intent.canceled.set(true)
+      if (browserIntent === intent) {
+        browserIntent = null
+        publishLocked(
+          attention = mutablePresentation.value.attention.takeUnless { it?.attemptId == intent.id },
+          browserLaunch = mutablePresentation.value.browserLaunch.takeUnless { it?.attemptId == intent.id },
+        )
+      }
+    }
+    intent.task?.cancel()
+    store.cancelSignIn(intent.application.origin)
   }
 
   private fun observeRetirement(
@@ -484,19 +774,26 @@ internal class GatewayIngressController(
     stableId: String,
     registration: Registration?,
     attention: GatewayAccessAttention? = mutablePresentation.value.attention,
-  ): Boolean =
-    store.isCurrent(retirement) && registrations[stableId] === registration && registration?.ordinaryAdmission != true &&
+  ): Boolean {
+    val intent = browserIntent
+    val presentation = mutablePresentation.value
+    val live = intent?.let(::isLiveIntentLocked) == true
+    return !live && browserIntent === intent && mutablePresentation.value === presentation &&
+      store.isCurrent(retirement) && registrations[stableId] === registration && registration?.ordinaryAdmission != true &&
       registry.entries.value.any { it.stableId == stableId && it.accessOrigin == retirement.origin.uri.toString() } &&
       attention?.let { it.stableId != stableId } != true
+  }
 
   private fun showRequired(
     registration: Registration,
     isCurrent: () -> Boolean,
   ) {
     synchronized(lock) {
+      val intent = browserIntent
       val presentation = mutablePresentation.value
+      val live = intent?.let(::isLiveIntentLocked) == true
       checkRegistrationLocked(registration, isCurrent)
-      if (mutablePresentation.value === presentation) {
+      if (!live && browserIntent === intent && mutablePresentation.value === presentation) {
         publishLocked(attention = requiredAttention(registration))
       }
     }
@@ -505,7 +802,27 @@ internal class GatewayIngressController(
   private fun requiredAttention(registration: Registration) = GatewayAccessAttention(registration.endpoint.stableId, "Sign in to Cloudflare Access to connect to this gateway.")
 
   private fun attentionAfterAdmissionLocked(registration: Registration): GatewayAccessAttention? =
-    mutablePresentation.value.attention.takeUnless { it?.stableId == registration.endpoint.stableId }
+    mutablePresentation.value.attention.takeUnless {
+      it?.stableId == registration.endpoint.stableId && browserIntent?.let(::isLiveIntentLocked) != true
+    }
+
+  private fun isLiveIntentLocked(intent: BrowserIntent): Boolean = liveParticipantLocked(intent) != null
+
+  private fun liveParticipantLocked(
+    intent: BrowserIntent,
+    stableId: String? = null,
+  ): BrowserParticipant? {
+    if (browserIntent !== intent || intent.canceled.get()) return null
+    // Caller predicates may reenter the owner; use a snapshot and recheck ownership after each predicate.
+    return intent.participants.toList().firstOrNull { participant ->
+      (stableId == null || participant.registration.endpoint.stableId == stableId) &&
+        callerIsCurrent {
+          participant.context.ensureActive()
+          participant.isCurrent()
+        } && isRegisteredLocked(participant.registration) && browserIntent === intent &&
+        !intent.canceled.get() && participant in intent.participants
+    }
+  }
 
   private fun callerIsCurrent(isCurrent: () -> Boolean): Boolean =
     try {
