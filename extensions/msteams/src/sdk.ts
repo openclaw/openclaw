@@ -129,6 +129,11 @@ export type MSTeamsApp = {
   reply(conversationId: string, messageId: string, activity: unknown): Promise<{ id?: string }>;
   on: MSTeamsAppOn;
   event(name: "signin", cb: (ctx: SigninEventCtx) => void | Promise<void>): MSTeamsApp;
+  /** The pinned SDK keeps its default sign-in route handlers on this collaborator. */
+  oauthHandlers: Pick<
+    import("@microsoft/teams.apps/dist/app.oauth.js").OauthHandlers,
+    "onTokenExchange" | "onVerifyState"
+  >;
   initialize(): Promise<void>;
   tokenManager: {
     getGraphToken(): Promise<unknown>;

@@ -92,8 +92,10 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
     app: {
       on: vi.fn(),
       event: vi.fn(),
-      onTokenExchange: vi.fn(async () => ({ status: 200 })),
-      onVerifyState: vi.fn(async () => ({ status: 200 })),
+      oauthHandlers: {
+        onTokenExchange: vi.fn(async () => ({ status: 200 })),
+        onVerifyState: vi.fn(async () => ({ status: 200 })),
+      },
       initialize: vi.fn(async () => {}),
       tokenManager: {
         getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),

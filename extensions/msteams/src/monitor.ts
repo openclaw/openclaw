@@ -449,10 +449,7 @@ export async function monitorMSTeamsProvider(
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
 
-  const handleSdkSigninInvoke = async (
-    ctx: unknown,
-    delegateName: "onTokenExchange" | "onVerifyState",
-  ) => {
+  const handleSdkSigninInvoke = async (ctx: unknown, invoke: () => Promise<unknown>) => {
     const adaptedCtx = adaptSdkContext(ctx, app);
     if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
       return { status: 200, body: {} };
@@ -464,22 +461,18 @@ export async function monitorMSTeamsProvider(
       return { status: 200, body: {} };
     }
 
-    const sdkSigninApp = app as MSTeamsApp & {
-      onTokenExchange?: (ctx: unknown) => Promise<unknown>;
-      onVerifyState?: (ctx: unknown) => Promise<unknown>;
-    };
-    const delegate = sdkSigninApp[delegateName];
-    if (typeof delegate !== "function") {
-      throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
-    }
-    return delegate.call(sdkSigninApp, ctx);
+    return invoke();
   };
 
   // Replace the SDK's default sign-in invoke routes with an authz gate that
   // delegates to the same SDK handlers only after sender policy passes. Registering
   // a user route with the same name intentionally replaces the SDK system route.
-  app.on("signin.token-exchange", (ctx) => handleSdkSigninInvoke(ctx, "onTokenExchange"));
-  app.on("signin.verify-state", (ctx) => handleSdkSigninInvoke(ctx, "onVerifyState"));
+  app.on("signin.token-exchange", (ctx) =>
+    handleSdkSigninInvoke(ctx, () => app.oauthHandlers.onTokenExchange(ctx)),
+  );
+  app.on("signin.verify-state", (ctx) =>
+    handleSdkSigninInvoke(ctx, () => app.oauthHandlers.onVerifyState(ctx)),
+  );
 
   // The delegated SDK sign-in handlers emit `signin` only after a successful
   // token exchange/lookup. Persist that token for later OpenClaw use.
