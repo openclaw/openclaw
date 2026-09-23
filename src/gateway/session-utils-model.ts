@@ -213,6 +213,7 @@ type GatewaySessionThinkingProjectionParams = {
   agentId: string;
   sessionKey: string;
   entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
   metadataSnapshot?: PluginMetadataSnapshot;

@@ -11,6 +11,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
+  readReplyPayloadSourceOccurrence,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -146,11 +147,14 @@ export function createBlockReplyPipeline(params: {
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
   const sourceOccurrenceKey = (payload: ReplyPayload) => {
-    const metadata = getReplyPayloadMetadata(payload);
-    const range = metadata?.blockSourceRange;
-    const sourceText = metadata?.blockSourceText;
-    return range && sourceText !== undefined
-      ? JSON.stringify([metadata?.assistantMessageIndex ?? null, range[0], range[1], sourceText])
+    const occurrence = readReplyPayloadSourceOccurrence(payload);
+    return occurrence
+      ? JSON.stringify([
+          occurrence.assistantMessageIndex,
+          occurrence.sourceRange[0],
+          occurrence.sourceRange[1],
+          occurrence.sourceText,
+        ])
       : undefined;
   };
 

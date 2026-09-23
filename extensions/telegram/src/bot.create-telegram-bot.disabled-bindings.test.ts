@@ -143,6 +143,7 @@ describe("Telegram startup with disabled thread bindings", () => {
       },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId } }],
       commands: { native: false, nativeSkills: false },
+      messages: { inbound: { debounceMs: 0 } },
       plugins: { enabled: false },
       session: {
         dmScope: "per-channel-peer",

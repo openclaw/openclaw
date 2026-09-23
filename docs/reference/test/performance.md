@@ -120,6 +120,30 @@ Declaration in this inventory is not evidence that a workload was exercised.
 Keep import, registration, workload, and cleanup coverage separate when joining
 profiling results to this inventory.
 
+### Reusing the resource host
+
+Source-checkout campaign tools can import `resolveResourceGatewayRuntime` and
+`runResourceGatewayCase` from `scripts/e2e/kitchen-sink-rpc-walk.mts`. Kitchen Sink
+uses this same host lifecycle. Run from one frozen, built OpenClaw package root
+per process; this is a testing seam, not a published plugin SDK API.
+
+The preparation callback receives an isolated config path, loopback port, test
+token and a local-archive installer that verifies the supplied SHA-256. Enable
+only the selected plugins there. The workload callback receives authenticated
+CLI-mode RPC calls, resource snapshots and counted `measure(name, count, run)`
+phases. Assert the active plugin inventory and operation results in the workload;
+registration or a successful transport response alone does not establish coverage.
+
+The host records startup, preserves failed phases and joins Gateway shutdown
+before checking service-stop logs. A failed workload, nonzero exit, attempted
+forced cleanup or shutdown error retains temporary state and fails the case.
+The campaign owns bounded callback deadlines, mock-service cleanup, runner
+isolation, repetitions and report publication. Keep mock-service measurements
+separate from Gateway observations and preserve host, archive and harness hashes.
+On an outer timeout, the runner must terminate and join the whole container or
+cgroup: the Gateway has its own process group, so killing the campaign process
+alone does not clean it up.
+
 ### Zod schema compilation
 
 Compile individual schemas only after measuring a repeated validation path.

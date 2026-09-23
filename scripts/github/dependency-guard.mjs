@@ -15,6 +15,7 @@ import {
   GITHUB_API_REQUEST_TIMEOUT_MS,
   GITHUB_ERROR_BODY_MAX_BYTES,
   GITHUB_RESPONSE_BODY_MAX_BYTES,
+  GitHubDiffDataError,
   GitHubRateLimitError,
   createGitHubApi,
   createIssueMutationHelpers,
@@ -678,7 +679,11 @@ export async function reviewDependencyChanges(
         await writeSummary(body);
         return true;
       } catch (error) {
-        if (error instanceof GitHubRateLimitError || error instanceof SupersededReviewError) {
+        if (
+          error instanceof GitHubRateLimitError ||
+          error instanceof GitHubDiffDataError ||
+          error instanceof SupersededReviewError
+        ) {
           throw error;
         }
         autoscrubStatus = {

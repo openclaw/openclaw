@@ -43,6 +43,8 @@ In `bidi` mode, recoverable provider diagnostics are logged without stopping the
 
 Stopping a meeting requests cancellation of any active agent consult. In `agent` mode, OpenClaw finishes active output and turn events before closing the session, then ignores late speech synthesis and audio delivery results.
 
+Leaving also waits for audio startup already admitted by that session and stops the resulting runtime before reporting completion. If a join fails after attaching a runtime and cleanup cannot finish, status keeps the ended session visible so `leave` can retry. A replacement for the same meeting waits for pending audio startup or stop work and can reject if audio cleanup still fails; other meetings remain independent. Browser leave results remain separate: a settled browser-only leave failure remains retryable without permanently blocking another join.
+
 The bounded live transcript remains available only in `transcribe` mode. In all
 three modes, browser joins also persist completed caption rows and meeting notes
 to the shared state database. Notes update about every five minutes when new

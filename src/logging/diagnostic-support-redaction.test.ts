@@ -366,9 +366,11 @@ it("preserves exact typed lease guidance without widening maintenance prose", ()
     guidance + " /private/state.db token=fixture-only-token alice@example.invalid",
     "Doctor could not enter maintenance. OpenClawAgentDatabaseLeaseActiveError: private message",
   ]) {
-    expect(redactPublicSupportDiagnosticLine(input, context)).toBe(
-      "Doctor could not enter maintenance.",
-    );
+    for (const prefix of ["", "DoctorMaintenanceRefusalError: "]) {
+      expect(redactPublicSupportDiagnosticLine(`${prefix}${input}`, context)).toBe(
+        `${prefix}Doctor could not enter maintenance.`,
+      );
+    }
   }
   expect(
     redactPublicSupportDiagnosticLine(

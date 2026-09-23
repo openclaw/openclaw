@@ -21,6 +21,10 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionEntryCacheSnapshot,
+  SessionSharingEntry,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
@@ -48,11 +52,6 @@ type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes"
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
-export type SessionEntryCacheSnapshot = {
-  entries: Map<string, SessionEntry>;
-  keys: string[];
-};
-
 type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
   validityToken: SqliteSessionEntryRevision;
 };
@@ -70,16 +69,6 @@ type SqliteSessionEntryCacheWriteGeneration = {
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
 
-export type SessionSharingEntry = Pick<
-  SessionEntry,
-  | "sessionId"
-  | "updatedAt"
-  | "lifecycleRevision"
-  | "visibility"
-  | "incognito"
-  | "createdActor"
-  | "sandbox"
->;
 type CommittedSessionSharingFacts = { entry: SessionSharingEntry; membership: ReadonlySet<string> };
 type PreparedSessionSharingRead = {
   facts: { entry: SessionSharingEntry | undefined; membership: ReadonlySet<string> } | undefined;
@@ -434,6 +423,7 @@ function loadSessionEntrySnapshot(
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
   fullEntryKeys?: ReadonlySet<string>,
+  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
   // Validation lends complete parsed facts only within this read. A concurrent external commit
@@ -458,6 +448,10 @@ function loadSessionEntrySnapshot(
         fullEntryKeys?.has(row.session_key) ? "full" : projection,
       );
       if (entry) {
+        if (retainFullEntry && !retainFullEntry(row.session_key, entry)) {
+          delete entry.skillsSnapshot;
+          delete entry.systemPromptReport;
+        }
         parsedEntries.set(row.session_key, entry);
       }
     }
@@ -479,28 +473,32 @@ export function readSessionEntryCache(
     projection?: "full" | "list";
     /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
     fullEntryKeys?: readonly string[];
+    /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
+    retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
     /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
     deferParticipants?: true;
   },
 ): SessionEntryCacheSnapshot {
+  const projection = options.retainFullEntry ? "full" : options.projection;
   const prepared = assertCanonicalSqliteSessionKeysCurrent(
     database,
-    undefined,
-    options.projection !== "full" && !options.fullEntryKeys,
+    projection !== "full" && !options.fullEntryKeys,
   );
   if (
     !options.cache ||
     options.deferParticipants ||
     options.fullEntryKeys ||
+    options.retainFullEntry ||
     options.latest ||
-    options.projection === "full" ||
+    projection === "full" ||
     database.db.isTransaction
   ) {
     return loadSessionEntrySnapshot(
       database,
-      options.projection,
+      projection,
       prepared,
       options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+      options.retainFullEntry,
       options.deferParticipants,
     );
   }

@@ -14,7 +14,7 @@ import {
 } from "../../../tasks/task-cancellation-context.js";
 import type {
   SubagentAdminKillResult,
-  TaskRegistryControlRuntime,
+  SubagentAdminKillParams,
 } from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -522,7 +522,7 @@ async function killSelectedSubagentRuns(
 
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(
-  params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
+  params: SubagentAdminKillParams,
   control?: {
     assertCurrent: () => void;
     beforeSessionKill?: () => boolean;
