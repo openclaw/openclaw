@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { AgentsApiClient, type AgentsApiEvent } from "./agentsapi-client.js";
+import { AgentsApiClient, type AgentsApiEvent, type AgentsApiTurn } from "./agentsapi-client.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
 export function createAgentsApiSession(options: {
@@ -27,6 +27,8 @@ export function createAgentsApiSession(options: {
   const observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   let latestInputTurnId: string | undefined;
+  let baselineTurnId: string | undefined;
+  let usageTurns: Promise<AgentsApiTurn[]> | undefined;
 
   const isAvailable = () => submitted && !stopped && !settled && !rootTurn && !signal.aborted;
   const submit = (text: string) => {
@@ -64,6 +66,7 @@ export function createAgentsApiSession(options: {
         submissionError = error;
       }
       await cleanupClient.cancel(sessionId, AbortSignal.timeout(30_000));
+      settled = true;
       if (submissionError !== undefined) {
         throw submissionError instanceof Error
           ? submissionError
@@ -100,9 +103,21 @@ export function createAgentsApiSession(options: {
     isSettled: () => settled,
     queueMessage: submit,
     cancel,
+    readUsageTurns() {
+      if (!submitted || !settled) {
+        return Promise.resolve([]);
+      }
+      // Turn REST records include billing omitted by terminal stream events.
+      // The captured baseline excludes work paid for by earlier attempts.
+      return (usageTurns ??= cleanupClient.turns(
+        sessionId,
+        AbortSignal.timeout(10_000),
+        baselineTurnId,
+      ));
+    },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
-      const baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
+      baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
       let events = await client.subscribe(
         sessionId,
         AbortSignal.any([signal, streamController.signal]),
