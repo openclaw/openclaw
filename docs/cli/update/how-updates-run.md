@@ -57,6 +57,14 @@ stop with a warning naming those counts; missing custody information never block
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
 
+Maintenance drain uses the service's local credentials, including an existing
+paired operator identity when no shared token or password is configured. It does
+not create an identity or request new pairing. Older installed updaters that omit
+this identity can report `device identity required` and wait until their existing
+drain deadline before stopping with a warning. A newer candidate cannot change
+that already-running updater; subsequent updates use the corrected local control
+client after installation.
+
 Explicit package artifacts, such as tarball paths and URLs, compare known build
 IDs before a same-version no-op. Matching known identity leaves the package unchanged;
 different or missing identity continues through normal update validation and

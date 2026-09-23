@@ -15,6 +15,7 @@ import {
   getCanonicalSqliteTableNames,
   type CanonicalSqliteNamedIndexContract,
 } from "./sqlite-schema-contract.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-transaction.js";
 
 const SQLITE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
@@ -107,39 +108,42 @@ export function repairCanonicalSqliteIndexes(
   const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
   const integrityFailuresByTable = new Map<string, Error>();
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
-  for (const index of indexes) {
-    assertSqliteIdentifier(index.name);
-    assertSqliteIdentifier(index.tableName);
-    const tableExists = db
-      .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(index.tableName);
-    if (!tableExists) {
-      continue;
+  // One read snapshot also avoids a network lock round trip per metadata query.
+  runSqlitePinnedReadSnapshotSync(db, () => {
+    for (const index of indexes) {
+      assertSqliteIdentifier(index.name);
+      assertSqliteIdentifier(index.tableName);
+      const tableExists = db
+        .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(index.tableName);
+      if (!tableExists) {
+        continue;
+      }
+      const tableIndexes = indexesByTable.get(index.tableName) ?? [];
+      tableIndexes.push(index);
+      indexesByTable.set(index.tableName, tableIndexes);
+      const actual = collectSqliteNamedIndexContract(db, index.name);
+      if (!isEqual(actual, index.fingerprint)) {
+        repairIndexes.add(index);
+      }
     }
-    const tableIndexes = indexesByTable.get(index.tableName) ?? [];
-    tableIndexes.push(index);
-    indexesByTable.set(index.tableName, tableIndexes);
-    const actual = collectSqliteNamedIndexContract(db, index.name);
-    if (!isEqual(actual, index.fingerprint)) {
-      repairIndexes.add(index);
-    }
-  }
-  assertNoUnexpectedUniqueIndexes(db, databaseLabel, schemaSql, indexesByTable);
+    assertNoUnexpectedUniqueIndexes(db, databaseLabel, schemaSql, indexesByTable);
 
-  if (options.verifyPhysicalIntegrity !== false) {
-    for (const [tableName, tableIndexes] of indexesByTable) {
-      try {
-        assertSqliteTableIntegrity(db, databaseLabel, tableName);
-      } catch (error) {
-        if (error instanceof Error) {
-          integrityFailuresByTable.set(tableName, error);
-        }
-        for (const index of tableIndexes) {
-          repairIndexes.add(index);
+    if (options.verifyPhysicalIntegrity !== false) {
+      for (const [tableName, tableIndexes] of indexesByTable) {
+        try {
+          assertSqliteTableIntegrity(db, databaseLabel, tableName);
+        } catch (error) {
+          if (error instanceof Error) {
+            integrityFailuresByTable.set(tableName, error);
+          }
+          for (const index of tableIndexes) {
+            repairIndexes.add(index);
+          }
         }
       }
     }
-  }
+  });
   if (repairIndexes.size === 0) {
     return [];
   }

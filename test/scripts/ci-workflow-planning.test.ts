@@ -2651,22 +2651,27 @@ describe("ci workflow guards", () => {
       };
     }
 
-    it.each(["test-play", "test-third-party"])(
-      "reuses one build instant across the %s unit and lint commands",
-      (task) => {
-        const result = runAndroidTask(
-          { task, lint: true },
-          { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
-        );
+    it.each([
+      { task: "test-wear", lint: true, app_lint: "third-party", build_benchmark: false, calls: 3 },
+      { task: "ktlint", lint: false, app_lint: "play", build_benchmark: false, calls: 2 },
+      { task: "ktlint", lint: false, app_lint: "play", build_benchmark: true, calls: 3 },
+    ])(
+      "reuses one build instant across every command in $task with benchmark=$build_benchmark",
+      ({ calls, ...row }) => {
+        const result = runAndroidTask(row, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        });
         expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-        expect(result.calls).toHaveLength(2);
+        expect(result.calls).toHaveLength(calls);
         const metadata = result.calls.map((call) =>
           call.filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
         );
-        expect(metadata[0]).toHaveLength(1);
-        expect(metadata[1]).toEqual(metadata[0]);
         expect(result.clockReads).toHaveLength(1);
-        expect(metadata[0]).toEqual([`-PopenclawBuildTimestamp=${result.clockReads[0]}`]);
+        expect(metadata).toEqual(
+          result.calls.map(() => [`-PopenclawBuildTimestamp=${result.clockReads[0]}`]),
+        );
       },
     );
 
@@ -2717,7 +2722,7 @@ describe("ci workflow guards", () => {
             const testCall = call.some((arg) => arg.endsWith("UnitTest"));
             expect(call.includes("--init-script")).toBe(testCall);
           }
-          if ((row.task !== "test-play" && row.task !== "test-third-party") || row.lint !== true) {
+          if (row.lint !== true && !row.app_lint) {
             expect(result.clockReads).toEqual([]);
             expect(
               result.calls.flat().filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
@@ -2821,22 +2826,51 @@ describe("ci workflow guards", () => {
     });
 
     it.each([
-      ["test-play", ":app:testPlayDebugUnitTest"],
-      ["test-play", ":app:lintPlayDebug"],
-      ["test-third-party", ":app:testThirdPartyDebugUnitTest"],
-      ["test-third-party", ":app:lintThirdPartyDebug"],
-      ["test-wear", ":wear:lintDebug"],
-      ["ktlint", ":benchmark:assembleDebug"],
-    ])("propagates %s failure from %s", (task, failTask) => {
+      { task: "test-play", failTask: ":app:testPlayDebugUnitTest", calls: 1 },
+      { task: "test-third-party", failTask: ":app:testThirdPartyDebugUnitTest", calls: 1 },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":wear:testDebugUnitTest",
+        calls: 1,
+      },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":wear:lintDebug",
+        calls: 2,
+      },
+      {
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+        failTask: ":app:lintThirdPartyDebug",
+        calls: 3,
+      },
+      {
+        task: "ktlint",
+        app_lint: "play",
+        build_benchmark: true,
+        failTask: ":benchmark:assembleDebug",
+        calls: 2,
+      },
+      {
+        task: "ktlint",
+        app_lint: "play",
+        build_benchmark: true,
+        failTask: ":app:lintPlayDebug",
+        calls: 3,
+      },
+    ])("propagates $task failure from $failTask", ({ failTask, calls, ...row }) => {
       const result = runAndroidTask(
-        { task, lint: true, build_benchmark: true },
+        row,
         { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
         failTask,
       );
       expect(result.status).toBe(23);
-      if (failTask.endsWith("UnitTest")) {
-        expect(result.calls).toHaveLength(1);
-      }
+      expect(result.calls).toHaveLength(calls);
     });
   });
 
@@ -5983,10 +6017,15 @@ describe("ci workflow guards", () => {
         expect(
           JSON.parse(expectDefined(preflightOutputs.android_matrix, "Android matrix")).include,
         ).toEqual([
-          { check_name: "android-test-play", task: "test-play", lint: true },
-          { check_name: "android-test-third-party", task: "test-third-party", lint: true },
-          { check_name: "android-test-wear", task: "test-wear", lint: true },
-          { check_name: "android-ktlint", task: "ktlint" },
+          { check_name: "android-test-play", task: "test-play" },
+          { check_name: "android-test-third-party", task: "test-third-party" },
+          {
+            check_name: "android-test-wear",
+            task: "test-wear",
+            lint: true,
+            app_lint: "third-party",
+          },
+          { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
       }
     },
@@ -6456,10 +6495,15 @@ describe("ci workflow guards", () => {
         ),
       ).include,
     ).toEqual([
-      { check_name: "android-test-play", task: "test-play", lint: true },
-      { check_name: "android-test-third-party", task: "test-third-party", lint: true },
-      { check_name: "android-test-wear", task: "test-wear", lint: true },
-      { check_name: "android-ktlint", task: "ktlint" },
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      {
+        check_name: "android-test-wear",
+        task: "test-wear",
+        lint: true,
+        app_lint: "third-party",
+      },
+      { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
 
     expect(

@@ -51,6 +51,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -211,6 +212,18 @@ type SessionTranscriptCurrentTurnEntryWorkerInput = Omit<
 > &
   SessionTranscriptCurrentTurnEntryRequest & { kind: "current-turn-entry" };
 
+export type SessionColdMetadataWorkerInput = {
+  kind: "cold-metadata";
+  database: { agentId: string; path: string };
+  sessionId: string;
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionColdMetadataWorkerResult = {
+  kind: "cold-metadata";
+  archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
+};
+
 export type SessionRowPresenceWorkerInput = {
   kind: "session-row-presence";
   database: { agentId: string; path: string };
@@ -346,6 +359,7 @@ export type SessionArchivePruningWorkerInput = {
 
 export type SessionHistoryWorkerInput =
   | SessionArchivePruningWorkerInput
+  | SessionColdMetadataWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
@@ -384,6 +398,7 @@ export type SessionTranscriptWorkerValues = {
     result: PublishedSessionTranscriptArchive | null;
   };
   "transcript-search": SessionTranscriptSearchWorkerResult;
+  "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
@@ -429,6 +444,9 @@ export type SessionHistoryWorkerDatabase = {
   readArchivePruning: (
     input: Omit<SessionArchivePruningWorkerInput, "kind" | "database">,
   ) => Promise<PublishedSessionTranscriptArchive | null>;
+  readColdMetadata: (
+    input: Omit<SessionColdMetadataWorkerInput, "kind" | "database">,
+  ) => Promise<SessionColdMetadataWorkerResult>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;

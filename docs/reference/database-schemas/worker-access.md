@@ -124,7 +124,7 @@ the bounded delta. The main thread retains display/profile projection, byte
 budgets, and fresh sharing checks against the originally admitted sources. A
 failed visibility lookup joins worker retirement before its partial facts return;
 the host observes that failure only if projection reaches the lookup before a
-history reset. Selected/current entries, pending inputs and receipts, retained
+history reset. Pending inputs and receipts, retained
 transcript-session keys, and SSE inline subagent visibility reads remain migration
 debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
@@ -171,6 +171,28 @@ recent messages in the history worker. They recheck the current config,
 sharing policy, and session identity before responding. Hot transcript reads use
 the atomic reader's cold marker; restoration runs only after a cold rejection and
 retains the bounded retry for a concurrent rearchive.
+
+`chat.history` and `chat.startup` also select entries and participant facts from
+the row projection. They prepare the requested row before selection and recheck
+current sharing and the captured store and session generation after awaited
+history reads, publishing the response in that synchronous frame. Retained task
+history keeps its recorded transcript when the live session advances. Responses
+own their nested metadata independently of resident rows. Pending-input
+reconciliation remains a separate synchronous owner; this change does not alter
+storage, migrations, configuration, or update behavior.
+
+A missing resident row gets a bounded worker sharing read before history treats
+it as absent. This preserves refusal for durable entries marked incognito, which
+are intentionally excluded from the resident roster. The sharing owner retains
+negative reads through response publication, invalidating them when the selected
+key, physical source, or route changes. Unrelated catalog refreshes do not reject
+empty history. Excluded metadata never grants transcript access or enters resident
+rows.
+
+Bulk hydration, stored parent links, inherited model lookups, and ACP metadata
+also retain qualified stored addresses when main aliases or global scope change.
+Request aliases still follow current configuration; preparing history never
+rekeys an existing row or redirects its stored lineage.
 
 Startup/topology hydration, internal synchronous keyed and archived reads, and
 process-held incognito stores remain migration debt. Preserve the

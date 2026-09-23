@@ -1373,7 +1373,7 @@ describe("gateway server chat", () => {
         };
       }>(ws, "chat.history", makeMainSessionParams());
 
-      expect(synthetic.ok).toBe(true);
+      expect(synthetic.ok, JSON.stringify(synthetic)).toBe(true);
       expect(synthetic.payload?.defaults?.modelProvider).toBeTruthy();
       expect(synthetic.payload?.defaults?.model).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.key).toBe("agent:main:main");
@@ -2468,7 +2468,7 @@ describe("gateway server chat", () => {
 
       const startup = await readWarmChatStartup(ws);
 
-      expect(startup.ok).toBe(true);
+      expect(startup.ok, JSON.stringify(startup)).toBe(true);
       expect(startup.payload?.metadata?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

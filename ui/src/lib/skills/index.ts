@@ -20,7 +20,7 @@ import { loadSkillStatusReport } from "./status-report.ts";
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
 
-type SkillsState = {
+export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   runtimeConfig: SkillConfigMutationOwner;
@@ -29,6 +29,10 @@ type SkillsState = {
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
+  skillsFilter: string;
+  skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
+  skillsDetailKey: string | null;
+  skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
@@ -36,6 +40,7 @@ type SkillsState = {
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
+  clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;
   clawhubDetailLoading: boolean;

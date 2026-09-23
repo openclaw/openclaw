@@ -7,8 +7,15 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-runtime.js";
+import {
+  createChatAbortContext,
+  invokeChatAbortHandler,
+} from "../../../gateway/server-methods/chat.abort.test-helpers.js";
+import { coreGatewayHandlers } from "../../../gateway/server-methods/core-handlers.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../infra/system-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { tasksWithPendingDelivery } from "../../../tasks/task-registry-state.js";
 import {
   cancelTaskById,
@@ -16,9 +23,14 @@ import {
   getTaskById,
   maybeDeliverTaskTerminalUpdate,
 } from "../../../tasks/task-registry.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   markRequesterTurnYielded,
@@ -38,6 +50,262 @@ const fixture = useSubagentControlFixture();
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSystemEventsForTest();
+});
+
+it.each([
+  "pending",
+  "admitted",
+  "exact admitted",
+  "exact private retry",
+  "pending RPC",
+  "retry backoff",
+  "declined",
+  "failed persistence",
+  "worker persistence",
+  "unrelated turn",
+  "transient failure",
+] as const)("preserves completed-child continuation ownership through %s", async (phase) => {
+  const requesterKey = "agent:main:stop-completion";
+  const childKey = "agent:main:subagent:completed-before-stop";
+  const childKeys =
+    phase === "exact private retry" ? [childKey, `${childKey}-private`] : [childKey];
+  for (const sessionKey of [requesterKey, ...childKeys]) {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: sessionKey === requesterKey ? "requester-session" : `${sessionKey}-session`,
+    });
+  }
+  const endedAt = Date.now();
+  const entries = childKeys.map((childSessionKey) => {
+    const runId = childSessionKey.slice(childSessionKey.lastIndexOf(":") + 1);
+    registerSubagentRun({
+      runId,
+      childSessionKey,
+      requesterSessionKey: requesterKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: requesterKey,
+      task: "Retrieve a result",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    const entry = subagentRuns.get(runId)!;
+    // Restored successful children can owe a wake without a parent turn binding.
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt,
+      outcome: { status: "ok" },
+    };
+    entry.completion = {
+      required: true,
+      resultText: "The retained child result.",
+      capturedAt: endedAt,
+    };
+    entry.delivery = { status: "pending" };
+    entry.cleanupHandled = true;
+    entry.cleanupCompletedAt = endedAt;
+    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    return entry;
+  });
+  const entry = entries[0]!;
+  if (phase === "exact private retry") {
+    const privateEntry = entries[1]!;
+    privateEntry.completionTarget = "parent";
+    privateEntry.completionRequesterSessionId = "requester-session";
+    for (const child of entries) {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 1,
+        batchRunIds: entries.map(({ runId }) => runId),
+      };
+    }
+  }
+  if (phase === "pending RPC") {
+    entry.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: [entry.runId],
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      rearmGeneration: 1,
+    };
+  }
+  persistSubagentRunsToDiskOrThrow(
+    subagentRuns,
+    entries.map(({ runId }) => runId),
+  );
+  for (const child of entries) {
+    finalizeTaskRunByRunId({
+      runId: child.runId,
+      runtime: "subagent",
+      sessionKey: child.childSessionKey,
+      status: "succeeded",
+      endedAt,
+    });
+  }
+
+  const admitted = createDeferredCore();
+  const execute = createDeferredCore();
+  const attempts: string[] = [];
+  const started: string[] = [];
+  const dedupe = new Map<string, { ts: number; ok: boolean; payload: Record<string, unknown> }>();
+  const abortContext = createChatAbortContext({ dedupe, getRuntimeConfig });
+  let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+  type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
+  const completion = { dispatch: dispatchGatewayMethodInProcess };
+  vi.spyOn(completion, "dispatch").mockResolvedValue({
+    status: "ok",
+    inputProcessingCompleted: true,
+    result: { payloads: [{ text: "The child has settled." }], meta: {} },
+  });
+  const dispatch: Dispatch = async <T>(...args: Parameters<Dispatch>): Promise<T> => {
+    const [, params, options] = args;
+    const runId = String(params?.idempotencyKey);
+    attempts.push(runId);
+    if (phase === "pending RPC") {
+      dedupe.set(`agent:${runId}`, {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          sessionKey: requesterKey,
+          sessionId: "requester-session",
+          agentId: "main",
+          status: "accepted",
+          controlUiVisible: true,
+        },
+      });
+    }
+    const owner = prepareSystemAgentRunAdmission(
+      getRuntimeConfig(),
+      runId,
+      "main",
+      "stop-completion-proof",
+    );
+    admission = owner;
+    const assertCurrent = resolveAdmittedRunActiveAssertion(await owner.admit("embedded"))!;
+    try {
+      admitted.resolve();
+      if (attempts.length === 1) {
+        await execute.promise;
+        if (phase === "transient failure" || phase === "retry backoff") {
+          throw new Error("temporary requester delivery failure");
+        }
+        if (phase === "pending RPC") {
+          const cancelled = dedupe.get(`agent:${runId}`)?.payload;
+          expect(cancelled).toMatchObject({
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+          });
+          vi.mocked(completion.dispatch).mockResolvedValueOnce(cancelled);
+          return await completion.dispatch<T>(...args);
+        }
+      }
+      assertCurrent();
+      options?.onExecutionStarted?.();
+      started.push(runId);
+      return await completion.dispatch<T>(...args);
+    } finally {
+      owner.close();
+    }
+  };
+  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  try {
+    if (phase !== "pending") {
+      await registryTesting.sweepOnceForTests();
+      await admitted.promise;
+    }
+    if (phase === "retry backoff") {
+      execute.resolve();
+      await fixture.settle();
+      expect(entry.requesterSettleWake?.status).toBe("pending");
+    }
+    if (phase === "failed persistence") {
+      fixture.persist.mockImplementation((runs, runIds) => {
+        if (runs.get(entry.runId)?.suppressCompletionDelivery) {
+          throw new Error("completion cancellation write rejected");
+        }
+        persistSubagentRunsToDiskOrThrow(runs, runIds);
+      });
+    }
+    if (phase === "worker persistence") {
+      const actual = await vi.importActual<typeof import("../registry/subagent-registry-state.js")>(
+        "../registry/subagent-registry-state.js",
+      );
+      vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementationOnce(
+        actual.persistSubagentRunsToDiskAsyncOrThrow,
+      );
+    }
+    if (phase === "pending RPC") {
+      const respond = await invokeChatAbortHandler({
+        handler: coreGatewayHandlers["chat.abort"]!,
+        context: abortContext,
+        request: { sessionKey: requesterKey, runId: attempts[0], agentId: "main" },
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({ aborted: true, runIds: [attempts[0]] }),
+      );
+    } else if (phase !== "transient failure") {
+      const result = await abortControlledSubagents({
+        cfg: getRuntimeConfig(),
+        sessionKey: requesterKey,
+        agentId: "main",
+        ...(phase === "exact admitted" ||
+        phase === "exact private retry" ||
+        phase === "retry backoff"
+          ? { requesterTurnRunId: attempts[0] }
+          : phase === "unrelated turn"
+            ? { requesterTurnRunId: "later-human-turn" }
+            : {}),
+        beforeKill: () => {
+          if (phase === "declined") {
+            return false;
+          }
+          if (phase !== "unrelated turn") {
+            admission?.close();
+          }
+          return true;
+        },
+      });
+      if (phase === "failed persistence") {
+        expect(result?.status).toBe("error");
+      } else if (phase !== "unrelated turn") {
+        expect(result?.status).toBe("ok");
+      }
+    }
+    execute.resolve();
+    if (phase === "pending") {
+      await registryTesting.sweepOnceForTests();
+    }
+    await fixture.settle();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+
+    const retry = phase === "transient failure" || phase === "failed persistence";
+    const continues = retry || phase === "declined" || phase === "unrelated turn";
+    expect.soft(attempts).toHaveLength(retry ? 2 : phase === "pending" ? 0 : 1);
+    expect.soft(started).toHaveLength(continues ? 1 : 0);
+    if (retry) {
+      expect(attempts[1]).toBe(`${attempts[0]}:retry-1`);
+    }
+    for (const child of entries) {
+      expect.soft(child.requesterSettleWake).toBeUndefined();
+      expect(child.execution.outcome).toEqual({ status: "ok" });
+      expect(child.completion?.resultText).toBe("The retained child result.");
+      expect(findTaskByRunId(child.runId)?.status).toBe("succeeded");
+    }
+  } finally {
+    admission?.close();
+    execute.resolve();
+    vi.useRealTimers();
+    await fixture.settle();
+  }
 });
 
 it.each([

@@ -343,9 +343,15 @@ it("keeps fixed-store ownership out of separate registered and suffixed database
 it.each([
   { name: "physical sentinel", parent: "global", model: "qwen3:14b", source: "inherited" },
   {
-    name: "qualified main alias",
+    name: "literal main parent",
     parent: "agent:main:main",
-    model: "qwen3:8b",
+    model: "qwen3:4b",
+    source: "inherited",
+  },
+  {
+    name: "literal configured-main parent",
+    parent: "agent:main:home",
+    model: "qwen3:30b",
     source: "inherited",
   },
   {
@@ -362,11 +368,11 @@ it.each([
     source: null,
   },
 ] as const)(
-  "keeps $name model facts separate from displayed lineage",
+  "keeps $name model facts bound to stored lineage",
   async ({ name, parent, model, source }) => {
     await withOpenClawTestState({ label: "combined-parent-model" }, async () => {
       const cfg: OpenClawConfig = {
-        session: { scope: "global" },
+        session: { scope: "global", mainKey: "home" },
         agents: {
           entries: { main: { default: true }, work: {} },
           defaults: { model: { primary: "ollama/llama3.1:8b" } },
@@ -374,6 +380,8 @@ it.each([
       };
       const parents: Array<[string, string, string]> = [
         ["main", "global", "qwen3:8b"],
+        ["main", "agent:main:main", "qwen3:4b"],
+        ["main", "agent:main:home", "qwen3:30b"],
         ["main", "agent:main:global", "qwen3:32b"],
       ];
       if (name !== "missing physical parent") {
@@ -405,7 +413,7 @@ it.each([
             modelProvider: "ollama",
             model,
             modelOverrideSource: source,
-            parentSessionKey: parent === "agent:main:main" ? "global" : parent,
+            parentSessionKey: parent,
           });
           const searched = await listProjectedSessions({
             projection,
@@ -688,7 +696,7 @@ it.for([false, true])(
 );
 
 it.for(["main", "unknown", "global"])(
-  "resolves global lineage aliases without folding sentinels (mainKey=%s)",
+  "keeps qualified lineage separate from physical sentinels (mainKey=%s)",
   async (mainKey) => {
     await withOpenClawTestState({ label: "combined-store-global-lineage" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");
@@ -702,14 +710,15 @@ it.for(["main", "unknown", "global"])(
       };
       const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       setCanonicalSqliteSessionMainKey(database, mainKey);
-      for (const sessionKey of ["global", "unknown"]) {
+      const qualifiedParent = `agent:ops:${mainKey}`;
+      for (const sessionKey of ["global", "unknown", qualifiedParent]) {
         replaceSessionEntrySync(
           { agentId: "ops", sessionKey, storePath },
           { sessionId: `parent-${sessionKey}`, updatedAt: Date.now() },
         );
       }
       for (const [name, parentSessionKey, parentSessionId] of [
-        ["alias", `agent:ops:${mainKey}`, "parent-global"],
+        ["qualified", qualifiedParent, `parent-${qualifiedParent}`],
         ["global", "global", "parent-global"],
         ["unknown", "unknown", "parent-unknown"],
       ] as const) {
@@ -727,7 +736,8 @@ it.for(["main", "unknown", "global"])(
       }
       await withResidentRows(cfg, async (projection) => {
         for (const [spawnedBy, children] of [
-          ["global", ["alias", "global"]],
+          [qualifiedParent, ["qualified"]],
+          ["global", ["global"]],
           ["unknown", ["unknown"]],
         ] as const) {
           const selected = await listProjectedSessions({

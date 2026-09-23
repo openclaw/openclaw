@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -160,7 +160,7 @@ describe("cron run-log task import", () => {
           fixture.close();
         }
 
-        expect(repairOpenClawStateDatabaseSchemaIfNeeded()).toEqual({
+        expect(await prepareOpenClawStateDatabaseSchema()).toEqual({
           changes: [],
           warnings: [expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/u)],
         });

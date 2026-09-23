@@ -214,6 +214,30 @@ describe("managed service update handoff", () => {
     },
   );
 
+  itUnix(
+    "retains terminal parent exit when a later liveness probe would be inconclusive",
+    async () => {
+      const { log, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
+        "launchd",
+        {
+          controlDisconnect: "transferred",
+          terminalParentExitProbe: true,
+          updaterExitCode: 7,
+          helperExitCode: 7,
+          updaterResult: {
+            status: "error",
+            mode: "npm",
+            recovery: { serviceRestartSafe: true, version: "1.0.0" },
+          },
+        },
+      );
+      expect(log).toContain("terminal parent exit observed");
+      expect(log).not.toContain("parent probed after terminal exit");
+      expect(state).toMatchObject({ parked: true, restored: true, healthProbeCount: 1 });
+      expect(sensitiveFilesRemoved).toBe(true);
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       [false, true].map((recover) => ({ kind, recover })),

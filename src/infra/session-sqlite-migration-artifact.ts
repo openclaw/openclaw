@@ -7,8 +7,8 @@ import {
   publishFileExclusive,
   requireDirectorySync,
   syncDirectory,
-} from "../infra/directory-durability.js";
-import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
+} from "./directory-durability.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 
 const IdentitySchema = z.object({
   dev: z.string(),

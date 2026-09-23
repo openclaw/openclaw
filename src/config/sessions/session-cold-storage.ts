@@ -41,6 +41,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type {
   SessionColdMutationPlan,
@@ -383,26 +384,35 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
+  preparation?: SessionColdReadPreparation,
 ): Promise<void> {
   assertCurrent?.();
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const resolved = preparation?.target ?? resolveSqliteTranscriptReadScope(scope);
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
   const key = `${storePath}\0${resolved.sessionId}`;
-  const initial = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionColdTranscript(database.db, resolved.sessionId),
-    options,
-  );
-  if (!initial.found || !initial.value) {
+  const readNativeMetadata = () => {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionColdTranscript(database.db, resolved.sessionId),
+      options,
+    );
+    return result.found ? result.value : undefined;
+  };
+  // Write-side callers keep their original synchronous preflight and admission order.
+  const initial = preparation ? await preparation.readMetadata("initial") : readNativeMetadata();
+  if (preparation) {
+    assertCurrent?.();
+  }
+  if (!initial) {
     return;
   }
   await operations.enqueue(storePath, async () => {
     assertCurrent?.();
-    const opened = withOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionColdTranscript(database.db, resolved.sessionId),
-      options,
-    );
-    if (!opened.found || !opened.value) {
+    const archive = preparation ? await preparation.readMetadata("queued") : readNativeMetadata();
+    if (preparation) {
+      assertCurrent?.();
+    }
+    if (!archive) {
       return;
     }
     await runColdMutation(
@@ -410,7 +420,7 @@ export async function restoreSessionColdTranscript(
         kind: "cold-restore",
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
-        archive: opened.value,
+        archive,
       },
       assertCurrent,
     );

@@ -2292,10 +2292,8 @@ src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
-src/commands/doctor-session-snapshots.ts	5
+src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
-src/commands/doctor-session-sqlite-migration-run.ts	4
-src/commands/doctor-session-sqlite-readers.ts	5
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	5
@@ -2899,6 +2897,7 @@ src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	5
+src/infra/session-sqlite-migration-readers.ts	5
 src/infra/shell-env.ts	1
 src/infra/sqlite-coordinator.ts	2
 src/infra/sqlite-file-generation.ts	9

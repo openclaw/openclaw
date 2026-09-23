@@ -14,6 +14,7 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
@@ -66,7 +67,7 @@ export function buildPendingInputItems(
     items.push(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ),
+      ).flatMap((item) => projectChatSystemNotice(item) ?? []),
     );
     if (input.state === "queued") {
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {

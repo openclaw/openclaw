@@ -4,17 +4,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
+import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import {
+  createSessionSqliteMigrationRun,
+  writeSessionSqliteMigrationManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   createSessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-failure.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import {
-  createSessionSqliteMigrationRun,
-  writeSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";

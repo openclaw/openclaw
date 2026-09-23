@@ -12,13 +12,13 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { sessionDeliveryRoute } from "../utils/delivery-context.read.js";
-import { createTranscriptEventReader } from "./doctor-session-sqlite-readers.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";

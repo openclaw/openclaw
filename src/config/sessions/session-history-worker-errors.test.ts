@@ -10,6 +10,7 @@ import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
+import * as sqliteScope from "./session-accessor.sqlite-scope.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 import {
   createVisibilityFailureDelta,
@@ -232,6 +233,10 @@ async function readThroughWorker() {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  // Synthetic targets keep discovery outside the error-transfer worker controls.
+  vi.spyOn(sqliteScope, "prepareSqliteTranscriptReadScope").mockImplementation(async (scope) =>
+    sqliteScope.resolveSqliteTranscriptReadScope(scope),
+  );
   observed.deferredRun = undefined;
   observed.post.mockReset();
   observed.read.mockReset();
@@ -266,6 +271,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+  vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });
 

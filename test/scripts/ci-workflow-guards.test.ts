@@ -2489,7 +2489,26 @@ AFTER_CD
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
-    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+    for (const [context, expected] of [
+      [{ eventName: "push" }, 4],
+      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
+      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
+      [{ eventName: "pull_request", authorAssociation: "NONE" }, 2],
+      [{ eventName: "push", runnerBackend: "github" }, 2],
+      [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
+      [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
+      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 2],
+      [{ eventName: "push", repository: "contributor/openclaw" }, 2],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], {
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          ...context,
+        }),
+        JSON.stringify(context),
+      ).toBe(expected);
+    }
   });
 
   it("runs the Docker seed tier with the published updater and a checked main smoke package", () => {
@@ -3966,6 +3985,13 @@ setImmediate(() => {
     }
     expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
 
+    const androidRunStep = expectDefined(
+      workflow.jobs.android.steps.find(
+        (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+      ),
+      "Android task runner",
+    );
+    const androidRunEnv = expectDefined(androidRunStep.env, "Android task environment");
     const androidRoutes = [
       ["GitHub override", { runnerBackend: "github" }, "ubuntu-24.04"],
       ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
@@ -3994,6 +4020,11 @@ setImmediate(() => {
       expect(evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context), label).toBe(
         runner,
       );
+      if (runner === "ubuntu-24.04") {
+        expect(evaluateWorkflowExpression(androidRunEnv.CI_RUNNER_BACKEND, context), label).toBe(
+          "github",
+        );
+      }
       for (const task of [
         "build-play",
         "build-play-compat",
@@ -4005,9 +4036,7 @@ setImmediate(() => {
         "test-wear",
       ]) {
         for (const lint of [undefined, false, true]) {
-          const extendedBudget =
-            ((task === "test-play" || task === "test-third-party") && lint === true) ||
-            (task === "build-play" && runner === "ubuntu-24.04");
+          const extendedBudget = task === "build-play" && runner === "ubuntu-24.04";
           expect(
             evaluateTimeout("android", { ...context, matrix: { task, lint } }),
             `${label}: ${task}, lint=${lint}`,
@@ -6179,7 +6208,6 @@ server.listen(0, "127.0.0.1", () => {
       androidSteps.find((step) => step.name === "Point Gradle at the sticky disk"),
       "Gradle sticky point step",
     );
-    const pointEnv = expectDefined(pointStep.env, "Gradle sticky point step env");
 
     // Task scope stays in the key (a light task like ktlint must never seed
     // heavy build lanes), but PR number and dependency hash must not: those
@@ -6191,19 +6219,35 @@ server.listen(0, "127.0.0.1", () => {
     );
     expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh and strand the
-    // fingerprint marker); PR clones stay read-only.
+    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
     expect(mountWith.commit).toBe(
       "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
     );
-    // The dependency hash moved from the key into a runtime fingerprint that
-    // bounds disk growth: the writer rebuilds cold when inputs change so
-    // retired artifacts do not accumulate on the O(1) key forever.
-    expect(pointEnv.GRADLE_DEPS_FINGERPRINT).toContain("hashFiles(");
-    expect(pointEnv.GRADLE_DEPS_FINGERPRINT).toContain("apps/android/gradle/libs.versions.toml");
-    expect(pointEnv.STICKY_WRITER).toContain("github.event_name != 'pull_request'");
-    expect(pointStep.run).toContain(".openclaw-gradle-deps-fingerprint");
-    expect(pointStep.run).toContain('rm -rf "$sticky_root/gradle-user-home"');
+    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
+    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
+    const gradleHome = path.join(stickyRoot, "gradle-user-home");
+    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
+    const githubEnv = path.join(stickyRoot, "github-env");
+    mkdirSync(path.dirname(cachedDependency), { recursive: true });
+    writeFileSync(cachedDependency, "cached dependency");
+    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
+    const result = runWorkflowShellScript(
+      expectDefined(pointStep.run, "Gradle sticky home").replace(
+        "sticky_root=/var/tmp/openclaw-gradle",
+        `sticky_root=${quoteShell(stickyRoot)}`,
+      ),
+      {
+        env: {
+          ...process.env,
+          GITHUB_ENV: githubEnv,
+          GRADLE_DEPS_FINGERPRINT: "new-inputs",
+          STICKY_WRITER: "true",
+        },
+      },
+    );
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
+    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
   });
 
   it("caches Robolectric SDK artifacts for Android test tasks only", () => {

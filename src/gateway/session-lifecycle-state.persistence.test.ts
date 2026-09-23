@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -238,7 +239,19 @@ it.each(["success", "failed-write"])(
     const runId = "native-cancel-run";
     const chatRunState = createChatRunState();
     const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
+    const terminalChanged = createDeferred();
+    const broadcastToConnIds = vi.fn<GatewayRequestContext["broadcastToConnIds"]>(
+      (event, payload) => {
+        if (
+          event === "sessions.changed" &&
+          isRecord(payload) &&
+          payload.runId === runId &&
+          payload.status === "killed"
+        ) {
+          terminalChanged.resolve();
+        }
+      },
+    );
     const context = {
       chatRunState,
       chatAbortControllers: new Map(),
@@ -448,6 +461,7 @@ it.each(["success", "failed-write"])(
           abortedLastRun: true,
         },
       });
+      await terminalChanged.promise;
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
