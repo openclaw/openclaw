@@ -2729,7 +2729,7 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
           ],
           [
             "channel-registry",
-            "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
+            "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
           ],
           [
             "channel-session",

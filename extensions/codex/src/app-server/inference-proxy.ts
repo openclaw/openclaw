@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
 import { promisify } from "node:util";
@@ -207,7 +208,10 @@ export async function createCodexInferenceProxy(params: {
       throw new Error(FAILURE);
     }
     const prepared = context.prepare(value);
-    const rewritten = Buffer.from(JSON.stringify(prepared.body));
+    // Native already serialized this request. Keep its bytes when the context
+    // owner made no change; malformed UTF-8 keeps the existing replacement path.
+    const rewritten =
+      prepared.body === value && isUtf8(bytes) ? bytes : Buffer.from(JSON.stringify(prepared.body));
     if (rewritten.length > MAX_BODY_BYTES) {
       throw new Error(FAILURE);
     }
@@ -228,7 +232,12 @@ export async function createCodexInferenceProxy(params: {
       encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
     signal.throwIfAborted();
     const prepared = prepare(decoded, sampling);
-    const body = encoding === "zstd" ? await compress(prepared.bytes) : prepared.bytes;
+    const body =
+      prepared.bytes === decoded
+        ? wire
+        : encoding === "zstd"
+          ? await compress(prepared.bytes)
+          : prepared.bytes;
     prepared.assertCurrent();
     const requestSignal = AbortSignal.any([signal, ...(prepared.signal ? [prepared.signal] : [])]);
     return {

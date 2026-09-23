@@ -14,9 +14,12 @@ import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  observeDoctorConfigStep,
+  useDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 
-const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome("billing-route");
 
 describe("Doctor model billing route migration", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -28,67 +31,77 @@ describe("Doctor model billing route migration", () => {
     "records inherited billing changes once (multiagent: $multiagent)",
     async ({ multiagent, successor }) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const configPath = await writeOpenClawConfig(home, {
-          auth: {
-            profiles: {
-              "openai:default": { provider: "openai", mode: "api_key" },
-              "openai:chatgpt-default": { provider: "openai", mode: "oauth" },
-            },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-completions",
-                models: [{ id: "gpt-4o-mini", name: "Heartbeat", input: ["text"] }],
+        const configPath = await observeDoctorConfigStep("write-config", () =>
+          writeOpenClawConfig(home, {
+            auth: {
+              profiles: {
+                "openai:default": { provider: "openai", mode: "api_key" },
+                "openai:chatgpt-default": { provider: "openai", mode: "oauth" },
               },
             },
-          },
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.4",
-              models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
-              heartbeat: { model: "openai/gpt-4o-mini" },
-              subagents: { model: "openai/gpt-4o-mini" },
-            },
-            ...(multiagent ? { ownership: "explicit" } : {}),
-            entries: multiagent
-              ? {
-                  main: { heartbeat: {} },
-                  metered: {
-                    heartbeat: { model: "openai/gpt-5.4" },
-                    subagents: { model: "openai/gpt-5.4" },
-                    models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
-                  },
-                }
-              : { main: {} },
-          },
-          gateway: {
-            mode: "local",
-            port: 19473,
-            auth: { mode: "token", token: "synthetic-gateway-token" },
-          },
-        });
-        const authDir = path.join(path.dirname(configPath), "agents", "main", "agent");
-        await fs.mkdir(authDir, { recursive: true });
-        await fs.writeFile(
-          path.join(authDir, "auth-profiles.json"),
-          JSON.stringify({
-            version: 1,
-            profiles: {
-              "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
-              "openai:chatgpt-default": {
-                type: "oauth",
-                provider: "openai",
-                access: "synthetic-oauth-access",
-                refresh: "synthetic-oauth-refresh",
-                expires: Date.now() + 3_600_000,
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  api: "openai-completions",
+                  models: [{ id: "gpt-4o-mini", name: "Heartbeat", input: ["text"] }],
+                },
               },
+            },
+            agents: {
+              defaults: {
+                model: "openai/gpt-5.4",
+                models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
+                heartbeat: { model: "openai/gpt-4o-mini" },
+                subagents: { model: "openai/gpt-4o-mini" },
+              },
+              ...(multiagent ? { ownership: "explicit" } : {}),
+              entries: multiagent
+                ? {
+                    main: { heartbeat: {} },
+                    metered: {
+                      heartbeat: { model: "openai/gpt-5.4" },
+                      subagents: { model: "openai/gpt-5.4" },
+                      models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+                    },
+                  }
+                : { main: {} },
+            },
+            gateway: {
+              mode: "local",
+              port: 19473,
+              auth: { mode: "token", token: "synthetic-gateway-token" },
             },
           }),
         );
-        const ctx = await prepareDoctorContext(configPath);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        const authDir = path.join(path.dirname(configPath), "agents", "main", "agent");
+        await observeDoctorConfigStep("create-auth-directory", () =>
+          fs.mkdir(authDir, { recursive: true }),
+        );
+        await observeDoctorConfigStep("write-auth-profiles", () =>
+          fs.writeFile(
+            path.join(authDir, "auth-profiles.json"),
+            JSON.stringify({
+              version: 1,
+              profiles: {
+                "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
+                "openai:chatgpt-default": {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "synthetic-oauth-access",
+                  refresh: "synthetic-oauth-refresh",
+                  expires: Date.now() + 3_600_000,
+                },
+              },
+            }),
+          ),
+        );
+        const ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
+          prepareDoctorContext(configPath),
+        );
+        await observeDoctorConfigStep("write-config-health", () =>
+          runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+        );
         const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
         expect(ctx.updateWarnings).toEqual([
           expect.stringContaining(
@@ -98,10 +111,17 @@ describe("Doctor model billing route migration", () => {
             `Billing route changed for agents.defaults.subagents.model (agent main): ${expectedRoute}`,
           ),
         ]);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await observeDoctorConfigStep("repeat-write-config-health", () =>
+          runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+        );
         expect(ctx.updateWarnings).toHaveLength(2);
-        const repeated = await prepareDoctorContext(configPath);
-        await runWriteConfigHealth(repeated, { runPostWriteRepairs: false });
+        const repeated = await observeDoctorConfigStep(
+          "repeat-prepare-context-outer-unmeasured",
+          () => prepareDoctorContext(configPath),
+        );
+        await observeDoctorConfigStep("reloaded-write-config-health", () =>
+          runWriteConfigHealth(repeated, { runPostWriteRepairs: false }),
+        );
         expect(repeated.updateWarnings ?? []).toEqual([]);
       });
     },

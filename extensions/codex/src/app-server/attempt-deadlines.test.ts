@@ -1,6 +1,6 @@
+import { createAgentHarnessAttemptDeadlineController } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexAttemptDeadlineController } from "./attempt-deadlines.js";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 
 describe("Codex attempt deadlines", () => {
@@ -18,9 +18,10 @@ describe("Codex attempt deadlines", () => {
     const abort = new AbortController();
     const onTimeout = vi.fn();
     const onDeadlineChanged = vi.fn();
-    const controller = createCodexAttemptDeadlineController({
+    const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs,
       timeoutMs,
+      settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
       onTimeout,
       onDeadlineChanged,
@@ -132,9 +133,10 @@ describe("Codex attempt deadlines", () => {
     abort.abort("cancelled");
     const onTimeout = vi.fn();
     const onDeadlineChanged = vi.fn();
-    const controller = createCodexAttemptDeadlineController({
+    const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs: 0,
       timeoutMs: 60_000,
+      settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
       onTimeout,
       onDeadlineChanged,

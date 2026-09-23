@@ -230,6 +230,13 @@ This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
 
+iMessage resource authorization reads uncached message-to-chat membership through
+its existing read-only Messages database worker and joins reader cleanup before
+returning. The resource owner retains local executable attestation, exclusive
+account binding, and conversation matching; reply sends recheck live caller
+authority after the read. Missing or failed reads retain the existing delegated
+refusal and direct-operator behavior, without falling back to host SQLite.
+
 Administrative skill archive uploads use the shared-state worker for staging,
 expiry cleanup, commit, installation claims, lease renewal, and consumption. The
 host retains per-upload locks and temporary archive materialization. Installation
