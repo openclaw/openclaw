@@ -30,7 +30,7 @@ describe("WhatsApp participant admission", () => {
       await withRegisteredChannelIngress(
         { plugin: whatsappPlugin, config: cfg, setRuntime: setWhatsAppRuntime },
         async (runtime, retire) => {
-          const prepare = async (group: boolean, beforeBuild = () => {}) => {
+          const prepare = async (group: boolean, retireBeforeContext = false) => {
             const conversationId = group ? "120363000000000000@g.us" : sender;
             const access = await checkInboundAccessControl({
               cfg,
@@ -51,21 +51,23 @@ describe("WhatsApp participant admission", () => {
             const msg = createTestWebInboundMessage();
             msg.admission = access.admission;
             const buildContext = runtime.channel.inbound.buildContext;
+            if (retireBeforeContext) {
+              retire();
+            }
             return await prepareWhatsAppInboundContext({
               combinedBody: "hello",
               msg,
               sender: { id: sender, e164: sender },
               route: {
                 agentId: "main",
+                channel: "whatsapp",
                 accountId: "default",
                 sessionKey: `agent:main:whatsapp:${group ? "group" : "direct"}:fixture`,
                 mainSessionKey: "agent:main:main",
+                lastRoutePolicy: "session",
                 matchedBy: "default",
               },
-              buildContext: (params) => {
-                beforeBuild();
-                return buildContext(params);
-              },
+              buildContext,
             });
           };
           for (const group of [false, true]) {
@@ -86,7 +88,7 @@ describe("WhatsApp participant admission", () => {
               invoker: { state: "unknown" },
             });
           }
-          const stale = await prepare(false, retire);
+          const stale = await prepare(false, true);
           expect(
             consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(stale.ctxPayload)),
           ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
