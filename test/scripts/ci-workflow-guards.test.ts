@@ -9471,14 +9471,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       const selectedFiles = selectedConfig.test?.include ?? [];
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 6);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 10);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
         );
-        expect(selectedFiles).toContain(
+        expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
         );
       } else {

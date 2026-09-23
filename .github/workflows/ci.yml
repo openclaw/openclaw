@@ -3217,7 +3217,9 @@ jobs:
       - name: Build runtime and Control UI artifacts for real-Gateway tests
         env:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
-        run: pnpm build:ci-artifacts
+          # build-artifacts owns SDK declarations; browser/Gateway consumers need runtime bytes.
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+        run: pnpm build
 
       - name: Prove desktop resize over node and SSH
         env:

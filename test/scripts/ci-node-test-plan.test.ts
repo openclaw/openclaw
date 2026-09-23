@@ -122,6 +122,10 @@ describe("Control UI release-only inventories", () => {
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+    "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
+    "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+    "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+    "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   ]);
   const tours = [
     "ui/src/e2e/board-fixture.e2e.test.ts",
@@ -167,15 +171,17 @@ describe("Control UI release-only inventories", () => {
       changedPaths: [
         entry,
         ...tours,
-        automationManagement,
+        ...releaseOnlyRealGateway,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
       ],
     });
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
-      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)),
-    ).toEqual([automationManagement]);
+      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
+    ).toEqual(
+      uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
+    );
     expect(groups.e2e[0]?.includePatterns).toEqual(expect.arrayContaining(tours));
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
