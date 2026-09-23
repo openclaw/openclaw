@@ -864,25 +864,23 @@ describe("model-selection", () => {
     });
 
     it("carries configured model compat into catalog entries for provider policy", () => {
-      const cfg = {
-        models: {
-          providers: {
-            vllm: {
-              models: [
-                {
-                  id: "Qwen/Qwen3-8B",
-                  name: "Qwen 3 8B",
-                  reasoning: true,
-                  thinkingLevelMap: { off: null, max: "max" },
-                  compat: {
-                    thinkingFormat: "qwen-chat-template",
-                  },
+      const cfg = createConfiguredModelRefConfig({
+        providers: {
+          vllm: {
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen 3 8B",
+                reasoning: true,
+                thinkingLevelMap: { off: null, max: "max" },
+                compat: {
+                  thinkingFormat: "qwen-chat-template",
                 },
-              ],
-            },
+              },
+            ],
           },
         },
-      } as unknown as OpenClawConfig;
+      });
 
       const model = buildConfiguredModelCatalog({ cfg }).find(
         (entry) => entry.provider === "vllm" && entry.id === "Qwen/Qwen3-8B",
@@ -894,23 +892,21 @@ describe("model-selection", () => {
     });
 
     it("carries configured model params into catalog entries for provider policy", () => {
-      const cfg = {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              models: [
-                {
-                  id: "company-fable",
-                  name: "Company Fable",
-                  params: {
-                    canonicalModelId: "claude-fable-5",
-                  },
+      const cfg = createConfiguredModelRefConfig({
+        providers: {
+          "amazon-bedrock": {
+            models: [
+              {
+                id: "company-fable",
+                name: "Company Fable",
+                params: {
+                  canonicalModelId: "claude-fable-5",
                 },
-              ],
-            },
+              },
+            ],
           },
         },
-      } as unknown as OpenClawConfig;
+      });
 
       const model = buildConfiguredModelCatalog({ cfg }).find(
         (entry) => entry.provider === "amazon-bedrock" && entry.id === "company-fable",
@@ -919,23 +915,21 @@ describe("model-selection", () => {
     });
 
     it("does not infer reasoning from non-vLLM thinking compat", () => {
-      const cfg = {
-        models: {
-          providers: {
-            custom: {
-              models: [
-                {
-                  id: "custom-reasoning",
-                  name: "Custom Reasoning",
-                  compat: {
-                    thinkingFormat: "together",
-                  },
+      const cfg = createConfiguredModelRefConfig({
+        providers: {
+          custom: {
+            models: [
+              {
+                id: "custom-reasoning",
+                name: "Custom Reasoning",
+                compat: {
+                  thinkingFormat: "together",
                 },
-              ],
-            },
+              },
+            ],
           },
         },
-      } as unknown as OpenClawConfig;
+      });
 
       const model = buildConfiguredModelCatalog({ cfg }).find(
         (entry) => entry.provider === "custom" && entry.id === "custom-reasoning",
@@ -947,16 +941,12 @@ describe("model-selection", () => {
 
   describe("buildModelAliasIndex", () => {
     it("should build alias index from config", () => {
-      const cfg: Partial<OpenClawConfig> = {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-3-5-sonnet": { alias: "fast" },
-              "openai/gpt-4o": { alias: "smart" },
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        modelEntries: {
+          "anthropic/claude-3-5-sonnet": { alias: "fast" },
+          "openai/gpt-4o": { alias: "smart" },
         },
-      };
+      });
 
       const index = buildModelAliasIndex({
         cfg: cfg as OpenClawConfig,
@@ -972,16 +962,12 @@ describe("model-selection", () => {
     });
 
     it("indexes duplicate aliases by provider", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            models: {
-              "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
-              "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        modelEntries: {
+          "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+          "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
         },
-      } as OpenClawConfig;
+      });
 
       const index = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
 
@@ -1071,16 +1057,12 @@ describe("model-selection", () => {
       const models = Object.fromEntries(
         Array.from({ length: 25 }, (_, index) => [`openai/gpt-5.5-aliasless-${index}`, {}]),
       );
-      const cfg: Partial<OpenClawConfig> = {
-        agents: {
-          defaults: {
-            models: {
-              ...models,
-              "openai/gpt-5.5-mini": { alias: "mini" },
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        modelEntries: {
+          ...models,
+          "openai/gpt-5.5-mini": { alias: "mini" },
         },
-      };
+      });
 
       const index = buildModelAliasIndex({
         cfg: cfg as OpenClawConfig,
@@ -1465,23 +1447,21 @@ describe("model-selection", () => {
     );
 
     it("keeps compat catalog-owned while overlaying metadata after manifest normalization", () => {
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            nvidia: {
-              models: [
-                {
-                  id: "llama-fast",
-                  name: "Configured Llama Fast",
-                  contextWindow: 128_000,
-                  reasoning: true,
-                  compat: { thinkingFormat: "qwen" },
-                },
-              ],
-            },
+      const cfg = createConfiguredModelRefConfig({
+        providers: {
+          nvidia: {
+            models: [
+              {
+                id: "llama-fast",
+                name: "Configured Llama Fast",
+                contextWindow: 128_000,
+                reasoning: true,
+                compat: { thinkingFormat: "qwen" },
+              },
+            ],
           },
         },
-      } as unknown as OpenClawConfig;
+      });
 
       const result = buildAllowedModelSet({
         cfg,
@@ -1502,29 +1482,23 @@ describe("model-selection", () => {
     });
 
     it("keeps configured provider models visible when the catalog is otherwise allow-any", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "ollama/existing" },
+      const cfg = createConfiguredModelRefConfig({
+        primary: "ollama/existing",
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [
+              {
+                id: "glm-5.1:cloud",
+                name: "GLM 5.1 Cloud",
+                contextWindow: 131_072,
+              },
+            ],
           },
         },
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
-              api: "ollama",
-              apiKey: "ollama-local",
-              models: [
-                {
-                  id: "glm-5.1:cloud",
-                  name: "GLM 5.1 Cloud",
-                  contextWindow: 131_072,
-                },
-              ],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
+      });
 
       const result = buildAllowedModelSet({
         cfg,
@@ -2048,20 +2022,16 @@ describe("model-selection", () => {
     ])(
       "keeps configured reference syntax and alias priority for $raw",
       ({ raw, alias, expected }) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: { models: { "provider/literal": { alias: alias ?? "team/quick" } } },
-          },
-          models: {
-            providers: {
-              provider: {
-                api: "openai-completions",
-                baseUrl: "https://provider.example/v1",
-                models: [],
-              },
+        const cfg = createConfiguredModelRefConfig({
+          modelEntries: { "provider/literal": { alias: alias ?? "team/quick" } },
+          providers: {
+            provider: {
+              api: "openai-completions",
+              baseUrl: "https://provider.example/v1",
+              models: [],
             },
           },
-        };
+        });
         const resolved = resolveModelRefFromString({
           cfg,
           raw,
@@ -2255,16 +2225,12 @@ describe("model-selection", () => {
 
   describe("resolveConfiguredModelRef", () => {
     it("should infer the unique provider from configured models for bare defaults", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "claude-opus-4-6" },
-            models: {
-              "anthropic/claude-opus-4-6": {},
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        primary: "claude-opus-4-6",
+        modelEntries: {
+          "anthropic/claude-opus-4-6": {},
         },
-      } as OpenClawConfig;
+      });
 
       const result = resolveConfiguredModelRef({
         cfg,
@@ -2278,13 +2244,9 @@ describe("model-selection", () => {
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", async () => {
       const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
-        const cfg: Partial<OpenClawConfig> = {
-          agents: {
-            defaults: {
-              model: { primary: "claude-3-5-sonnet" },
-            },
-          },
-        };
+        const cfg = createConfiguredModelRefConfig({
+          primary: "claude-3-5-sonnet",
+        });
 
         const result = resolveConfiguredModelRef({
           cfg: cfg as OpenClawConfig,
@@ -2337,16 +2299,12 @@ describe("model-selection", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        const cfg = {
-          agents: {
-            defaults: {
-              model: { primary: "claude-opus-4-6" },
-              models: {
-                "anthropic/claude-opus-4-6": {},
-              },
-            },
+        const cfg = createConfiguredModelRefConfig({
+          primary: "claude-opus-4-6",
+          modelEntries: {
+            "anthropic/claude-opus-4-6": {},
           },
-        } as OpenClawConfig;
+        });
 
         const result = resolveConfiguredModelRef({
           cfg,
@@ -2364,20 +2322,14 @@ describe("model-selection", () => {
     });
 
     it("normalizes bare configured default model strings with manifest policies", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "llama-fast" },
+      const cfg = createConfiguredModelRefConfig({
+        primary: "llama-fast",
+        providers: {
+          nvidia: {
+            models: [{ id: "llama-fast" }],
           },
         },
-        models: {
-          providers: {
-            nvidia: {
-              models: [{ id: "llama-fast" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
+      });
 
       const result = resolveConfiguredModelRef({
         cfg,
@@ -2598,27 +2550,25 @@ describe("model-selection", () => {
     });
 
     it("uses a configured custom provider when the default is only an empty overlay", () => {
-      const cfg = {
-        models: {
-          providers: {
-            openai: { baseUrl: "https://openai.example.com/v1", models: [] },
-            "local-provider": {
-              baseUrl: "http://127.0.0.1:9191/v1",
-              models: [
-                {
-                  id: "local-good",
-                  name: "Local Good",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 4_096,
-                },
-              ],
-            },
+      const cfg = createConfiguredModelRefConfig({
+        providers: {
+          openai: { baseUrl: "https://openai.example.com/v1", models: [] },
+          "local-provider": {
+            baseUrl: "http://127.0.0.1:9191/v1",
+            models: [
+              {
+                id: "local-good",
+                name: "Local Good",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4_096,
+              },
+            ],
           },
         },
-      } as OpenClawConfig;
+      });
 
       expect(
         resolveConfiguredModelRef({
@@ -2734,13 +2684,9 @@ describe("model-selection", () => {
     });
 
     it("resolves openrouter:auto through the canonical OpenRouter auto model", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openrouter:auto" },
-          },
-        },
-      } as OpenClawConfig;
+      const cfg = createConfiguredModelRefConfig({
+        primary: "openrouter:auto",
+      });
 
       const result = resolveConfiguredModelRef({
         cfg,
@@ -2752,16 +2698,12 @@ describe("model-selection", () => {
     });
 
     it("resolves openrouter:free to the first configured concrete OpenRouter free model", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openrouter:free" },
-            models: {
-              "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        primary: "openrouter:free",
+        modelEntries: {
+          "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
         },
-      } as OpenClawConfig;
+      });
 
       const result = resolveConfiguredModelRef({
         cfg,
@@ -2799,31 +2741,25 @@ describe("model-selection", () => {
     });
 
     it("resolves openrouter:free from configured OpenRouter provider models when needed", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openrouter:free" },
+      const cfg = createConfiguredModelRefConfig({
+        primary: "openrouter:free",
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [
+              {
+                id: "deepseek/deepseek-r1-0528:free",
+                name: "DeepSeek R1 Free",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+              },
+            ],
           },
         },
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.ai/api/v1",
-              models: [
-                {
-                  id: "deepseek/deepseek-r1-0528:free",
-                  name: "DeepSeek R1 Free",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig;
+      });
 
       const result = resolveConfiguredModelRef({
         cfg,
@@ -2838,15 +2774,11 @@ describe("model-selection", () => {
     });
 
     it("resolves openrouter:free through the allowed-model interactive path", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
-            },
-          },
+      const cfg = createConfiguredModelRefConfig({
+        modelEntries: {
+          "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
         },
-      } as OpenClawConfig;
+      });
 
       const catalog = [
         {
@@ -2873,33 +2805,27 @@ describe("model-selection", () => {
     });
 
     it("treats raw openrouter:free allowlist entries as allowed in the legacy resolver path", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter:free": {},
-            },
+      const cfg = createConfiguredModelRefConfig({
+        modelEntries: {
+          "openrouter:free": {},
+        },
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [
+              {
+                id: "deepseek/deepseek-r1-0528:free",
+                name: "DeepSeek R1 Free",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+              },
+            ],
           },
         },
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.ai/api/v1",
-              models: [
-                {
-                  id: "deepseek/deepseek-r1-0528:free",
-                  name: "DeepSeek R1 Free",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig;
+      });
 
       const catalog = [
         {

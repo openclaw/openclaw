@@ -434,22 +434,53 @@ describe("model-selection plugin runtime normalization", () => {
         hasModelDirective: true,
       });
 
-    const firstPromise = select(firstConfig, "first");
-    await firstCatalogLoadStarted;
-    const secondPromise = select(secondConfig, "second");
-    await vi.waitFor(() => expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2));
-    releaseFirstCatalogLoad?.();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    const pending: Promise<unknown>[] = [];
+    let catalogReleased = false;
+    try {
+      const firstPromise = select(firstConfig, "first");
+      const firstStopped = firstPromise.then(() => {
+        if (!catalogReleased) {
+          throw new Error("First selection completed before its catalog was released");
+        }
+      });
+      pending.push(firstPromise, firstStopped);
+      await Promise.race([firstCatalogLoadStarted, firstStopped]);
 
-    expect([...first.allowedModelKeys]).toContain("custom-provider/first");
-    expect([...first.allowedModelKeys]).not.toContain("custom-provider/second");
-    expect([...second.allowedModelKeys]).toContain("custom-provider/second");
-    expect([...second.allowedModelKeys]).not.toContain("custom-provider/first");
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(getCurrentPluginMetadataSnapshotMock.mock.calls).toEqual([
-      [{ config: firstConfig, allowWorkspaceScopedSnapshot: true }],
-      [{ config: secondConfig, allowWorkspaceScopedSnapshot: true }],
-    ]);
+      const secondPromise = select(secondConfig, "second");
+      const secondStopped = secondPromise.then(() => {
+        expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2);
+      });
+      pending.push(secondPromise, secondStopped);
+      const bothCatalogsStarted = vi.waitFor(() =>
+        expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2),
+      );
+      pending.push(bothCatalogsStarted);
+      await Promise.race([bothCatalogsStarted, firstStopped, secondStopped]);
+      catalogReleased = true;
+      releaseFirstCatalogLoad?.();
+      const [first, second] = await Promise.all([
+        firstPromise,
+        secondPromise,
+        firstStopped,
+        secondStopped,
+      ]);
+
+      expect([...first.allowedModelKeys]).toContain("custom-provider/first");
+      expect([...first.allowedModelKeys]).not.toContain("custom-provider/second");
+      expect([...second.allowedModelKeys]).toContain("custom-provider/second");
+      expect([...second.allowedModelKeys]).not.toContain("custom-provider/first");
+      expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(2);
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls).toEqual([
+        [{ config: firstConfig, allowWorkspaceScopedSnapshot: true }],
+        [{ config: secondConfig, allowWorkspaceScopedSnapshot: true }],
+      ]);
+    } finally {
+      // Release and join every started producer even when admission or an assertion fails.
+      // allSettled observes peer failures without replacing the original failure.
+      catalogReleased = true;
+      releaseFirstCatalogLoad?.();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("preserves runtime discovery fallback across configured, stored, and fallback refs", async () => {

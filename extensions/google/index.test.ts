@@ -1,6 +1,5 @@
 // Google tests cover index plugin behavior.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
@@ -12,7 +11,8 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
@@ -25,6 +25,9 @@ const googleProviderPlugin = {
 };
 
 describe("google provider plugin hooks", () => {
+  const lifetime = createFixtureLifetime();
+  afterEach(() => lifetime.cleanup());
+
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -176,138 +179,148 @@ describe("google provider plugin hooks", () => {
     ).toBe("native");
   });
 
-  it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
-    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
-    await writeFile(
-      credentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "client-id",
-        client_secret: "client-secret",
-        refresh_token: "refresh-token",
-      }),
-      "utf8",
-    );
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
-    const provider = requireRegisteredProvider(providers, "google-vertex");
-
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: {
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_PROJECT: "vertex-project",
-          GOOGLE_CLOUD_LOCATION: "global",
-        },
-      }),
-    ).toBe("gcp-vertex-credentials");
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: {
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_PROJECT: "",
-          GCLOUD_PROJECT: "vertex-project",
-          GOOGLE_CLOUD_LOCATION: "global",
-        },
-      }),
-    ).toBe("gcp-vertex-credentials");
-    expect(
-      googleProviderDiscovery.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: {
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_PROJECT: "vertex-project",
-          GOOGLE_CLOUD_LOCATION: "global",
-        },
-      }),
-    ).toBe("gcp-vertex-credentials");
-  });
-
-  it("prefers relocated Google Cloud SDK ADC over the home fallback", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-cloud-sdk-"));
-    const cloudSdkDir = path.join(tempDir, "cloud-sdk");
-    const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
-    await Promise.all([
-      mkdir(cloudSdkDir, { recursive: true }),
-      mkdir(homeCredentialsDir, { recursive: true }),
-    ]);
-    const relocatedCredentialsPath = path.join(cloudSdkDir, "application_default_credentials.json");
-    const homeCredentialsPath = path.join(
-      homeCredentialsDir,
-      "application_default_credentials.json",
-    );
-    await Promise.all([
-      writeFile(
-        relocatedCredentialsPath,
+  it("resolves Google Vertex ADC auth evidence to the config marker", () =>
+    lifetime.run(async () => {
+      const tempDir = lifetime.createTempDir("openclaw-google-vertex-config-key-");
+      const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+      await writeFile(
+        credentialsPath,
         JSON.stringify({
           type: "authorized_user",
-          client_id: "fixture-client",
-          client_secret: "fixture-secret",
-          refresh_token: "fixture-refresh",
+          client_id: "client-id",
+          client_secret: "client-secret",
+          refresh_token: "refresh-token",
         }),
         "utf8",
-      ),
-      writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
-    ]);
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
-    const provider = requireRegisteredProvider(providers, "google-vertex");
-    const env = {
-      CLOUDSDK_CONFIG: cloudSdkDir,
-      HOME: path.join(tempDir, "home"),
-      GOOGLE_CLOUD_PROJECT: "fixture-project",
-      GOOGLE_CLOUD_LOCATION: "global",
-    };
+      );
+      const { providers } = await registerProviderPlugin({
+        plugin: googleProviderPlugin,
+        id: "google",
+        name: "Google Provider",
+      });
+      const provider = requireRegisteredProvider(providers, "google-vertex");
 
-    expect(provider.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
-      "gcp-vertex-credentials",
-    );
-    expect(googleProviderDiscovery.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
-      "gcp-vertex-credentials",
-    );
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: { ...env, GOOGLE_APPLICATION_CREDENTIALS: homeCredentialsPath },
-      }),
-    ).toBeUndefined();
+      expect(
+        provider.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: {
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          },
+        }),
+      ).toBe("gcp-vertex-credentials");
+      expect(
+        provider.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: {
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "",
+            GCLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          },
+        }),
+      ).toBe("gcp-vertex-credentials");
+      expect(
+        googleProviderDiscovery.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: {
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          },
+        }),
+      ).toBe("gcp-vertex-credentials");
+    }));
 
-    await writeFile(
-      homeCredentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "stale-client",
-        client_secret: "stale-secret",
-        refresh_token: "stale-refresh",
-      }),
-      "utf8",
-    );
-    const missingRelocatedCredentialsEnv = {
-      ...env,
-      CLOUDSDK_CONFIG: path.join(tempDir, "missing-cloud-sdk"),
-    };
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: missingRelocatedCredentialsEnv,
-      }),
-    ).toBeUndefined();
-    expect(
-      googleProviderDiscovery.resolveConfigApiKey?.({
-        provider: "google-vertex",
-        env: missingRelocatedCredentialsEnv,
-      }),
-    ).toBeUndefined();
-  });
+  it("prefers relocated Google Cloud SDK ADC over the home fallback", () =>
+    lifetime.run(async () => {
+      const tempDir = lifetime.createTempDir("openclaw-google-vertex-cloud-sdk-");
+      const cloudSdkDir = path.join(tempDir, "cloud-sdk");
+      const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
+      // Keep sibling filesystem operations owned if Promise.all rejects early.
+      await Promise.all([
+        lifetime.track(mkdir(cloudSdkDir, { recursive: true })),
+        lifetime.track(mkdir(homeCredentialsDir, { recursive: true })),
+      ]);
+      const relocatedCredentialsPath = path.join(
+        cloudSdkDir,
+        "application_default_credentials.json",
+      );
+      const homeCredentialsPath = path.join(
+        homeCredentialsDir,
+        "application_default_credentials.json",
+      );
+      await Promise.all([
+        lifetime.track(
+          writeFile(
+            relocatedCredentialsPath,
+            JSON.stringify({
+              type: "authorized_user",
+              client_id: "fixture-client",
+              client_secret: "fixture-secret",
+              refresh_token: "fixture-refresh",
+            }),
+            "utf8",
+          ),
+        ),
+        lifetime.track(
+          writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
+        ),
+      ]);
+      const { providers } = await registerProviderPlugin({
+        plugin: googleProviderPlugin,
+        id: "google",
+        name: "Google Provider",
+      });
+      const provider = requireRegisteredProvider(providers, "google-vertex");
+      const env = {
+        CLOUDSDK_CONFIG: cloudSdkDir,
+        HOME: path.join(tempDir, "home"),
+        GOOGLE_CLOUD_PROJECT: "fixture-project",
+        GOOGLE_CLOUD_LOCATION: "global",
+      };
+
+      expect(provider.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
+        "gcp-vertex-credentials",
+      );
+      expect(
+        googleProviderDiscovery.resolveConfigApiKey?.({ provider: "google-vertex", env }),
+      ).toBe("gcp-vertex-credentials");
+      expect(
+        provider.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: { ...env, GOOGLE_APPLICATION_CREDENTIALS: homeCredentialsPath },
+        }),
+      ).toBeUndefined();
+
+      await writeFile(
+        homeCredentialsPath,
+        JSON.stringify({
+          type: "authorized_user",
+          client_id: "stale-client",
+          client_secret: "stale-secret",
+          refresh_token: "stale-refresh",
+        }),
+        "utf8",
+      );
+      const missingRelocatedCredentialsEnv = {
+        ...env,
+        CLOUDSDK_CONFIG: path.join(tempDir, "missing-cloud-sdk"),
+      };
+      expect(
+        provider.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: missingRelocatedCredentialsEnv,
+        }),
+      ).toBeUndefined();
+      expect(
+        googleProviderDiscovery.resolveConfigApiKey?.({
+          provider: "google-vertex",
+          env: missingRelocatedCredentialsEnv,
+        }),
+      ).toBeUndefined();
+    }));
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
@@ -368,9 +381,8 @@ describe("google provider plugin hooks", () => {
     });
     const googleProvider = requireRegisteredProvider(providers, "google");
     const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
-    const capturedStream = createCapturedThinkingConfigStream();
-
     const runCase = (provider: typeof googleProvider, providerId: string) => {
+      const capturedStream = createCapturedThinkingConfigStream();
       const wrapped = provider.wrapStreamFn?.({
         provider: providerId,
         modelId: "gemini-3.1-pro-preview",

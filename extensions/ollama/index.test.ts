@@ -38,32 +38,12 @@ const fetchLoadedOllamaModelNamesMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredSecretInputStringMock = vi.hoisted(() => vi.fn());
-const buildOllamaModelDefinitionMock = vi.hoisted(() =>
-  vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
-    const normalized = modelId.trim().toLowerCase();
-    const isKnownCloudReasoningModel =
-      normalized === "glm-5.2:cloud" || /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
-    return {
-      id: modelId,
-      name: modelId,
-      reasoning: isKnownCloudReasoningModel || (capabilities?.includes("thinking") ?? false),
-      input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: contextWindow ?? (normalized === "glm-5.2:cloud" ? 1_000_000 : 8192),
-      maxTokens: 8192,
-      compat: capabilities
-        ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
-        : { supportsUsageInStreaming: true },
-    };
-  }),
-);
 const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
   vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => (() => ({})) as never),
 );
 
 vi.mock("./src/provider-models.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/provider-models.js")>()),
-  buildOllamaModelDefinition: buildOllamaModelDefinitionMock,
   buildOllamaProvider: buildOllamaProviderMock,
   fetchOllamaModels: fetchOllamaModelsMock,
   fetchLoadedOllamaModelNames: fetchLoadedOllamaModelNamesMock,
@@ -118,7 +98,6 @@ beforeEach(() => {
     contextWindow: 32_768,
     capabilities: ["completion", "tools"],
   });
-  buildOllamaModelDefinitionMock.mockClear();
   createConfiguredOllamaStreamFnMock.mockClear();
 });
 
@@ -1677,6 +1656,7 @@ describe("ollama plugin", () => {
         compat: {
           supportsTools: true,
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: false,
         },
       }),
     ]);
@@ -2070,6 +2050,7 @@ describe("ollama plugin", () => {
         compat: {
           supportsTools: true,
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: false,
         },
       }),
     ]);
@@ -2103,6 +2084,7 @@ describe("ollama plugin", () => {
         compat: {
           supportsTools: true,
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: false,
         },
       }),
     ]);
@@ -2438,7 +2420,7 @@ describe("ollama plugin", () => {
 
   it("uses Ollama Cloud auth for live catalog discovery", async () => {
     const provider = registerOllamaCloudProvider();
-    mockDiscoveredOllamaProvider([buildOllamaModelDefinitionMock("glm-5.2")], {
+    mockDiscoveredOllamaProvider([{ id: "glm-5.2", name: "glm-5.2" }], {
       baseUrl: "https://ollama.com",
       once: true,
     });
@@ -2464,7 +2446,7 @@ describe("ollama plugin", () => {
 
   it("confirms GLM-5.2 with authenticated show when cloud tags omit it", async () => {
     const provider = registerOllamaCloudProvider();
-    mockDiscoveredOllamaProvider([buildOllamaModelDefinitionMock("kimi-k2.6")], {
+    mockDiscoveredOllamaProvider([{ id: "kimi-k2.6", name: "kimi-k2.6" }], {
       baseUrl: "https://ollama.com",
       once: true,
     });

@@ -22,7 +22,6 @@ import {
   TEST_SECONDARY_PROFILE_ID,
   withAuthState,
 } from "./session-override.test-support.js";
-import type { AuthProfileStore } from "./types.js";
 
 describe("resolveSessionAuthProfileOverride", () => {
   it("returns early when no auth sources exist", async () => {
@@ -334,9 +333,9 @@ describe("resolveSessionAuthProfileOverride", () => {
           openai: [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
         },
       });
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store: AuthProfileStore, profileId: string) => profileId === TEST_PRIMARY_PROFILE_ID,
-      );
+      authStoreMocks.state.store.usageStats = {
+        [TEST_PRIMARY_PROFILE_ID]: { cooldownUntil: Date.now() + 60_000 },
+      };
 
       const sessionEntry: SessionEntry = {
         sessionId: "s1",
@@ -412,9 +411,9 @@ describe("resolveSessionAuthProfileOverride", () => {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
-      );
+      authStoreMocks.state.store.usageStats = {
+        [TEST_PRIMARY_PROFILE_ID]: { cooldownUntil: Date.now() + 60_000 },
+      };
 
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -671,7 +670,6 @@ describe("resolveSessionAuthProfileOverride", () => {
             : undefined,
           usageStats: { [TEST_PRIMARY_PROFILE_ID]: createStats(Date.now() + 60_000) },
         });
-        authStoreMocks.isProfileInCooldown.mockReturnValue(false);
 
         const sessionEntry = createAutomaticSessionEntry({
           model: "model-y",

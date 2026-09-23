@@ -16,7 +16,6 @@ import { resolveModelRoutes } from "./provider-policy-api.js";
 
 const mocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
-  openAIResponsesTransportStreamFn: vi.fn(),
   resolveApiKeyForProvider: vi.fn(),
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
@@ -125,61 +124,6 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
-  const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
-    ctx,
-  ) => {
-    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn);
-
-    if (actual.resolveOpenAIFastMode(ctx.extraParams)) {
-      nextStreamFn = actual.createOpenAIFastModeWrapper(nextStreamFn);
-    }
-
-    const serviceTier = actual.resolveOpenAIServiceTier(ctx.extraParams);
-    if (serviceTier) {
-      nextStreamFn = actual.createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
-    }
-
-    const textVerbosity = actual.resolveOpenAITextVerbosity(ctx.extraParams);
-    if (textVerbosity) {
-      nextStreamFn = actual.createOpenAITextVerbosityWrapper(nextStreamFn, textVerbosity);
-    }
-
-    nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
-      config: ctx.config,
-      agentDir: ctx.agentDir,
-      agentId: ctx.agentId,
-    });
-    return actual.createOpenAIResponsesContextManagementWrapper(
-      actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
-      ctx.extraParams,
-    );
-  };
-
-  return {
-    buildProviderStreamFamilyHooks: actual.buildProviderStreamFamilyHooks,
-    createCodexNativeWebSearchWrapper: actual.createCodexNativeWebSearchWrapper,
-    createOpenAIAttributionHeadersWrapper: actual.createOpenAIAttributionHeadersWrapper,
-    createOpenAIFastModeWrapper: actual.createOpenAIFastModeWrapper,
-    createOpenAIReasoningCompatibilityWrapper: actual.createOpenAIReasoningCompatibilityWrapper,
-    createOpenAIResponsesContextManagementWrapper:
-      actual.createOpenAIResponsesContextManagementWrapper,
-    createOpenAIServiceTierWrapper: actual.createOpenAIServiceTierWrapper,
-    createOpenAITextVerbosityWrapper: actual.createOpenAITextVerbosityWrapper,
-    getOpenRouterModelCapabilities: actual.getOpenRouterModelCapabilities,
-    loadOpenRouterModelCapabilities: actual.loadOpenRouterModelCapabilities,
-    resolveOpenAIFastMode: actual.resolveOpenAIFastMode,
-    resolveOpenAIServiceTier: actual.resolveOpenAIServiceTier,
-    resolveOpenAITextVerbosity: actual.resolveOpenAITextVerbosity,
-    OPENAI_RESPONSES_STREAM_HOOKS: {
-      ...actual.OPENAI_RESPONSES_STREAM_HOOKS,
-      wrapStreamFn,
-    },
-  };
-});
-
 const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${readPinnedCodexClientVersion()}`;
 
 function readPinnedCodexClientVersion(): string {
@@ -268,10 +212,6 @@ describe("buildOpenAIProvider", () => {
     clearLiveCatalogCacheForTests();
     mocks.resolveApiKeyForProvider.mockReset();
     mocks.resolveProviderAuthProfileMetadata.mockReset();
-    mocks.openAIResponsesTransportStreamFn.mockReset();
-    mocks.openAIResponsesTransportStreamFn.mockImplementation(() => {
-      throw new Error("unexpected native OpenAI Responses transport call");
-    });
   });
 
   afterEach(() => {

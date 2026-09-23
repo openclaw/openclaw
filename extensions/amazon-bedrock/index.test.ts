@@ -1247,22 +1247,13 @@ describe("amazon-bedrock provider plugin", () => {
       const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
 
-      // Regular model IDs contain "claude" so the shared runtime handles caching natively.
-      // wrapStreamFn should not install an onPayload hook for these.
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId: ANTHROPIC_MODEL,
-        streamFn: spyStreamFn,
-      } as never);
-
-      const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
-        cacheRetention: "short",
-      }) as unknown as Record<string, unknown>;
-
-      // For regular Anthropic models, no onPayload should be installed for cache injection.
-      if (typeof result?.onPayload === "function") {
-        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
-      }
+      await callWrappedStreamWithPayload(
+        provider,
+        ANTHROPIC_MODEL,
+        ANTHROPIC_MODEL_DESCRIPTOR,
+        { cacheRetention: "short" },
+        payload,
+      );
 
       const system = payload.system as Array<Record<string, unknown>>;
       expect(system).toHaveLength(1);
@@ -1275,19 +1266,13 @@ describe("amazon-bedrock provider plugin", () => {
 
       // Claude 3 Opus is not in the shared runtime supportsPromptCaching list, but it's
       // also not an application inference profile — we should not inject.
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId: oldClaudeModel,
-        streamFn: spyStreamFn,
-      } as never);
-
-      const result = wrapped?.({ id: oldClaudeModel } as never, { messages: [] } as never, {
-        cacheRetention: "short",
-      }) as unknown as Record<string, unknown>;
-
-      if (typeof result?.onPayload === "function") {
-        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
-      }
+      await callWrappedStreamWithPayload(
+        provider,
+        oldClaudeModel,
+        { id: oldClaudeModel } as never,
+        { cacheRetention: "short" },
+        payload,
+      );
 
       const system = payload.system as Array<Record<string, unknown>>;
       expect(system).toHaveLength(1);

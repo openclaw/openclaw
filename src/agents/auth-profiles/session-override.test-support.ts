@@ -28,7 +28,7 @@ const authStoreMocks = vi.hoisted(() => {
   };
   const ensureAuthProfileStore = vi.fn(() => state.store);
   const hasAnyAuthProfileStoreSource = vi.fn(() => state.hasSource);
-  const isProfileInCooldown = vi.fn((_store: AuthProfileStore, _profileId: string) => false);
+  const isProfileInCooldown = vi.fn<typeof import("./usage-state.js").isProfileInCooldown>();
   const resolveProviderModelRoutes = vi.fn(
     ({ provider, modelId }: { provider: string; modelId?: string }) =>
       state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
@@ -45,9 +45,7 @@ const authStoreMocks = vi.hoisted(() => {
       state.store = { version: 1, profiles: {} };
       ensureAuthProfileStore.mockReset().mockImplementation(() => state.store);
       hasAnyAuthProfileStoreSource.mockReset().mockImplementation(() => state.hasSource);
-      isProfileInCooldown
-        .mockReset()
-        .mockImplementation((_store: AuthProfileStore, _profileId: string) => false);
+      isProfileInCooldown.mockClear();
       resolveProviderModelRoutes
         .mockReset()
         .mockImplementation(
@@ -69,9 +67,12 @@ vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
 }));
 
-vi.mock("./usage.js", () => ({
-  isProfileInCooldown: authStoreMocks.isProfileInCooldown,
-}));
+vi.mock("./usage.js", async () => {
+  const { isProfileInCooldown } = await import("./usage-state.js");
+  return {
+    isProfileInCooldown: authStoreMocks.isProfileInCooldown.mockImplementation(isProfileInCooldown),
+  };
+});
 
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   // Synthetic route IDs in this fixture are already canonical.
@@ -153,9 +154,12 @@ export async function prepareCooldownAuthState(
       ),
       order: { openai: profileIds },
     }),
-    ...(options.usageStats ? { usageStats: options.usageStats } : {}),
+    usageStats:
+      options.usageStats ??
+      Object.fromEntries(
+        profileIds.map((profileId) => [profileId, { cooldownUntil: Date.now() + 60_000 }]),
+      ),
   };
-  authStoreMocks.isProfileInCooldown.mockReturnValue(true);
   return agentDir;
 }
 

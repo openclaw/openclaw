@@ -36,7 +36,6 @@ describe("explicit auth-profile pin lifecycle", () => {
   beforeEach(() => {
     authStoreMocks.state.hasSource = true;
     authStoreMocks.state.store = createStore([TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID]);
-    authStoreMocks.isProfileInCooldown.mockReturnValue(false);
   });
 
   it.each([

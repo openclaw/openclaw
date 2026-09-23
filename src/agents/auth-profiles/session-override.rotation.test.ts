@@ -12,7 +12,6 @@ import {
   TEST_SECONDARY_PROFILE_ID,
   withAuthState,
 } from "./session-override.test-support.js";
-import type { AuthProfileStore } from "./types.js";
 
 const OPENAI_MODEL_ID = "gpt-5.6-sol";
 const API_PRIMARY_PROFILE_ID = "openai:api-primary";
@@ -76,9 +75,6 @@ function createTriggeredSessionEntry(params: {
         cooldownReason: "rate_limit",
       },
     };
-    authStoreMocks.isProfileInCooldown.mockImplementation(
-      (_store: AuthProfileStore, profileId: string) => profileId === params.profileId,
-    );
   }
   return createAutomaticSessionEntry({
     model: params.model,
@@ -282,11 +278,9 @@ describe("session auth-profile rotation", () => {
     await withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state, {
         profileIds: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+        usageStats: { [TEST_PRIMARY_PROFILE_ID]: { cooldownUntil: Date.now() + 60_000 } },
       });
       authStoreMocks.state.store.order = undefined;
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store: AuthProfileStore, profileId: string) => profileId === TEST_PRIMARY_PROFILE_ID,
-      );
       const sessionEntry = createAutomaticSessionEntry();
       const sessionStore = { "agent:main:main": sessionEntry };
 
@@ -303,10 +297,6 @@ describe("session auth-profile rotation", () => {
       const agentDir = await prepareCooldownAuthState(state, {
         usageStats: { [TEST_PRIMARY_PROFILE_ID]: { cooldownUntil: Date.now() - 1 } },
       });
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (store: AuthProfileStore, profileId: string) =>
-          (store.usageStats?.[profileId]?.cooldownUntil ?? 0) > Date.now(),
-      );
       const sessionEntry = createAutomaticSessionEntry({ authProfileOverrideCompactionCount: 0 });
       const sessionStore = { "agent:main:main": sessionEntry };
 
