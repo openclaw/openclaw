@@ -422,6 +422,50 @@ describe("relay command authorization", () => {
     expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
   });
 
+  it("reports manual selected-tab grouping failures", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: TEST_RELAY_KEY,
+        authVersion: 2,
+        accessMode: "selected",
+      },
+      initialTabs: [{ id: 207, url: "https://example.com/manual-group", groupId: -1 }],
+    });
+    harness.tabsGroup.mockRejectedValueOnce(new Error("group failed"));
+
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 207,
+        accessMode: "selected",
+        grant: true,
+      }),
+    ).resolves.toEqual({ ok: false, error: "group failed" });
+  });
+
+  it("reports manual selected-tab naming failures", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: TEST_RELAY_KEY,
+        authVersion: 2,
+        accessMode: "selected",
+      },
+      initialTabs: [{ id: 208, url: "https://example.com/manual-name", groupId: -1 }],
+    });
+    harness.tabGroupsUpdate.mockRejectedValueOnce(new Error("name failed"));
+
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 208,
+        accessMode: "selected",
+        grant: true,
+      }),
+    ).resolves.toEqual({ ok: false, error: "name failed" });
+  });
+
   it("keeps a Selected barrier ahead of a queued All-mode widening", async () => {
     const harness = await loadBackground({
       storedConfig: {

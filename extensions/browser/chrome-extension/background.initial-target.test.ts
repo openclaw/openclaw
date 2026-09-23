@@ -57,22 +57,16 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
         harness.updateTab(101, { pendingUrl: url });
         harness.updateTab(101, { url, pendingUrl: undefined });
         if (failGrouping) {
+          harness.updateTab(101, { groupId: 7 });
           throw new Error("group failed");
         }
         return await group(params);
       });
-      const expectedType = failGrouping && url !== "about:blank" ? "error" : "result";
-      expect(await harness.command({ type: "createTab", url })).toMatchObject({
-        type: expectedType,
+      expect(await harness.command({ type: "createTab", url })).toMatchObject({ type: "result" });
+      expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
+      expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
+        type: "result",
       });
-      if (expectedType === "error") {
-        expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
-      } else {
-        expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
-        expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
-          type: "result",
-        });
-      }
     },
   );
 
@@ -95,6 +89,89 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       ).resolves.toMatchObject({ accessible: false });
     });
   });
+  it("rejects fallback authority after a delayed group departure before browser I/O", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 });
+      throw new Error("group identity unavailable");
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "result",
+    });
+    harness.debuggerSendCommand.mockClear();
+    harness.updateTab(101, { groupId: -1 }, false);
+    expect(
+      await harness.command({ type: "cdp", tabId: 101, method: "Runtime.evaluate" }),
+    ).toMatchObject({
+      type: "error",
+    });
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects fallback authority if the tab departs before debugger attachment", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    const originalGet = harness.tabsGet.getMockImplementation()!;
+    const fallbackRead = deferred(undefined);
+    let fallbackReadStarted = false;
+    let holdFallbackRead = false;
+    harness.tabsGet.mockImplementation(async (tabId) => {
+      const tab = await originalGet(tabId);
+      if (holdFallbackRead && tabId === 101) {
+        holdFallbackRead = false;
+        fallbackReadStarted = true;
+        await fallbackRead.promise;
+      }
+      return tab;
+    });
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      holdFallbackRead = true;
+      harness.updateTab(101, { groupId: 7 }, false);
+      throw new Error("group identity unavailable");
+    });
+    const creating = harness.command({ type: "createTab", url: "about:blank" });
+    await vi.waitFor(() => expect(fallbackReadStarted).toBe(true));
+    harness.updateTab(101, { groupId: -1 }, false);
+    fallbackRead.resolve();
+    expect(await creating).toMatchObject({ type: "error" });
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+  });
+
+  it("retires fallback authority on explicit selected-mode revocation", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 });
+      throw new Error("group identity unavailable");
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "result",
+    });
+    harness.debuggerSendCommand.mockClear();
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 101,
+        accessMode: "selected",
+        grant: false,
+      }),
+    ).resolves.toMatchObject({ ok: true, accessible: false });
+    expect(
+      await harness.command({ type: "cdp", tabId: 101, method: "Runtime.evaluate" }),
+    ).toMatchObject({
+      type: "error",
+    });
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "accepts initial HTTP redirects (attach failure: %s) without reclaiming a changed destination",
     async (failAttach) => {
@@ -336,7 +413,10 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       const harness = await createHarness(mode);
       const failure = new Error(`${stage} failed`);
       if (stage === "group") {
-        harness.tabsGroup.mockRejectedValueOnce(failure);
+        harness.tabsGroup.mockImplementationOnce(async () => {
+          harness.updateTab(101, { groupId: 7 });
+          throw failure;
+        });
       } else {
         harness.tabGroupsUpdate.mockRejectedValueOnce(failure);
       }

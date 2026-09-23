@@ -18,23 +18,46 @@ export async function isTabSelected(tab) {
 
 export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created }) {
   const assertCurrent = () => created?.assertCurrent();
-  const fallback = async () => {
-    if (created) {
-      // Some Chromium shells expose grouping but do not reliably expose the
-      // resulting group identity. Keep this exception scoped to creation.
-      created.groupFallback = true;
-      created.grouping = false;
-      created.expectedGroupId = undefined;
-      try {
-        const currentTab = await chromeApi.tabs.get(tabId);
-        if (Number.isInteger(currentTab.groupId) && currentTab.groupId >= 0) {
-          created.groupId = currentTab.groupId;
-        }
-      } catch {
-        // Keep the fallback scoped to this creation even if the follow-up
-        // snapshot is unavailable.
-      }
+  const fallback = async (error) => {
+    if (!created) {
+      throw error instanceof Error ? error : new Error(String(error));
     }
+    let currentTab;
+    try {
+      currentTab = await chromeApi.tabs.get(tabId);
+    } catch {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    assertCurrent();
+    const fallbackGroupId = currentTab.groupId;
+    // The first snapshot can have been queued before the grouping failure was
+    // observed. Re-read after the authority check so a delayed tab move cannot
+    // be turned into a create-time grant from stale state.
+    try {
+      currentTab = await chromeApi.tabs.get(tabId);
+    } catch {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    assertCurrent();
+    if (!Number.isInteger(currentTab.groupId) || currentTab.groupId < 0) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    if (
+      Number.isInteger(created.groupId) &&
+      created.groupId >= 0 &&
+      currentTab.groupId !== created.groupId
+    ) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    // Some Chromium shells expose grouping but do not reliably expose the
+    // resulting group identity. Keep this exception scoped to creation.
+    created.groupFallback = true;
+    created.grouping = false;
+    created.expectedGroupId = undefined;
+    if (currentTab.groupId !== fallbackGroupId) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    created.groupId = fallbackGroupId;
   };
   const verifyMembership = async (groupId) => {
     const [currentTab, group] = await Promise.all([
@@ -55,8 +78,8 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
   let groups;
   try {
     groups = await chromeApi.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    await fallback();
+  } catch (error) {
+    await fallback(error);
     return;
   }
   assertCurrent();
@@ -74,8 +97,8 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
       tabIds: [tabId],
       ...(group ? { groupId: group.id } : {}),
     });
-  } catch {
-    await fallback();
+  } catch (error) {
+    await fallback(error);
     return;
   }
   assertCurrent();
@@ -92,17 +115,17 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     }
     try {
       await chromeApi.tabGroups.update(groupId, { title: OPENCLAW_TAB_GROUP_TITLE, color });
-    } catch {
-      await fallback();
+    } catch (error) {
+      await fallback(error);
       return;
     }
     assertCurrent();
   }
   try {
     if (!(await verifyMembership(groupId))) {
-      await fallback();
+      await fallback(new Error(`tab ${tabId} group membership could not be verified`));
     }
-  } catch {
-    await fallback();
+  } catch (error) {
+    await fallback(error);
   }
 }

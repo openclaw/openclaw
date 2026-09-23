@@ -1,4 +1,4 @@
-import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
+import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
@@ -38,6 +38,29 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   const isSelected = async (tab) => {
     const created = createdTabs.get(tab?.id);
     if (created?.groupFallback) {
+      const sameWindow = tab?.windowId === created.tab.windowId;
+      const sameGroup = tab?.groupId === created.groupId;
+      if (!sameWindow || !sameGroup) {
+        created.groupFallback = false;
+        invalidateTab(tab.id);
+        return false;
+      }
+      if (created.handedOff) {
+        let currentGroup;
+        try {
+          currentGroup = await chromeApi.tabGroups.get(created.groupId);
+        } catch {
+          currentGroup = undefined;
+        }
+        if (
+          currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
+          currentGroup.windowId !== tab.windowId
+        ) {
+          created.groupFallback = false;
+          invalidateTab(tab.id);
+          return false;
+        }
+      }
       return true;
     }
     const selected = await isSelectedTab(tab);
@@ -116,8 +139,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         invalidateTab(tab.id);
       }
       created.initialBlank = false;
-      if (!created.handedOff) {
-        invalidateTab(tab.id);
+      if (created.handedOff) {
+        createdTabs.delete(tab.id);
+        if (!created.isCurrent()) {
+          invalidateTab(tab.id);
+        }
       }
     }
     const options = {
@@ -471,6 +497,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       tabId,
       controlledBlank: documents.get(tabId)?.controlledBlank === true,
     });
+    const created = createdTabs.get(tabId);
+    if (created) {
+      created.groupFallback = false;
+    }
     invalidateTab(tabId);
     return token;
   }
