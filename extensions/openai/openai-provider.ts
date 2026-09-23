@@ -62,7 +62,6 @@ import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
-  buildOpenAISyntheticCatalogEntry,
   findCatalogTemplate,
   matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
@@ -160,10 +159,6 @@ type BuildOpenAILiveProviderConfigParams = {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
-
-function shouldFetchOpenAILiveModels(baseUrl: string): boolean {
-  return isOpenAIHttpsApiBaseUrl(baseUrl);
-}
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
   return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
@@ -266,7 +261,7 @@ async function buildOpenAILiveProviderConfig(
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   const models = fallback.models;
-  if (!shouldFetchOpenAILiveModels(baseUrl)) {
+  if (!isOpenAIHttpsApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
   const [
@@ -1144,64 +1139,43 @@ export function buildOpenAIProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
-      const openAiGpt55ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54Template = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54MiniTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54NanoTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-      });
-      return [
-        buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
+      const models = [
+        {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
           contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
+        },
+        {
           id: OPENAI_GPT_54_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54ProTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54MiniTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_MINI_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54NanoTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_NANO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
-        }),
-      ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+        },
+      ];
+      return models.flatMap(({ templateIds, ...model }) => {
+        const template = findCatalogTemplate({
+          entries: ctx.entries,
+          providerId: PROVIDER_ID,
+          templateIds,
+        });
+        const input: ("text" | "image")[] = ["text", "image"];
+        return template ? [{ ...template, ...model, name: model.id, reasoning: true, input }] : [];
+      });
     },
   };
 }

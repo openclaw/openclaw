@@ -364,6 +364,9 @@ function rebindChannelPluginConfig(
     ...config,
     listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
     resolveAccount: (cfg, accountId) => config.resolveAccount(rebind(cfg), accountId),
+    resolveAccountAsync: config.resolveAccountAsync
+      ? (cfg, accountId) => config.resolveAccountAsync!(rebind(cfg), accountId)
+      : undefined,
     inspectAccount: config.inspectAccount
       ? (cfg, accountId) => config.inspectAccount?.(rebind(cfg), accountId)
       : undefined,
@@ -418,6 +421,9 @@ function rebindChannelPluginConfig(
       : undefined,
     hasConfiguredState: config.hasConfiguredState
       ? (params) => config.hasConfiguredState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
+      : undefined,
+    hasConfiguredStateAsync: config.hasConfiguredStateAsync
+      ? (params) => config.hasConfiguredStateAsync!({ ...params, cfg: rebind(params.cfg) })
       : undefined,
     hasPersistedAuthState: config.hasPersistedAuthState
       ? (params) => config.hasPersistedAuthState?.({ ...params, cfg: rebind(params.cfg) }) ?? false

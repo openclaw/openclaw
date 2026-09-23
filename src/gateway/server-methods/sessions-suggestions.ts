@@ -272,7 +272,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
+    const cfg = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
     const target = requireSuggestionTarget({ client, context, ...params, respond });
     if (!target) {
       return;

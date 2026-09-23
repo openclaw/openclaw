@@ -125,13 +125,13 @@ async function fixture(withInstructions = true, contextText = "synthetic persona
 
 describe("private inference HTTP relay", () => {
   it.each([
-    { zstd: false, withInstructions: true },
+    { zstd: false, withInstructions: true, query: "?cursor=synthetic%2Fa%5Cb%2Ec" },
     { zstd: true, withInstructions: true },
     { zstd: false, withInstructions: false },
     { zstd: true, withInstructions: false },
   ])(
     "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
-    async ({ zstd, withInstructions }) => {
+    async ({ zstd, withInstructions, query = "" }) => {
       const { proxy, body } = await fixture(withInstructions);
       let forwarded: unknown;
       transport.fetch.mockImplementation(async (args) => {
@@ -141,7 +141,9 @@ describe("private inference HTTP relay", () => {
         expect(args.init.duplex).toBe("half");
         const bytes = zstd ? zstdDecompressSync(wire) : wire;
         forwarded = JSON.parse(bytes.toString());
-        expect(args.url).toBe("https://api.openai.com/v1/responses");
+        const target = new URL(args.url);
+        expect(target.origin + target.pathname).toBe("https://api.openai.com/v1/responses");
+        expect(target.searchParams.get("cursor")).toBe(query ? "synthetic/a\\b.c" : null);
         expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");
         expect(args.capture).toBe(false);
         expect(args.mode).toBe("trusted_env_proxy");
@@ -154,7 +156,7 @@ describe("private inference HTTP relay", () => {
         };
       });
       const bytes = Buffer.from(JSON.stringify(body));
-      const response = await post(proxy.baseUrl + "/responses", {
+      const response = await post(proxy.baseUrl + "/responses" + query, {
         method: "POST",
         body: zstd ? zstdCompressSync(bytes) : bytes,
         headers: {

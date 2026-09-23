@@ -305,6 +305,7 @@ describe("CI changed Node test plan", () => {
     "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
         "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
@@ -2048,12 +2049,13 @@ describe("CI changed Node test plan", () => {
       const workerCount = targets.filter((file) =>
         databaseWorkerExtensionTestFiles.includes(file),
       ).length;
-      const runtimeFiles = listVitestRuntimeConsumerFiles([
-        "test/vitest/vitest.extension-telegram.config.ts",
-      ]).filter((file) => targets.includes(file));
+      const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+      const runtimeFiles = listVitestRuntimeConsumerFiles([telegramConfig]).filter((file) =>
+        targets.includes(file),
+      );
       expect(
         shards
-          .filter((shard) => shard.pretestBuildMode)
+          .filter((shard) => shard.pretestBuildMode && shard.configs.includes(telegramConfig))
           .flatMap((shard) => shard.includePatterns ?? [])
           .toSorted(),
       ).toEqual(runtimeFiles.toSorted());

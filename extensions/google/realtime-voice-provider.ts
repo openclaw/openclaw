@@ -144,10 +144,6 @@ type GoogleLiveTranscriptAccumulator = {
   byteCount: number;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function asSensitivity(value: unknown): GoogleRealtimeSensitivity | undefined {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized === "low" || normalized === "high" ? normalized : undefined;
@@ -218,10 +214,10 @@ function normalizeProviderConfig(
       value: raw?.apiKey ?? cfg?.models?.providers?.google?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
-    model: trimToUndefined(raw?.model),
-    voice: trimToUndefined(raw?.speakerVoice) ?? trimToUndefined(raw?.voice),
+    model: normalizeOptionalString(raw?.model),
+    voice: normalizeOptionalString(raw?.speakerVoice) ?? normalizeOptionalString(raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
-    apiVersion: trimToUndefined(raw?.apiVersion),
+    apiVersion: normalizeOptionalString(raw?.apiVersion),
     prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
     silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
     startSensitivity: asSensitivity(raw?.startSensitivity),
@@ -238,7 +234,10 @@ function normalizeProviderConfig(
 }
 
 function resolveEnvApiKey(): string | undefined {
-  return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
+  return (
+    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
+    normalizeOptionalString(process.env.GOOGLE_API_KEY)
+  );
 }
 
 // Gemini 3.1 Live replaces client-content text and async tools with realtime text
@@ -800,7 +799,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.clearPendingAudio();
+    this.pendingAudio.clear();
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     this.resetToolCallOwnership();
@@ -875,18 +874,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private captureSessionLifecycle(message: LiveServerMessage): void {
-    const raw = message as unknown as {
-      goAway?: { timeLeft?: string };
-      sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
-    };
-    const update = raw.sessionResumptionUpdate;
+    const update = message.sessionResumptionUpdate;
     if (update?.resumable === false) {
       this.resumptionHandle = undefined;
     } else if (update?.resumable && update.newHandle) {
       this.resumptionHandle = update.newHandle;
     }
-    if (raw.goAway?.timeLeft) {
-      this.config.onError?.(new Error(`Google Live session goAway: ${raw.goAway.timeLeft}`));
+    if (message.goAway?.timeLeft) {
+      this.config.onError?.(new Error(`Google Live session goAway: ${message.goAway.timeLeft}`));
     }
   }
 
@@ -1082,14 +1077,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.closeNotified) {
       return;
     }
-    this.clearPendingAudio();
+    this.pendingAudio.clear();
     this.responseInterrupted = false;
     this.closeNotified = true;
     this.config.onClose?.(reason);
-  }
-
-  private clearPendingAudio(): void {
-    this.pendingAudio.clear();
   }
 
   private cancelConnectAttempt(attempt: GoogleLiveConnectionAttempt | undefined): void {

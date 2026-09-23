@@ -15,6 +15,7 @@ import {
   modelSupportsInput,
 } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   findNormalizedProviderValue,
   isCliProvider,
@@ -303,6 +304,7 @@ export function getSessionDefaults(
   modelCatalog?: ModelCatalogEntry[],
   options?: {
     agentId?: string;
+    modelRef?: ModelRef;
     allowPluginNormalization?: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     providerPolicySource?: ThinkingProviderPolicySource;
@@ -311,20 +313,22 @@ export function getSessionDefaults(
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
   );
-  const resolved = options?.agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        allowPluginNormalization: options.allowPluginNormalization,
-        manifestPlugins: options.metadataSnapshot,
-      })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
-        manifestPlugins: options?.metadataSnapshot,
-      });
+  const resolved =
+    options?.modelRef ??
+    (options?.agentId
+      ? resolveDefaultModelForAgent({
+          cfg,
+          agentId,
+          allowPluginNormalization: options.allowPluginNormalization,
+          manifestPlugins: options.metadataSnapshot,
+        })
+      : resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+          allowPluginNormalization: options?.allowPluginNormalization,
+          manifestPlugins: options?.metadataSnapshot,
+        }));
   const displayModel = resolveSessionDisplayModelIdentityRef({
     cfg,
     provider: resolved.provider,

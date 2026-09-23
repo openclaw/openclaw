@@ -249,7 +249,13 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
 
 async function assertSteeredRecoveryOrder(
   page: Page,
-  texts: { original: string; beforeSteer: string; steer: string; afterSteer: string },
+  texts: {
+    original: string;
+    beforeSteer: string;
+    steer: string;
+    afterSteer: string;
+    latest: string;
+  },
 ): Promise<void> {
   const thread = page.locator(".chat-thread");
   await assertActiveTurnVisible(page, texts.afterSteer);
@@ -257,6 +263,7 @@ async function assertSteeredRecoveryOrder(
     await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   }
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.locator(".chat-working-indicator__preamble")).toHaveText(texts.latest);
 
   const order = await thread.evaluate((element, expected) => {
     const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
@@ -599,6 +606,7 @@ suite.define(() => {
       beforeSteer: "The first recovery note is visible.",
       steer: "Please include the verification pass.",
       afterSteer: "The second recovery note is visible.",
+      latest: "Verifying the remaining work.",
     };
     const fixtureNow = Date.now();
     const snapshot = activeRunSnapshot(runId, texts.original, "", {
@@ -661,6 +669,18 @@ suite.define(() => {
             kind: "preamble",
             itemId: "fixture-preamble-after-steer",
             progressText: texts.afterSteer,
+          },
+        },
+        {
+          runId,
+          seq: 4,
+          stream: "item",
+          ts: fixtureNow + 5_000,
+          sessionKey: "agent:main:main",
+          data: {
+            kind: "preamble",
+            itemId: "fixture-latest-preamble",
+            progressText: texts.latest,
           },
         },
       ],

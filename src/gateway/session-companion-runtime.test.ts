@@ -2,8 +2,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createAdmittedRunOperatorAuthority,
+  readRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import * as internalSessions from "../agents/internal-session-effects.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -52,7 +58,7 @@ describe("Side chat with a published Gateway runtime", () => {
           defaults: {
             workspace: state.workspaceDir,
             model: "test-provider/test-model",
-            utilityModel: "test-provider/test-model",
+            utilityModel: "test-provider/utility-model",
           },
         },
         models: {
@@ -61,17 +67,15 @@ describe("Side chat with a published Gateway runtime", () => {
               api: "openai-completions",
               apiKey: "synthetic-test-key",
               baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                {
-                  id: "test-model",
-                  name: "Test model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
+              models: ["test-model", "utility-model"].map((id) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 1024,
+              })),
             },
           },
         },
@@ -89,9 +93,17 @@ describe("Side chat with a published Gateway runtime", () => {
         sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
       });
       const observedTools: string[][] = [];
+      const observedModels: Array<{
+        model: string | undefined;
+        authority: AdmittedRunOperatorAuthority | undefined;
+      }> = [];
       const internalTargets: Parameters<typeof SessionManager.open>[0][] = [];
       const seededHistory: unknown[][] = [];
       runLoop.mockImplementation(async (_refresh, { runParams }) => {
+        observedModels.push({
+          model: runParams.model,
+          authority: readRunOperatorAuthority(runParams),
+        });
         const target = runParams.sessionTarget;
         if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
           throw new Error("Expected the run-owned internal session target");
@@ -254,6 +266,19 @@ describe("Side chat with a published Gateway runtime", () => {
           }
           return;
         }
+        const operatorAuthority = (allow: string[]) =>
+          createAdmittedRunOperatorAuthority({
+            profileId: "companion-reader",
+            scopes: ["operator.read"],
+            assertCurrent: () => {},
+            modelPolicy: prepareOperatorModelPolicy({
+              cfg,
+              policy: { sourceAgent: "main", allow },
+              manifestPlugins: [],
+            }),
+          });
+        const authority = operatorAuthority(["test-provider/test-model"]);
+        const deniedAuthority = operatorAuthority([]);
         const syncOpen = SessionManager.open.bind(SessionManager);
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
         const nativeExec: unknown = Object.getOwnPropertyDescriptor(
@@ -343,10 +368,34 @@ describe("Side chat with a published Gateway runtime", () => {
               ts: expect.any(Number),
             });
           }
+          await expect(
+            companion.ask({
+              agentId: "main",
+              sessionKey: selected.sessionKey,
+              question: "What is it doing now?",
+              connId: "restricted-connection",
+              operatorAuthority: authority,
+            }),
+          ).resolves.toMatchObject({ answer: "The selected session is ready." });
+          await expect(
+            companion.ask({
+              agentId: "main",
+              sessionKey: selected.sessionKey,
+              question: "Use another model?",
+              connId: "denied-connection",
+              operatorAuthority: deniedAuthority,
+            }),
+          ).rejects.toThrow("Side chat");
         } finally {
           syncProbe.mockRestore();
           asyncProbe.mockRestore();
         }
+        expect(observedModels).toEqual([
+          { model: "utility-model", authority: undefined },
+          { model: "utility-model", authority: undefined },
+          { model: "test-model", authority },
+        ]);
+        expect(observedModels[2]?.authority).toBe(authority);
         expect(hydrationCount).toBeGreaterThan(0);
         expect(hydrationFailures).toEqual([]);
         expect(seededHistory[0]).toEqual([
@@ -370,7 +419,7 @@ describe("Side chat with a published Gateway runtime", () => {
         }
         expect((await SessionManager.openAsync(selected)).getPersistedEntries()).toEqual(retained);
         expect(observedTools).toEqual(
-          Array.from({ length: 2 }, () => ["read", "sessions_history", "sessions_search"]),
+          Array.from({ length: 3 }, () => ["read", "sessions_history", "sessions_search"]),
         );
         expect(cfg.tools?.toolSearch).toEqual({ enabled: true, mode: "directory" });
         expect(cfg.tools?.sessions?.visibility).toBe("all");

@@ -44,6 +44,7 @@ const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
+const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
 const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
@@ -155,13 +156,14 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 
 /** @param {string} path Canonical repository-relative script or test path. */
 export function isMacosToolingPath(path) {
-  return MACOS_SCRIPT_SCOPE_RE.test(path);
+  return MACOS_SCRIPT_SCOPE_RE.test(path) || SWIFT_LINT_OWNER_RE.test(path);
 }
 
 /** @param {string} path Canonical repository-relative build input. */
 function isAppleSharedBuildInput(path) {
   return (
     APPLE_SWIFT_CONFIG_RE.test(path) ||
+    SWIFT_LINT_OWNER_RE.test(path) ||
     MERMAID_ASSET_INPUT_RE.test(path) ||
     path === "scripts/prepare-apple-mermaid.mjs"
   );

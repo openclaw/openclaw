@@ -10,7 +10,6 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
@@ -409,31 +408,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict: async (reason) => {
-            const session = turn.session;
-            if (session.kind !== "session") {
-              return false;
-            }
-            return await resetReplyRunSession({
-              options: {
-                failureLabel: "role ordering conflict",
-                buildLogMessage: (nextSessionId) =>
-                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-                cleanupTranscripts: true,
-              },
-              sessionKey: session.key,
-              queueKey: session.key,
-              activeSessionEntry: session.current(),
-              activeSessionStore: turn.sessionStore,
-              storePath: session.storePath,
-              followupRun: turn.queued,
-              onActiveSessionEntry: (entry) => {
-                session.adopt(entry);
-                turn.operation.updateSessionId(entry.sessionId);
-              },
-              onNewSession: () => undefined,
-            });
-          },
           isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,

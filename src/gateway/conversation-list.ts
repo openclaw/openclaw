@@ -2,6 +2,7 @@ import type {
   ConversationListItem,
   ConversationListResult,
 } from "../../packages/gateway-protocol/src/schema/agent.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 import {
   buildConversationIdentity,
@@ -140,7 +141,7 @@ async function discoverChannelAddresses(params: {
   }
   const identities = new Map<string, ConversationIdentity>();
   for (const accountId of new Set(plugin.config.listAccountIds(params.config).filter(Boolean))) {
-    const account = plugin.config.resolveAccount(params.config, accountId);
+    const account = await resolveChannelAccount({ plugin, cfg: params.config, accountId });
     if (plugin.config.isEnabled?.(account, params.config) === false) {
       continue;
     }

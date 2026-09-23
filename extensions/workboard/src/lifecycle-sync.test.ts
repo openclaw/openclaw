@@ -1,4 +1,8 @@
 import type { WorkboardExecution } from "@openclaw/workboard-contract";
+import {
+  createHookRunner,
+  createMockPluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginService } from "../api.js";
 import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
@@ -522,26 +526,39 @@ describe("Workboard gateway lifecycle sync", () => {
     expect((await store.get(card.id))?.status).toBe("running");
   });
 
-  it("uses agent_end context to reconcile non-subagent linked sessions", async () => {
+  it.each([
+    ["agent:main:dashboard:agent-end", false, "blocked"],
+    ["agent:main:dashboard:incognito-agent-end", false, "blocked"],
+    ["agent:main:dashboard:incognito-agent-end", true, "review"],
+  ] as const)("settles %s after agent_end success=%s", async (sessionKey, success, status) => {
     const store = createWorkboardSqliteTestStore();
-    const sessionKey = "agent:main:dashboard:agent-end";
     const card = await createLinkedCard(store, {
       sessionKey,
       runId: "run-agent",
       execution: execution(sessionKey, "run-agent"),
     });
 
-    await syncWorkboardAgentEnded({
-      store,
-      event: { runId: "run-agent", success: false },
-      context: { sessionKey },
-      now: card.updatedAt + 1,
-    });
-
+    const handler = vi.fn(async (...args: unknown[]) =>
+      syncWorkboardAgentEnded({
+        store,
+        event: args[0] as Parameters<typeof syncWorkboardAgentEnded>[0]["event"],
+        context: args[1] as Parameters<typeof syncWorkboardAgentEnded>[0]["context"],
+        now: card.updatedAt + 1,
+      }),
+    );
+    const runner = createHookRunner(createMockPluginRegistry([{ hookName: "agent_end", handler }]));
+    await runner.runAgentEnd(
+      { messages: [{ role: "user", content: "PRIVATE_INPUT" }], error: "PRIVATE_ERROR", success },
+      { runId: "run-agent", sessionKey },
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked" },
+      status,
+      execution: { status },
     });
+    expect(handler).toHaveBeenCalledOnce();
+    if (sessionKey.includes("incognito-")) {
+      expect(JSON.stringify(handler.mock.calls)).not.toContain("PRIVATE_");
+    }
   });
 
   it("marks an inactive running session stale and clears it after recovery", async () => {

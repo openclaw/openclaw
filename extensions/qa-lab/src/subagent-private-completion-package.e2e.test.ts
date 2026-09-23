@@ -381,6 +381,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       );
       const children = await waitForQaTransportCondition(
         async () => {
+          await mock.terminalRequesters.settle(gateway);
           const currentChildren = await tasks(sessionKey);
           return currentChildren.length === 2 &&
             currentChildren.every(
@@ -459,6 +460,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       );
       const child = await waitForQaTransportCondition(
         async () => {
+          await mock.terminalRequesters.settle(gateway);
           const currentChild = (await tasks(sessionKey)).find(
             (task) => task.title === "qa-terminal-silent",
           );
@@ -685,7 +687,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       await waitForQaTransportCondition(() => heldProvider.mainHeld() || undefined, 30_000, 50);
       heldProvider.releaseChild();
       const pendingInput = await waitForQaTransportCondition(
-        () => {
+        async () => {
+          await mock.terminalRequesters.settle(gateway);
           const pendingRow = rows(
             agentDb,
             "SELECT * FROM session_pending_inputs WHERE session_key = ? AND state = 'queued'",

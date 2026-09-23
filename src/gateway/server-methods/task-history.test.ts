@@ -20,6 +20,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { markTaskTerminalById, recordTaskProgressByRunId } from "../../tasks/runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
@@ -124,6 +125,8 @@ describe("tasks.history", () => {
         const task = createNativeTask(`history-held-${change}`);
         const pending = runTaskHandler("tasks.history", { taskId: task.taskId });
         const store = getTaskRegistryStore();
+        // Detached results precede cleanup; the enclosing scope includes root release.
+        const scopeRuns = vi.spyOn(AsyncWorkScope.prototype, "run");
         let mutation: Promise<unknown> | undefined;
         try {
           await entered.promise;
@@ -186,10 +189,18 @@ describe("tasks.history", () => {
         } finally {
           history.resolve();
           release.resolve();
-          await pending;
-          await mutation;
-          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-          resetTaskFlowRegistryForTests({ persist: false });
+          try {
+            await pending;
+            await mutation;
+            for (const result of scopeRuns.mock.results) {
+              expect(result.type).toBe("return");
+              await result.value;
+            }
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            resetTaskFlowRegistryForTests({ persist: false });
+          } finally {
+            scopeRuns.mockRestore();
+          }
         }
       });
     },

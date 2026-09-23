@@ -138,6 +138,26 @@ describe("ManagedWorktreeService branch discovery", () => {
         includeRepositoryStatus: true,
       }),
     ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+
+    const unborn = path.join(root, "unborn");
+    await fs.mkdir(unborn);
+    await git(unborn, "init", "-b", "main", `--template=${path.join(root, "git-template")}`);
+    await expect(
+      service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+    ).resolves.toEqual({ branches: [], repositoryStatus: "not_git" });
+    await expect(service.listRepositoryBranches(unborn)).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+    await expect(service.create({ repoRoot: unborn, name: "requires-commit" })).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+
+    for (const ref of ["broken-ref\n", `${"a".repeat(40)}\n`]) {
+      await fs.writeFile(path.join(unborn, ".git", "refs", "heads", "main"), ref);
+      await expect(
+        service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+      ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+    }
   });
 
   it.skipIf(process.platform !== "win32")(

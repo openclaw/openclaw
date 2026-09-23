@@ -10,6 +10,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
+import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 export { modelKey };
@@ -171,6 +172,7 @@ export function resolveModelDirectiveSelection(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
+  operatorModelPolicy?: PreparedOperatorModelPolicy;
   cfg?: OpenClawConfig;
   agentId?: string;
   rawRuntime?: string | undefined;
@@ -188,6 +190,8 @@ export function resolveModelDirectiveSelection(params: {
 
   const rawTrimmed = raw.trim();
   const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
+  const allows = (ref: { provider: string; model: string }) =>
+    policy.allows(ref) && (params.operatorModelPolicy?.allows(ref) ?? true);
 
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
     aliasIndex.byKey.get(modelKey(provider, model))?.[0];
@@ -223,7 +227,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (model.endsWith("*") || !policy.allows({ provider, model })) {
+      if (model.endsWith("*") || !allows({ provider, model })) {
         continue;
       }
       if (providerFilter && provider !== providerFilter) {
@@ -245,7 +249,7 @@ export function resolveModelDirectiveSelection(params: {
         });
       }
       for (const match of aliasMatches) {
-        if (!policy.allows(match)) {
+        if (!allows(match)) {
           continue;
         }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
@@ -323,6 +327,16 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  if (
+    params.operatorModelPolicy &&
+    !params.operatorModelPolicy.allows(resolved.ref) &&
+    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+  ) {
+    return {
+      error:
+        "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+    };
+  }
   const explicitSelection = {
     selection: {
       provider: resolved.ref.provider,
@@ -331,7 +345,7 @@ export function resolveModelDirectiveSelection(params: {
       ...(resolved.alias ? { alias: resolved.alias } : {}),
     },
   };
-  const permitted = policy.allows(resolved.ref);
+  const permitted = allows(resolved.ref);
   // Preserve catalog hints for bare fragments, while explicit routes and aliases
   // depend only on policy, never on finite picker membership.
   if (

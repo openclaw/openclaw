@@ -1,7 +1,16 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { CodexAppServerRpcError } from "./client.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
+  getCodexInferenceThread,
+  getCodexInferenceThreadQualification,
+  ownCodexInferenceClient,
+} from "./inference-routing.js";
+import { isJsonObject } from "./protocol.js";
+import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   setupRunAttemptTestHooks,
   tempDir,
@@ -19,6 +28,226 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
 describe("Codex native configuration lifecycle", () => {
+  it.each([false, true])(
+    "validates every operator parent provider in final native config (overridden: %s)",
+    async (overridden) => {
+      const sessionFile = path.join(tempDir, "all-provider-routes.jsonl");
+      const workspaceDir = path.join(tempDir, "all-provider-workspace");
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return {
+              config: {
+                model_providers: {
+                  restored: { name: "Stored provider", base_url: "https://restored.example/v1" },
+                },
+              },
+              origins: {},
+              layers: [],
+            };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start") {
+            return threadStartResult("parent");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      ownCodexInferenceClient(fixture.client);
+      const params = createParams(sessionFile, workspaceDir);
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
+        profileId: "operator-parent",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+      });
+      try {
+        const pending = startOrResumeThread({
+          client: fixture.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createAppServerOptions(),
+          userMcpServersEnabled: false,
+          buildFinalConfigPatch: async () => ({
+            configPatch: overridden
+              ? { "model_providers.restored.base_url": "https://bypass.example/v1" }
+              : undefined,
+          }),
+        });
+        if (overridden) {
+          await expect(pending).rejects.toThrow("inference route was overridden");
+          expect(
+            fixture.writes.some((line) => {
+              const frame: unknown = JSON.parse(line);
+              return isJsonObject(frame) && frame.method === "thread/start";
+            }),
+          ).toBe(false);
+        } else {
+          const binding = await pending;
+          const qualification = getCodexInferenceThreadQualification(
+            fixture.client,
+            binding.threadId,
+          );
+          expect(qualification?.hasProvider("openai")).toBe(true);
+          expect(qualification?.hasProvider("restored")).toBe(true);
+        }
+      } finally {
+        closeHost();
+        fixture.client.close();
+      }
+    },
+  );
+
+  it.each(["rotation", "missing resume"] as const)(
+    "routes the final native provider after %s without reusing the injected URL as upstream",
+    async (recovery) => {
+      const sessionFile = path.join(tempDir, "inference-selection.jsonl");
+      const workspaceDir = path.join(tempDir, "inference-selection-workspace");
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads: ["old-thread"],
+        respond: async (method) => {
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/resume") {
+            throw new CodexAppServerRpcError(
+              { code: -32_600, message: "thread not loaded: old-thread" },
+              method,
+            );
+          }
+          if (method === "thread/start") {
+            return threadStartResult("new-thread");
+          }
+          if (method === "thread/inject_items") {
+            return {};
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      ownCodexInferenceClient(fixture.client);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "old-thread",
+        clientId: fixture.client.getInstanceId(),
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: recovery === "rotation" ? "retired-provider" : "openai",
+        dynamicToolsFingerprint: "[]",
+        webSearchThreadConfigFingerprint: JSON.stringify({
+          "features.standalone_web_search": false,
+          web_search: "disabled",
+        }),
+        ...(recovery === "rotation" ? { nativeSkillIsolationFingerprint: "retired" } : {}),
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      const config = { openai_base_url: "https://api.openai.com/v1" };
+      try {
+        const binding = await startOrResumeThread({
+          client: fixture.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createAppServerOptions(),
+          userMcpServersEnabled: false,
+          config,
+        });
+        const route = getCodexInferenceThread(fixture.client, binding.threadId);
+        expect(route?.upstream).toBe("https://api.openai.com/v1");
+        const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+        expect(start).toMatchObject({ config: { openai_base_url: route?.baseUrl } });
+        if (recovery === "missing resume") {
+          expect(start).toHaveProperty("modelProvider", "openai");
+        } else {
+          expect(start).not.toHaveProperty("modelProvider");
+        }
+        expect(config).toEqual({ openai_base_url: "https://api.openai.com/v1" });
+        expect(
+          fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+        ).toHaveLength(recovery === "missing resume" ? 1 : 0);
+      } finally {
+        fixture.client.close();
+      }
+    },
+  );
+
+  it.each(["missing issuer", "policy introduced during preparation"] as const)(
+    "refuses an unowned route before native dispatch when %s",
+    async (restriction) => {
+      const sessionFile = path.join(tempDir, "unowned-inference.jsonl");
+      const workspaceDir = path.join(tempDir, "unowned-inference-workspace");
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "thread/start") {
+            return threadStartResult("unexpected-thread");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      let modelPolicyRequired = false;
+      const closeHost =
+        restriction === "missing issuer"
+          ? undefined
+          : await bindProductionHarnessHostCapabilitiesForTest(params, {
+              profileId: "restricted-caller",
+              scopes: ["operator.write"],
+              assertCurrent: () => {},
+              get modelPolicy() {
+                return modelPolicyRequired ? { models: [], allows: () => false } : undefined;
+              },
+            });
+      if (restriction === "missing issuer") {
+        params.hostCapabilities = createCodexTestHostCapabilities({
+          retainSourceAuthority: undefined,
+        });
+      }
+      try {
+        await expect(
+          startOrResumeThread({
+            client: fixture.client,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createAppServerOptions(),
+            userMcpServersEnabled: false,
+            buildFinalConfigPatch: async () => {
+              await Promise.resolve();
+              modelPolicyRequired = true;
+              return {};
+            },
+          }),
+        ).rejects.toThrow("cannot enforce your operator role's model policy");
+        expect(
+          fixture.request.mock.calls.some(([method]) =>
+            ["thread/start", "thread/resume", "thread/fork", "turn/start"].includes(method),
+          ),
+        ).toBe(false);
+      } finally {
+        closeHost?.();
+      }
+    },
+  );
+
   it.each([
     { nativeModel: false, changeModel: false },
     { nativeModel: true, changeModel: true },

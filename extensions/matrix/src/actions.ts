@@ -7,7 +7,11 @@ import type {
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
+import {
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
+} from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -174,15 +178,20 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  prepareSendPayload: ({ ctx, payload }) => {
+  prepareSendPayload: async ({ ctx, payload }) => {
     if (ctx.action !== "send") {
       return null;
     }
-    const account = resolveMatrixActionAccount({
-      cfg: ctx.cfg as CoreConfig,
-      accountId: ctx.accountId,
-    });
-    return account && createActionGate(account.config.actions)("messages") ? payload : null;
+    const cfg = ctx.cfg as CoreConfig;
+    if (!ctx.accountId && requiresExplicitMatrixDefaultAccount(cfg)) {
+      return null;
+    }
+    const account = await resolveMatrixAccountAsync({ cfg, accountId: ctx.accountId });
+    return account.enabled &&
+      account.configured &&
+      createActionGate(account.config.actions)("messages")
+      ? payload
+      : null;
   },
   handleAction: async (ctx) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");

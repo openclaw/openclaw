@@ -34,60 +34,16 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 const LEGACY_APPROVAL_CHILD_TIMEOUT_MS = 45_000;
-function seedPluginStateConflict(stateDir: string): void {
-  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
-  const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
-  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
-  fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
-
-  const shared = new DatabaseSync(sharedPath);
+function seedDeferredAgentSqliteFamily(stateDir: string): { sourcePath: string; bytes: Buffer } {
+  const sourcePath = path.join(stateDir, "agent", "retained.sqlite");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  const database = new DatabaseSync(sourcePath);
   try {
-    shared.exec(`
-      CREATE TABLE plugin_state_entries (
-        plugin_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        entry_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER,
-        PRIMARY KEY (plugin_id, namespace, entry_key)
-      );
-    `);
-    shared
-      .prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run("discord", "components", "interaction:1", '{"ok":false}', 2_000, null);
+    database.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('keep');");
   } finally {
-    shared.close();
+    database.close();
   }
-
-  const sidecar = new DatabaseSync(sidecarPath);
-  try {
-    sidecar.exec(`
-      CREATE TABLE plugin_state_entries (
-        plugin_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        entry_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER,
-        PRIMARY KEY (plugin_id, namespace, entry_key)
-      );
-    `);
-    sidecar
-      .prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      // Older or equal sidecar rows can be archived; a newer divergent row must stay unresolved.
-      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
-  } finally {
-    sidecar.close();
-  }
+  return { sourcePath, bytes: fs.readFileSync(sourcePath) };
 }
 
 describe("doctor invalid config process exit", () => {
@@ -399,9 +355,10 @@ describe("gateway startup-migration refusal", () => {
     try {
       // Readiness must use the migration fixture without extra hooks or Control UI settings.
       await instance.state.writeConfig({
+        agents: { entries: { main: {} } },
         gateway: { mode: "local", port, auth: { mode: "none" } },
       });
-      seedPluginStateConflict(stateDir);
+      const deferredDatabase = seedDeferredAgentSqliteFamily(stateDir);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const job = {
         name: "Legacy automation",
@@ -430,7 +387,7 @@ describe("gateway startup-migration refusal", () => {
         await instance.startGateway();
         const response = await fetch(`http://127.0.0.1:${port}/readyz`);
         await expect(response.json()).resolves.toMatchObject({ ready: true, failing: [] });
-        const warning = "Left plugin-state sidecar in place";
+        const warning = "Deferred SQLite family";
         const logs = instance.logs();
         expect(logs.split(warning)).toHaveLength(2);
         expect(logs).toContain(STARTUP_RECOVERY);
@@ -440,7 +397,7 @@ describe("gateway startup-migration refusal", () => {
         expect(JSON.parse(status.stdout).startupMigrationWarning).toBe(
           'Startup migrations need attention. Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
         );
-        expect(fs.existsSync(path.join(stateDir, "plugin-state", "state.sqlite"))).toBe(true);
+        expect(fs.readFileSync(deferredDatabase.sourcePath)).toEqual(deferredDatabase.bytes);
       } finally {
         await instance.stopGateway();
       }
@@ -476,7 +433,7 @@ describe("gateway startup-migration refusal", () => {
         lastTouchedAt: "2026-08-01T00:00:00.000Z",
         lastTouchedVersion: "2026.7.1-2",
       },
-      agents: { defaults: { heartbeat: { skipWhenBusy: true } } },
+      agents: { defaults: { heartbeat: { skipWhenBusy: true } }, list: [{ id: "main" }] },
       gateway: { mode: "local", auth: { mode: "none" } },
     };
     const env: NodeJS.ProcessEnv = {
@@ -495,7 +452,7 @@ describe("gateway startup-migration refusal", () => {
 
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify(stableConfig));
-    seedPluginStateConflict(stateDir);
+    seedDeferredAgentSqliteFamily(stateDir);
     // Initialization and repair must share the same database module instance.
     const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
     const stateDatabaseUrl = resolveRuntimeWorkerUrl(
@@ -550,7 +507,7 @@ describe("gateway startup-migration refusal", () => {
     const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
 
     expect(resultLine, output).toBeDefined();
-    expect(output).toContain("Left plugin-state sidecar in place");
+    expect(output).toContain("Deferred SQLite family");
     expect(output).toContain(STARTUP_RECOVERY);
     expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
       valid: true,
