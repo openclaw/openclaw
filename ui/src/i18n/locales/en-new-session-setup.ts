@@ -97,8 +97,6 @@ const enNewSessionSetup = {
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
-    incognito: "Incognito",
-    incognitoDescription: "Keep this session only until the Gateway restarts",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",

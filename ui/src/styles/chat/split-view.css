@@ -10,7 +10,6 @@
   .chat-pane__header
   :is(
     .chat-pane__nav-toggle,
-    .chat-pane__incognito,
     openclaw-session-owner-chip,
     .chat-pane__participants,
     .chat-pane__presence,
@@ -202,7 +201,50 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-pane__incognito > span {
+  display: inline-flex;
+}
+
+.chat-pane__incognito-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px dashed var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-pane__incognito-notice p {
+  margin: 0;
+}
+
+.chat-pane__incognito-limits {
   color: var(--muted);
+}
+
+.chat-pane__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.chat-pane__incognito-notice-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-pane__incognito svg,

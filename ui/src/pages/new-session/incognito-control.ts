@@ -1,5 +1,4 @@
-import { html, nothing, svg } from "lit";
-import { strokeIcon } from "../../components/icons-tools.ts";
+import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,16 +6,6 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
-
-const shredderIcon = strokeIcon(svg` <path
-    d="M4 13V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5"
-  />
-  <path d="M14 2v5a1 1 0 0 0 1 1h5" />
-  <path d="M10 22v-5" />
-  <path d="M14 19v-2" />
-  <path d="M18 20v-3" />
-  <path d="M2 13h20" />
-  <path d="M6 20v-3" />`);
 
 /** Page-level session privacy control for the fixed new-session rail. */
 export function renderNewSessionIncognitoControl(
@@ -36,7 +25,7 @@ export function renderNewSessionIncognitoControl(
     submission.submitting ||
     Boolean(submission.pendingPlacement.sessionKey) ||
     Boolean(disabledReason);
-  const description = disabledReason ?? t("newSession.incognitoDescription");
+  const description = disabledReason ?? t("sessionsView.incognitoDescription");
   return html`
     <div class="new-session-page__incognito-rail">
       ${
@@ -80,7 +69,7 @@ export function renderNewSessionIncognitoControl(
             active ? "new-session-page__incognito-toggle--active" : ""
           }"
           role="switch"
-          aria-label=${t("newSession.incognito")}
+          aria-label=${t("sessionsView.incognitoLabel")}
           aria-checked=${String(active)}
           ?disabled=${disabled}
           title=${description}
@@ -90,7 +79,14 @@ export function renderNewSessionIncognitoControl(
             }
           }}
         >
-          ${shredderIcon}
+          ${icons.incognito}
+          ${
+            active
+              ? html`<span class="new-session-page__incognito-toggle-label"
+                  >${t("sessionsView.incognitoLabel")}</span
+                >`
+              : nothing
+          }
         </button>
       </openclaw-tooltip>
     </div>
@@ -99,7 +95,7 @@ export function renderNewSessionIncognitoControl(
 
 /** Persistent context beside the draft while ephemeral session mode is active. */
 export function renderNewSessionIncognitoNotice(active: boolean) {
-  const description = t("newSession.incognitoDescription");
+  const description = t("sessionsView.incognitoDescription");
   return html`
     <div
       class="new-session-page__incognito-notice ${
@@ -109,9 +105,9 @@ export function renderNewSessionIncognitoNotice(active: boolean) {
       aria-hidden=${String(!active)}
     >
       <span class="new-session-page__incognito-notice-icon" aria-hidden="true">
-        ${shredderIcon}
+        ${icons.incognito}
       </span>
-      <span>${description}</span>
+      <span>${description} ${t("sessionsView.incognitoLimits")}</span>
     </div>
   `;
 }

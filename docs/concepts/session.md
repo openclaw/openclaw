@@ -130,7 +130,7 @@ The `incognito-` segment is reserved for dashboard, subagent, and hidden interna
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 

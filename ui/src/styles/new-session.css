@@ -68,6 +68,17 @@ openclaw-new-session-page {
   color: var(--accent);
 }
 
+.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
+  width: auto;
+  padding-inline: 10px;
+  gap: 7px;
+}
+
+.new-session-page__incognito-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
   top: var(--openclaw-native-titlebar-height, 52px);
 }
@@ -168,9 +179,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   pointer-events: none;
   transform: translateY(-2px);
   visibility: hidden;
-  white-space: nowrap;
+  white-space: normal;
   transition:
-    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
     margin 160ms cubic-bezier(0.2, 0, 0, 1),
     opacity 120ms ease-out,
     filter 120ms ease-out,
@@ -179,7 +189,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__incognito-notice--visible {
-  max-height: 20px;
+  max-height: none;
   margin-top: 0;
   opacity: 1;
   filter: blur(0);
@@ -1457,16 +1467,11 @@ wa-popover.new-session-page__where-popover::part(body) {
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 8px);
-    max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
     margin-inline: 4px;
     padding-inline: 0;
     white-space: normal;
     text-align: left;
-  }
-
-  .new-session-page__incognito-notice--visible {
-    max-height: 48px;
   }
 }
 

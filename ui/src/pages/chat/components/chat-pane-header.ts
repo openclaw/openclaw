@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
@@ -302,6 +303,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
   const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
+  const incognito = props.session?.incognito || isIncognitoSessionKey(props.session?.key);
 
   return html`
     <div
@@ -334,14 +336,17 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${
-          props.session?.incognito
-            ? html`<span
-                class="chat-pane__incognito"
-                role="img"
-                aria-label=${t("chat.sessionHeader.incognito")}
-                title=${t("chat.sessionHeader.incognito")}
-                >${icons.lock}</span
-              >`
+          incognito
+            ? html`<openclaw-tooltip
+                .content=${t("sessionsView.incognitoDescription")}
+                placement="bottom"
+                open-on-click
+              >
+                <button type="button" class="chat-pane__incognito">
+                  <span aria-hidden="true">${icons.incognito}</span>
+                  ${t("sessionsView.incognitoLabel")}
+                </button>
+              </openclaw-tooltip>`
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
@@ -542,5 +547,21 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         </div>
       </div>
     </div>
+    ${
+      incognito
+        ? html`<aside
+            class="chat-pane__incognito-notice"
+            aria-label=${t("sessionsView.incognitoLabel")}
+          >
+            <span class="chat-pane__incognito-notice-icon" aria-hidden="true"
+              >${icons.incognito}</span
+            >
+            <div>
+              <p>${t("sessionsView.incognitoDescription")}</p>
+              <p class="chat-pane__incognito-limits">${t("sessionsView.incognitoLimits")}</p>
+            </div>
+          </aside>`
+        : nothing
+    }
   `;
 }

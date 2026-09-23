@@ -8,6 +8,14 @@ import { strokeIcon, toolIcons } from "./icons-tools.ts";
 
 export const icons = {
   github: githubMark,
+  incognito: strokeIcon(svg`
+    <path d="m7 7 1.5-4.5 3.5 1 3.5-1L17 7M5 7h14" />
+    <path d="M8 10v3c0 3 1.8 5 4 5s4-2 4-5v-3M8 14H6m10 0h2" />
+    <path d="m2.5 9.5-1 3a2.5 2.5 0 0 0 5 0l-1-3-1.5 2-1.5-2Z" />
+    <path d="m18.5 9.5-1 3a2.5 2.5 0 0 0 5 0l-1-3-1.5 2-1.5-2Z" />
+    <path d="m10 18-2 3 4-1 4 1-2-3" />
+    <path d="M10.5 11h.01m2.99 0h.01" />
+  `),
   repeat: strokeIcon(
     svg`<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>`,
   ),

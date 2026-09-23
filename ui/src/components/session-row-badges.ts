@@ -153,7 +153,7 @@ export function renderSessionRowBadges(params: {
       params.incognito
         ? renderSessionRowBadge(
             t("sessionsView.incognito"),
-            icons.lock,
+            icons.incognito,
             "session-row-badge--incognito",
           )
         : nothing
