@@ -2417,6 +2417,13 @@ describe("WorkboardStore", () => {
       token: tokenClaim.token,
     });
     expect(tokenReleased.metadata?.claim).toBeUndefined();
+
+    const preserveCard = await store.create({ title: "Preserve running status", status: "todo" });
+    const preserveClaim = await store.claim(preserveCard.id, { ownerId: "main", ttlSeconds: 60 });
+    expect(preserveClaim.card.status).toBe("running");
+    const preserveReleased = await store.releaseClaim(preserveCard.id, { ownerId: "main" });
+    expect(preserveReleased.status).toBe("running");
+    expect(preserveReleased.metadata?.claim).toBeUndefined();
   });
 
   it("atomically guards and adopts dispatcher workspace authority", async () => {

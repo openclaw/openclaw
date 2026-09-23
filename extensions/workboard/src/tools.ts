@@ -364,12 +364,15 @@ export function createWorkboardTools(params: {
       name: "workboard_release",
       label: "Workboard Release",
       description:
-        "Release this agent's Workboard claim after finishing, pausing, or handing off card work.",
+        "Release this agent's Workboard claim. Omitting status preserves the current card status and only clears the claim; pass status (for example todo, ready, or review) when finishing, pausing, or handing off to an un-running state.",
       parameters: strictObject({
         id: cardIdField(),
         token: claimTokenField(),
         status: Type.Optional(
-          Type.String({ description: "Optional next card status after release." }),
+          Type.String({
+            description:
+              "Optional next card status after release. When omitted, the current status is preserved and only the claim is cleared; pass a status such as todo, ready, or review to leave an un-running state.",
+          }),
         ),
       }),
       execute: async (_toolCallId, rawParams) => {

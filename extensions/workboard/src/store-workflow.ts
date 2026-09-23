@@ -211,6 +211,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (!existing) {
         throw new Error(`card not found: ${id}`);
       }
+      // Omitting status preserves the current card status and only clears the claim.
       const status =
         input.status === undefined
           ? existing.status
