@@ -22,7 +22,8 @@ backup.
 For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases and includes the old runtime aliases.
+`plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
+and includes the old runtime aliases.
 Current releases leave those retired database files untouched.
 
 Back up the state first and use a [supported Node version](/install/node):

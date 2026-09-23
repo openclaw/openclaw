@@ -92,7 +92,7 @@ describe("Doctor workspace persistence", () => {
             const entries = {
               ops: {
                 memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
-                sandbox: { perSession: true },
+                sandbox: { browser: { enableNoVnc: true } },
                 model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
               },
               research: { memory: { search: { provider: "auto" } } },
@@ -120,7 +120,7 @@ describe("Doctor workspace persistence", () => {
             const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
             expect(saved.agents.entries.ops).toEqual({
               memory: { search: entries.ops.memorySearch },
-              sandbox: { scope: "session" },
+              sandbox: { browser: { noVncEnabled: true } },
               model: { primary: "openai/gpt-5.6-sol" },
             });
             expect(saved.agents.ownership).toBe("explicit");

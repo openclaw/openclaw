@@ -40,20 +40,13 @@ function shouldUseCompatPreflight(path: ReadonlyArray<string>, value: unknown): 
   const joined = path.join(".");
   const last = path[path.length - 1];
   if (
-    joined === "heartbeat" ||
     joined === "memorySearch" ||
     joined === "gateway.bind" ||
     joined === "hooks.internal.handlers"
   ) {
     return true;
   }
-  if (
-    joined === "channels.telegram.groupMentionsOnly" ||
-    joined === "agents.defaults.sandbox.perSession"
-  ) {
-    return true;
-  }
-  if (path.length >= 4 && path[0] === "agents" && path[1] === "list" && last === "perSession") {
+  if (joined === "channels.telegram.groupMentionsOnly") {
     return true;
   }
   if (last === "ttlHours" && path[path.length - 2] === "threadBindings") {

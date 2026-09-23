@@ -1100,7 +1100,7 @@ Supported candidate sources:
 
 It is the GitHub-native replacement for most of the package/update coverage that previously required Parallels. Cross-OS release checks still matter for OS-specific onboarding, installer, and platform behavior, but package/update product validation should prefer Package Acceptance.
 
-The canonical checklist for update and plugin validation is [Testing updates and plugins](/help/testing-updates-plugins). Use it when deciding which local, Docker, Package Acceptance, or release-check lane proves a plugin install/update, doctor cleanup, or published-package migration change. Exhaustive published update migration from every stable `2026.4.23+` package is a separate manual `Update Migration` workflow, not part of Full Release CI.
+The canonical checklist for update and plugin validation is [Testing updates and plugins](/help/testing-updates-plugins). Use it when deciding which local, Docker, Package Acceptance, or release-check lane proves a plugin install/update, doctor cleanup, or published-package migration change. Exhaustive published update migration from every stable `2026.6.1+` package is a separate manual `Update Migration` workflow, not part of Full Release CI.
 
 Pre-June 2026 package-acceptance exceptions are retired. Current tooling requires complete package inventory, no local build metadata, service-wrapper support, and current update/plugin persistence contracts. Use matching historical `workflow_ref` tooling when reproducing acceptance results for old candidates.
 

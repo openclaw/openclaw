@@ -952,6 +952,41 @@ describe("frozen admission workflow barriers", () => {
     expect(f.outputs.resolved_admission?.outputs.baseline_scope).toBe("all-scenarios");
   });
 
+  it("rejects a pre-June dist-tag before publishing resolved baseline admission", () => {
+    const f = packageAdmissionBaselineFixture({
+      docker_lanes: "published-upgrade-survivor",
+      published_upgrade_survivor_baseline: "openclaw@beta",
+    });
+    writeFileSync(join(f.f.root, "bin/npm"), "#!/bin/sh\nprintf '\"2026.5.31\"\\n'\n", {
+      mode: 0o755,
+    });
+    const result = f.resolveBaselines();
+    expect(result.failedStep).toBe("Pin published upgrade baseline versions");
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(f.outputs.exact_baselines?.outputs).toEqual({});
+    expect(f.request().options.baselinesResolved).toBe(false);
+  });
+
+  it("rejects a pre-June inherited baseline at direct frozen preflight admission", () => {
+    const f = packageAdmissionBaselineFixture({ docker_lanes: "root-managed-vps-upgrade" });
+    const request = f.request();
+    Object.assign(request.options, {
+      baselinesResolved: true,
+      upgradeSurvivorBaseline: "openclaw@2026.5.31",
+      upgradeSurvivorBaselines: "",
+    });
+    const requestPath = join(f.f.root, "frozen-admission-request.json");
+    writeFileSync(requestPath, JSON.stringify(request));
+    const result = spawnSync(
+      process.execPath,
+      [join(f.f.tooling, "scripts/preflight-frozen-target-contracts.mjs"), "--plan", requestPath],
+      { encoding: "utf8", env: { PATH: process.env.PATH, HOME: f.f.root } },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(result.stdout).toBe("");
+  });
+
   it.each(["onboard", "upgrade-survivor"])(
     "preserves unused multiline package baselines and scope for %s",
     (lane) => {
@@ -7951,12 +7986,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("last-stable-4");
-    expect(workflow).toContain("all-since-2026.4.23");
+    expect(workflow).toContain("all-since-2026.6.1");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
-    expect(workflow).toContain("--history-count 6");
-    expect(workflow).toContain("--include-version 2026.4.23");
-    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain('"last-stable-"');
     expect(workflow).toContain('"all-since-"');
     const smoke = runPackageAcceptanceProfile({ suiteProfile: "smoke" });
@@ -9229,7 +9261,6 @@ describe("package artifact reuse", () => {
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
-    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
     expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
@@ -9239,7 +9270,6 @@ describe("package artifact reuse", () => {
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -9265,11 +9295,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(
-      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
-    ).toBeLessThan(
-      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
-    );
   });
 
   it("reuses a content-addressed bare image for prepared E2E images", () => {

@@ -23,8 +23,8 @@ import {
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
-  normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
   supportsUpgradeSurvivorScenarioAtBaseline,
@@ -32,7 +32,6 @@ import {
 
 export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
-export { normalizeUpgradeSurvivorBaselineSpec };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -500,6 +499,7 @@ function expandUpgradeSurvivorBaselineLanes(
     return { lanes: poolLanes, omittedLaneNames: [] };
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
+  baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   // Trusted-current planners may know scenarios that a frozen target's Docker
   // harness cannot seed or assert. Filter by the selected tree's concrete
   // harness contract so validation never schedules an impossible target lane.
