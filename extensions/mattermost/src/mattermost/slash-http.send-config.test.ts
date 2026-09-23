@@ -60,7 +60,6 @@ const mockState = vi.hoisted(() => ({
       }),
     }),
   ),
-  normalizeMattermostAllowList: vi.fn((value: unknown) => value),
   getMattermostCommand: vi.fn(async () => ({
     id: "cmd-1",
     token: "valid-token",
@@ -149,7 +148,6 @@ vi.mock("./model-picker.js", () => ({
 
 vi.mock("./monitor-auth.js", () => ({
   authorizeMattermostCommandInvocation: mockState.authorizeMattermostCommandInvocation,
-  normalizeMattermostAllowList: mockState.normalizeMattermostAllowList,
 }));
 
 vi.mock("./reply-delivery.js", () => ({

@@ -930,7 +930,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
 
   const isDirectMessage = params.auth.channelType === "im";
   const isRoom = params.auth.channelType === "channel" || params.auth.channelType === "group";
-  const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
+  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: isDirectMessage,
     eventScope: params.eventScope,
   });

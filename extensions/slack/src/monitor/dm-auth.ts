@@ -13,6 +13,7 @@ export async function authorizeSlackDirectMessage(params: {
   senderId: string;
   eventScope?: SlackEventScope;
   allowFromLower: string[];
+  storeReadFailed?: boolean;
   resolveSenderName: (senderId: string) => Promise<{ name?: string }>;
   sendPairingReply: (text: string) => Promise<void>;
   onDisabled: () => Promise<void> | void;
@@ -42,7 +43,10 @@ export async function authorizeSlackDirectMessage(params: {
     return true;
   }
 
-  if (params.ctx.dmPolicy === "pairing") {
+  // A pairing-store read failure must not look like "never paired": issuing a
+  // pairing challenge here would wrongly ask an already-paired sender to
+  // re-pair. Fall through to the ordinary unauthorized outcome instead.
+  if (params.ctx.dmPolicy === "pairing" && !params.storeReadFailed) {
     const pairingSenderId = formatSlackTarget({
       teamId: params.eventScope?.teamId,
       kind: "user",

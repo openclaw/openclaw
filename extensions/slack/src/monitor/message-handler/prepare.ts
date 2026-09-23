@@ -510,7 +510,7 @@ async function authorizeSlackInboundMessage(params: {
     return drop("channel-not-allowed");
   }
 
-  const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+  const effective = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
     eventScope: params.eventScope,
   });
@@ -526,7 +526,7 @@ async function authorizeSlackInboundMessage(params: {
       accountId: account.accountId,
       senderId: directUserId,
       eventScope: params.eventScope,
-      allowFromLower,
+      ...effective,
       resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
       sendPairingReply: async (text) => {
         await sendMessageSlack(message.channel, text, {
@@ -554,7 +554,7 @@ async function authorizeSlackInboundMessage(params: {
 
   return {
     senderId,
-    allowFromLower,
+    allowFromLower: effective.allowFromLower,
   };
 }
 

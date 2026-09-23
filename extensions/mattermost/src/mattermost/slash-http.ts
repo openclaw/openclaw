@@ -31,10 +31,7 @@ import {
   resolveMattermostModelPickerCurrentModel,
   resolveMattermostModelPickerEntry,
 } from "./model-picker.js";
-import {
-  authorizeMattermostCommandInvocation,
-  normalizeMattermostAllowList,
-} from "./monitor-auth.js";
+import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
   buildPreparedModelsProviderData,
@@ -505,14 +502,6 @@ async function authorizeSlashInvocation(params: {
     surface: "mattermost",
   });
   const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
-  const storeAllowFrom = normalizeMattermostAllowList(
-    await core.channel.pairing
-      .readAllowFromStore({
-        channel: "mattermost",
-        accountId: account.accountId,
-      })
-      .catch(() => []),
-  );
   const decision = await authorizeMattermostCommandInvocation({
     account,
     cfg,
@@ -520,7 +509,11 @@ async function authorizeSlashInvocation(params: {
     senderName,
     channelId,
     channelInfo,
-    storeAllowFrom,
+    readStoreAllowFrom: () =>
+      core.channel.pairing.readAllowFromStore({
+        channel: "mattermost",
+        accountId: account.accountId,
+      }),
     allowTextCommands,
     hasControlCommand,
   });

@@ -505,7 +505,7 @@ export function createSlackCommandHandler(params: {
         return false;
       }
 
-      const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+      const effective = await resolveSlackEffectiveAllowFrom(ctx, {
         includePairingStore: isDirectMessage,
         eventScope,
       });
@@ -520,7 +520,7 @@ export function createSlackCommandHandler(params: {
           accountId: ctx.accountId,
           senderId: command.user_id,
           eventScope,
-          allowFromLower: effectiveAllowFromLower,
+          ...effective,
           resolveSenderName: (userId) => ctx.resolveUserName(userId, eventScope),
           sendPairingReply: async (text) => {
             await respond({
@@ -601,7 +601,7 @@ export function createSlackCommandHandler(params: {
         channelType: channelType ?? "channel",
         channelId: command.channel_id,
         threadId: p.threadTs,
-        ownerAllowFromLower: effectiveAllowFromLower,
+        ownerAllowFromLower: effective.allowFromLower,
         channelUsers: isRoom ? channelConfig?.users : undefined,
         allowTextCommands: false,
         hasControlCommand: false,

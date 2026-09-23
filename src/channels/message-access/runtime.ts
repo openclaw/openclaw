@@ -392,7 +392,8 @@ async function resolveChannelMessageIngressForOwner(
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
-  const storeAllowFrom = await readChannelIngressStoreAllowFrom({ ...params, channelId });
+  const { entries: storeAllowFrom, readFailed: pairingStoreReadFailed } =
+    await readChannelIngressStoreAllowFrom({ ...params, channelId });
   const rawAllowFrom = normalizeStringEntries(params.allowFrom ?? []);
   const rawStoreAllowFrom = normalizeStringEntries(storeAllowFrom);
   const rawGroupAllowFrom = normalizeStringEntries(params.groupAllowFrom ?? []);
@@ -458,6 +459,7 @@ async function resolveChannelMessageIngressForOwner(
     routeFacts,
     mentionFacts: params.mentionFacts,
     event: params.event,
+    pairingStoreReadFailed,
     allowlists: {
       dm: rawAllowFrom,
       group: rawEffective.effectiveGroupAllowFrom,

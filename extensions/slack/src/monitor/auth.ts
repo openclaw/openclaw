@@ -1,10 +1,10 @@
-import {
-  type ChannelIngressEventInput,
-  type ChannelIngressContextBinding,
-  type ChannelIngressPolicyInput,
-  type ChannelIngressStateInput,
-  readChannelIngressStoreAllowFromForDmPolicy,
+import type {
+  ChannelIngressEventInput,
+  ChannelIngressContextBinding,
+  ChannelIngressPolicyInput,
+  ChannelIngressStateInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
@@ -99,27 +99,35 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[]
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
   options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
-) {
+): Promise<{ allowFromLower: string[]; storeReadFailed: boolean }> {
   const teamId = options?.eventScope?.teamId ?? ctx.teamId;
   const base = buildBaseAllowFrom(ctx, teamId);
   if (options?.includePairingStore !== true) {
-    return base;
+    return { allowFromLower: base, storeReadFailed: false };
   }
+  // Same gating the shared ingress resolver applies: a policy that never
+  // consults stored approvals must not read the store at all.
+  if (ctx.dmPolicy === "allowlist" || ctx.dmPolicy === "open") {
+    return { allowFromLower: base, storeReadFailed: false };
+  }
+  let storeReadFailed = false;
   let storeAllowFrom: string[];
   try {
-    const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
-      provider: "slack",
-      accountId: ctx.accountId,
-      dmPolicy: ctx.dmPolicy,
-    });
+    const resolved = await readChannelAllowFromStore("slack", process.env, ctx.accountId);
     storeAllowFrom = Array.isArray(resolved) ? resolved : [];
   } catch {
+    // An unavailable store is not an empty allowlist: report it so the DM gate
+    // denies instead of treating the sender as never paired.
+    storeReadFailed = true;
     storeAllowFrom = [];
   }
-  return resolveSlackUserAllowListForTeam({
-    allowList: [...base, ...storeAllowFrom],
-    teamId,
-  });
+  return {
+    allowFromLower: resolveSlackUserAllowListForTeam({
+      allowList: [...base, ...storeAllowFrom],
+      teamId,
+    }),
+    storeReadFailed,
+  };
 }
 
 async function fetchSlackChannelMemberIds(
@@ -348,6 +356,10 @@ async function decideSlackSystemIngress(params: {
   channelType: SlackIngressChannelType;
   channelId?: string;
   ownerAllowFromLower: string[];
+  /** True when a pairing-store read failed, so an empty ownerAllowFromLower is
+   *  a read failure, not a genuinely open policy — must not fall through to
+   *  the wildcard-when-empty DM fallback below. */
+  storeReadFailed?: boolean;
   channelUsers?: Array<string | number>;
   interactiveEvent: boolean;
   retryNameLookup?: boolean;
@@ -416,7 +428,11 @@ async function decideSlackSystemIngress(params: {
       groupAllowFromFallbackToAllowFrom: false,
       mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
     },
-    allowFrom: isDirectMessage ? wildcardWhenOpen(ownerAllowFromLower) : ownerAllowFrom,
+    allowFrom: isDirectMessage
+      ? params.storeReadFailed
+        ? ownerAllowFromLower
+        : wildcardWhenOpen(ownerAllowFromLower)
+      : ownerAllowFrom,
     groupAllowFrom,
     command:
       params.interactiveEvent && hasAnyCommandAllowlist
@@ -539,7 +555,7 @@ export async function authorizeSlackSystemEventSender(params: {
     }
   }
 
-  const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
+  const { allowFromLower, storeReadFailed } = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: ingressChannelType === "im",
     eventScope: params.eventScope,
   });
@@ -565,6 +581,7 @@ export async function authorizeSlackSystemEventSender(params: {
     channelType: ingressChannelType,
     channelId,
     ownerAllowFromLower: allowFromLower,
+    storeReadFailed,
     channelUsers: channelConfig?.users,
     interactiveEvent: params.interactiveEvent === true,
     retryNameLookup: params.retryNameLookup && params.ctx.allowNameMatching,
