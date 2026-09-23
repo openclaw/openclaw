@@ -423,12 +423,44 @@ SDK rejects language-code hints on this API path.
 </Note>
 
 <Note>
+A Talk or bridge session can carry a caller language hint; Android forwards the
+language part of `talk.speechLocale` or the device locale. The OpenAI realtime
+provider uses that hint for input transcription only. Google Live native-audio
+models ignore `speechConfig.languageCode` and otherwise reply in whatever language
+a short or noisy utterance was transcribed as, so the Google provider also treats
+the hint as a soft reply-language preference. It starts the system instruction
+with a short note: reply in the hinted language, and switch when the caller asks
+for another language. OpenClaw's realtime prompt and your `realtime.instructions`
+follow that note, so a reply language set there (for example "Always reply in
+French") usually takes precedence. Both are model guidance rather than hard
+settings, so this precedence is best effort. Sessions without a hint, or with an
+unrecognized one, send the instructions unchanged.
+</Note>
+
+<Note>
 Gemini 3.1 Live accepts conversational text through realtime input and uses
 sequential function calling. OpenClaw omits the older `NON_BLOCKING`, function
 response scheduling, and affective-dialog fields for this model. Prefer
 `thinkingLevel`; configured positive `thinkingBudget` values are mapped to the
 nearest supported level, while `-1` leaves Google's default in place. See the
 [Gemini Live capability comparison](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
+</Note>
+
+<Note>
+Gemini 3.8 Live (`gemini-3.8-live`) keeps the async function-calling contract and
+rejects any thinking config, so OpenClaw sends none for it. Gemini 3.8 Live Extended
+Thinking (`gemini-3.8-live-extended-thinking`) requires `NON_BLOCKING` tools, rejects
+function response scheduling, and abandons a call after an interim response, so OpenClaw
+sends one final result per agent consult without a "working" interim. Configure its
+reasoning depth with `thinkingLevel` (`low`, `medium`, or `high`; `minimal` maps to
+`low`), or a positive `thinkingBudget` mapped to the nearest level. On this model an
+explicit stop or barge-in interrupts generation through a short client-content turn that
+tells the model it was interrupted (an empty turn makes it resume). Cancelling the current
+generation is reliable, but the silence that follows is best effort: the model may still
+resume or start another response, so treat a stop as "stop this reply", not a guarantee of
+silence. Other Gemini Live models interrupt only through server-side voice activity
+detection. See the
+[Gemini 3.8 Live thinking guide](https://ai.google.dev/gemini-api/docs/live-api/thinking).
 </Note>
 
 <Note>
