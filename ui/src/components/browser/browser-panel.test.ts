@@ -31,7 +31,7 @@ function attachAnnotationOverlay(panel: {
   overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
   overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
   overlay.addEventListener("pointerdown", (event) =>
-    panel.browserPanelController.handleOverlayPointerDown(event as PointerEvent),
+    panel.browserPanelController.input.handleOverlayPointerDown(event as PointerEvent),
   );
   overlay.addEventListener("pointermove", (event) =>
     panel.browserPanelController.handleOverlayPointerMove(event as PointerEvent),

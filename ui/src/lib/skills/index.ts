@@ -165,28 +165,6 @@ function isSkillsAgentScopeCurrent(
   return state.skillsAgentId === scope.agentId && state.skillsAgentRevision === scope.revision;
 }
 
-async function runStaleAwareRequest<T>(
-  isCurrent: () => boolean,
-  request: () => Promise<T>,
-  onSuccess: (value: T) => void,
-  onError: (err: unknown) => void,
-  onFinally: () => void,
-) {
-  try {
-    const result = await request();
-    if (!isCurrent()) {
-      return;
-    }
-    onSuccess(result);
-  } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    onError(err);
-  }
-  onFinally();
-}
-
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
@@ -579,23 +557,24 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      ref === state.clawhubDetailRef &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug: ref }),
-    (res) => {
-      state.clawhubDetail = res ?? null;
-    },
-    (err) => {
-      state.clawhubDetailError = formatUiError(err);
-    },
-    () => {
-      state.clawhubDetailLoading = false;
-    },
-  );
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    ref === state.clawhubDetailRef &&
+    isSkillsAgentScopeCurrent(state, agentScope);
+  try {
+    const res = await client.request<ClawHubSkillDetail>("skills.detail", { slug: ref });
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetail = res ?? null;
+  } catch (err) {
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetailError = formatUiError(err);
+  }
+  state.clawhubDetailLoading = false;
 }
 
 export function closeClawHubDetail(state: SkillsState) {

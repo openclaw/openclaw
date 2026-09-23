@@ -48,10 +48,10 @@ type ControlUiE2eScenario<T> = {
   retainedState?: () => string | undefined;
 };
 type ControlUiE2eScenarioContext = {
-  signal: AbortSignal;
-  onTestFinished: (cleanup: () => void | Promise<void>, timeout?: number) => void;
-  task: {
-    result?: { errors?: readonly unknown[] };
+  readonly signal: AbortSignal;
+  readonly onTestFinished: (cleanup: () => void | Promise<void>, timeout?: number) => void;
+  readonly task: {
+    readonly result?: { errors?: readonly unknown[] };
   };
 };
 type ControlUiE2eSuite = {

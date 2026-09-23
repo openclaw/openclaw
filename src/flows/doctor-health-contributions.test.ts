@@ -23,6 +23,11 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
+import {
+  clearHealthChecksForTest,
+  getHealthCheck,
+  registerHealthCheck,
+} from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 // This suite's SecretRef migration assertion uses a core model credential. Registry owner suites
@@ -80,6 +85,9 @@ const mocks = vi.hoisted(() => ({
   noteLegacyCodexProviderOverride: vi.fn(),
   noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
+  collectMemorySearchHealthFindings: vi
+    .fn<() => Promise<readonly HealthFinding[]>>()
+    .mockResolvedValue([]),
   noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   callGateway: vi.fn(),
@@ -115,7 +123,6 @@ const mocks = vi.hoisted(() => ({
     status: { ok: true },
   })),
   probeGatewayMemoryStatus: vi.fn(async () => ({ checked: true, ready: true, skipped: false })),
-  listHealthChecks: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
@@ -389,10 +396,14 @@ vi.mock("../commands/doctor-auth.js", () => ({
   noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
-vi.mock("../commands/doctor-memory-search.js", () => ({
+vi.mock("../commands/doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands/doctor-memory-search.js", () => ({
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,
+  collectMemorySearchHealthFindings: mocks.collectMemorySearchHealthFindings,
 }));
 
 vi.mock("../commands/doctor-web-fetch-proxy.js", () => ({
@@ -445,26 +456,6 @@ vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
-
-vi.mock("./health-check-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./health-check-registry.js")>();
-  return {
-    ...actual,
-    listHealthChecks: mocks.listHealthChecks,
-    listExtensionHealthChecksForDoctor: (
-      coreChecks: Parameters<typeof actual.listExtensionHealthChecksForDoctor>[0],
-    ) => {
-      const coreIds = new Set(coreChecks.map((check) => check.id));
-      const registeredChecks = mocks.listHealthChecks() as readonly HealthCheck[];
-      for (const check of registeredChecks) {
-        if (check.id.startsWith("core/doctor/") || coreIds.has(check.id)) {
-          throw new actual.HealthCheckRegistrationError(check.id);
-        }
-      }
-      return registeredChecks.filter((check) => check.kind !== "core");
-    },
-  };
-});
 
 vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
@@ -685,6 +676,15 @@ function createDoctorLintFixture(
   });
 }
 
+function setRegisteredHealthChecks(
+  checks: ReadonlyArray<Pick<HealthCheck, "id" | "kind"> & { defaultEnabled?: boolean }>,
+) {
+  clearHealthChecksForTest();
+  for (const check of checks) {
+    registerHealthCheck({ ...check, description: check.id, detect: async () => [] });
+  }
+}
+
 describe("doctor health contributions", () => {
   async function withProcessPlatform<T>(
     platform: NodeJS.Platform,
@@ -740,6 +740,7 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyCodexProviderOverride.mockClear();
     mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear().mockResolvedValue(undefined);
+    mocks.collectMemorySearchHealthFindings.mockClear().mockResolvedValue([]);
     mocks.noteWebFetchProxyDiagnostic.mockClear().mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear().mockReturnValue({ message: "gateway details" });
     mocks.callGateway.mockReset().mockResolvedValue({});
@@ -782,7 +783,7 @@ describe("doctor health contributions", () => {
       checksRepaired: 0,
       checksValidated: 0,
     }));
-    mocks.listHealthChecks.mockReset().mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
@@ -903,6 +904,7 @@ describe("doctor health contributions", () => {
   });
 
   afterEach(() => {
+    clearHealthChecksForTest();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -3117,45 +3119,29 @@ describe("doctor health contributions", () => {
     expect(detect).toHaveBeenCalledTimes(2);
   });
 
-  it("collects memory-search notes as structured findings", async () => {
+  it("collects memory-search findings from the diagnostic owner", async () => {
     const contribution = requireDoctorContribution("doctor:memory-search");
     const check = contribution.healthChecks[0] as HealthCheck;
-    const env = { OPENCLAW_STATE_DIR: "/isolated-memory-state" };
-    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
-      opts.noteFn(
-        [
-          'Memory search provider is set to "openai" but no API key was found.',
-          "Semantic recall will not work without a valid API key.",
-          "Fix (pick one):",
-          "- Set OPENAI_API_KEY in your environment",
-        ].join("\n"),
-        "Memory search",
-      );
-    });
-
-    const findings = await check.detect(createDoctorLintFixture({}, { env }));
-
-    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
-    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
-    expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith(
+    const ctx = createDoctorLintFixture(
       {},
-      expect.objectContaining({
-        env,
-        includeWorkspaceMemoryHealth: false,
-        skipAuthProfileResolution: true,
-        gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
-        noteFn: expect.any(Function),
-      }),
+      { env: { OPENCLAW_STATE_DIR: "/isolated-memory-state" } },
     );
-    expect(findings).toEqual([
-      expect.objectContaining({
+    const findings: HealthFinding[] = [
+      {
         checkId: "core/doctor/memory-search",
         severity: "warning",
         path: "memory.search.provider",
         message: 'Memory search provider is set to "openai" but no API key was found.',
-        fixHint: expect.stringContaining("OPENAI_API_KEY"),
-      }),
-    ]);
+        fixHint: "- Set OPENAI_API_KEY in your environment",
+      },
+    ];
+    mocks.collectMemorySearchHealthFindings.mockResolvedValueOnce(findings);
+
+    expect(await check.detect(ctx)).toEqual(findings);
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
+    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+    expect(mocks.collectMemorySearchHealthFindings).toHaveBeenCalledWith(ctx);
+    expect(mocks.noteMemorySearchHealth).not.toHaveBeenCalled();
   });
 
   it("forwards the interactive Doctor environment to memory provider discovery", async () => {
@@ -3165,18 +3151,6 @@ describe("doctor health contributions", () => {
     await contribution.run(createDoctorContext({ env }));
 
     expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith({}, expect.objectContaining({ env }));
-  });
-
-  it("does not report disabled memory search as a lint warning", async () => {
-    const contribution = requireDoctorContribution("doctor:memory-search");
-    const check = contribution.healthChecks[0] as HealthCheck;
-    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
-      opts.noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
-    });
-
-    const findings = await check.detect(createDoctorLintFixture());
-
-    expect(findings).toEqual([]);
   });
 
   it("keeps workspace suggestions opt-in for default lint selection", async () => {
@@ -3923,12 +3897,12 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
-      checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
+      checks: [getHealthCheck("plugin/example/unrelated")],
     });
   });
 
   it("skips opt-in extension checks during routine repair", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/regular", kind: "plugin" },
       { id: "plugin/example/opt-in", kind: "plugin", defaultEnabled: false },
     ]);
@@ -3945,7 +3919,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
-      { checks: [{ id: "plugin/example/regular", kind: "plugin" }] },
+      { checks: [getHealthCheck("plugin/example/regular")] },
     );
   });
 
@@ -4023,7 +3997,7 @@ describe("doctor health contributions", () => {
   );
 
   it("rejects extension repairs that claim reserved core doctor ids", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/unrelated", kind: "plugin" },
       { id: "core/doctor/shell-completion", kind: "plugin" },
     ]);
@@ -4043,7 +4017,7 @@ describe("doctor health contributions", () => {
   });
 
   it("rejects registered core-kind repairs that claim reserved core doctor ids", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/unrelated", kind: "plugin" },
       { id: "core/doctor/shell-completion", kind: "core" },
     ]);
