@@ -30,6 +30,20 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { execPlainGh, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 import {
+  RELEASE_PRIORITY_RECORD_KIND,
+  RELEASE_PRIORITY_VARIABLE,
+  defaultReleasePriorityRecordPath,
+  describeRun,
+  isDeferredCiJobSet,
+  isQueuedRun,
+  mergeReleasePriorityRecord,
+  readReleasePriorityRecord,
+  selectDeferredRunCandidates,
+  selectLatestRunsPerLane,
+  selectQueuedRunsToCancel,
+  writeReleasePriorityRecord,
+} from "./lib/release-priority.mjs";
+import {
   createReleaseEvidenceClient,
   releaseExecutionPlanRestoreContract,
   restoreOriginalPublicationAdmission,
@@ -113,6 +127,10 @@ function parseArgs(argv) {
       options.job = requiredValue(argv[++index], "--job");
     } else if (argument === "--failed") {
       options.failedOnly = true;
+    } else if (argument === "--restore") {
+      options.restore = requiredValue(argv[++index], "--restore");
+    } else if (argument === "--out") {
+      options.outPath = requiredValue(argv[++index], "--out");
     } else if (argument === "--json") {
       options.json = true;
     } else if (argument === "--dry-run") {
@@ -121,13 +139,22 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!["continue", "rerun", "status", "verify"].includes(command)) {
+  if (!["continue", "prioritize", "rerun", "status", "verify"].includes(command)) {
     throw new Error(
-      "usage: pnpm frv <status|continue|rerun|verify> --run <id> [--failed | --job <child>:<name>]",
+      "usage: pnpm frv <status|continue|rerun|verify|prioritize> --run <id> [--failed | --job <child>:<name>] | pnpm frv prioritize --restore <record>",
     );
   }
-  if (!/^[1-9][0-9]*$/u.test(options.runId)) {
-    throw new Error("--run must be a positive decimal");
+  const restoring = command === "prioritize" && options.restore !== undefined;
+  if (restoring ? options.runId !== "" : !/^[1-9][0-9]*$/u.test(options.runId)) {
+    throw new Error(
+      restoring ? "--restore does not take --run" : "--run must be a positive decimal",
+    );
+  }
+  if (
+    (options.restore !== undefined || options.outPath !== undefined) &&
+    command !== "prioritize"
+  ) {
+    throw new Error("--restore and --out are valid only with prioritize");
   }
   if (command === "continue" && !options.failedOnly) {
     throw new Error("continue requires --failed");
@@ -135,8 +162,8 @@ function parseArgs(argv) {
   if (command !== "continue" && options.failedOnly) {
     throw new Error("--failed is valid only with continue");
   }
-  if (command !== "continue" && command !== "rerun" && options.dryRun) {
-    throw new Error("--dry-run is valid only with continue or rerun");
+  if (!["continue", "prioritize", "rerun"].includes(command) && options.dryRun) {
+    throw new Error("--dry-run is valid only with continue, rerun, or prioritize");
   }
   if (command === "rerun") {
     parseJobSelector(options.job);
@@ -900,6 +927,33 @@ export function createClient(repository, dependencies = {}) {
       });
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
+    cancelRun: (runId) => rerun(runId, "cancel"),
+    rerunRun: (runId) => rerun(runId, "rerun"),
+    async listRuns(query) {
+      const output = await apiText(
+        `actions/runs?${query}&per_page=100`,
+        ".workflow_runs[] | @json",
+      );
+      return output
+        ? output
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
+    },
+    async getVariable(name) {
+      try {
+        return String((await apiJson(`actions/variables/${name}`)).value ?? "");
+      } catch (error) {
+        if (/HTTP 404|Not Found/u.test(String(error?.stderr ?? error?.message ?? ""))) {
+          return "";
+        }
+        throw error;
+      }
+    },
+    setVariable: (name, value) =>
+      mutate(["variable", "set", name, "--repo", repository, "--body", value]),
+    deleteVariable: (name) => mutate(["variable", "delete", name, "--repo", repository]),
     rerunJob: (jobId) =>
       mutate(["api", "-X", "POST", `repos/${repository}/actions/jobs/${jobId}/rerun`]),
     rerunParent: (runId) => rerun(runId, "rerun"),
@@ -1165,6 +1219,107 @@ async function inspectManualRetryOwner(plan, child, parentBinding, client, opera
   }
   remainingOperationTime(operationDeadline);
   return { ready: true, parentRunAttempt: Number(current.run_attempt) };
+}
+
+export async function prioritizeRelease(parentRunId, client, options = {}) {
+  const parent = await client.getRun(parentRunId);
+  if (
+    String(parent.path ?? "").split("@", 1)[0] !==
+      ".github/workflows/full-release-validation.yml" ||
+    parent.status === "completed"
+  ) {
+    throw new Error(`run ${parentRunId} is not an active Full Release Validation parent`);
+  }
+  const queued = (
+    await Promise.all(
+      ["queued", "pending", "waiting"].map((status) => client.listRuns(`status=${status}`)),
+    )
+  ).flat();
+  const recordPath = options.outPath ?? defaultReleasePriorityRecordPath(parentRunId);
+  const candidates = selectQueuedRunsToCancel(queued, parentRunId);
+  const previous = readReleasePriorityRecord(recordPath, { optional: true });
+  const intent = mergeReleasePriorityRecord(previous, {
+    kind: RELEASE_PRIORITY_RECORD_KIND,
+    parentRunId: String(parentRunId),
+    repository: client.repository ?? DEFAULT_REPOSITORY,
+    recordedAt: new Date().toISOString(),
+    cancelled: candidates,
+  });
+  if (options.dryRun) {
+    return { action: "would-prioritize", record: intent, recordPath };
+  }
+  // Recovery intent and the gate both land before the first cancellation.
+  writeReleasePriorityRecord(recordPath, intent);
+  await client.setVariable(RELEASE_PRIORITY_VARIABLE, String(parentRunId));
+  const cancelled = [];
+  const failures = [];
+  const skipped = [];
+  for (const run of candidates) {
+    // Only a run that is still queued at this instant is cancelled.
+    if (!isQueuedRun(await client.getRun(run.id))) {
+      skipped.push(run);
+      continue;
+    }
+    try {
+      await client.cancelRun(run.id);
+      cancelled.push(run);
+    } catch (error) {
+      failures.push(`${run.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const record = mergeReleasePriorityRecord(previous, { ...intent, cancelled });
+  writeReleasePriorityRecord(recordPath, record);
+  return { action: "prioritized", failures, record, recordPath, skipped };
+}
+
+export async function clearReleasePriority(client, parentRunId) {
+  if ((await client.getVariable(RELEASE_PRIORITY_VARIABLE)) !== String(parentRunId)) {
+    return false;
+  }
+  await client.deleteVariable(RELEASE_PRIORITY_VARIABLE);
+  return true;
+}
+
+export async function restoreReleasePriority(recordPath, client, options = {}) {
+  const record = readReleasePriorityRecord(recordPath);
+  // Close the pause window first so nothing defers while the batch is collected.
+  const cleared = options.dryRun ? false : await clearReleasePriority(client, record.parentRunId);
+  const runs = await client.listRuns(`created=${encodeURIComponent(`>=${record.recordedAt}`)}`);
+  const deferred = [];
+  for (const run of selectDeferredRunCandidates(runs, record)) {
+    if (
+      run.conclusion === "skipped" ||
+      isDeferredCiJobSet(await client.getParentJobs(String(run.id)))
+    ) {
+      deferred.push(describeRun(run));
+    }
+  }
+  const rerun = selectLatestRunsPerLane([...record.cancelled, ...deferred]);
+  if (options.dryRun) {
+    return { action: "would-restore", deferred, rerun };
+  }
+  const failures = [];
+  for (const run of rerun) {
+    try {
+      await client.rerunRun(run.id);
+    } catch (error) {
+      failures.push(`${run.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { action: "restored", cleared, failures, rerun };
+}
+
+// A sealed parent releases hosted-runner priority; a failure here never undoes the seal.
+async function releaseSealedPriority(client, parentRunId) {
+  try {
+    if (await clearReleasePriority(client, parentRunId)) {
+      console.log(`[frv] cleared ${RELEASE_PRIORITY_VARIABLE} (${parentRunId})`);
+    }
+  } catch (error) {
+    console.warn(
+      `[frv] ${RELEASE_PRIORITY_VARIABLE} not cleared: ${error instanceof Error ? error.message : String(error)}; run pnpm frv prioritize --restore <record>`,
+    );
+  }
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
@@ -2066,8 +2221,17 @@ function print(value, json) {
       `${child.key}: ${child.status} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
     );
   }
+  for (const run of value.record?.cancelled ?? value.rerun ?? []) {
+    console.log(`${run.name} ${run.id} ${run.headBranch} ${run.url}`);
+  }
+  for (const failure of value.failures ?? []) {
+    console.log(`failure: ${failure}`);
+  }
   if (value.action) {
     console.log(`action: ${value.action}`);
+  }
+  if (value.recordPath) {
+    console.log(`record: ${value.recordPath}`);
   }
   if (value.finalRunId) {
     console.log(`final run: https://github.com/openclaw/openclaw/actions/runs/${value.finalRunId}`);
@@ -2086,10 +2250,23 @@ async function main() {
     return;
   }
   const client = createClient(options.repository);
+  if (options.command === "prioritize") {
+    print(
+      options.restore === undefined
+        ? await prioritizeRelease(options.runId, client, {
+            dryRun: options.dryRun,
+            outPath: options.outPath,
+          })
+        : await restoreReleasePriority(options.restore, client, { dryRun: options.dryRun }),
+      options.json,
+    );
+    return;
+  }
   if (options.command === "verify") {
     const plan = await loadPlan(options);
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
+    await releaseSealedPriority(client, options.runId);
     return;
   }
   const plan = await loadPlan(options);
@@ -2097,13 +2274,14 @@ async function main() {
     print(await inspectContinuation(plan, client), options.json);
     return;
   }
-  print(
-    await continueFailed(plan, options.runId, client, {
-      dryRun: options.dryRun,
-      job: options.job,
-    }),
-    options.json,
-  );
+  const result = await continueFailed(plan, options.runId, client, {
+    dryRun: options.dryRun,
+    job: options.job,
+  });
+  print(result, options.json);
+  if (!options.dryRun && options.command === "continue") {
+    await releaseSealedPriority(client, options.runId);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

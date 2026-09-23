@@ -532,9 +532,11 @@ describe("reply turn admission", () => {
         successorSettled = true;
       });
       await vi.advanceTimersByTimeAsync(100);
+      // Worker I/O settles on real turns, not fake-clock advancement. No later
+      // retry timer is advanced while joining the successor admission.
+      const admitted = await successor;
       expect(successorSettled).toBe(true);
       accessorSpy.mockRestore();
-      const admitted = await successor;
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
         admitted.operation.complete();

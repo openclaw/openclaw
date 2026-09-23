@@ -1,4 +1,4 @@
-// Control UI tests cover the working claw's optical alignment.
+// Control UI tests cover the working claw's alignment and fixed size.
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
@@ -33,6 +33,7 @@ describeBrowser("working claw browser layout", () => {
       const css = [
         "ui/src/styles/base.css",
         "ui/src/styles/components.css",
+        "ui/src/styles/chat/startup-layout.css",
         "ui/src/styles/chat/working-indicator.css",
         // Production code splitting can attach grouped chat CSS after the
         // indicator chunk. The centering invariant must not depend on order.
@@ -71,6 +72,41 @@ describeBrowser("working claw browser layout", () => {
       expect(geometry.layoutCenter).toBeCloseTo(geometry.statusCenter, 3);
       expect(geometry.paintedCenter).toBeCloseTo(geometry.statusCenter, 3);
       expect(geometry.translate).toBe("none");
+
+      await page.locator(".chat-working-indicator__status").evaluate((status) => {
+        const preamble = document.createElement("span");
+        preamble.className = "chat-working-indicator__preamble";
+        preamble.textContent =
+          "Checking the remaining cleanup paths and updating the implementation before running the focused tests. ".repeat(
+            5,
+          );
+        status.prepend(preamble);
+      });
+      for (const width of [640, 320]) {
+        await page.setViewportSize({ width, height: 480 });
+        const layout = await page.evaluate(() => {
+          const svg = document.querySelector(".chat-reading-indicator svg")!;
+          const preamble = document.querySelector(".chat-working-indicator__preamble")!;
+          return {
+            width: getComputedStyle(svg).width,
+            height: getComputedStyle(svg).height,
+            preambleHeight: Number.parseFloat(getComputedStyle(preamble).height),
+            statusHeight: Number.parseFloat(getComputedStyle(preamble.parentElement!).height),
+            lineHeight: Number.parseFloat(getComputedStyle(preamble).lineHeight),
+            preambleWidth: preamble.clientWidth,
+            preambleScrollWidth: preamble.scrollWidth,
+            textOverflow: getComputedStyle(preamble).textOverflow,
+            scrollWidth: document.documentElement.scrollWidth,
+          };
+        });
+        expect(layout.width).toBe("18px");
+        expect(layout.height).toBe("18px");
+        expect(layout.preambleHeight).toBeCloseTo(layout.lineHeight, 1);
+        expect(layout.statusHeight).toBeCloseTo(layout.lineHeight, 1);
+        expect(layout.preambleScrollWidth).toBeGreaterThan(layout.preambleWidth);
+        expect(layout.textOverflow).toBe("ellipsis");
+        expect(layout.scrollWidth).toBeLessThanOrEqual(width);
+      }
     } finally {
       await page.close();
     }
