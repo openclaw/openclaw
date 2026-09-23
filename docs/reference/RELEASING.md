@@ -724,9 +724,15 @@ without replacement. The package carries the inventory in
 candidate's bridges. Existing older compatibility aliases remain separately
 owned by their original upgrade contracts.
 
-The default `update-first-hop-compat` lane runs each recorded release against the
-candidate, with separate artifacts per version. Published updaters may correctly
-skip a same-version tarball, so the lane stamps only test-artifact version metadata:
+The `update-first-hop-compat` selection expands into one Docker lane per
+recorded release (`update-first-hop-compat-<version>`, from
+`scripts/lib/update-compat-inventory.json`), so the hops run as parallel jobs
+and the wall clock stays at one hop (~10 minutes) instead of one per release.
+Each lane runs `scripts/e2e/update-first-hop-compat-docker.sh` with
+`OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=<version>` and writes
+`.artifacts/update-first-hop-compat-<version>/`; a frozen target that records
+fewer releases omits the lanes it does not list. Published updaters may correctly
+skip a same-version tarball, so each lane stamps only test-artifact version metadata:
 first hop `2026.9.99-first-hop.0` retains compatibility bridges; second hop
 `2026.9.99-first-hop.1` removes them. The original candidate stays unchanged, and
 transformation receipts bind package digests and every changed or removed member.
@@ -1474,7 +1480,7 @@ release. Existing approval and provenance checks still apply.
 
 Stable publication requires Full Release Validation with `runReleaseSoak=true` unless the operator supplies a non-empty `stable_soak_waiver` reason; the waiver also accepts advisory (beta-profile) performance evidence for publication and closeout when the product performance child run succeeded. The reason is recorded in postpublish evidence and the release verification tail, and all other evidence checks remain required. For regular stable tags published to `latest`, the waiver also authorizes first-time plugin npm bootstrap with beta-profile validation and is recorded in the attested bootstrap approval. The [fast path](#fast-path-default) supplies the waiver by default; leave the input empty only when soak actually ran:
 
-**Operator lane waiver.** When the release owner decides non-proof lanes must not block a stable, set the repository variable `OPENCLAW_FRV_LANE_WAIVER` to `<target version> <reason>` (for example `2026.9.6 ship now`; `workflow_dispatch` caps inputs at 25, and a value naming another version fails closed) and dispatch Full Release Validation: failed jobs in the CI, plugin prerelease, release-checks, and performance children become advisory and are recorded in the manifest (`advisoryJobs` with `reason: lane_waiver`), while install-smoke, upgrade-survivor, pack/qualify-npm, `resolve_target`, and every artifact gate stay blocking (a lost `update-first-hop-compat` lane is waivable only behind green upgrade-survivor lanes). Publishing that evidence requires `lane_waiver=<reason>` on `openclaw-release-publish.yml` as acknowledgement; the receipt records `laneWaiver`, `laneWaiverAcknowledgement`, and `waivedJobs` next to `stableSoakWaiver`. Clear the variable after the release. Native app and Control UI CI lanes and cross-OS execution lanes are advisory for the npm decision even without a waiver.
+**Operator lane waiver.** When the release owner decides non-proof lanes must not block a stable, set the repository variable `OPENCLAW_FRV_LANE_WAIVER` to `<target version> <reason>` (for example `2026.9.6 ship now`; `workflow_dispatch` caps inputs at 25, and a value naming another version fails closed) and dispatch Full Release Validation: failed jobs in the CI, plugin prerelease, release-checks, and performance children become advisory and are recorded in the manifest (`advisoryJobs` with `reason: lane_waiver`), while install-smoke, upgrade-survivor, pack/qualify-npm, `resolve_target`, and every artifact gate stay blocking (a lost `update-first-hop-compat-<version>` lane is waivable only behind green upgrade-survivor lanes). Publishing that evidence requires `lane_waiver=<reason>` on `openclaw-release-publish.yml` as acknowledgement; the receipt records `laneWaiver`, `laneWaiverAcknowledgement`, and `waivedJobs` next to `stableSoakWaiver`. Clear the variable after the release. Native app and Control UI CI lanes and cross-OS execution lanes are advisory for the npm decision even without a waiver.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
