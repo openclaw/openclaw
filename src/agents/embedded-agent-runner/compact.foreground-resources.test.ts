@@ -23,6 +23,8 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
+import { isTerminalTaskStatus, type TaskStatus } from "../../tasks/task-registry.types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -165,6 +167,7 @@ it.each([
       const forceDisposal = createDeferredCore();
       const factoryAborted = createDeferredCore();
       const operationAborted = createDeferredCore();
+      const taskSettled = createDeferredCore<TaskStatus>();
       const parent = deferred ? new AsyncWorkScope() : undefined;
       let factorySignal: AbortSignal | undefined;
       let factoryCloseContextMatches = false;
@@ -309,6 +312,17 @@ it.each([
       const caller = new AbortController();
       const callerReason = new Error("foreground compaction caller cancelled");
       let pending: Promise<unknown> | undefined;
+      const stopTasks = deferred
+        ? onTaskRegistryChange((event) => {
+            if (
+              event?.kind === "upserted" &&
+              event.task.ownerKey === target.sessionKey &&
+              isTerminalTaskStatus(event.task.status)
+            ) {
+              taskSettled.resolve(event.task.status);
+            }
+          })
+        : undefined;
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
@@ -380,6 +394,12 @@ it.each([
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
+        if (deferred) {
+          // The owner settles its task before disposal; measure factory drainage after publication.
+          expect(
+            await withTestTimeout(taskSettled.promise, 5_000, "Deferred task never settled"),
+          ).toBe("succeeded");
+        }
         await withTestTimeout(
           disposalEntered.promise,
           1_000,
@@ -417,6 +437,7 @@ it.each([
           reopened.close();
         }
       } finally {
+        stopTasks?.();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();
