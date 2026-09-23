@@ -1787,11 +1787,15 @@ export function terminalPolicyPass(child, releaseProfile, workflowRef, laneWaive
     return false;
   }
   // A failed workflow passes only with complete terminal job evidence whose
-  // failures are all advisory; the aggregator must have run.
+  // failures are all advisory; the aggregator must have finished with a verdict.
   return (
     child.jobs.length > 0 &&
     child.jobs.every((job) => job.status === "completed") &&
-    (gate === undefined || child.jobs.some((job) => job.name === gate)) &&
+    (gate === undefined ||
+      child.jobs.some(
+        (job) =>
+          job.name === gate && (job.conclusion === "success" || job.conclusion === "failure"),
+      )) &&
     failedJobsForPolicy(child, releaseProfile, workflowRef, laneWaiver).length === 0
   );
 }

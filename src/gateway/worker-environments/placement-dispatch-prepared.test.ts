@@ -16,10 +16,8 @@ import {
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
-import {
-  getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
-} from "../../state/session-repository-workspaces.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import {
   createNodeRegistryRuntime,

@@ -23,8 +23,13 @@ permissions:
 # 65-minute recovery deadline after bootstrap.
 jobs:
   resolve:
+    # PR prose is not an approval input. Keep base/permission changes and
+    # unknown edit payloads, plus command edits/deletions that revoke approval.
     if: >-
-      ${{ (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
+      ${{ (github.event_name != 'pull_request_target' || github.event.action != 'edited' ||
+      github.event.changes.base || github.event.changes.maintainer_can_modify ||
+      (!github.event.changes.title && !github.event.changes.body)) &&
+      (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
       (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
       contains(github.event.comment.body, '/allow-dependencies-change') ||
       (github.event.action == 'edited' &&

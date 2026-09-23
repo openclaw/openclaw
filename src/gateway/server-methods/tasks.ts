@@ -33,7 +33,7 @@ import {
 } from "../task-session-access.js";
 import { taskHistoryHandler } from "./task-history.js";
 import { mapTaskSummary } from "./task-summary.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
@@ -144,6 +144,41 @@ function invalidTaskListCursor(
       reason ? { details: { reason } } : undefined,
     ),
   );
+}
+
+function createTaskRecoveryHandler(method: "tasks.retry" | "tasks.dismiss"): GatewayRequestHandler {
+  return async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, method, respond)) {
+      return;
+    }
+    let recover = retrySubagentCompletionDelivery;
+    if (method === "tasks.dismiss") {
+      const { discardSubagentTerminalDelivery } =
+        await import("../../agents/subagents/registry/subagent-registry.js");
+      recover = (taskId) =>
+        dismissSubagentCompletionDelivery(taskId, {
+          discardTerminalDelivery: discardSubagentTerminalDelivery,
+        });
+    }
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await recover(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(method === "tasks.retry" && result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  };
 }
 
 // Control UI task methods expose the stable gateway protocol shape; helpers
@@ -342,53 +377,6 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
     });
   },
-  "tasks.retry": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
-      return;
-    }
-    const results = [];
-    const cfg = context.getRuntimeConfig();
-    for (const taskId of params.taskIds) {
-      const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
-        results.push({ taskId, ok: false, reason: "task not found" });
-        continue;
-      }
-      const result = await retrySubagentCompletionDelivery(taskId);
-      results.push({
-        taskId,
-        ok: result.ok,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
-        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-      });
-    }
-    respond(true, { results });
-  },
-  "tasks.dismiss": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
-      return;
-    }
-    const { discardSubagentTerminalDelivery } =
-      await import("../../agents/subagents/registry/subagent-registry.js");
-    const results = [];
-    const cfg = context.getRuntimeConfig();
-    for (const taskId of params.taskIds) {
-      const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
-        results.push({ taskId, ok: false, reason: "task not found" });
-        continue;
-      }
-      const result = await dismissSubagentCompletionDelivery(taskId, {
-        discardTerminalDelivery: discardSubagentTerminalDelivery,
-      });
-      results.push({
-        taskId,
-        ok: result.ok,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-      });
-    }
-    respond(true, { results });
-  },
+  "tasks.retry": createTaskRecoveryHandler("tasks.retry"),
+  "tasks.dismiss": createTaskRecoveryHandler("tasks.dismiss"),
 };
