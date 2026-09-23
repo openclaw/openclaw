@@ -11,6 +11,7 @@ import {
   resolveReplyScreenToolTarget,
   resolveReplyThemeProfileId,
 } from "../reply-tool-authority.js";
+import { collectCurrentInboundContext } from "./current-inbound-context.js";
 import type { FollowupRun } from "./types.js";
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
@@ -204,43 +205,6 @@ function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
     item.currentInboundAudio === true ||
     Boolean(item.currentInboundContext)
   );
-}
-
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
-  const contexts = items.flatMap((item, index) =>
-    item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
-  );
-  if (contexts.length === 0) {
-    return undefined;
-  }
-  if (contexts.length === 1) {
-    return contexts[0]?.context;
-  }
-  const renderField = (field: "text" | "resumableText") => {
-    const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
-      return value ? [`Queued #${index + 1} context:\n${value}`] : [];
-    });
-    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
-  };
-  const text = renderField("text");
-  if (!text) {
-    return undefined;
-  }
-  const resumableText = renderField("resumableText");
-  const injectedGoalContexts = [
-    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
-  ];
-  return {
-    text,
-    ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
-    promptJoiner: "\n\n",
-    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
-  };
 }
 
 export function collectRuntimeMetadata(

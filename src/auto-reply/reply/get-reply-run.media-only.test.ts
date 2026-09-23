@@ -66,6 +66,7 @@ import {
   ownerParams,
   requireMockCallArg,
 } from "./get-reply-run.test-support.js";
+import { createCurrentReplyFacts } from "./get-reply.test-fixtures.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -3490,19 +3491,17 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const call = requireLastRunReplyAgentCall();
+    const context = call?.followupRun.currentInboundContext;
     expect(call?.commandBody).toContain("what does this mean?");
     expect(call?.commandBody).not.toContain("Reply target of current user message");
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
-    expect(call?.followupRun.currentInboundContext?.promptJoiner).toBe(" ");
-    expect(call?.followupRun.currentInboundContext?.text).toContain("Current message:");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      '[Replying to: "quoted status body"]',
-    );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
-      "Reply target of current user message",
-    );
+    expect(context?.promptJoiner).toBe(" ");
+    expect(context?.text).toContain("Current message:");
+    expect(context?.text).toContain('[Replying to: "quoted status body"]');
+    expect(context?.text).not.toContain("Reply target of current user message");
+    expect(context?.reply).toEqual(createCurrentReplyFacts(true));
   });
 
   it("runs bare mention replies when the reply target is the current-turn context", async () => {
@@ -3543,13 +3542,13 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
+    const context = call?.followupRun.currentInboundContext;
     expect(call?.transcriptCommandBody).toBe("");
     expect(call?.followupRun.prompt).toBe("");
     expect(call?.followupRun.transcriptPrompt).toBe("");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "Reply target of current user message",
-    );
-    expect(call?.followupRun.currentInboundContext?.text).toContain("quoted status body");
+    expect(context?.text).toContain("Reply target of current user message");
+    expect(context?.text).toContain("quoted status body");
+    expect(context?.reply).toEqual(createCurrentReplyFacts(false));
   });
 
   it("runs room events as contextual events instead of direct user prompts", async () => {
