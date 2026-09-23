@@ -173,6 +173,7 @@ async function runCliIsolatedCompletion(params: {
           streamParams: params.request.streamParams,
           abortSignal: params.request.abortSignal,
           assertCurrent: params.request.assertCurrent,
+          mapOperatorAuthorizationError: params.request.mapOperatorAuthorizationError,
           executionMode: "side-question",
           cliToolAvailability: { native: [], openClaw: [] },
           disableTools: true,

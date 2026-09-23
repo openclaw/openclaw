@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
+import type { CliOutput } from "./cli-output-contracts.js";
+import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -8,6 +12,13 @@ import {
   resetIsolatedCompletionTestState,
   runIsolatedCompletion,
 } from "./isolated-completion.test-support.js";
+
+const cli = vi.hoisted(() => ({
+  prepare: vi.fn<(params: RunCliAgentParams) => Promise<PreparedCliRunContext>>(),
+  execute: vi.fn<(context: PreparedCliRunContext) => Promise<CliOutput>>(),
+}));
+vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.prepare }));
+vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
 const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
   await import("./admitted-run-context.js");
@@ -242,5 +253,102 @@ describe("isolated completion requester model policy", () => {
         requesterModel: { provider: "test-provider", model: "allowed" },
       }),
     );
+  });
+
+  it("preserves a retired CLI model denial after the model policy is restored", async () => {
+    const preparePolicy = (deny: string[]) =>
+      prepareOperatorModelPolicy({
+        cfg: config,
+        policy: { sourceAgent: "main", deny },
+        manifestPlugins: [],
+      });
+    let policy = preparePolicy([]);
+    const listeners = new Set<() => void>();
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "isolated-reader",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      get modelPolicy() {
+        return policy;
+      },
+      onModelPolicyChanged: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "google-gemini-cli",
+      model: "transport-alias",
+      backend: { sessionMode: "none" },
+      config,
+    });
+    const cleanup = vi.fn(async () => {});
+    cli.prepare.mockImplementation(async (params) => {
+      const admittedRunContext =
+        params.admittedRunContext ?? (await params.preparedRunAdmission?.admit("embedded"));
+      if (!admittedRunContext) {
+        throw new Error("CLI completion requires its admitted run");
+      }
+      return {
+        ...context,
+        params: { ...params, admittedRunContext },
+        preparedBackend: { ...context.preparedBackend, cleanup },
+      };
+    });
+    const started = createDeferredCore<AbortSignal | undefined>();
+    const finish = createDeferredCore();
+    cli.execute.mockImplementation(async (prepared) => {
+      started.resolve(prepared.params.abortSignal);
+      await finish.promise;
+      return { text: "retired model output" };
+    });
+    mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue("test-provider");
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockImplementation(runRealCliAgent);
+    const pending = runIsolatedAgentRuntimeCompletion({
+      request: {
+        messages: [{ role: "user", content: "Answer the synthetic question." }],
+        execution: { mode: "isolated-agent-runtime" },
+      },
+      cfg: config,
+      agentId: "main",
+      provider: "test-cli",
+      model: "allowed",
+      operatorAuthority: authority,
+    });
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      const signal = await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("CLI settled before dispatch");
+        }),
+      ]);
+      policy = preparePolicy(["test-provider/allowed"]);
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(signal?.aborted).toBe(true);
+      policy = preparePolicy([]);
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(() => authority.assertCurrent()).not.toThrow();
+      if (!policy) {
+        throw new Error("Restored CLI model policy was not prepared");
+      }
+      expect(policy.allows({ provider: "test-provider", model: "allowed" })).toBe(true);
+      finish.resolve();
+      expect(await outcome).toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message: expect.stringContaining("cannot use this model"),
+      });
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(listeners.size).toBe(0);
+    } finally {
+      finish.resolve();
+      await outcome;
+    }
   });
 });

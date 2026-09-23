@@ -80,18 +80,15 @@ export function bindLlmOperatorAuthority(
         assertModelAllowed: (model) =>
           withOperatorAuthorization(() => assertOperatorModelAllowed(operatorAuthority, model)),
         bindModelExecution: (model) => {
-          const execution = withOperatorAuthorization(() =>
-            bindOperatorModelExecution(operatorAuthority, model),
+          const execution = bindOperatorModelExecution(
+            operatorAuthority,
+            model,
+            createLlmOperatorAuthorizationError,
           );
           if (execution) {
             resources.defer(execution.release);
           }
-          return (
-            execution && {
-              ...execution,
-              assertCurrent: () => withOperatorAuthorization(execution.assertCurrent),
-            }
-          );
+          return execution;
         },
       });
     });

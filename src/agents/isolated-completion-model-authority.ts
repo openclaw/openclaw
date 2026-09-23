@@ -27,12 +27,11 @@ export function createIsolatedCompletionModelAuthority(params: {
         bound.model?.provider !== model?.provider ||
         bound.model?.model !== model?.model
       ) {
-        let execution: ReturnType<typeof bindOperatorModelExecution>;
-        try {
-          execution = bindOperatorModelExecution(params.operatorAuthority, model);
-        } catch (error) {
-          throw params.mapOperatorAuthorizationError?.(error) ?? error;
-        }
+        const execution = bindOperatorModelExecution(
+          params.operatorAuthority,
+          model,
+          params.mapOperatorAuthorizationError,
+        );
         if (!execution) {
           return {};
         }
@@ -40,21 +39,14 @@ export function createIsolatedCompletionModelAuthority(params: {
         bound = { model: model ? { ...model } : undefined, execution };
       }
       const { execution } = bound;
-      const assertExecutionCurrent = () => {
-        try {
-          execution.assertCurrent();
-        } catch (error) {
-          throw params.mapOperatorAuthorizationError?.(error) ?? error;
-        }
-      };
-      assertExecutionCurrent();
+      execution.assertCurrent();
       return {
         abortSignal: params.abortSignal
           ? AbortSignal.any([params.abortSignal, execution.signal])
           : execution.signal,
         assertCurrent: () => {
           params.assertCurrent();
-          assertExecutionCurrent();
+          execution.assertCurrent();
         },
       };
     },
