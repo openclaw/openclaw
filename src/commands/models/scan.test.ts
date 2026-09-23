@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
   resolveApiKeyForProviderCore: vi.fn(),
   scanOpenRouterModels: vi.fn(),
+  updateConfig: vi.fn(),
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -20,6 +21,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 
 vi.mock("../../agents/model-scan.js", () => ({
   scanOpenRouterModels: mocks.scanOpenRouterModels,
+}));
+
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
+  updateConfig: mocks.updateConfig,
 }));
 
 const { modelsScanCommand } = await import("./scan.js");
@@ -229,4 +235,33 @@ describe("models scan command", () => {
       expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
     });
   });
+
+  // Documented in docs/cli/models.md: --set-default only gates the primary model.
+  it.each([false, true])(
+    "replaces configured fallbacks from a probed scan (setDefault: %s)",
+    async (setDefault) => {
+      await withOpenRouterApiKey("sk-or-test", async () => {
+        const probed = { ok: true, latencyMs: 100, skipped: false };
+        mocks.scanOpenRouterModels.mockResolvedValue([
+          scanResult({ tool: probed, modelRef: "openrouter/acme/free:free" }),
+        ]);
+        await modelsScanCommand({ json: true, setDefault }, createRuntime());
+
+        const update = mocks.updateConfig.mock.calls[0]?.[0] as (cfg: object) => {
+          agents: { defaults: { model: { primary?: string; fallbacks?: string[] } } };
+        };
+        const next = update({
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus", fallbacks: ["openai/gpt-hand-tuned"] },
+            },
+          },
+        });
+        expect(next.agents.defaults.model).toEqual({
+          primary: setDefault ? "openrouter/acme/free:free" : "anthropic/claude-opus",
+          fallbacks: ["openrouter/acme/free:free"],
+        });
+      });
+    },
+  );
 });

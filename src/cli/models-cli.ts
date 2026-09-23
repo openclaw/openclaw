@@ -294,8 +294,12 @@ export function registerModelsCli(program: Command) {
     .option("--no-probe", "Skip live probes; list free candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
-    .option("--set-default", "Set agents.defaults.model to the first selection", false)
-    .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
+    .option(
+      "--set-default",
+      "Also make the first selection the primary model (probed scans always replace fallbacks)",
+      false,
+    )
+    .option("--set-image", "Also make the first image selection the primary image model", false)
     .option("--json", "Output JSON", false)
     .action(async (opts, command: Command) => {
       const runtime = await loadModelsRuntime();

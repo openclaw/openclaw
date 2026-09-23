@@ -246,6 +246,16 @@ Numeric scan options reject empty and whitespace-only values. Omit a flag to ret
 
 `--set-default` and `--set-image` require live probes; metadata-only scan results are informational and are not applied to config.
 
+A probed scan that reaches a selection writes config even without `--set-default` or `--set-image`:
+
+- `agents.defaults.model.fallbacks` is replaced with the selected tool-capable models. Any existing fallback chain is overwritten, not merged.
+- `agents.defaults.imageModel.fallbacks` is replaced with the selected image-capable models when the scan finds any.
+- Selected models are added to `agents.defaults.models`.
+
+`--set-default` and `--set-image` only control whether the first selection also becomes the `primary` model. Without them, the existing primary models are kept. `--yes` and `--no-input` accept the preselected models, and `--json` changes only the output format: a probed `--json` scan still writes the same config.
+
+To inspect candidates without changing config, use `openclaw models scan --no-probe`. To keep a hand-tuned fallback chain, restore it afterward with [`openclaw models fallbacks`](#fallbacks).
+
 ## Aliases
 
 ```bash

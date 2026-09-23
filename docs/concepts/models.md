@@ -399,7 +399,7 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
   <Accordion title="Scanning (OpenRouter free models)">
     `openclaw models scan` inspects OpenRouter's public free-model catalog and can probe candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live probing and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
-    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults. A probed scan replaces `agents.defaults.model.fallbacks` (and image fallbacks) with the selection even without `--set-default`; use `--no-probe` to inspect candidates without changing config.
 
   </Accordion>
 </AccordionGroup>
