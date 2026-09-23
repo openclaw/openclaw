@@ -45,6 +45,29 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "node-workspace-sync-acquisition",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-21",
+    deprecated: "2026-09-15",
+    warningStarts: "2026-09-15",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins until explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#managed-node-workspace-acquisition",
+    surfaces: ["OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/node-host/invoke-workspace.test.ts",
+      "src/node-host/node-worker-workspace-retention.test.ts",
+      "extensions/codex/src/node-exec-server.test.ts",
+    ],
+    releaseNote:
+      "Node-host plugins can await managed workspace acquisition while existing synchronous callers retain their immediate lease contract.",
+  },
+  {
     code: "plugin-tasks-sync-reads",
     status: "deprecated",
     owner: "sdk",

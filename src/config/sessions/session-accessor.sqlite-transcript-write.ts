@@ -416,7 +416,7 @@ function runTranscriptWriteSnapshotSync<T>(
   >((database) => {
     beforeCommitInTransaction?.();
     assertOwnedTranscriptWriteCommit(fencedScope);
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    const fresh = readSessionEntryRow(database, resolved.sessionKey, "list");
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
       return err(refusal);
@@ -485,6 +485,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): Result<
   TranscriptWriteSnapshot<TranscriptMessageAppendResult<TMessage> | undefined>,
   TranscriptAppendRefusal
@@ -492,7 +493,13 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   return runTranscriptWriteSnapshotSync(
     scope,
     (database, resolved) =>
-      appendTranscriptMessageInTransaction(database, resolved, options, preparedMessage),
+      appendTranscriptMessageInTransaction(
+        database,
+        resolved,
+        options,
+        preparedMessage,
+        projection,
+      ),
     undefined,
     options.expectedMutationAt,
   );

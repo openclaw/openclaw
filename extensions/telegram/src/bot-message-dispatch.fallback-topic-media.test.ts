@@ -67,7 +67,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       events: ["fail-tool", "cancel-final"],
       fallback: false,
     },
-    { name: "partially delivered final", events: ["partial-final"], fallback: false },
+    { name: "partially delivered final", events: ["partial-final"], fallback: true },
     { name: "empty metadata reply", events: ["empty-final"], fallback: true },
   ])("preserves ordinary message fallback outcome for $name", async ({ events, fallback }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -147,10 +147,9 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     ).resolves.toEqual({ kind: "completed" });
     expect(deliverReplies).toHaveBeenCalledTimes(Number(fallback));
     if (fallback) {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "No response generated. Please try again." }],
-        }),
+      const fallbackReply = deliverReplies.mock.calls[0]?.[0]?.replies[0];
+      expect(fallbackReply?.isError === true).toBe(
+        events.includes("fail-final") || events.includes("partial-final"),
       );
     }
   });
@@ -185,9 +184,12 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   });
 
   it("uses resolved DM config for auto-topic-label overrides", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: true,
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Topic response" }),
+      }),
+    );
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
 
@@ -223,9 +225,12 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "s1", updatedAt: 1 },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: true,
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Topic response" }),
+      }),
+    );
     const bot = createBot();
     const base = "a".repeat(499);
     const rawBody = `${base}😀tail`;
@@ -362,7 +367,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).toHaveBeenCalledOnce();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [{ text: "No response generated. Please try again." }],
+        replies: [expect.objectContaining({ isError: true })],
       }),
     );
   });

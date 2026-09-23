@@ -43,6 +43,7 @@ import {
   hasImportGraphImpactOnTargets,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
+import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -301,15 +302,28 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each(["blacksmith", "github", "hybrid"])(
-    "retains only directly changed runtime proofs with their canonical execution policies (%s)",
+    "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
+        "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
+        "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
         "src/node-host/node-worker-supervisor.recovery.test.ts",
+        "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/pr-merge-admission.test.ts",
+        "test/scripts/pr-merge-outcome.test.ts",
+        "test/scripts/pr-merge-receipt.test.ts",
+        "test/scripts/pr-merge-recovery.test.ts",
+        "test/scripts/pr-merge-rest.test.ts",
+        "test/scripts/pr-worktree-interruption.test.ts",
+        "test/scripts/pr-worktree-provision.test.ts",
       ];
       const before = createChangedNodeTestShards(targets, { runnerBackend });
       const selected = createChangedNodeTestShards(targets, {
@@ -325,7 +339,19 @@ describe("CI changed Node test plan", () => {
           ...(selected?.flatMap((shard) => shard.includePatterns ?? []) ?? []),
           ...groups.flatMap((group) => group.includePatterns ?? []),
         ].toSorted(),
-      ).toEqual(targets.toSorted());
+      ).toEqual(
+        [
+          ...targets,
+          "test/scripts/ci-git-owner.test.ts",
+          "test/scripts/ci-platform-checkout.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+          "test/scripts/openclaw-performance-workflow.test.ts",
+          "test/scripts/plugin-release-git-lifecycle.test.ts",
+          "test/scripts/release-workflow-git-lifecycle.test.ts",
+          "test/scripts/test-projects.test.ts",
+        ].toSorted(),
+      );
       for (const target of targets) {
         const ownerJob = expectDefined(
           before?.find(
@@ -2347,6 +2373,11 @@ describe("CI changed Node test plan", () => {
     for (const owner of uiOwners) {
       expect(shards).toContainEqual({
         ...owner,
+        groups: owner.groups.filter((group) =>
+          group.configs.some((config) =>
+            /^test\/vitest\/vitest\.ui(?:-isolated|-timing)?\.config\.ts$/u.test(config),
+          ),
+        ),
         configs: [],
         checkName: `checks-node-changed-ui-${owner.shardName}`,
         shardName: `changed-ui-${owner.shardName}`,
@@ -2364,6 +2395,10 @@ describe("CI changed Node test plan", () => {
       "src/agents/live-model-filter.test.ts",
       "test/ui.presenter-next-run.test.ts",
       "test/talk-browser-defaults.test.ts",
+      "test/vitest-ui-package-config.test.ts",
+      "src/audit/execution-decision-facts.test.ts",
+      "src/auto-reply/reply/commands-export-session.test.ts",
+      "src/gateway/server-methods/session-change-event.fallback.test.ts",
     ]) {
       const consumerConfig = buildVitestRunPlans([consumer])[0]!.config;
       expect(
@@ -2377,6 +2412,22 @@ describe("CI changed Node test plan", () => {
         consumer,
       ).toBe(true);
     }
+    const toolingFiles = selectedGroups
+      .filter((group) => group.configs.includes("test/vitest/vitest.tooling.config.ts"))
+      .flatMap((group) => group.includePatterns ?? []);
+    for (const unrelated of [
+      "test/scripts/pr-worktree-provision.test.ts",
+      "test/scripts/pr-merge-recovery.test.ts",
+      "test/scripts/mobile-release-authority.test.ts",
+    ]) {
+      expect(toolingFiles, unrelated).not.toContain(unrelated);
+    }
+    expect(
+      selectedGroups
+        .filter((group) => group.requiresDist)
+        .map((group) => group.shard_name)
+        .toSorted(),
+    ).toEqual(["core-runtime-tui-pty", "core-support-boundary"]);
     expect(createChangedNodeTestShards(paths)).toBeNull();
     expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
       createChangedNodeTestShards([paths[1]!], options),
@@ -2386,6 +2437,33 @@ describe("CI changed Node test plan", () => {
       createChangedNodeTestShards([...paths, "package.json"], { ...options, onFallback }),
     ).toBeNull();
     expect(onFallback).toHaveBeenCalledWith("tooling owner change requires full-family coverage");
+
+    const consumers = testProjects.resolveControlUiTestConsumers([paths[0]!]);
+    for (const missing of [
+      "test/scripts/missing-ui-consumer.test.ts",
+      "test/scripts/missing-ui-consumer.e2e.test.ts",
+    ]) {
+      const unresolvedConsumer = vi
+        .spyOn(testProjects, "resolveControlUiTestConsumers")
+        .mockReturnValue([...consumers, missing]);
+      try {
+        expect(createChangedNodeTestShards(paths, options), missing).toBeNull();
+      } finally {
+        unresolvedConsumer.mockRestore();
+      }
+    }
+    const resolvePlans = testProjects.buildVitestRunPlans;
+    const missingOwner = vi
+      .spyOn(testProjects, "buildVitestRunPlans")
+      .mockImplementation((targets, cwd) =>
+        targets.includes("test/vitest-ui-package-config.test.ts") ? [] : resolvePlans(targets, cwd),
+      );
+    try {
+      expect(createChangedNodeTestShards(paths, { ...options, onFallback })).toBeNull();
+      expect(onFallback).toHaveBeenCalledWith("unresolved UI host consumer");
+    } finally {
+      missingOwner.mockRestore();
+    }
   });
 
   it("chunks many targets into bounded parallel jobs", () => {

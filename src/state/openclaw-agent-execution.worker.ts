@@ -1,8 +1,17 @@
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import {
+  onSqliteWalCheckpoint,
+  type SqliteWalCheckpointSnapshot,
+} from "../infra/sqlite-wal-checkpoint.js";
+import {
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
+  type SqliteWorkerPreparedBackend,
+} from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -47,7 +56,7 @@ import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
-): SqliteWorkerBackend<AgentDatabaseOperations> {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
   const backend = openAgentDatabaseBackend(input, opening);
   try {
     backend.execute({ type: "database.prepareWrite", input: undefined });
@@ -70,11 +79,14 @@ export function createSqliteWorkerBackend(
 export function openExistingSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
-): SqliteWorkerBackend<AgentDatabaseOperations> {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
   return openAgentDatabaseBackend(input, opening);
 }
 
-type AgentDatabaseNativeBackend = Omit<SqliteWorkerBackend<AgentDatabaseOperations>, "close"> & {
+type AgentDatabaseNativeBackend = Omit<
+  SqliteWorkerPreparedBackend<AgentDatabaseOperations>,
+  "close"
+> & {
   close(): void;
 };
 
@@ -233,6 +245,9 @@ function openAgentDatabaseBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let archivePruning:
+    | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
+    | undefined;
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
@@ -247,6 +262,7 @@ function openAgentDatabaseBackend(
     admit,
   });
   let closed = false;
+  let closeReceipt: SqliteWorkerCloseReceipt | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Agent database execution owner is closed");
@@ -254,6 +270,17 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (
+        command.type === "session.archivePruning.deletePublished" ||
+        command.type === "session.archivePruning.removeLegacy" ||
+        command.type === "session.archivePruning.reclaimPages"
+      ) {
+        return import("../config/sessions/session-history-archive-pruning.worker.js").then(
+          (module) => {
+            archivePruning = module;
+          },
+        );
+      }
       if (command.type === "session.entries.replace") {
         return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
           (module) => {
@@ -329,14 +356,60 @@ function openAgentDatabaseBackend(
           admit,
         );
       }
+      if (command.type === "session.archivePruning.deletePublished" && archivePruning) {
+        return archivePruning.deletePublishedSessionArchiveInDatabase(
+          openWriter(),
+          options,
+          command.input,
+          admit,
+        );
+      }
+      if (command.type === "session.archivePruning.removeLegacy" && archivePruning) {
+        return archivePruning.removeLegacySessionArchiveInDatabase(
+          openWriter(),
+          options,
+          command.input.filePath,
+          admit,
+        );
+      }
+      if (command.type === "session.archivePruning.reclaimPages" && archivePruning) {
+        return archivePruning.reclaimSessionArchivePagesInWorker(
+          openWriter(),
+          command.input.maxPages,
+          admit,
+        );
+      }
       throw new Error("Unknown agent database operation");
+    },
+    [SQLITE_WORKER_CLOSE_RECEIPT]() {
+      return closeReceipt;
     },
     close() {
       closed = true;
+      closeReceipt = undefined;
+      let checkpoint: SqliteWalCheckpointSnapshot | undefined;
       const errors: unknown[] = [];
       for (const cleanup of [
         () => domain.close(),
-        () => database && closeOpenClawAgentDatabaseByPath(database.path, database.agentId),
+        () => {
+          if (!database) {
+            return;
+          }
+          const closingPath = sqliteReaderDatabasePathKey(database.path);
+          const stopObserving = onSqliteWalCheckpoint((observation) => {
+            if (observation.databasePath === closingPath) {
+              checkpoint = {
+                health: observation.health,
+                observedAtNs: observation.observedAtNs,
+              };
+            }
+          });
+          try {
+            closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+          } finally {
+            stopObserving();
+          }
+        },
         () => releaseBorrow?.(),
         () => sharedBorrow?.release(),
       ]) {
@@ -355,6 +428,16 @@ function openAgentDatabaseBackend(
           "Agent database cleanup failed",
           errors[0],
         );
+      }
+      if (identity && checkpoint) {
+        closeReceipt = {
+          identity: {
+            key: `file:${identity.physicalIdentity}`,
+            canonicalPath: identity.nativeLocation,
+          },
+          incarnation: identity.incarnation,
+          checkpoint,
+        };
       }
     },
   };

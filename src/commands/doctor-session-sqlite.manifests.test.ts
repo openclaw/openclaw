@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import * as replaceFile from "../infra/replace-file.js";
-import { assertSafeSessionSqliteMigrationMove } from "./doctor-session-sqlite-migration-run.js";
+import { assertSafeSessionSqliteMigrationMove } from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {

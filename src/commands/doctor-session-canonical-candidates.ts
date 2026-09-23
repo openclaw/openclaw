@@ -15,17 +15,17 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../gateway/session-store-key.js";
 import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqlitePath,
+  type ExistingAgentDatabaseTarget,
+} from "../infra/session-sqlite-migration-readers.js";
+import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqlitePath,
-  type ExistingAgentDatabaseTarget,
-} from "./doctor-session-sqlite-readers.js";
 
 export type CanonicalSessionCandidate = {
   agentId: string;

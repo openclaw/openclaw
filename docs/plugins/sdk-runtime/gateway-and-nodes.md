@@ -284,6 +284,14 @@ Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operati
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
+Current service handles also expose `enqueueRun(id, mode)` for service-owned
+work. It uses the normal cron admission queue with the service's live authority,
+independently of a completed agent tool caller. Use `"if-enabled"` to request an
+immediate run without overriding a disabled job. Retained handles still reject
+when the service stops or the scheduler is replaced, including while waiting for
+admission. This optional method is absent on older hosts; it has no caller-scoped
+fallback.
+
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`
 override. It returns only a boolean, not storage metadata or permission to mutate

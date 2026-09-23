@@ -24,7 +24,7 @@ extensions/amazon-bedrock/stream.runtime.ts	13
 extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
-extensions/anthropic/cli-migration.ts	2
+extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	10
 extensions/anthropic/register.runtime.ts	2
 extensions/anthropic/session-catalog-continue.ts	1
@@ -1830,7 +1830,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	23
+src/agents/session-tool-result-guard.ts	11
 src/agents/session-transcript-repair.ts	6
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
@@ -1848,7 +1848,7 @@ src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
-src/agents/sessions/session-manager-entries.ts	3
+src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
@@ -2292,10 +2292,8 @@ src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
-src/commands/doctor-session-snapshots.ts	5
+src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
-src/commands/doctor-session-sqlite-migration-run.ts	4
-src/commands/doctor-session-sqlite-readers.ts	5
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	5
@@ -2899,6 +2897,7 @@ src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	5
+src/infra/session-sqlite-migration-readers.ts	5
 src/infra/shell-env.ts	1
 src/infra/sqlite-coordinator.ts	2
 src/infra/sqlite-file-generation.ts	9
@@ -3040,7 +3039,7 @@ src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2
-src/node-host/node-worker-workspace.ts	3
+src/node-host/node-worker-workspace.ts	1
 src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/skills.ts	1

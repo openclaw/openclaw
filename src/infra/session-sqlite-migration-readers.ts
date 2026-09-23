@@ -1,4 +1,4 @@
-/** Read-only diagnostic readers used by the session SQLite doctor mode. */
+/** Read-only source and SQLite readers for session migration. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,11 +30,11 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
@@ -243,7 +243,7 @@ type TranscriptImportPlan = {
 
 class TranscriptImportLimitError extends Error {}
 
-type TranscriptFileFingerprint = {
+export type TranscriptFileFingerprint = {
   ctimeNs: bigint;
   dev: bigint;
   ino: bigint;

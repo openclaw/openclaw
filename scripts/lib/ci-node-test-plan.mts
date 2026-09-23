@@ -19,6 +19,7 @@ import {
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
+import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -40,7 +41,7 @@ import {
 import {
   boundaryTestFiles,
   bundledPluginDependentUnitTestFiles,
-  isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
 } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   buildVitestRunPlans,
@@ -1028,7 +1029,7 @@ function applyCompactGroupWorkerPins(
     // New measurements must not be divided again after serial files become parallel.
     return {
       ...group,
-      timing_key: `${group.shard_name}-parallel${gatewayServerSerialSeconds(group.includePatterns, runnerBackend) > 0 ? "-native-serial" : ""}`,
+      timing_key: `${compactGroupTimingKey(group)}-parallel${gatewayServerSerialSeconds(group.includePatterns, runnerBackend) > 0 ? "-native-serial" : ""}`,
       env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV },
     };
   }
@@ -1076,9 +1077,17 @@ function readCompactGroupSeconds(
 ): number | undefined {
   const timings = readCompactGroupTimings(profile);
   const key = compactGroupTimingKey(group);
+  const fullOwnerKey = key.startsWith("changed-") ? key.slice("changed-".length) : undefined;
+  // A reduced parallel sample retires the full-owner fallback for both timing shapes.
+  const hasReducedParallelSample =
+    fullOwnerKey !== undefined &&
+    isParallelGatewayServerGroup(group) &&
+    timings[key.endsWith("-stripes") ? key.slice(0, -"-stripes".length) : `${key}-stripes`] !==
+      undefined;
   // Keep the full owner's admission estimate until the reduced tier has samples.
   const measured =
-    timings[key] ?? (key === `changed-${group.shard_name}` ? timings[group.shard_name] : undefined);
+    timings[key] ??
+    (fullOwnerKey !== undefined && !hasReducedParallelSample ? timings[fullOwnerKey] : undefined);
   if (measured !== undefined) {
     return measured;
   }
@@ -2225,12 +2234,13 @@ function createStripedSplitShards(params: {
 
 function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  const files = listTestFiles("src").filter(
-    (file) =>
-      isStripeEligibleTestFile(file, unitFastFiles) &&
-      !file.startsWith("src/acp/") &&
-      !file.startsWith("src/security/") &&
-      isUnitConfigTestFile(file),
+  const files = filterUnitConfigTestFiles(
+    listTestFiles("src").filter(
+      (file) =>
+        isStripeEligibleTestFile(file, unitFastFiles) &&
+        !file.startsWith("src/acp/") &&
+        !file.startsWith("src/security/"),
+    ),
   );
   return [
     ...createStripedSplitShards({
@@ -2395,6 +2405,13 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTest
       {
         shardName: "core-runtime-infra-process",
         configs: ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"],
+        includePatterns: ["src/logging", "src/process"].flatMap((root) =>
+          listScopedOwnerTestFiles({
+            root,
+            include: [`${root}/**/*.test.ts`],
+            exclude: [...databaseWorkerCoreTestFiles],
+          }),
+        ),
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
@@ -3094,11 +3111,11 @@ function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return listTestFiles(owner.root).filter(
-    (file) =>
-      isStripeEligibleTestFile(file, unitFastFiles) &&
-      owner.include.some((pattern) => matchesGlob(file, pattern)) &&
-      !owner.exclude.some((pattern) => matchesGlob(file, pattern)),
+  return filterFilesByPatterns(
+    listTestFiles(owner.root).filter((file) => isStripeEligibleTestFile(file, unitFastFiles)),
+    owner.include,
+    owner.exclude,
+    matchesGlob,
   );
 }
 
@@ -3267,9 +3284,11 @@ function splitOversizedCompactGroup(
   ].map((key) => `${key}#selector-`);
   const splitParentSeconds = {
     blacksmith: parallelGateway
-      ? (readCompactGroupTimings("blacksmith")[splitTimingParent] ?? 0)
+      ? (readCompactGroupSeconds({ ...group, timing_key: splitTimingParent }, "blacksmith") ?? 0)
       : 0,
-    github: parallelGateway ? (readCompactGroupTimings("github")[splitTimingParent] ?? 0) : 0,
+    github: parallelGateway
+      ? (readCompactGroupSeconds({ ...group, timing_key: splitTimingParent }, "github") ?? 0)
+      : 0,
   };
   const hasSplitTimingHistory =
     !isTooling &&

@@ -20,6 +20,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { captureTaskExecutionOwner } from "../../tasks/task-execution-owner.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../../tasks/task-flow-registry.store.sqlite.js";
+import * as taskLineage from "../../tasks/task-registry-agent-event-lineage.js";
 import { requestTasks } from "../../tasks/task-registry-read.test-support.js";
 import { taskDeliveryStates, tasks } from "../../tasks/task-registry-state.js";
 import {
@@ -37,11 +38,80 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { registerSessionFollowupTask } from "./agent-run-task-tracking.js";
 import type { AgentTurnIo } from "./types.js";
 
 const provider = vi.hoisted(() => ({
   execute: vi.fn<typeof import("../../commands/agent.js").agentCommandFromGatewayIngress>(),
 }));
+
+it.each(["succeeded", "failed", "cancelled", "timed_out"] as const)(
+  "releases rejected follow-up lineage without rewriting a %s task",
+  async (status) => {
+    const state = await createOpenClawTestState({ layout: "state-only" });
+    const registry = createEmptyPluginRegistry();
+    const retained = new Set<() => void>();
+    const retain = taskLineage.retainTaskAgentEventLineage;
+    const subscriptions = vi
+      .spyOn(taskLineage, "retainTaskAgentEventLineage")
+      .mockImplementation((...args) => {
+        const close = retain(...args);
+        retained.add(close);
+        return () => {
+          close();
+          retained.delete(close);
+        };
+      });
+    markPluginRegistryActive(registry);
+    try {
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        const params = {
+          followup: {
+            kind: "session_followup" as const,
+            requesterSessionKey: "agent:main:parent",
+          },
+          runId: "terminal-followup",
+          sessionKey: "agent:main:child",
+          task: "Preserve the completed follow-up",
+          requesterOrigin: undefined,
+          assertCurrent: () => {},
+        };
+        const created = await registerSessionFollowupTask(params);
+        if (created.kind !== "receipt") {
+          throw new Error("Expected the core task creation receipt");
+        }
+        expect(retained.size).toBe(1);
+        await created.finalizeActive(
+          { status, endedAt: Date.now(), terminalSummary: "Original terminal outcome" },
+          () => true,
+        );
+        expect(retained.size).toBe(0);
+        const before = loadTaskRegistryStateFromSqlite();
+        expect(before.tasks.get(created.task.taskId)?.status).toBe(status);
+
+        // The earlier tracking lookup had no task; creation now finds a terminal row.
+        await expect(registerSessionFollowupTask(params)).rejects.toThrow(
+          "Follow-up task registration failed; run was not started.",
+        );
+        expect(retained.size).toBe(0);
+        expect(loadTaskRegistryStateFromSqlite()).toEqual(before);
+        expect(getTaskRunOwner(created.task)).toBeUndefined();
+      });
+    } finally {
+      for (const close of retained) {
+        close();
+      }
+      subscriptions.mockRestore();
+      await closeOpenClawStateDatabaseAsync();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      markPluginRegistryRetired(registry);
+      await state.cleanup();
+    }
+  },
+);
 
 it.each([
   "activate",

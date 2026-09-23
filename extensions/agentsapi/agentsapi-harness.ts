@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import type { AgentReasoningParam } from "openai/resources/beta/agents/agents";
 import {
+  buildCurrentInboundPrompt,
   createAgentHarnessAttemptCancellation,
   createAgentHarnessAttemptDeadlineController,
   createAgentHarnessAttemptLifecycle,
   emitAgentHarnessAttemptEvent,
+  selectSupportedReasoningEffort,
   type AgentHarnessAttemptTimeout,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
@@ -26,6 +29,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIReasoningEffortMap,
+  resolveOpenAIReasoningEffortMapping,
+} from "openclaw/plugin-sdk/llm";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
@@ -204,6 +212,8 @@ async function runAgentsApiSession(
   let remoteSessionId = binding?.sessionId;
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
   let reply: ReturnType<typeof createAgentsApiMessageProjection>["reply"] | undefined;
+  let projection: ReturnType<typeof createAgentsApiMessageProjection> | undefined;
+  let usageRecorded = false;
   let terminalTurnId: string | undefined;
   const handle = {
     kind: "embedded",
@@ -223,7 +233,9 @@ async function runAgentsApiSession(
       }
       await options?.userTurnTranscriptRecorder?.persistApproved();
       assertCurrent();
-      await native.queueMessage(text);
+      await native.queueMessage(
+        buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
+      );
       options?.userTurnTranscriptRecorder?.markSentToProvider?.();
     },
     isStreaming: () => native?.isAvailable() ?? false,
@@ -252,6 +264,7 @@ async function runAgentsApiSession(
       );
     }
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
+    const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     if (!remoteSessionId) {
       remoteSessionId = await client.create(
         controller.signal,
@@ -263,13 +276,18 @@ async function runAgentsApiSession(
           .filter(Boolean)
           .join("\n\n"),
         params.model.id,
+        reasoningEffort,
       );
       assertCurrent();
       await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
+    } else {
+      await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
+      assertCurrent();
     }
-    const projection = createAgentsApiMessageProjection(remoteSessionId, (event) => {
+    projection = createAgentsApiMessageProjection(remoteSessionId, (event) => {
       void emitEvent(event);
     });
+    const messageProjection = projection;
     reply = projection.reply;
     native = createAgentsApiSession({
       client,
@@ -279,8 +297,10 @@ async function runAgentsApiSession(
       signal: controller.signal,
       assertCurrent,
       onSettled: () => deadlines.beginSettlement(Date.now()),
+      onUsageError: (error) =>
+        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
       onEvent: (event) => {
-        projection.observe(event);
+        messageProjection.observe(event);
         params.onRunProgress?.({
           reason: event.type,
           provider: "openai",
@@ -291,7 +311,7 @@ async function runAgentsApiSession(
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const result = await native.run(
-      params.prompt,
+      buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },
@@ -299,6 +319,11 @@ async function runAgentsApiSession(
     );
     // A terminal root turn is insufficient: run() also waits for native session idle.
     terminalTurnId = result.turn.id;
+    const turns = await native.readUsageTurns();
+    assertCurrent();
+    projection.recordUsage(params.model, turns);
+    usageRecorded = true;
+    params.hostCapabilities.reportOutputTokens?.(reply.usage?.output ?? 0);
     if (result.cancelled) {
       terminal = { kind: "aborted", source: "runtime" };
     } else {
@@ -321,6 +346,16 @@ async function runAgentsApiSession(
   } finally {
     try {
       await native?.close();
+    } catch (error) {
+      terminal = { kind: "failed", source: "prompt", error };
+    }
+    try {
+      if (native && projection && !usageRecorded) {
+        const turns = await native.readUsageTurns();
+        assertHarnessCurrent();
+        projection.recordUsage(params.model, turns);
+        usageRecorded = true;
+      }
     } catch (error) {
       terminal = { kind: "failed", source: "prompt", error };
     }
@@ -424,6 +459,47 @@ async function runAgentsApiSession(
     runAgentEndSideEffects(agentEnd);
   }
   return result;
+}
+
+function resolveAgentsApiReasoningEffort(
+  params: Pick<AgentHarnessAttemptParamsV2, "model" | "thinkLevel">,
+): AgentReasoningParam["effort"] {
+  if (params.thinkLevel === "ultra") {
+    throw new Error("Agents API MVP does not support the ultra delegation mode");
+  }
+  if (params.thinkLevel === "adaptive") {
+    return undefined;
+  }
+  const supportedEfforts = resolveOpenAIModelReasoningEfforts(params.model);
+  const modelMapped = params.model.thinkingLevelMap?.[params.thinkLevel];
+  if (!params.model.reasoning || supportedEfforts?.length === 0 || modelMapped === null) {
+    return undefined;
+  }
+  const mapped =
+    resolveOpenAIReasoningEffortMapping(
+      params.thinkLevel,
+      resolveOpenAIReasoningEffortMap(params.model),
+    ) ?? modelMapped;
+  const effort = mapped?.trim() ?? (params.thinkLevel === "off" ? "none" : params.thinkLevel);
+  switch (effort) {
+    case "none":
+      return supportedEfforts?.includes("none") ? effort : undefined;
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return supportedEfforts === undefined
+        ? effort
+        : selectSupportedReasoningEffort({
+            requested: effort,
+            supportedEfforts,
+            effortOrder: ["minimal", "low", "medium", "high", "xhigh", "max"] as const,
+          });
+    default:
+      throw new Error(`Agents API does not support reasoning effort ${effort}`);
+  }
 }
 
 function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {

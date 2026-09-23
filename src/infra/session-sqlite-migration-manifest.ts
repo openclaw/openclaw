@@ -1,23 +1,23 @@
-/** Manifest and restore helpers for doctor-owned session SQLite migrations. */
+/** Durable manifest owner shared by session migration, restoration, and startup verification. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
-import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
-import { assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
-import * as replaceFile from "../infra/replace-file.js";
 import { VERSION } from "../version.js";
+import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import * as replaceFile from "./replace-file.js";
 import {
   MigrationArtifactSchema,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
-import { isSessionSqliteMigrationWarning } from "./doctor-session-sqlite-types.js";
-import type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteRestoreConflict,
-} from "./doctor-session-sqlite-types.js";
+} from "./session-sqlite-migration-artifact.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteRestoreConflict,
+} from "./session-sqlite-migration-issues.js";
 
 export type SessionSqliteMigrationMoveKind =
   | "legacy-store"
@@ -487,7 +487,7 @@ export function readSessionSqliteMigrationManifest(
   manifestPath: string,
 ): SessionSqliteMigrationManifest | undefined {
   try {
-    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
     const result = MigrationManifestSchema.safeParse(parsed);
     if (!result.success) {
       return undefined;
@@ -501,13 +501,11 @@ export function readSessionSqliteMigrationManifest(
         targets: result.data.targets.map(normalizeMigrationTargetManifest),
       };
       const normalizedResult = MigrationManifestSchema.safeParse(normalized);
-      return normalizedResult.success
-        ? (normalizedResult.data as SessionSqliteMigrationManifest)
-        : undefined;
+      return normalizedResult.success ? normalizedResult.data : undefined;
     }
     // New manifests are canonicalized when written. Do not realpath retained entries here:
     // a symlink inserted after the write must remain visible to the restore safety checks.
-    return result.data as SessionSqliteMigrationManifest;
+    return result.data;
   } catch {
     return undefined;
   }
@@ -593,7 +591,7 @@ export function canonicalMigrationFilePath(filePath: string): string {
     try {
       return path.join(fs.realpathSync.native(currentPath), ...suffix, fileName);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = isRecord(error) ? error.code : undefined;
       const parentPath = path.dirname(currentPath);
       if ((code !== "ENOENT" && code !== "ENOTDIR") || parentPath === currentPath) {
         return resolvedPath;
@@ -620,7 +618,7 @@ function isSymbolicLinkPath(filePath: string): boolean {
   try {
     return fs.lstatSync(filePath).isSymbolicLink();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isRecord(error) && error.code === "ENOENT") {
       return false;
     }
     throw error;
@@ -690,4 +688,32 @@ export function uniqueRestoreMoves(
     moves.set(`${move.sourcePath}\u0000${move.archivePath}`, move);
   }
   return [...moves.values()];
+}
+
+export function collectRecordedConsumedArchives(
+  manifest: SessionSqliteMigrationManifest,
+): Set<string> {
+  const consumed = new Set(manifest.restore?.consumedArchives ?? []);
+  const restoredSources = new Set(manifest.restore?.restoredFiles ?? []);
+  if (restoredSources.size === 0) {
+    return consumed;
+  }
+  const movesBySource = new Map<string, SessionSqliteMigrationMove[]>();
+  for (const target of manifest.targets) {
+    for (const move of uniqueRestoreMoves(target)) {
+      const moves = movesBySource.get(move.sourcePath) ?? [];
+      moves.push(move);
+      movesBySource.set(move.sourcePath, moves);
+    }
+  }
+  // Older shipped manifests only recorded restored source paths. Preserve that evidence when the
+  // source identifies exactly one archive, then persist the explicit archive path on this run.
+  for (const sourcePath of restoredSources) {
+    const moves = movesBySource.get(sourcePath);
+    const move = moves?.length === 1 ? moves[0] : undefined;
+    if (move) {
+      consumed.add(move.archivePath);
+    }
+  }
+  return consumed;
 }
