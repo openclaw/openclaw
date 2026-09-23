@@ -19,6 +19,7 @@ export class NewSessionDraftController {
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   private readonly subscriptions: SubscriptionsController;
+  private modelDefaultsPolicy: "last-used" | "configured" | null | undefined;
 
   constructor(
     host: ReactiveControllerHost,
@@ -106,6 +107,23 @@ export class NewSessionDraftController {
       },
     );
     this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, callbacks);
+    this.submission.draftPersistence.modelSelection = {
+      read: () =>
+        read().context?.config?.current.newSessionModelDefaults === "configured"
+          ? this.place.modelControl.draftSelection(this.place.agentId)
+          : undefined,
+      restore: (selection) => this.place.modelControl.restoreDraftSelection(selection),
+      retire: () => {
+        if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+          this.place.modelControl.retireDraftSelection();
+        }
+      },
+    };
+    this.place.modelControl.onDraftSelectionChange = () => {
+      if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+        this.submission.draftPersistence.noteModelSelectionMutation();
+      }
+    };
     this.subscriptions = new SubscriptionsController(host)
       .watch(
         () => this.read().context?.gateway,
@@ -147,10 +165,22 @@ export class NewSessionDraftController {
   }
 
   synchronizeSelections() {
+    const modelDefaultsPolicy = this.read().context?.config?.current.newSessionModelDefaults;
     if (!this.place.agentsHydrated && this.agentsReady()) {
       this.place.setAgentsHydrated(true);
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+    } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
+      this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     }
+    if (
+      modelDefaultsPolicy === "configured" &&
+      this.modelDefaultsPolicy !== "configured" &&
+      !this.submission.submitting &&
+      this.place.modelControl.draftSelection(this.place.agentId)
+    ) {
+      this.submission.draftPersistence.noteModelSelectionMutation();
+    }
+    this.modelDefaultsPolicy = modelDefaultsPolicy;
     this.place.restorePreferenceSelections();
     this.place.synchronizeTerminalHosts();
   }

@@ -16,6 +16,7 @@ type StoreReadResult =
         revision: number;
         text: string;
         mentions?: readonly HumanMention[];
+        modelSelection?: { agentId: string; model: string; thinkingLevel: string };
         attachments: unknown[];
         writeId: string;
       };
@@ -95,6 +96,76 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
+    const flow = createFlow();
+    let selected = "openai/first";
+    flow.draftPersistence.modelSelection = {
+      read: () => ({ agentId: "main", model: selected, thinkingLevel: "low" }),
+      restore: vi.fn(),
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("failed-submission");
+    await resolvePendingRead({ status: "not-found" });
+    await settle();
+    flow.setMessage("Still unsent");
+    flow.draftPersistence.captureSubmission();
+    // A rejected/no-result create keeps this same unsent mutation and text.
+    selected = "openai/second";
+    flow.draftPersistence.noteModelSelectionMutation();
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          text: "Still unsent",
+          modelSelection: expect.objectContaining({ model: selected }),
+        }),
+      ),
+    );
+    flow.disconnect();
+  });
+
+  it("retires accepted model intent only while the submitted mutation still owns the view", async () => {
+    const flow = createFlow();
+    const retire = vi.fn();
+    flow.draftPersistence.modelSelection = { read: () => undefined, restore: vi.fn(), retire };
+    flow.setMessage("Submitted draft");
+    const accepted = flow.draftPersistence.captureSubmission();
+    await flow.draftPersistence.clearSubmittedDraft(accepted);
+    expect(retire).toHaveBeenCalledTimes(1);
+    const previous = flow.draftPersistence.captureSubmission();
+    flow.setMessage("Newer draft");
+    await flow.draftPersistence.clearSubmittedDraft(previous);
+    expect(retire).toHaveBeenCalledTimes(1);
+    flow.disconnect();
+  });
+
+  it("merges a model-only edit with a message whose durable restore is still pending", async () => {
+    const flow = createFlow();
+    const selection = { agentId: "main", model: "openai/other", thinkingLevel: "low" };
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => selection,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("model-choice");
+    flow.draftPersistence.noteModelSelectionMutation();
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Keep this unsent message", attachments: [], writeId: "stored" },
+    });
+    await vi.waitFor(() => expect(flow.message).toBe("Keep this unsent message"));
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Keep this unsent message", modelSelection: selection }),
+      ),
+    );
+    flow.disconnect();
+  });
+
   it("saves the captured normal draft after retirement settles on another route", async () => {
     let finishRetirement!: (result: {
       status: "persisted";

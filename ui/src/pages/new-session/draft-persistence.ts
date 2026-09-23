@@ -1,5 +1,8 @@
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
+import type {
+  DurableComposerDraftScope,
+  DurableDraftModelSelection,
+} from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import {
@@ -48,6 +51,15 @@ const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime
 const NEW_SESSION_DRAFT_PERSIST_DELAY_MS = 200;
 
 export class NewSessionDraftPersistence {
+  modelSelection:
+    | {
+        read: () => DurableDraftModelSelection | undefined;
+        restore: (selection: DurableDraftModelSelection | undefined) => void;
+        retire: () => void;
+      }
+    | undefined;
+  private restorePromise: Promise<void> | undefined;
+  private pendingModelSelectionMutation = false;
   private gatewayOwner = "";
   private recoveryScope = "";
   private routeKey = "";
@@ -100,6 +112,7 @@ export class NewSessionDraftPersistence {
     this.gatewayOwner = gatewayOwner;
     this.recoveryScope = recoveryScope;
     if (currentOwner && !preserveCurrent) {
+      this.pendingModelSelectionMutation = false;
       this.apply("", [], true);
     }
     // The route may win the startup race; activate it as soon as its owner exists.
@@ -135,6 +148,9 @@ export class NewSessionDraftPersistence {
     }
     if (this.routeKey !== routeKey) {
       this.persistNow();
+      if (this.routeKey) {
+        this.pendingModelSelectionMutation = false;
+      }
       this.routeKey = routeKey;
       this.revision = 0;
     }
@@ -164,7 +180,14 @@ export class NewSessionDraftPersistence {
       undefined,
       baseline.mentions,
     );
-    void this.restoreScope(scope, generation, mutationGeneration, signature);
+    const restoring = this.restoreScope(scope, generation, mutationGeneration, signature);
+    this.restorePromise = restoring;
+    void restoring.finally(() => {
+      if (this.restorePromise === restoring) {
+        this.restorePromise = undefined;
+        this.flushModelSelectionMutation();
+      }
+    });
   }
 
   noteDraftReplaced() {
@@ -177,7 +200,28 @@ export class NewSessionDraftPersistence {
     this.pristineMutationBaseline = this.mutationGeneration;
   }
 
+  noteModelSelectionMutation() {
+    // An editable draft may have a failed submission capture; new input owns it again.
+    this.submittedMutation = null;
+    // Model edits must not turn an outstanding message restore into an empty-text overwrite.
+    this.pendingModelSelectionMutation = true;
+    this.flushModelSelectionMutation();
+  }
+
+  private flushModelSelectionMutation() {
+    if (
+      this.pendingModelSelectionMutation &&
+      !this.restorePromise &&
+      this.restoredIdentity &&
+      !this.disconnected &&
+      this.submittedMutation !== this.mutation
+    ) {
+      this.noteUserMutation();
+    }
+  }
+
   noteUserMutation() {
+    this.pendingModelSelectionMutation = false;
     this.mutationGeneration += 1;
     this.mutation = createMutation();
     this.pendingHandoffMutation = null;
@@ -225,6 +269,7 @@ export class NewSessionDraftPersistence {
   }
 
   captureSubmission() {
+    this.pendingModelSelectionMutation = false;
     this.reconcileHandoffCommit();
     this.submittedMutation = this.mutation;
     // Freeze pristine restoration; a dirty draft must still finish its CAS
@@ -283,6 +328,7 @@ export class NewSessionDraftPersistence {
           currentScope &&
           durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope)))
     ) {
+      this.modelSelection?.retire();
       consume?.();
     }
     // Fence retries before waiting: already-started writes settle before the CAS,
@@ -455,6 +501,7 @@ export class NewSessionDraftPersistence {
       ...(state.mentions?.length
         ? { mentions: state.mentions.map((mention) => ({ ...mention })) }
         : {}),
+      modelSelection: this.modelSelection?.read(),
       storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
@@ -551,6 +598,9 @@ export class NewSessionDraftPersistence {
     } else {
       this.apply(result.status === "found" ? result.draft.text : "", attachments);
     }
+    this.modelSelection?.restore(
+      result.status === "found" ? result.draft.modelSelection : undefined,
+    );
     this.mutation.committedRevision = storedRevision;
   }
 

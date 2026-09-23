@@ -58,6 +58,7 @@ import {
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -1092,17 +1093,7 @@ export async function handleControlUiHttpRequest(
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
       devGitBranch,
-      embedSandbox:
-        config?.gateway?.controlUi?.embedSandbox === "trusted"
-          ? "trusted"
-          : config?.gateway?.controlUi?.embedSandbox === "strict"
-            ? "strict"
-            : "scripts",
-      allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
-      seamColor: config?.ui?.seamColor,
-      environment: config?.gateway?.controlUi?.environment,
-      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
+      ...resolveControlUiBootstrapPresentation(config),
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
