@@ -56,11 +56,25 @@ export function canSkipNpmLockSetup({ cwd = process.cwd(), base = "", historical
     if (git(["rev-parse", "refs/remotes/origin/ci-ratchet-base^{commit}"]).trim() !== base) {
       return false;
     }
-    // The generator uses triple-dot without first-parent override. Missing merge
-    // bases deliberately fall back to running the existing command after setup.
+    // Match the generator: shallow CI checkouts may contain both endpoints but
+    // no merge base. Only that explicit Git failure permits the two-dot fallback.
     // Disable rename detection so moving a manifest away cannot hide its old path.
+    const diff = (range) => git(["diff", "--no-renames", "--name-only", "-z", range, "--"]);
+    let rangePaths;
+    try {
+      rangePaths = diff(`${base}...HEAD`);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("stderr" in error) ||
+        !String(error.stderr).includes("no merge base")
+      ) {
+        return false;
+      }
+      rangePaths = diff(`${base}..HEAD`);
+    }
     const paths = [
-      git(["diff", "--no-renames", "--name-only", "-z", `${base}...HEAD`, "--"]),
+      rangePaths,
       git(["diff", "--no-renames", "--name-only", "-z", "--cached", "--"]),
       git(["diff", "--no-renames", "--name-only", "-z", "--"]),
       git(["ls-files", "--others", "--exclude-standard", "-z"]),

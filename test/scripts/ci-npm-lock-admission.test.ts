@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { canSkipNpmLockSetup } from "../../scripts/ci-npm-lock-admission.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -141,10 +142,35 @@ describe("npm lock setup admission", () => {
     git("-c", "commit.gpgsign=false", "merge", "--no-ff", "-m", "merge", "side");
     expect(skip()).toBe(true);
   });
-  it("runs when history has no merge base", () => {
+  it.each([
+    ["src/example.ts", true],
+    ["extensions/example/package.json", false],
+  ])("uses the generator's two-dot fallback in a depth-one checkout: %s", (file, expected) => {
+    write(file, file.endsWith(".json") ? '{"private":true}' : "changed\n");
+    commit();
+    const shallow = temps.make("npm-lock-shallow-");
+    const run = (...args: string[]) =>
+      execFileSync("git", args, {
+        cwd: shallow,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    run("clone", "--quiet", "--depth=1", pathToFileURL(cwd).href, ".");
+    run("fetch", "--quiet", "--depth=1", "origin", `${base}:refs/remotes/origin/ci-ratchet-base`);
+    expect(run("rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(() => run("diff", `${base}...HEAD`)).toThrow("no merge base");
+    expect(
+      execFileSync(process.execPath, [path.join(harness, "scripts/ci-npm-lock-admission.mjs")], {
+        cwd: shallow,
+        env: { ...process.env, CHECKOUT_BASE_SHA: base, HISTORICAL_TARGET: "false" },
+        encoding: "utf8",
+      }),
+    ).toBe(`skip=${expected}\n`);
+  });
+  it("matches the generator's fallback for disconnected identical trees", () => {
     git("checkout", "--orphan", "unrelated");
     commit();
-    expect(skip()).toBe(false);
+    expect(skip()).toBe(true);
   });
   it("wires the dependency-free decision before setup and preserves the named check", () => {
     const workflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
