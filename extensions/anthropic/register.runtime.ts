@@ -83,7 +83,6 @@ function classifyAnthropicFailoverDescriptor(value: string | undefined) {
       return undefined;
   }
 }
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-5";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
@@ -283,7 +282,7 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
  * shaping follows without teaching the shared contracts about unknown ids.
  */
 function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
-  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5-5";
 }
 
 // Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
@@ -369,19 +368,6 @@ function buildAnthropicForwardCompatModel(
     ...(unreleasedGeneration
       ? { params: { canonicalModelId: resolveAnthropicUnreleasedCanonicalModelId(lower) } }
       : {}),
-    ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
-      ? {
-          thinkingLevelMap: {
-            ...(requiresClaudeMandatoryAdaptiveThinking({ id: trimmedModelId })
-              ? { minimal: "low" as const }
-              : {}),
-            xhigh: "xhigh",
-            max: "max",
-          },
-        }
-      : supportsAnthropicNativeMaxEffort(trimmedModelId)
-        ? { thinkingLevelMap: { max: "max" } }
-        : {}),
   };
 }
 
@@ -723,7 +709,7 @@ function normalizeAnthropicResolvedModel(
 /** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
-  const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
+  const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   return {
     id: providerId,
     label: "Anthropic",

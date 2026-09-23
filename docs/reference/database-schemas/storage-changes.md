@@ -130,8 +130,15 @@ join native reader cleanup before returning. Doctor imports legacy registry rows
 through the shared-state writer, with host transaction and commit admission under
 the captured maintenance scope. Imports retain sequential per-row transactions,
 existing-row precedence, and sharded-before-monolithic ordering; source cleanup
-waits for durable acknowledgement. Runtime registry writes, reservations, and
-currentness callbacks retain their synchronous owners.
+waits for durable acknowledgement. Container registry updates, completion, and
+removal execute through the same writer, preserving captured inputs, immutable
+fields, update/remove ordering, and removal-intent guards. Docker and Podman use
+the existing pending/ready state for one-time setup; interrupted setup retains
+its container and data and cannot be reused as ready. Legacy entries without a
+readiness marker keep their existing behavior. Browser writes, reservation/lock
+primitives, removal-intent admission, and currentness callbacks retain their
+existing synchronous owners. Existing records need no schema or data migration,
+and retention is unchanged.
 
 Shared-state operations that request host transaction or commit admission acquire
 fresh lifecycle coordinator custody on their executing SQLite worker. A live
@@ -1668,17 +1675,41 @@ maintenance also waits for the parent's commit-settlement probe to release its
 writer lock. Child transaction settlement and parent probe release are distinct
 facts in the existing commit gate; failed release cannot acknowledge success.
 
-Queued archive pruning prepares cold connections through the same asynchronous
-admission owner while retaining its existing writer section. File-backed page
-drains use the existing reclamation worker, acquired before the caller's writer
-section. Each unit checks current authority before checkpointing and vacuum,
-authorizes commit, and joins native settlement. Cache eviction between units can
-refresh the host claim only for the same physical database; no dispatched mutation
-is replayed. Incognito maintenance retains its in-process owner.
-Archive-row and unpublished-name reads follow
-validation. After removing a derived archive file, pruning reacquires before the
-canonical row-deletion transaction; an acquisition failure propagates without
-deleting that recovery row.
+Archive pruning retains its maintenance and archive-worker lifetimes while each
+page-reclamation unit acquires and releases the physical writer separately.
+Foreground session writes can run between units. Durable archive metadata reads
+use the existing history worker; conditional deletions, legacy file removal, and
+page reclamation use the agent database execution broker.
+The host captures the physical file before
+waiting and rechecks the original path alias and live authority before effects
+and at worker admission. Each write joins native settlement without replaying a
+dispatched mutation. Host connection eviction does not redirect work or require
+a synchronous database reopen. Process-held incognito maintenance retains its
+existing in-process owner and remains a separate worker migration.
+
+Canonical archive removal holds one writer section through selection, derived-file
+removal, and conditional row deletion. It rechecks pressure, authority, and the
+selected published row before deleting the canonical recovery copy. A failed
+admission or changed row preserves that copy and stops the current
+cleanup attempt. Legacy file removal checks exact canonical filename ownership,
+stats the file, and unlinks it in one synchronous worker write transaction. It
+preserves files owned by published or unpublished rows and holds the SQLite writer
+lock through unlink. Since file removal cannot roll back, the host grants commit
+immediately before unlink; no-effect outcomes also require current commit authority.
+Native settlement finishes before the item writer is released. Filesystem inventory
+and successive page drains run outside the item writer.
+Aggregate pruning diagnostics report the whole operation separately from actual
+writer waits.
+Archive order, retention policy, schemas, and update behavior are unchanged.
+
+Worker retirement preserves the original operation failure without reporting it
+again as a cleanup failure. A successfully retired execution owner is released for
+later requests; genuine native-close and lease-cleanup failures retain their
+existing retry custody.
+Successful pooled-agent close relays its recorded WAL checkpoint after native and
+lease cleanup settle. The original generation and physical database identities
+fence that observation, and the budget owner releases deferral only for a newer
+completed checkpoint.
 
 Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
 agent-database admission. A cold mutation waits for the existing integrity worker;
@@ -1859,6 +1890,18 @@ lifecycle owner. A future backend must supply equivalent product behavior or
 an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
+
+Prepared node-workspace registration, binding, mutation completion, and retirement
+run in the same shared-state worker as the node launch journal. Existing-only
+reads do not create a database or run schema opening. Filesystem preparation and
+workspace serialization stay on the host; writes recheck cancellation and host
+ownership at transaction admission. Retiring rows remain cleanup-only after a
+lost mutation permit, and successful overlays return only after durable
+completion. Retention fences legacy synchronous acquisitions while awaiting the
+retirement tombstone, then preserves the existing path checks before removal.
+The deprecated public synchronous workspace capability retains its read path;
+internal callers and bundled plugins use its async companion. Table shape,
+identifiers, transaction boundaries, and retained recovery state are unchanged.
 
 Session membership, participant display facts, and category membership are prepared
 in the existing session read worker and retained by the session-row projection.

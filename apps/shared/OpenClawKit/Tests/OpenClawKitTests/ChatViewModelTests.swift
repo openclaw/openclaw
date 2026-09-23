@@ -9993,7 +9993,9 @@ struct ChatViewModelTests {
         #expect(await transport.sentThinkingLevels() == ["off"])
     }
 
-    @Test func `failed latest model selection does not replay after older completion finishes`() async throws {
+    @Test func `failed latest model selection restores earlier success without replay`() async throws {
+        let firstPatchGate = AsyncGate()
+        let secondPatchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = sessionsResponse(
@@ -10010,10 +10012,11 @@ struct ChatViewModelTests {
             modelResponses: [models],
             setSessionModelHook: { model in
                 if model == "openai/gpt-5.4" {
-                    try await Task.sleep(for: .milliseconds(200))
+                    await firstPatchGate.wait()
                     return
                 }
                 if model == "openai/gpt-5.4-pro" {
+                    await secondPatchGate.wait()
                     throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])
                 }
             })
@@ -10021,66 +10024,28 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("older model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
-        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
-
-        try await waitUntil("older model completion wins after latest failure") {
-            await MainActor.run {
-                vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
-                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+        do {
+            try await waitUntil("older model patch starts") {
+                await transport.patchedModels() == ["openai/gpt-5.4"]
             }
+            await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
+            await firstPatchGate.open()
+            try await waitUntil("latest model patch starts after earlier success") {
+                await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
+            }
+            #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
+        } catch {
+            await firstPatchGate.open()
+            await secondPatchGate.open()
+            await vm.waitForPendingSessionSettings(in: "main")
+            throw error
         }
+        await secondPatchGate.open()
+        await vm.waitForPendingSessionSettings(in: "main")
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
-        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
-    }
-
-    @Test func `failed latest model selection restores earlier success without replay`() async throws {
-        let now = Date().timeIntervalSince1970 * 1000
-        let history = historyPayload()
-        let sessions = sessionsResponse(
-            sessionEntry(key: "main", updatedAt: now, model: nil),
-            ts: now)
-        let models = [
-            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
-            modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
-        ]
-
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [history],
-            sessionsResponses: [sessions],
-            modelResponses: [models],
-            setSessionModelHook: { model in
-                if model == "openai/gpt-5.4" {
-                    try await Task.sleep(for: .milliseconds(100))
-                    return
-                }
-                if model == "openai/gpt-5.4-pro" {
-                    try await Task.sleep(for: .milliseconds(200))
-                    throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])
-                }
-            })
-
-        try await loadAndWaitBootstrap(vm: vm)
-
-        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
-        try await waitUntil("earlier model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
-        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
-
-        try await waitUntil("latest failure restores prior successful model") {
-            await MainActor.run {
-                vm.modelSelectionID == "openai/gpt-5.4" &&
-                    vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
-                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
-            }
-        }
-
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 

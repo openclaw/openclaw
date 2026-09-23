@@ -24,6 +24,7 @@ export type RealtimeTalkTranscript = {
   /** Literal fragments append; complete snapshots replace without inferred turn boundaries. */
   textMode?: "verbatim" | "snapshot";
   itemId?: string;
+  transcriptId?: string;
   order?: number;
 };
 
@@ -38,6 +39,7 @@ export type RealtimeTalkTranscriptItem =
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
+  onInputNotice?: (detail: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
   onTranscript?: (entry: RealtimeTalkTranscript) => void;

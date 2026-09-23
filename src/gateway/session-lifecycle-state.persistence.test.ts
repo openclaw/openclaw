@@ -534,9 +534,7 @@ it.for([
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const writerStarted = createDeferred();
       const releaseWriter = createDeferred();
-      const terminalChanged = createDeferred();
-      const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-      sessionEventSubscribers.subscribe("session-observer");
+      const clearRequested = createDeferred<string>();
       let claimId: string | undefined;
       let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
       let heldWriter: Promise<unknown> | undefined;
@@ -563,7 +561,12 @@ it.for([
         claimId = claimAgentRunContext(
           runId,
           { lifecycleGeneration, sessionId, sessionKey: target.sessionKey },
-          { exclusive: true, ownsContext: true, trackOwner: true },
+          {
+            exclusive: true,
+            ownsContext: true,
+            trackOwner: true,
+            onClearRequested: clearRequested.resolve,
+          },
         );
         if (!claimId) {
           throw new Error("expected worker terminal claim");
@@ -576,17 +579,13 @@ it.for([
           signal: new AbortController().signal,
           log: silentLog,
           broadcast: vi.fn(),
-          broadcastToConnIds: (event, payload) => {
-            if (event === "sessions.changed" && isRecord(payload) && payload.runId === runId) {
-              terminalChanged.resolve();
-            }
-          },
+          broadcastToConnIds: vi.fn(),
           nodeHasSessionSubscribers: () => false,
           nodeSendToSession: vi.fn(),
           agentRunSeq,
           chatRunState,
           toolEventRecipients: chatRunState.toolEventRecipients,
-          sessionEventSubscribers,
+          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
           sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
           chatAbortControllers: new Map(),
           restartRecoveryCandidates: new Map(),
@@ -619,7 +618,11 @@ it.for([
         );
         releaseWriter.resolve();
         await heldWriter;
-        await racePromiseWithAbortSignal(terminalChanged.promise, signal);
+        // Failed runs also persist a transcript receipt after the row update.
+        expect(await racePromiseWithAbortSignal(clearRequested.promise, signal)).toBe(
+          terminalClaimId,
+        );
+        expect(persistenceTestWarnings).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)?.status).toBe(status);
         expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
           "clear-requested",

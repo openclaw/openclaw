@@ -127,34 +127,47 @@ describe("gateway auxiliary authority lifecycle", () => {
       onAgentRunAuthorityClosed,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
-    const operationalRunInstance = Object.freeze({
-      instanceId: "egress-proxy-instance",
-      runId: "egress-proxy-run",
-    });
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const generation = new AbortController();
-    const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
-    const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
-    record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
-    const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
+    vi.useFakeTimers();
+    const restoreClock = installTestApprovalClock();
+    try {
+      const operationalRunInstance = Object.freeze({
+        instanceId: "egress-proxy-instance",
+        runId: "egress-proxy-run",
+      });
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const generation = new AbortController();
+      const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
+      const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
+      record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
+      const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
 
-    generation.abort();
+      generation.abort();
 
-    await expect(pending).resolves.toBeNull();
-    expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe("cancelled");
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
-      scoped,
-      "approval-scope-closed",
-    );
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+      await expect(pending).resolves.toBeNull();
+      expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe(
+        "cancelled",
+      );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
+        scoped,
+        "approval-scope-closed",
+      );
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
 
-    releaseAgentRunDelegatedAuthority(authority);
+      releaseAgentRunDelegatedAuthority(authority);
 
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
-    expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
-      expect.objectContaining({ operationalRunInstance }),
-      undefined,
-    );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
+      expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
+        expect.objectContaining({ operationalRunInstance }),
+        undefined,
+      );
+    } finally {
+      try {
+        await gatewayAux.stopOperatorInteractions();
+      } finally {
+        restoreClock?.();
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("retires one request approval while its sibling and admitted run remain live", async () => {

@@ -1,10 +1,7 @@
 // Channels page view contracts.
 import type {
   ChannelAccountSnapshot,
-  ChannelsPairingListResult,
   ChannelsPairingRequest,
-  ChannelsStatusSnapshot,
-  ConfigUiHints,
   DiscordStatus,
   GoogleChatStatus,
   IMessageStatus,
@@ -15,9 +12,11 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
-import type { PluginListResult } from "../../lib/plugins/index.ts";
+import type { ChannelsState } from "../../lib/channels/index.ts";
+import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
+import type { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
-import type { ChannelWizardState } from "./wizard-controller.ts";
+import type { ChannelWizardHost } from "./wizard-host.ts";
 
 export type ChannelKey = string;
 
@@ -29,52 +28,23 @@ export type ChannelPairingPrompt = {
 };
 
 export type ChannelsProps = {
-  connected: boolean;
-  loading: boolean;
-  snapshot: ChannelsStatusSnapshot | null;
-  pluginCatalog: PluginListResult | null;
-  pluginIconUrls: Readonly<Record<string, string>>;
-  lastError: string | null;
-  lastSuccessAt: number | null;
-  pairingLoading: boolean;
-  pairingSnapshot: ChannelsPairingListResult | null;
-  pairingError: string | null;
-  pairingLastSuccessAt: number | null;
-  pairingBusyRequestId: string | null;
+  channels: ChannelsState;
+  config: RuntimeConfigState;
+  presentation: ChannelPluginPresentationController;
+  wizardHost: ChannelWizardHost;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
   pairingNotice: string | null;
   canManagePairing: boolean;
   canAdmin: boolean;
-  whatsappMessage: string | null;
-  whatsappQrDataUrl: string | null;
-  whatsappConnected: boolean | null;
-  whatsappBusy: boolean;
-  configSchema: unknown;
-  configSchemaLoading: boolean;
-  configForm: Record<string, unknown> | null;
-  configUiHints: ConfigUiHints;
-  configSaving: boolean;
-  configError: string | null;
-  configFormDirty: boolean;
   showAdvancedSettings: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   selectedChannel: string | null;
-  wizard: ChannelWizardState;
-  wizardMultiselect: readonly unknown[];
-  wizardTextValue: string;
-  wizardSecretVisible: boolean;
-  setupBlockedByDirtyConfig: boolean;
   onShowDetail: (channelId: string) => void;
   onCloseDetail: () => void;
   onStartSetup: (channelId: string | null) => void;
-  onWizardAnswer: (value: unknown) => void;
-  onWizardToggleMultiselect: (value: unknown) => void;
-  onWizardTextInput: (value: string) => void;
-  onWizardToggleSecretVisibility: () => void;
-  onWizardClose: () => void;
   onRefresh: (probe: boolean) => void;
   onPairingRefresh: () => void;
   onPairingFilterChange: (channel: string | null, accountId: string | null) => void;
