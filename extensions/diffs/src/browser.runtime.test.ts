@@ -17,8 +17,9 @@ import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } fro
 import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
-const { launchMock } = vi.hoisted(() => ({
+const { launchMock, playwrightExecutablePathMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
+  playwrightExecutablePathMock: vi.fn(),
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
@@ -26,6 +27,7 @@ let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").Playwrigh
 vi.mock("playwright-core", () => ({
   chromium: {
     launch: launchMock,
+    executablePath: playwrightExecutablePathMock,
   },
 }));
 
@@ -63,6 +65,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
+    playwrightExecutablePathMock.mockReset().mockReturnValue(path.join(rootDir, "chromium"));
   });
 
   afterEach(async () => {
@@ -149,9 +152,37 @@ describe("PlaywrightDiffScreenshotter", () => {
       "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
       "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
       "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      playwrightExecutablePathMock(),
     ]);
     expect(candidates.every((candidate) => path.win32.isAbsolute(candidate))).toBe(true);
   });
+
+  it.each([true, false])(
+    "renders with Playwright-only installation when full Chromium is present=%s",
+    async (hasFullChromium) => {
+      vi.stubEnv("PATH", "");
+      vi.stubEnv("OPENCLAW_BROWSER_EXECUTABLE_PATH", "");
+      vi.stubEnv("BROWSER_EXECUTABLE_PATH", "");
+      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
+      const managedPath = path.join(rootDir, "playwright", "chromium", "chrome");
+      playwrightExecutablePathMock.mockReturnValue(managedPath);
+      vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
+        if (!hasFullChromium || candidate !== managedPath) {
+          throw new Error("ENOENT");
+        }
+      });
+
+      const launchOptions = await renderWithBrowserDiscovery();
+      if (hasFullChromium) {
+        // Playwright's default headless launch requests the absent shell binary.
+        expect(launchOptions.executablePath).toBe(managedPath);
+      } else {
+        // A shell-only installation must retain Playwright's default selection.
+        expect(launchOptions).not.toHaveProperty("executablePath");
+      }
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("png");
+    },
+  );
 
   it("preserves custom Windows install-root precedence", async () => {
     stubWindowsBrowserDiscoveryEnv({

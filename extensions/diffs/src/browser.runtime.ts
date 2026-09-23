@@ -323,6 +323,7 @@ function injectBaseHref(html: string): string {
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {
+  const playwrightPath = chromium.executablePath();
   const cacheKey = JSON.stringify({
     configPath: config.browser?.executablePath?.trim() || "",
     env: [
@@ -331,18 +332,21 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
       process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? "",
     ],
     path: process.env.PATH ?? "",
+    playwrightPath,
   });
 
   if (executablePathCache?.key === cacheKey) {
     return await executablePathCache.valuePromise;
   }
 
-  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error: unknown) => {
-    if (executablePathCache?.valuePromise === valuePromise) {
-      executablePathCache = null;
-    }
-    throw error;
-  });
+  const valuePromise = resolveBrowserExecutablePathUncached(config, playwrightPath).catch(
+    (error: unknown) => {
+      if (executablePathCache?.valuePromise === valuePromise) {
+        executablePathCache = null;
+      }
+      throw error;
+    },
+  );
   executablePathCache = {
     key: cacheKey,
     valuePromise,
@@ -352,6 +356,7 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
 
 async function resolveBrowserExecutablePathUncached(
   config: OpenClawConfig,
+  playwrightPath: string,
 ): Promise<string | undefined> {
   const configPath = config.browser?.executablePath?.trim();
   if (configPath) {
@@ -377,6 +382,13 @@ async function resolveBrowserExecutablePathUncached(
     if (await isExecutable(candidate)) {
       return candidate;
     }
+  }
+
+  // Full-only Docker images omit the shell Playwright selects for an unspecified
+  // headless launch. Use its public full-browser path without duplicating cache
+  // layouts; when it is absent, leave shell-only selection to Playwright.
+  if (await isExecutable(playwrightPath)) {
+    return playwrightPath;
   }
 
   return undefined;

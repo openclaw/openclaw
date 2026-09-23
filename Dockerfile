@@ -350,22 +350,27 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi
 
-# Optionally install Chromium and Xvfb for browser automation.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
-# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+# Optionally install Chromium distributions for browser automation.
+# Legacy 1 keeps full Chromium and headless shell; explicit chromium or
+# headless-shell installs only that distribution; managed shell use requires an
+# explicit executablePath on a separate headless browser profile.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
-      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
-      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
-    fi
+    set -eu; \
+    case "$OPENCLAW_INSTALL_BROWSER" in \
+      ""|0) exit 0 ;; \
+      1) set -- ;; \
+      chromium) set -- --no-shell ;; \
+      headless-shell) set -- --only-shell ;; \
+      *) echo 'OPENCLAW_INSTALL_BROWSER must be empty, 0, 1, chromium, or headless-shell' >&2; exit 1 ;; \
+    esac; \
+    install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
+    mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
+    node /app/node_modules/playwright-core/cli.js install --with-deps "$@" chromium && \
+    chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"
 
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...

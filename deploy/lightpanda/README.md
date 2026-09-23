@@ -6,10 +6,15 @@ They do not add an engine binary, container layer, or npm dependency to OpenClaw
 
 ## License boundary
 
-OpenClaw's adapter is MIT-licensed. Lightpanda 0.4.1 is
-**AGPL-3.0-or-later**, as stated in its
+OpenClaw's adapter is MIT-licensed. Lightpanda 0.4.1 is **AGPL**, with an
+upstream declaration inconsistency: its
+[licensing document](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/LICENSING.md)
+says `AGPL-3.0-only`, while its
 [source header](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/LICENSE).
+allows version 3 or later. Preserve both pieces of evidence in the SBOM review;
+do not silently choose one SPDX expression as license clearance. The
+[license text](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/LICENSE)
+is AGPL version 3.
 The engine is independently installed and communicates with OpenClaw over CDP;
 OpenClaw does not link, vendor, or relicense its implementation. This is not an
 MIT-only stack or a certification that every deployment is legally compliant.

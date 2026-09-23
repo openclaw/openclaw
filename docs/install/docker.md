@@ -146,8 +146,43 @@ For a new installation from a local source build, bake Chromium into the image:
 OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
 ```
 
-This build-time option installs Chromium and Xvfb; setting it on
-an already-built container does not install a browser.
+`OPENCLAW_INSTALL_BROWSER=1` installs full Chromium and headless shell, preserving
+existing Playwright scripts that use default headless launches. Choose `chromium`
+to install only full Chromium, or `headless-shell` for a smaller, headless-only image:
+
+```bash
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=headless-shell ./scripts/docker/setup.sh
+```
+
+All modes use the repository-pinned Playwright installer, including its system
+libraries, fonts, and FFmpeg helper. Empty or `0` omits the browser. These are
+build-time choices; setting them on an already-built container does not install
+or replace a browser. Headless shell cannot provide a headed browser window or
+Chrome extensions. Keep full Chromium for those workflows and validate your sites
+before switching. Neither browser distribution is MIT-only; inventory the actual
+image and preserve all third-party license notices.
+
+OpenClaw automatically discovers full Chromium only. A `headless-shell` image
+requires an explicit shell executable path on a separate managed profile. Find
+the installed path inside the container (the revision directory changes with
+Playwright updates):
+
+```bash
+find /home/node/.cache/ms-playwright -type f -name chrome-headless-shell
+```
+
+Set `browser.profiles.shell.executablePath` to that path, give the profile its own
+`cdpPort`, and keep it headless. Select that profile when starting the browser.
+Do not reuse an existing full Chromium profile: switching distributions can
+discard localStorage. See [Browser configuration](/tools/browser/configuration).
+
+With the explicit `chromium` mode,
+your own Playwright scripts must use `channel: "chromium"` for headless launches;
+Playwright's default headless launch expects the separate shell binary. Keep `1`
+to retain both binaries without changing existing scripts.
+The bundled Diffs PNG/PDF renderer supports all image modes. After explicit and
+system-browser choices, it selects Playwright's full Chromium when installed and
+otherwise retains Playwright's default headless-shell selection.
 
 The image supplies Chromium, not a replacement for your browser configuration:
 
@@ -157,7 +192,7 @@ The image supplies Chromium, not a replacement for your browser configuration:
 - OpenClaw auto-detects the image's Playwright-managed Chromium on Linux. An
   explicit `browser.executablePath` or profile executable path must point to a
   binary inside the container; a path from your laptop will not work there.
-- A headless container needs headless browser operation. Check explicit
+- Managed browsers run headless by default. Check explicit
   `browser.headless`, profile headless settings, and `OPENCLAW_BROWSER_HEADLESS`
   overrides if startup reports a missing display. See [Browser configuration](/tools/browser-control).
 - Connect with `operator.admin` access to a Gateway advertising `browser.request`.

@@ -450,6 +450,7 @@ async function main() {
           const snapshot = await request("GET", "/snapshot", undefined, {
             targetId,
             format: "ai",
+            mode: "efficient",
           });
           const text = String(snapshot.snapshot);
           const nameRef = /textbox[^\n]*\[ref=((?:f\d+)?e\d+)\]/.exec(text)?.[1];
