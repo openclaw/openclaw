@@ -231,3 +231,19 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Native harness attempt projection
+
+Official native harness plugins share attempt projection through
+`openclaw/plugin-sdk/agent-harness-attempt-runtime`. The seam includes
+`AgentHarnessProjectionSettlement` for joining presentation callbacks before
+terminal delivery, `NativeToolOutputAccumulator` and the native tool formatting
+helpers for bounded output, and the attributed assistant, tool-call, and
+tool-result message constructors.
+Use `racePromiseWithAbortSignal` to keep projection draining under the existing
+attempt cancellation and settlement deadline.
+
+Adapters supply backend attribution, stable item identities, native status,
+and transcript provenance. Native protocol parsing, approval and hook handling,
+and session controls remain adapter-owned. Persist constructed messages through
+the existing scoped transcript APIs; these projection helpers do not own storage.
