@@ -21,6 +21,23 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    readArchivePruning: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-archive-pruning", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-archive-pruning"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of archive pruning",
+            );
+          }
+          return value.result;
+        },
+      ),
     readColdMetadata: async (input) =>
       await runRequest(
         () => ({ kind: "cold-metadata", ...input }),

@@ -124,6 +124,17 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "session-archive-pruning") {
+        const { readSessionArchivePruningInWorker } =
+          await import("./session-history-archive-pruning.worker.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-archive-pruning" as const,
+            result: readSessionArchivePruningInWorker(request),
+          }))),
+        };
+      }
       if (request.kind === "cold-metadata") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

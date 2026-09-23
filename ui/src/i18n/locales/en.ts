@@ -4086,6 +4086,7 @@ export const en: TranslationMap & {
       markdownPreview: "Markdown preview",
       toolDetails: "Tool details",
       reloadFailed: "Failed to reload the latest file.",
+      reloadBlocked: "Save or discard your file edits before reloading.",
       overwriteLoadFailed: "Failed to load the latest file before overwriting.",
       fullContentLoadFailed: "Failed to load full content: {error}",
     },

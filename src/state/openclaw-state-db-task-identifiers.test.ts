@@ -10,7 +10,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
@@ -68,7 +68,7 @@ it.each([false, true])(
       const pathname = database.path;
       closeOpenClawStateDatabaseForTest();
 
-      expect(repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env }).warnings).toEqual([]);
+      expect((await prepareOpenClawStateDatabaseSchema({ env: state.env })).warnings).toEqual([]);
       const unchanged = new DatabaseSync(pathname);
       expect(snapshot(unchanged)).toEqual(before);
       unchanged.close();

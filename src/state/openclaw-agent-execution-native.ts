@@ -6,6 +6,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
+import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -104,6 +106,7 @@ export function createAgentDatabaseNativeGeneration(
   let closing: Promise<void> | undefined;
   let nativeIdentity: AgentDatabaseExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
+  let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let quickCheckPending = false;
   let receiveValidation:
@@ -308,8 +311,9 @@ export function createAgentDatabaseNativeGeneration(
             stateDatabasePath: context.admission.databasePath,
             assertCurrent,
             createAdmission: admission(source, registration, assertCallerCurrent),
-            onNativeStopped: (stopped) => {
+            onNativeStopped: (stopped, readReceipt) => {
               nativeStopped = stopped;
+              readCloseReceipt = readReceipt;
             },
           },
         );
@@ -391,6 +395,29 @@ export function createAgentDatabaseNativeGeneration(
       admission(source, undefined, assertCallerCurrent),
     );
   }
+  const publishCloseCheckpoint = () => {
+    const receipt = readCloseReceipt?.();
+    if (
+      !receipt ||
+      !nativeIdentity ||
+      !lease ||
+      receipt.incarnation !== nativeIdentity.incarnation ||
+      receipt.identity.key !== `file:${nativeIdentity.physicalIdentity}` ||
+      receipt.identity.canonicalPath !== nativeIdentity.nativeLocation
+    ) {
+      return;
+    }
+    try {
+      // Cleanup retains custody after ordinary admission is revoked during shutdown.
+      assertCleanupOwned();
+      assertExistingDatabaseIdentity(pathname, receipt.identity.key);
+      assertExistingDatabaseIdentity(nativeIdentity.nativeLocation, receipt.identity.key);
+      assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
+      publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
+    } catch {
+      // A stale diagnostic must not clear another generation's budget or fail native cleanup.
+    }
+  };
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
@@ -430,6 +457,7 @@ export function createAgentDatabaseNativeGeneration(
             cause: errors[0],
           });
         }
+        publishCloseCheckpoint();
       })().catch((error: unknown) => {
         closing = undefined;
         throw error;
