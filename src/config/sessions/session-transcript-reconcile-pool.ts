@@ -38,7 +38,9 @@ export type SessionTranscriptReconcileOperation = {
   retainLeaseForCleanup(
     lease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
   ): void;
-  startTask: typeof startReconcileWorkerTask;
+  startTask(
+    input: SessionTranscriptReconcileWorkerInput,
+  ): ReturnType<typeof startReconcileWorkerTask>;
 };
 
 export function captureSessionTranscriptReconcileGeneration(): number {
@@ -106,7 +108,10 @@ export function runSessionTranscriptReconcileOperation<T>(
           if (input.mode !== "release") {
             controller.signal.throwIfAborted();
           }
-          return startReconcileWorkerTask(input);
+          return startReconcileWorkerTask(
+            input,
+            input.mode === "release" ? undefined : controller.signal,
+          );
         },
       }),
     );
@@ -119,7 +124,7 @@ export function runSessionTranscriptReconcileOperation<T>(
 async function releaseReconcileWorkerLease(
   input: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
 ): Promise<void> {
-  const task = startReconcileWorkerTask(input);
+  const task = await startReconcileWorkerTask(input);
   try {
     const cleanup = await task.leaseRelease;
     if (cleanup.failure) {
@@ -167,7 +172,10 @@ export function getSessionTranscriptReconcileWorkerPoolSnapshot() {
   );
 }
 
-function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) {
+async function startReconcileWorkerTask(
+  input: SessionTranscriptReconcileWorkerInput,
+  signal?: AbortSignal,
+) {
   const owner =
     input.mode === "memory"
       ? undefined
@@ -180,6 +188,17 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
             },
           }),
         };
+  const sourceIdentity =
+    input.mode === "disk" ? readDatabasePathIdentitySync(input.path).key : undefined;
+  if (owner && input.mode === "disk" && owner.context.admission.identity.key.startsWith("path:")) {
+    // Finish canonical first creation before publishing a task that could claim an agent lease.
+    const { runOpenClawStateWorkerOperation } =
+      await import("../../state/openclaw-state-worker-store.js");
+    await runOpenClawStateWorkerOperation(owner.context, async () => undefined, {
+      assertCurrent: () => signal?.throwIfAborted(),
+    });
+  }
+  signal?.throwIfAborted();
   const pool = (runtime.pool ??= new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
@@ -223,8 +242,7 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
         input,
         port: port2,
         coordination,
-        sourceIdentity:
-          input.mode === "disk" ? readDatabasePathIdentitySync(input.path).key : undefined,
+        sourceIdentity,
       },
       {
         inputBytes,
