@@ -426,10 +426,7 @@ describe("runSqliteImmediateTransactionSync", () => {
     // busyTimeoutMs: 0 should NOT collapse threshold to 1ms.
     // With the default 1000ms threshold, 5ms steps are not slow.
     // Before the fix, this would have produced false-positive warnings.
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.anything(),
-    );
+    expect(logger.warn).not.toHaveBeenCalledWith("slow SQLite transaction step", expect.anything());
   });
 
   it("still warns for busyTimeoutMs: 0 when transaction crosses the default 1000ms threshold", () => {
@@ -451,13 +448,10 @@ describe("runSqliteImmediateTransactionSync", () => {
     });
 
     // The 1000ms default threshold still catches genuinely slow transactions.
-    expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
-      expect.anything(),
-    );
+    expect(logger.warn).toHaveBeenCalledWith("slow SQLite transaction step", expect.anything());
   });
 
-  it("logs slow successful transaction lock waits", () => {
+  it("logs slow successful transaction steps without attributing lock contention", () => {
     const logger = { warn: vi.fn() };
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -480,7 +474,7 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(readEntries(db)).toEqual(["committed"]);
 
     expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
+      "slow SQLite transaction step",
       expect.objectContaining({
         async: false,
         database: "agent.sqlite",
@@ -492,7 +486,7 @@ describe("runSqliteImmediateTransactionSync", () => {
         threadId,
       }),
     );
-    expect(logger.warn).toHaveBeenCalledWith("slow SQLite transaction lock wait", {
+    expect(logger.warn).toHaveBeenCalledWith("slow SQLite transaction step", {
       async: false,
       busyTimeoutMs: 5_000,
       database: "agent.sqlite",
@@ -598,7 +592,7 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(db.prepare("SELECT id FROM entries").all()).toEqual([{ id: "committed" }]);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
-      "slow SQLite transaction lock wait",
+      "slow SQLite transaction step",
       expect.objectContaining({
         operation: "service-proof",
         step: "begin",

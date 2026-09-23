@@ -9,7 +9,10 @@ import type { CronJob } from "./types.js";
 
 /** Runs a test callback with an isolated OpenClaw home for cron tests. */
 export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-cron-",
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
 }
 
 export async function writeSessionStore(

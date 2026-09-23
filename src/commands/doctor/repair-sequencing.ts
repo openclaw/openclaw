@@ -231,6 +231,7 @@ export async function runDoctorRepairSequence(params: {
     repairedPluginOpenClawHostLinks ||
     missingConfiguredPluginInstallRepair.pluginInventoryChanged
   ) {
+    pluginMetadataSnapshotState.inventoryChanged = true;
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();

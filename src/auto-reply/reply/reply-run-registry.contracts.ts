@@ -1,4 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -29,6 +30,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 export type ReplyBackendQueueMessageOptions = {
+  /** Prepared context for this queue item, separate from its transcript and answer text. */
+  currentInboundContext?: CurrentInboundPromptContext;
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;

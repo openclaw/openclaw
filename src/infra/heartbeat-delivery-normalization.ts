@@ -190,9 +190,11 @@ export function classifyHeartbeatAgentOutcome(params: {
       mediaUrls: undefined,
     });
   const shouldSkipMain =
-    normalized.shouldSkip &&
-    !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
+    // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
+    (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
+    (normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
   if (hasExplicitFailure) {
     return {
       kind: "failure",

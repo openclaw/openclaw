@@ -9,6 +9,7 @@ export type RealtimeTalkConversationEntry = {
   text: string;
   isStreaming: boolean;
   order?: number;
+  transcriptId?: string;
 };
 
 export type RealtimeTalkConversationState = {
@@ -52,6 +53,26 @@ export function continueRealtimeTalkConversation(
 }
 
 export function updateRealtimeTalkConversation(
+  state: RealtimeTalkConversationState,
+  update: RealtimeTalkTranscriptUpdate,
+): RealtimeTalkConversationState {
+  const next = applyRealtimeTalkTranscript(state, update);
+  if (!update.transcriptId || next === state) {
+    return next;
+  }
+  const entryIndex =
+    update.itemId !== undefined
+      ? next.entries.findIndex((entry) => entry.id === `item-${update.itemId}`)
+      : next.entries.findLastIndex((entry) => entry.role === update.role);
+  if (entryIndex < 0) {
+    return next;
+  }
+  const entries = next.entries.slice();
+  entries[entryIndex] = { ...entries[entryIndex]!, transcriptId: update.transcriptId };
+  return { ...next, entries };
+}
+
+function applyRealtimeTalkTranscript(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,
 ): RealtimeTalkConversationState {

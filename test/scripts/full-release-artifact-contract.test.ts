@@ -854,6 +854,7 @@ describe("retained publication admission", () => {
               github: { run_attempt: 1 },
               needs: {
                 resolve_target: { result: "success" },
+                plugin_compatibility_readiness: { result: "success" },
                 evidence_reuse: { result: "failure" },
               },
             }),

@@ -22,7 +22,7 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -1012,7 +1012,7 @@ describe("external shared-state ownership", () => {
     expect(() => repairOpenClawStateDatabaseSchema({ env: fixture.unmarkedEnv })).toThrow(
       OpenClawStateOwnershipError,
     );
-    expect(() => repairOpenClawStateDatabaseSchemaIfNeeded({ env: fixture.unmarkedEnv })).toThrow(
+    await expect(prepareOpenClawStateDatabaseSchema({ env: fixture.unmarkedEnv })).rejects.toThrow(
       OpenClawStateOwnershipError,
     );
     expect(() =>

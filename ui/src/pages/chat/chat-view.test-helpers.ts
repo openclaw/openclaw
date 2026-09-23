@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { render, type ReactiveControllerHost } from "lit";
 import { expect, vi } from "vitest";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
@@ -214,6 +215,55 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
 
 export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
   render(renderChat(createChatProps(overrides)), container);
+}
+
+export function getChatModelSelect(container: Element): HTMLElement {
+  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  expect(select).toBeInstanceOf(HTMLElement);
+  if (!(select instanceof HTMLElement)) {
+    throw new Error("Expected chat model control");
+  }
+  return select;
+}
+
+export function getChatThinkingValue(control: HTMLElement): string {
+  return control.dataset.chatThinkingValue ?? "";
+}
+
+export function getThinkingSelect(container: Element): HTMLElement {
+  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  expect(select).toBeInstanceOf(HTMLElement);
+  if (!(select instanceof HTMLElement)) {
+    throw new Error("Expected chat thinking control");
+  }
+  return select;
+}
+
+export function getThinkingSlider(container: Element): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
+}
+
+export function getThinkingSliderValues(container: Element): string[] {
+  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
+  return values ? values.split(",") : [];
+}
+
+export function getThinkingReasoningValueLabel(container: Element): string {
+  const preview = container.querySelector(
+    "[data-chat-thinking-preview-committed]:not([hidden]), " +
+      "[data-chat-thinking-preview-index]:not([hidden])",
+  );
+  return preview?.textContent?.trim() ?? "";
+}
+
+export function createDragEvent(type: string, types = ["Files"]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  return event;
+}
+
+export function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
+  return expectDefined(items[index], `${label} ${index}`);
 }
 
 export function replaceSkillCommands(

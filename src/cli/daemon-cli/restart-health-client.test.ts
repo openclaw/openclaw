@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayAuthConfig } from "../../config/types.gateway.js";
@@ -18,11 +18,22 @@ import {
   shouldClearUnboundScopesForMissingDeviceIdentity,
 } from "../../gateway/server/ws-connection/connect-policy.js";
 import {
+  resolveDeviceSignaturePayloadVersion,
   shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "../../gateway/server/ws-connection/handshake-auth-helpers.js";
+import {
+  loadDeviceAuthTokenReadOnly,
+  storeDeviceAuthToken,
+} from "../../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withGatewayMaintenanceDrain } from "../update-cli/update-command-service-drain.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
+
+vi.mock("../../daemon/systemd-maintenance.js", () => ({
+  readSystemdGatewayStopTimeout: async () => 330_000,
+}));
 
 // Exercise the real client over a socket and apply the Gateway's actual identity
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
@@ -34,9 +45,18 @@ describe("restart verifier local control identity", () => {
     { mode: "token", requirePluginHealth: false, host: "127.0.0.1" },
     { mode: "trusted-proxy", requirePluginHealth: false, host: "127.0.0.1" },
     { mode: "token", requirePluginHealth: false, host: "0.0.0.0" },
+    ...(["token", "password", "none", "trusted-proxy"] as const).map((mode) => ({
+      mode,
+      requirePluginHealth: false,
+      host: "127.0.0.1",
+      drain: true,
+    })),
   ] as const)(
-    "reads health on $host with $mode auth without creating device state (requirePluginHealth=$requirePluginHealth)",
-    async ({ mode, requirePluginHealth, host }) => {
+    "local control on $host with $mode auth (drain=$drain, requirePluginHealth=$requirePluginHealth)",
+    async (scenario) => {
+      const { mode, requirePluginHealth, host } = scenario;
+      const drain = "drain" in scenario && scenario.drain;
+      const paired = drain && mode === "trusted-proxy";
       await withOpenClawTestState(
         {
           env: {
@@ -52,7 +72,7 @@ describe("restart verifier local control identity", () => {
               ? { mode }
               : {
                   mode,
-                  [credential]: "fixture-restart-secret",
+                  ...(!paired ? { [credential]: "fixture-restart-secret" } : {}),
                   ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-user" } } : {}),
                 };
           const gateway = new WebSocketServer({ host, port: 0 });
@@ -86,6 +106,24 @@ describe("restart verifier local control identity", () => {
                 connections.push(connect);
                 const sharedAuthOk =
                   credential !== "none" && connect.auth?.[credential] === "fixture-restart-secret";
+                if (
+                  paired &&
+                  (!connect.device ||
+                    connect.device.id !== identity?.deviceId ||
+                    connect.auth?.deviceToken !== "fixture-paired-token" ||
+                    !resolveDeviceSignaturePayloadVersion({
+                      device: connect.device,
+                      connectParams: connect,
+                      role: "operator",
+                      scopes: connect.scopes ?? [],
+                      signedAtMs: connect.device.signedAt,
+                      nonce: "test-nonce",
+                    }))
+                ) {
+                  reject("device identity required");
+                  socket.close(1008, "device identity required");
+                  return;
+                }
                 const policy = {
                   connectParams: connect,
                   locality: "direct_local" as const,
@@ -124,6 +162,23 @@ describe("restart verifier local control identity", () => {
                   ...hello,
                   server: { ...hello.server, version: "2026.8.1", buildId: "fixture-build" },
                 });
+                return;
+              }
+              if (drain) {
+                sendMinimalGatewayResponse(
+                  socket,
+                  request.id,
+                  request.method === "status"
+                    ? { pid: process.pid, shutdownBudget: { timeoutMs: 25_000 } }
+                    : {
+                        status: "ready",
+                        suspensionId: "fixture-suspension",
+                        expiresAtMs: Date.now() + 60_000,
+                        activeCount: 0,
+                        blockers: [],
+                        writeCustody: [],
+                      },
+                );
                 return;
               }
               if (request.method !== "health" && !scopes.includes("operator.read")) {
@@ -168,13 +223,65 @@ describe("restart verifier local control identity", () => {
                 password: "fixture-peer-password",
               },
               auth,
+              port,
             },
           });
+          const identity = paired ? loadOrCreateDeviceIdentity({ env: state.env }) : null;
+          if (identity) {
+            await storeDeviceAuthToken({
+              env: state.env,
+              deviceId: identity.deviceId,
+              role: "operator",
+              token: "fixture-paired-token",
+              scopes: ["operator.admin"],
+            });
+          }
           const service = createMockGatewayService({
             readRuntime: async () => ({ status: "running", pid: process.pid }),
           });
           const before = await fs.readdir(state.stateDir, { recursive: true });
+          const callerStateDir = process.env.OPENCLAW_STATE_DIR;
+          if (paired) {
+            process.env.OPENCLAW_STATE_DIR = state.path("unrelated-caller");
+          }
           try {
+            if (drain) {
+              const stop = vi.fn(async () => "stopped");
+              const warn = vi.fn();
+              await expect(
+                withGatewayMaintenanceDrain(
+                  {
+                    state: {
+                      installed: true,
+                      loadState: { status: "loaded" },
+                      running: true,
+                      env: state.env,
+                      command: null,
+                      runtime: { status: "running", pid: process.pid },
+                    },
+                    assertCurrent: () => {},
+                    warn,
+                    timeoutMs: 0,
+                  },
+                  stop,
+                ),
+              ).resolves.toBe("stopped");
+              expect(requests).toEqual(["connect", "status", "connect", "gateway.suspend.prepare"]);
+              expect(failures).toEqual([]);
+              expect(stop).toHaveBeenCalledOnce();
+              expect(warn).not.toHaveBeenCalled();
+              if (identity) {
+                expect(
+                  await loadDeviceAuthTokenReadOnly({
+                    env: state.env,
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                  }),
+                ).toMatchObject({ token: "fixture-paired-token" });
+              }
+              expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(before);
+              return;
+            }
             const result = await waitForGatewayHealthyRestart({
               service,
               port,
@@ -218,6 +325,11 @@ describe("restart verifier local control identity", () => {
             expect(connections[0]?.scopes).toEqual(["operator.read"]);
             expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(before);
           } finally {
+            if (callerStateDir === undefined) {
+              delete process.env.OPENCLAW_STATE_DIR;
+            } else {
+              process.env.OPENCLAW_STATE_DIR = callerStateDir;
+            }
             await closeMinimalGatewayServer(gateway);
           }
         },

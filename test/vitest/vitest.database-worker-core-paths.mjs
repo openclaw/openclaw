@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/cli/daemon-cli/restart-health-client.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/config/sessions/disk-budget.physical-usage.test.ts",
   "src/agents/agent-bundle-mcp-requester-connect.read.test.ts",
@@ -602,6 +603,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/cron-tool.output-contract.test.ts",
   "src/plugins/services.cron.test.ts",
   "test/plugins/memory-dreaming-cron.test.ts",
+  "test/plugins/workboard-automation-authority.test.ts",
   "src/state/creator-namespace-migration.test.ts",
   "src/agents/auth-profiles/store-owner-publication.test.ts",
   "src/agents/auth-profiles/usage.inherited-owner.test.ts",

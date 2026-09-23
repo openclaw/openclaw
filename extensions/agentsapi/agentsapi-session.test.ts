@@ -1,6 +1,7 @@
+import type { AgentSessionEvent } from "openai/resources/beta/agents/agents";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { AgentsApiClient, type AgentsApiEvent } from "./agentsapi-client.js";
+import { AgentsApiClient } from "./agentsapi-client.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -25,7 +26,7 @@ describe("Agents API native session receipts", () => {
       if (request.init?.method === "POST") {
         return guardedResponse(request.url, Response.json({}));
       }
-      if (request.url.includes("/events?")) {
+      if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
         return guardedResponse(request.url, stream.response(request.signal));
       }
       return guardedResponse(
@@ -100,14 +101,14 @@ describe("Agents API native session receipts", () => {
         }
         return guardedResponse(request.url, Response.json({}));
       }
-      if (request.url.includes("/turns?")) {
+      if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
+        return guardedResponse(request.url, stream.response(request.signal));
+      }
+      if (!inputTypes.includes("agent.session.input.cancel")) {
         return guardedResponse(
           request.url,
           Response.json({ data: [], has_more: false, last_id: null }),
         );
-      }
-      if (request.url.includes("/events?")) {
-        return guardedResponse(request.url, stream.response(request.signal));
       }
       idleRequested.resolve();
       return guardedResponse(request.url, await idleReceipt.promise);
@@ -138,7 +139,7 @@ describe("Agents API native session receipts", () => {
     await idleRequested.promise;
     expect(inputTypes).toEqual(["agent.session.input.message", "agent.session.input.cancel"]);
     expect(cancellationSettled).toBe(false);
-    idleReceipt.resolve(Response.json({ status: "idle" }));
+    idleReceipt.resolve(Response.json({ id: "session-fixture", status: "idle", error: null }));
 
     await cancellation;
     await expect(run).rejects.toBe(interruption);
@@ -159,7 +160,7 @@ describe("Agents API native session receipts", () => {
   });
 });
 
-function createSession(signal: AbortSignal, onEvent: (event: AgentsApiEvent) => void) {
+function createSession(signal: AbortSignal, onEvent: (event: AgentSessionEvent) => void) {
   return createAgentsApiSession({
     client: new AgentsApiClient("fixture-not-a-real-api-key", () => {}),
     cleanupClient: new AgentsApiClient("fixture-not-a-real-api-key", () => {}),
@@ -202,7 +203,7 @@ function createEventStream() {
       });
       return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
     },
-    send(event: AgentsApiEvent) {
+    send(event: { type: string; [key: string]: unknown }) {
       const observed = deferred<void>();
       const callbacks = waiters.get(event.type) ?? [];
       callbacks.push(() => observed.resolve());
@@ -213,7 +214,7 @@ function createEventStream() {
       streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       return observed.promise;
     },
-    observe(event: AgentsApiEvent) {
+    observe(event: AgentSessionEvent) {
       waiters.get(event.type)?.shift()?.();
     },
   };

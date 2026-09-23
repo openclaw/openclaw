@@ -315,13 +315,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockClear();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
-    emitTalkEvent({
-      relaySessionId: "relay-1",
-      type: "transcript",
+    const committedTranscript = {
       role: "assistant",
       text: "not committed yet",
+      transcriptId: "voice:relay-1:1",
+      textMode: "snapshot",
       final: true,
-    });
+    } as const;
+    emitTalkEvent({ relaySessionId: "relay-1", type: "transcript", ...committedTranscript });
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "toolCall",
@@ -337,11 +338,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.activate();
 
     expect(onStatus).toHaveBeenCalledWith("listening");
-    expect(onTranscript).toHaveBeenCalledWith({
-      role: "assistant",
-      text: "not committed yet",
-      final: true,
-    });
+    expect(onTranscript).toHaveBeenCalledWith(committedTranscript);
     await waitForFast(() =>
       expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
     );
@@ -535,7 +532,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const transport = await createTransport({ client });
 
     await startTransport(transport);
-    for (let index = 0; index < 321; index += 1) {
+    for (let index = 0; index < 4_097; index += 1) {
       emitTalkEvent({
         relaySessionId: "relay-1",
         type: "audio",
@@ -555,7 +552,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         ],
       ]),
     );
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
     expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
 
     emitTalkEvent({
@@ -563,7 +560,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: "AAAA",
     });
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
 
     emitTalkEvent({ relaySessionId: "relay-1", type: "clear" });
     emitTalkEvent({
@@ -571,7 +568,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "audio",
       audioBase64: "AAAA",
     });
-    expect(createdSources).toHaveLength(321);
+    expect(createdSources).toHaveLength(4_097);
     expect(createdSources.at(-1)?.start).toHaveBeenCalledOnce();
 
     void transport.stop();
@@ -585,7 +582,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "audio",
-      audioBase64: zeroPcmBase64(24000 * 11),
+      audioBase64: zeroPcmBase64(24000 * 61),
     });
 
     await waitForFast(() =>

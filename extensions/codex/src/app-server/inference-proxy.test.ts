@@ -245,8 +245,17 @@ describe("private inference WebSocket relay", () => {
       }
       const { proxy } = await fixture();
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+      socket.on("error", () => {});
       try {
-        await once(socket, "error");
+        const [, response] = await once(socket, "unexpected-response");
+        const chunks: Buffer[] = [];
+        for await (const chunk of response) {
+          chunks.push(Buffer.from(chunk));
+        }
+        expect(response.statusCode).toBe(502);
+        expect(Buffer.concat(chunks).toString()).toBe(
+          "Codex parent-local inference transport failed; retry on a fresh connection.",
+        );
         expect(transport.resolve).toHaveBeenCalledOnce();
         expect(transport.proxyAgent).toHaveBeenCalledOnce();
         expect(transport.dials).toEqual([]);
@@ -255,6 +264,39 @@ describe("private inference WebSocket relay", () => {
       }
     },
   );
+
+  it("returns a complete sanitized rejection when upstream closes before upgrading", async () => {
+    const server = createServer();
+    server.on("upgrade", (_request, socket) => socket.destroy());
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("fixture did not listen");
+    }
+    transport.upstream = "ws://127.0.0.1:" + address.port;
+    const { proxy } = await fixture();
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    socket.on("error", () => {});
+    try {
+      const [, response] = await once(socket, "unexpected-response");
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        chunks.push(Buffer.from(chunk));
+      }
+      expect(response.statusCode).toBe(502);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+    } finally {
+      socket.terminate();
+      proxy.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 
   it.each(["https://127.0.0.1/v1", "https://service.internal/v1"])(
     "rejects blocked hostname %s before proxy or DNS work",

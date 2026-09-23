@@ -25,6 +25,16 @@ export type RuntimeContextFragment = {
   text: string;
 };
 
+export type CurrentInboundPromptContext = {
+  text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: RuntimeContextFragment[];
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
+};
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 

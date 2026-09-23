@@ -31,6 +31,7 @@ import {
 import { sleep } from "./lib/sleep.mjs";
 import {
   discoverStaticExtensionAssets,
+  resolveStaticExtensionAssetSource,
   shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
 import {
@@ -456,7 +457,9 @@ const listRequiredStaticExtensionAssetOutputs = (deps: RunNodeRequirementDeps) =
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
   const hasRuntimeOverlay = deps.fs.existsSync(runtimeExtensionsRoot);
   return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
-    .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
+    .filter((asset) =>
+      deps.fs.existsSync(resolveStaticExtensionAssetSource(deps.cwd, asset, deps.fs)),
+    )
     .flatMap((asset) => {
       const relativeOutput = normalizePath(asset.dest).replace(/^dist\//u, "");
       const outputs = [path.join(distRoot, relativeOutput)];
