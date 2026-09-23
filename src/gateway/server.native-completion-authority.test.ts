@@ -249,7 +249,7 @@ describe("native completion final-effect authority", () => {
           "Expected real native completion input recorder",
         );
         expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return { payloads: [{ text: "Child received" }], meta: { durationMs: 1 } };
+        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
       });
       expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();
@@ -426,7 +426,7 @@ describe("native completion final-effect authority", () => {
           vi.spyOn(userTurnTranscript, "createUserTurnTranscriptRecorder").mockImplementation(
             (params) => {
               const recorder = createRecorder(params);
-              if (params.input.idempotencyKey === `${completion.idempotencyKey}:active-wake`) {
+              if (params.input?.idempotencyKey === `${completion.idempotencyKey}:active-wake`) {
                 const resolve = recorder.resolveMessage.bind(recorder);
                 recorder.resolveMessage = async (...args) => {
                   entered.resolve();
