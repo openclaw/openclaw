@@ -847,6 +847,93 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it.each([
+    ["settles", "normalCi", "success"],
+    ["persists", "normalCi", "success"],
+    ["attempt changes", "normalCi", "success"],
+    ["attempt changes after jobs", "normalCi", "success"],
+    ["settles", "releaseChecks", "failure"],
+  ])(
+    "bounds duplicate job materialization when it %s for %s with %s",
+    async (outcome, key, conclusion) => {
+      const selected = child(key, "101");
+      let latestReads = 0;
+      const client = {
+        getRun: async () =>
+          runFor(
+            selected,
+            (outcome === "attempt changes" && latestReads > 0) ||
+              (outcome === "attempt changes after jobs" && latestReads > 1)
+              ? 3
+              : 2,
+            conclusion,
+          ),
+        getAttemptJobs: async (_runId: string, attempt: number) => {
+          const jobs = [job("test", attempt === 1 ? "failure" : conclusion)];
+          if (attempt === 2 && (++latestReads === 1 || outcome === "persists")) {
+            jobs.push(job("test"));
+          }
+          return jobs;
+        },
+        repository: REPOSITORY,
+      };
+      vi.useFakeTimers();
+      vi.stubEnv("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", "100");
+      vi.stubEnv("OPENCLAW_FRV_POLL_MS", "50");
+      try {
+        const inspection = inspectContinuation(plan([selected]), client);
+        const result =
+          outcome === "settles"
+            ? expect(inspection).resolves.toMatchObject({
+                children: [
+                  {
+                    effectiveRunAttempt: 2,
+                    status: conclusion === "success" ? "passed" : "failed",
+                  },
+                ],
+              })
+            : expect(inspection).rejects.toThrow(
+                outcome === "persists"
+                  ? "duplicate job identity"
+                  : "changed during attempt materialization",
+              );
+        await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+      expect(latestReads).toBe(outcome === "attempt changes" ? 1 : 2);
+    },
+  );
+
+  it("caps continuation materialization reads at the operation deadline", async () => {
+    const scenario = rerunScenario({ childSource: [2, "failure"] });
+    const readTimes: number[] = [];
+    const client = {
+      ...scenario.client,
+      getRun: async (runId: string) => {
+        readTimes.push(Date.now());
+        return scenario.client.getRun(runId);
+      },
+      getAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 2 ? [job("test", "failure"), job("test", "failure")] : [job("test")],
+    };
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", "10");
+    try {
+      const operationDeadline = Date.now() + 5;
+      const result = expect(
+        continueFailed(plan([scenario.selected]), "77", client, { operationDeadline }),
+      ).rejects.toThrow("duplicate job identity");
+      await Promise.all([result, vi.advanceTimersByTimeAsync(20)]);
+      expect(Math.max(...readTimes)).toBeLessThan(operationDeadline);
+      expect(scenario.counters.posts).toEqual({ child: 0, parent: 0 });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("does not rerun a parent that already seals the recovered child attempt", async () => {
     const selected = child("normalCi", "101");
     const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" as string | null }]]);

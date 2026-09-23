@@ -89,7 +89,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
   validation inputs remain exact. Newer child attempts replace matching jobs;
   jobs absent from a newer attempt carry forward. A duplicate job identity,
-  missing attempt, regressed attempt, or changed tuple fails closed.
+  missing attempt, regressed attempt, or changed tuple fails closed. `frv status`
+  and `continue` allow up to 60 seconds of read-only reconciliation when GitHub
+  temporarily returns duplicate jobs in the newest retry attempt. The run tuple
+  and attempt stay pinned; persistent duplicates and older-attempt conflicts
+  remain errors.
 - Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
   The controller is stateless: the immutable execution plan, exact GitHub run
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
