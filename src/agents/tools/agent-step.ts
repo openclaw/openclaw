@@ -6,8 +6,10 @@
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
@@ -34,22 +36,30 @@ function extractAgentCommandReply(
 }
 
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
-export async function runAgentStep(params: {
-  agentId?: string;
-  sessionKey: string;
-  message: string;
-  extraSystemPrompt: string;
-  timeoutMs: number;
-  channel?: string;
-  lane?: string;
-  transcriptMessage?: string;
-  sourceAgentId?: string;
-  sourceSessionKey?: string;
-  sourceChannel?: string;
-  sourceTool?: string;
-  sourceRole?: "subagent";
-  callGateway?: GatewayCaller;
-}): Promise<string | undefined> {
+export async function runAgentStep(
+  params: {
+    agentId?: string;
+    sessionKey: string;
+    message: string;
+    extraSystemPrompt: string;
+    timeoutMs: number;
+    channel?: string;
+    lane?: string;
+    sourceAgentId?: string;
+    sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
+    sourceRole?: "subagent";
+    callGateway?: GatewayCaller;
+  } & (
+    | {
+        transcriptMessage?: undefined;
+        deliveryContext?: DeliveryContext;
+        expectedSessionId?: string;
+      }
+    | { transcriptMessage: string; deliveryContext?: never; expectedSessionId?: never }
+  ),
+): Promise<string | undefined> {
   const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
@@ -62,7 +72,7 @@ export async function runAgentStep(params: {
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
-  const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
+  const channel = params.deliveryContext?.channel ?? params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   if (params.transcriptMessage !== undefined) {
     // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
@@ -92,6 +102,10 @@ export async function runAgentStep(params: {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
+      expectedExistingSessionId: params.expectedSessionId,
+      accountId: params.deliveryContext?.accountId,
+      to: params.deliveryContext?.to,
+      threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
       deliver: false,
       sourceReplyDeliveryMode: "message_tool_only",
       channel,

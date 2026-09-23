@@ -50,6 +50,7 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -90,6 +91,7 @@ import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
+import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -307,19 +309,8 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   );
 }
 
-export function createSessionsSendTool(opts?: {
-  agentId?: string;
-  agentSessionKey?: string;
-  agentChannel?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  callGateway?: GatewayCaller;
-  /** Backend-derived target incarnation; never sourced from model arguments. */
-  expectedTargetSessionId?: string;
-  /** Backend-owned downstream operation id; never sourced from model arguments. */
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): AnyAgentTool {
+export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
+  const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -657,9 +648,10 @@ export function createSessionsSendTool(opts?: {
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterSessionKey = rawRequesterSessionKey;
       let replyRequesterSessionKey = rawRequesterSessionKey;
-      // Only unthreaded DMs need reply-address normalization. Resolving other
-      // requesters as direct peers can reject valid channel-only bindings.
+      // Preserve exact admitted incarnations. Legacy key-only callers still normalize
+      // unthreaded DM reply addresses to their monitored main session.
       if (
+        !opts?.agentSessionId &&
         rawRequesterSessionKey &&
         parsedRequesterSessionKey &&
         rawRequesterSessionKey !== resolvedKey &&
@@ -1092,6 +1084,8 @@ export function createSessionsSendTool(opts?: {
                         replyMode,
                         requesterSessionKey: replyRequesterSessionKey,
                         requesterAgentId,
+                        requesterSessionId: opts?.agentSessionId,
+                        requesterOrigin,
                         requesterChannel,
                         roundOneReply: reply?.replyText,
                         sourceReplyDelivered: reply?.sourceReplyDelivered,
