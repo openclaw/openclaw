@@ -4,7 +4,6 @@ import type {
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import {
   ensureProjectRegistrySchema,
@@ -14,30 +13,11 @@ import {
   resolveProjectCloneRefreshOwnerInDatabase,
   resolveProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
-  type ProjectRegistryIdentity,
-  type ProjectRegistryInsert,
-  type ProjectRegistryRecord,
 } from "./project-registry.kernel.js";
-
-type ProjectCheckoutLeaseInput<TProject> = {
-  project: TProject;
-  lease: OpenClawStateLeaseIdentity;
-};
-
-export type ProjectRegistryWorkerOperations = {
-  "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
-  "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
-  "projects.resolve": { input: { id: string }; output: ProjectRegistryRecord | undefined };
-  "projects.insert": {
-    input: ProjectCheckoutLeaseInput<ProjectRegistryInsert>;
-    output: ProjectRegistryRecord;
-  };
-  "projects.remove": { input: ProjectCheckoutLeaseInput<ProjectRegistryIdentity>; output: boolean };
-  "projects.resolveRefreshOwner": {
-    input: ProjectCheckoutLeaseInput<ProjectRegistryIdentity>;
-    output: ProjectRegistryRecord | undefined;
-  };
-};
+import type {
+  ProjectCheckoutLeaseInput,
+  ProjectRegistryWorkerOperations,
+} from "./project-registry.worker-contract.js";
 
 export function isProjectRegistryCommand(command: {
   type: string;

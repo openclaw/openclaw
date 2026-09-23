@@ -63,7 +63,7 @@ import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-w
 import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
-import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker.js";
+import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
