@@ -10,7 +10,9 @@ export function resolveCronWebhookDeliveryError(deliveryTo: string): string | un
   }
   try {
     const parsed = new URL(target);
-    return parsed.username || parsed.password ? "cron.errors.webhookUrlInvalid" : undefined;
+    return parsed.username || parsed.password || parsed.hostname.includes("%")
+      ? "cron.errors.webhookUrlInvalid"
+      : undefined;
   } catch {
     return "cron.errors.webhookUrlInvalid";
   }
