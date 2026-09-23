@@ -205,6 +205,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -3532,10 +3533,7 @@ internal fun resolveChatEffortPosition(
   return ChatEffortPosition(optionIndex = selectedIndex, fraction = fraction)
 }
 
-internal fun chatEffortNeedleAngle(
-  position: ChatEffortPosition,
-  fastMode: Boolean = false,
-): Float? = if (fastMode) 330f else position.fraction?.let { 180f + it * 120f }
+internal fun chatEffortNeedleAngle(position: ChatEffortPosition): Float? = position.fraction?.let { 180f + it * 120f }
 
 internal fun chatEffortVisualFraction(
   fraction: Float,
@@ -3558,7 +3556,6 @@ private fun ChatThinkingLevelPicker(
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
-  val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
   Surface(
     onClick = onOpen,
     enabled = enabled,
@@ -3571,28 +3568,41 @@ private fun ChatThinkingLevelPicker(
     color = Color.Transparent,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Canvas(modifier = Modifier.size(22.dp).testTag("chat-thinking-gauge")) {
-        val radius = size.width * 0.43f
-        val hub = Offset(center.x, size.height * 0.72f)
-        val bounds = Offset(hub.x - radius, hub.y - radius)
-        val dialSize = Size(radius * 2, radius * 2)
-        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Butt)
-        for (start in listOf(180f, 225f, 270f)) {
-          drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
-        }
-        drawArc(fastZoneColor, 315f, 45f, false, bounds, dialSize, style = stroke)
-        // Fast mode occupies the red zone; otherwise the needle reflects advertised effort.
-        chatEffortNeedleAngle(position, fastMode)?.let { angle ->
-          rotate(angle, pivot = hub) {
-            drawLine(
-              color = needleColor,
-              start = hub,
-              end = Offset(hub.x + radius * 0.83f, hub.y),
-              strokeWidth = 2.dp.toPx(),
-              cap = StrokeCap.Round,
-            )
+      Box(modifier = Modifier.size(22.dp).testTag("chat-thinking-gauge")) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+          val radius = size.width * 0.43f
+          val hub = Offset(center.x, size.height * 0.72f)
+          val bounds = Offset(hub.x - radius, hub.y - radius)
+          val dialSize = Size(radius * 2, radius * 2)
+          val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Butt)
+          for (start in listOf(180f, 225f, 270f)) {
+            drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
           }
-          drawCircle(color = needleColor, radius = 1.5.dp.toPx(), center = hub)
+          chatEffortNeedleAngle(position)?.let { angle ->
+            rotate(angle, pivot = hub) {
+              drawLine(
+                color = needleColor,
+                start = hub,
+                end = Offset(hub.x + radius * 0.83f, hub.y),
+                strokeWidth = 2.dp.toPx(),
+                cap = StrokeCap.Round,
+              )
+            }
+            drawCircle(color = needleColor, radius = 1.5.dp.toPx(), center = hub)
+          }
+        }
+        if (fastMode) {
+          Box(
+            modifier =
+              Modifier
+                .align(AbsoluteAlignment.BottomRight)
+                .size(10.dp)
+                .background(ClawTheme.colors.surface, CircleShape)
+                .testTag("chat-fast-mode-badge"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(8.dp), tint = ClawTheme.colors.danger)
+          }
         }
       }
     }

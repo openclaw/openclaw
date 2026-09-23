@@ -3225,17 +3225,27 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun effortHeldDragPreviewsGaugeAndCommitsOnlyOnRelease() =
     withEffortRequests { model, requests, release ->
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"reason":"patch","session":{"key":"${controller.sessionKey.value}","fastMode":true,"effectiveFastMode":true}}""",
+        )
+      }
+      assertEffortGauge("low", fast = true)
+      val lowGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
       val dialog = openEffortSheet()
       val (x, y, time) = startEffortDrag(dialog)
       assertEquals("Preview must not dispatch", 0, requests.size)
       assertEquals("Preview must not mutate the authoritative setting", "low", model.chatThinkingLevel.value)
-      assertEffortGauge("high")
+      assertEffortGauge("high", fast = true)
+      val previewGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+      assertFalse("Fast mode must not mask the previewed effort", lowGauge.sameAs(previewGauge))
       composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
       composeRule.waitUntil { requests.size == 1 }
       assertEquals(JsonPrimitive("high"), requests.single().second["thinkingLevel"])
       composeRule.runOnIdle { release.complete(Unit) }
       composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
-      assertEffortGauge("high")
+      assertEffortGauge("high", fast = true)
       assertTrue(dialog.isShowing)
     }
 
@@ -3957,31 +3967,57 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun fastModeGaugeRetainsAccessibleStateWithoutAnOverlayBadge() {
-    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
-    composeRule.runOnIdle {
-      controller.handleGatewayEvent(
-        "sessions.changed",
-        """
-        {"reason":"patch","session":{
-          "key":"${AndroidScreenshotFixture.mainSessionKey}",
-          "thinkingLevel":"high",
-          "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
-          "fastMode":true,"effectiveFastMode":true
-        }}
-        """.trimIndent(),
-      )
+  fun fastModeGaugeTracksEffortAndRetainsASeparateFastCue() {
+    val direction = mutableStateOf(LayoutDirection.Ltr)
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp }, layoutDirection = { direction.value })
+
+    fun publishEffort(level: String) {
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """
+          {"reason":"patch","session":{
+            "key":"${AndroidScreenshotFixture.mainSessionKey}",
+            "thinkingLevel":"$level",
+            "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
+            "fastMode":true,"effectiveFastMode":true
+          }}
+          """.trimIndent(),
+        )
+      }
+      composeRule.waitForIdle()
     }
 
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsDisplayed()
-    composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).assertIsDisplayed()
-    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    fun capture(label: String) {
+      System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
+        val folder = File(path).apply { mkdirs() }
+        val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
+        assertTrue(image.width > 0 && image.height > 0)
+        File(folder, "fast-effort-$label.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      }
+    }
+
+    publishEffort("off")
+    val offGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+    capture("off")
+    publishEffort("high")
+    val highGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+    capture("high")
+    assertFalse("Effort changes must move the needle even while Fast stays on", offGauge.sameAs(highGauge))
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertIsDisplayed()
     composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
       SemanticsMatcher.expectValue(
         SemanticsProperties.StateDescription,
-        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("high", "high"))),
+        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
       ),
     )
+
+    composeRule.runOnIdle { direction.value = LayoutDirection.Rtl }
+    publishEffort("off")
+    capture("rtl-off")
+    val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    assertTrue("Fast cue must not cover the Off needle in RTL", badge.left > gauge.center.x)
   }
 
   @Test
