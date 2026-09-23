@@ -69,7 +69,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseReadabilityForDoctor,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
   runWithOpenClawStateBusyTimeout,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
@@ -1573,7 +1573,7 @@ describe("openclaw state database", () => {
 
   it.each([16, OPENCLAW_STATE_SCHEMA_VERSION])(
     "requires Doctor to repair the dangling Workshop review index in schema v%i",
-    (version) => {
+    async (version) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -1607,7 +1607,7 @@ describe("openclaw state database", () => {
       expect(() => openOpenClawStateDatabase(options)).toThrow(
         /legacy-workshop-review-index.*openclaw doctor --fix/u,
       );
-      expect(() => repairOpenClawStateDatabaseSchemaIfNeeded(options)).toThrow(
+      await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
         /legacy-workshop-review-index.*openclaw doctor --fix/u,
       );
       expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
@@ -4189,7 +4189,7 @@ describe("openclaw state database", () => {
     }
   });
 
-  it("skips exclusive repair when the automatic schema gate is already current", () => {
+  it("skips exclusive repair when the automatic schema gate is already current", async () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -4199,7 +4199,7 @@ describe("openclaw state database", () => {
     before.prepare("UPDATE schema_meta SET updated_at = 123 WHERE meta_key = 'primary'").run();
     before.close();
 
-    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+    expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [],
       warnings: [],
     });
@@ -6860,7 +6860,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
   it.each(["target_machine_class", "target_os"])(
     "keeps placement-owned %s absent during generic repair and open",
-    (columnName) => {
+    async (columnName) => {
       const stateDir = createTempStateDir();
       const databasePath = materializeCurrentStateDatabase(stateDir);
       const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(`  ${columnName} TEXT,\n`, "");
@@ -6878,7 +6878,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       legacyDb.close();
 
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+      expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
       const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
       try {
         const repairedColumns = repairedDb

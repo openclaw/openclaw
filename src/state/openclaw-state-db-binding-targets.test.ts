@@ -13,7 +13,7 @@ import {
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -203,7 +203,7 @@ describe("conversation binding target migration", () => {
     closeOpenClawStateDatabaseForTest();
     const holder = await holdGatewayLifecycle(initial.path);
     try {
-      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+      expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
         changes: [],
         warnings: [],
       });

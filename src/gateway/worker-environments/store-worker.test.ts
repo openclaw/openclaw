@@ -4,8 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import * as sqlite from "../../infra/kysely-sync.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { createStateSchemaMigrationStep } from "../../infra/state-migrations.state-schema.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -57,6 +60,119 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each(["automatic", "doctor-preparation"] as const)(
+  "keeps live inventory usable after a current-schema %s check",
+  async (mode) => {
+    const stateDir = tempDirs.make("worker-inventory-schema-check-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawStateDatabase({ env });
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const intent = await store.createIntent({
+      environmentId: "schema-check-environment",
+      providerId: "provider",
+      profileId: "profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "schema-check-provision",
+    });
+    const result = await createStateSchemaMigrationStep({
+      stateDir,
+      env,
+      mode,
+      requiredness: "conditional",
+    }).run();
+    expect(result).toMatchObject({ changes: [], warnings: [] });
+    expect(store.get(intent.environmentId)).toEqual(intent);
+    await store.transition({
+      environmentId: intent.environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
+    expect(store.get(intent.environmentId)?.state).toBe("provisioning");
+    await store.close();
+  },
+);
+
+it("retires inventory after an admitted schema repair before reopening it", async () => {
+  const stateDir = tempDirs.make("worker-inventory-schema-repair-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const database = openOpenClawStateDatabase({ env });
+  const store = await createWorkerEnvironmentStore({ database });
+  database.db.exec("DROP INDEX idx_audit_events_time");
+  const result = await createStateSchemaMigrationStep({
+    stateDir,
+    env,
+    mode: "doctor-preparation",
+    requiredness: "conditional",
+  }).run();
+  expect(result.warnings).toEqual([]);
+  expect(result.changes).toContain("Rebuilt canonical shared-state SQLite indexes (1)");
+  expect(() => store.list()).toThrow("inventory has closed");
+  const reopened = await createWorkerEnvironmentStore({ database });
+  expect(reopened.list()).toEqual([]);
+  await reopened.close();
+});
+
+it("joins explicit Doctor retirement when repair's native close fails after commit", async () => {
+  const stateDir = tempDirs.make("worker-inventory-repair-close-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const database = openOpenClawStateDatabase({ env });
+  const store = await createWorkerEnvironmentStore({ database });
+  database.db.exec("DROP INDEX idx_audit_events_time");
+  const failure = new Error("synthetic repair native close failed after commit");
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const opener = vi
+    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+    .mockImplementation((pathname, options) => {
+      const native = open(pathname, options);
+      if (pathname === database.path && options?.enableForeignKeyConstraints === false) {
+        const close = native.close.bind(native);
+        vi.spyOn(native, "close").mockImplementationOnce(() => {
+          close();
+          throw failure;
+        });
+      }
+      return native;
+    });
+  try {
+    await expect(
+      createStateSchemaMigrationStep({
+        stateDir,
+        env,
+        mode: "doctor",
+        requiredness: "conditional",
+      }).run(),
+    ).rejects.toBe(failure);
+    expect(database.db.isOpen).toBe(false);
+    expect(() => store.list()).toThrow("inventory has closed");
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
+        .get(),
+    ).toEqual({ name: "idx_audit_events_time" });
+  } finally {
+    opener.mockRestore();
+  }
+});
+
+it.each(["automatic", "doctor-preparation", "doctor"] as const)(
+  "preserves live inventory when %s schema admission is refused",
+  async (mode) => {
+    const stateDir = tempDirs.make("worker-inventory-repair-refusal-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawStateDatabase({ env });
+    const store = await createWorkerEnvironmentStore({ database });
+    await expect(
+      withExistingOpenClawStateSchema({ path: database.path }, () =>
+        createStateSchemaMigrationStep({ stateDir, env, mode, requiredness: "conditional" }).run(),
+      ),
+    ).rejects.toThrow(/schema repair.*owned/i);
+    expect(database.db.isOpen).toBe(true);
+    expect(store.list()).toEqual([]);
+    await store.close();
+  },
+);
 
 it("shares committed inventory and native pairing publications across database aliases", async () => {
   const directory = tempDirs.make("worker-inventory-alias-");
