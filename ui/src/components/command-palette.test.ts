@@ -826,7 +826,7 @@ describe("CommandPalette search", () => {
 
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await palette.updateComplete;
-    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("config");
+    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("appearance");
     expect(palette.isOpen).toBe(false);
   });
 
