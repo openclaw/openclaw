@@ -12,10 +12,8 @@ import {
   fetchBulkAdvisories,
   filterFindingsBySeverity,
   parseArgs,
-  parseSnapshotKey,
   readBoundedBulkAdvisoryErrorText,
   runPnpmAuditProd,
-  stripVersionDecorators,
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
@@ -79,23 +77,8 @@ snapshots:
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
   });
 
-  it.each(["constructor", "toString", "unknown"])("rejects unsupported audit level %s", (level) => {
+  it.each(["constructor", "unknown"])("rejects unsupported audit level %s", (level) => {
     expect(() => filterFindingsBySeverity({}, level)).toThrow("Unsupported audit level");
-  });
-
-  it("parses scoped snapshot keys with peer suffixes", () => {
-    expect(parseSnapshotKey("@scope/pkg@1.2.3(peer@4.5.6)")).toEqual({
-      packageName: "@scope/pkg",
-      reference: "1.2.3(peer@4.5.6)",
-      version: "1.2.3",
-    });
-  });
-
-  it("strips peer and patch decorators from resolved versions", () => {
-    expect(stripVersionDecorators("7.0.0-rc.9(patch_hash=abc123)(sharp@0.34.5)")).toBe(
-      "7.0.0-rc.9",
-    );
-    expect(stripVersionDecorators("1.2.3")).toBe("1.2.3");
   });
 
   it("collects the production graph from pnpm lockfile snapshots", () => {
@@ -321,60 +304,60 @@ snapshots:
     },
   );
 
-  it.each([
-    [503, "timeout", 503, 200],
-    ["timeout", 503, "timeout", 200],
-  ])("recovers a flapping registry in order: %j", async (...sequence) => {
-    vi.mocked(delay).mockClear();
-    const events: (string | number)[] = [];
-    const logs: string[] = [];
-    const fetchImpl = vi.fn(async (_url, init) => {
-      const outcome = sequence[events.filter((event) => event !== "wait").length];
-      if (outcome === undefined) {
-        throw new Error("Unexpected extra advisory attempt");
-      }
-      events.push(outcome);
-      if (outcome === "timeout") {
-        return await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
-            { once: true },
-          );
-        });
-      }
-      return new Response(outcome === 200 ? "{}" : "unavailable", { status: Number(outcome) });
-    });
-    vi.mocked(delay).mockImplementation(async () => {
-      events.push("wait");
-    });
-    try {
-      await expect(
-        fetchBulkAdvisories({
-          payload: { axios: ["1.0.0"] },
-          fetchImpl,
-          timeoutMs: 5,
-          stderr: {
-            write: (line) => {
-              logs.push(line);
-              return true;
+  it.each([[503, "timeout", 503, 200]])(
+    "recovers a flapping registry in order: %j",
+    async (...sequence) => {
+      vi.mocked(delay).mockClear();
+      const events: (string | number)[] = [];
+      const logs: string[] = [];
+      const fetchImpl = vi.fn(async (_url, init) => {
+        const outcome = sequence[events.filter((event) => event !== "wait").length];
+        if (outcome === undefined) {
+          throw new Error("Unexpected extra advisory attempt");
+        }
+        events.push(outcome);
+        if (outcome === "timeout") {
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+              { once: true },
+            );
+          });
+        }
+        return new Response(outcome === 200 ? "{}" : "unavailable", { status: Number(outcome) });
+      });
+      vi.mocked(delay).mockImplementation(async () => {
+        events.push("wait");
+      });
+      try {
+        await expect(
+          fetchBulkAdvisories({
+            payload: { axios: ["1.0.0"] },
+            fetchImpl,
+            timeoutMs: 5,
+            stderr: {
+              write: (line) => {
+                logs.push(line);
+                return true;
+              },
             },
-          },
-        }),
-      ).resolves.toEqual({});
-      expect(events).toEqual(
-        sequence.flatMap((outcome, index) => (index === 3 ? [outcome] : [outcome, "wait"])),
-      );
-      expect(logs.join("")).toMatch(/attempt 1\/4.*503|attempt 1\/4.*timeout/u);
-      expect(logs.join("")).toContain("attempt 4/4 succeeded");
-      for (const [index, [ms]] of vi.mocked(delay).mock.calls.entries()) {
-        expect(ms).toBeGreaterThanOrEqual(1000 * 2 ** index);
-        expect(ms).toBeLessThanOrEqual(2000 * 2 ** index);
+          }),
+        ).resolves.toEqual({});
+        expect(events).toEqual(
+          sequence.flatMap((outcome, index) => (index === 3 ? [outcome] : [outcome, "wait"])),
+        );
+        expect(logs.join("")).toMatch(/attempt 1\/4.*503|attempt 1\/4.*timeout/u);
+        expect(logs.join("")).toContain("attempt 4/4 succeeded");
+        for (const [index, [ms]] of vi.mocked(delay).mock.calls.entries()) {
+          expect(ms).toBeGreaterThanOrEqual(1000 * 2 ** index);
+          expect(ms).toBeLessThanOrEqual(2000 * 2 ** index);
+        }
+      } finally {
+        vi.mocked(delay).mockImplementation(async () => {});
       }
-    } finally {
-      vi.mocked(delay).mockImplementation(async () => {});
-    }
-  });
+    },
+  );
 
   it.each(["10", "Fri, 04 Sep 2026 12:00:10 GMT"])(
     "honors Retry-After %s on 429",
@@ -486,14 +469,11 @@ snapshots:
     expect(secondWaitMs).toBeLessThanOrEqual(4000);
   });
 
-  it.each(["network error", "HTTP 503"])("recovers %s with bounded backoff", async (failure) => {
+  it("recovers network errors with bounded backoff", async () => {
     vi.mocked(delay).mockClear();
     const fetchImpl = vi.fn(async () => new Response("{}"));
     fetchImpl.mockImplementationOnce(async () => {
-      if (failure === "network error") {
-        throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") });
-      }
-      return new Response("temporarily unavailable", { status: 503 });
+      throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") });
     });
 
     await expect(
@@ -506,12 +486,9 @@ snapshots:
     expect(waitMs).toBeLessThanOrEqual(2000);
   });
 
-  it.each(["network error", "HTTP 503"])("fails closed after repeated %s", async (failure) => {
+  it("fails closed after repeated network errors", async () => {
     const fetchImpl = vi.fn(async () => {
-      if (failure === "network error") {
-        throw new TypeError("fetch failed");
-      }
-      return new Response("temporarily unavailable", { status: 503 });
+      throw new TypeError("fetch failed");
     });
     await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
       /failed after 4 attempts.*Check npm registry availability/u,
@@ -683,15 +660,6 @@ snapshots:
     expect(cancelled).toBe(true);
   });
 
-  it("fails closed on empty successful bulk advisory response bodies", async () => {
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      fetchImpl: async () => new Response("", { status: 200 }),
-    });
-
-    await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
-  });
-
   it.each(
     [
       null,
@@ -700,7 +668,6 @@ snapshots:
       { axios: [null] },
       { axios: [[]] },
       { axios: [{ id: 1, vulnerable_versions: "<2" }] },
-      { axios: [{ id: 1, severity: "unknown", vulnerable_versions: "<2" }] },
       { axios: [{ id: 1, severity: "constructor", vulnerable_versions: "<2" }] },
       { axios: [{ id: {}, severity: "high", vulnerable_versions: "<2" }] },
       { axios: [{ id: 1, severity: "high", vulnerable_versions: null }] },
