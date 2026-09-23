@@ -56,9 +56,9 @@ import type {
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { startGatewayTaskSubscriptions } from "./server-task-subscriptions.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
+import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
-import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
@@ -143,33 +143,7 @@ export function startGatewayEventSubscriptions(params: {
   const sessionActivitySummaries = createSessionActivitySummaries({
     getConfig: getRuntimeConfig,
     onChanged: (target) => {
-      const publication = (async () => {
-        const projection = params.getSessionRowProjection?.();
-        const captured = projection?.capture({ key: target.key, agentId: target.agentId });
-        if (projection) {
-          do {
-            await projection.ensureMaterialized();
-          } while (projection.needsMaterialization);
-        }
-        if (projection && (!captured || !projection.isCurrent(captured))) {
-          return;
-        }
-        const row = projection?.snapshot({ key: target.key, agentId: target.agentId }).row;
-        params.broadcast(
-          "sessions.changed",
-          {
-            sessionKey: target.key,
-            agentId: target.agentId,
-            reason: "activity-summary",
-            ...buildGatewaySessionSnapshot({
-              sessionRow: row,
-              agentId: target.agentId,
-              includeSession: true,
-            }),
-          },
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-        );
-      })().catch((error: unknown) =>
+      const publication = broadcastSessionActivitySummary(target, params).catch((error: unknown) =>
         params.log.warn("Activity summary publication failed", { error }),
       );
       agentEventDispatches.add(publication);

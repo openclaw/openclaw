@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -238,7 +239,19 @@ it.each(["success", "failed-write"])(
     const runId = "native-cancel-run";
     const chatRunState = createChatRunState();
     const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
+    const terminalChanged = createDeferred();
+    const broadcastToConnIds = vi.fn<GatewayRequestContext["broadcastToConnIds"]>(
+      (event, payload) => {
+        if (
+          event === "sessions.changed" &&
+          isRecord(payload) &&
+          payload.runId === runId &&
+          payload.status === "killed"
+        ) {
+          terminalChanged.resolve();
+        }
+      },
+    );
     const context = {
       chatRunState,
       chatAbortControllers: new Map(),
@@ -448,6 +461,7 @@ it.each(["success", "failed-write"])(
           abortedLastRun: true,
         },
       });
+      await terminalChanged.promise;
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
@@ -511,6 +525,7 @@ it.each([
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
+    const clearRequested = createDeferred<string>();
     let claimId: string | undefined;
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
@@ -537,7 +552,12 @@ it.each([
       claimId = claimAgentRunContext(
         runId,
         { lifecycleGeneration, sessionId, sessionKey: target.sessionKey },
-        { exclusive: true, ownsContext: true, trackOwner: true },
+        {
+          exclusive: true,
+          ownsContext: true,
+          trackOwner: true,
+          onClearRequested: clearRequested.resolve,
+        },
       );
       if (!claimId) {
         throw new Error("expected worker terminal claim");
@@ -589,11 +609,12 @@ it.each([
       );
       releaseWriter.resolve();
       await heldWriter;
-      await vi.waitFor(() => expect(loadSessionEntry(target)?.status).toBe(status));
-      await vi.waitFor(() =>
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "clear-requested",
-        ),
+      // Failed runs also persist a transcript receipt after the row update.
+      expect(await clearRequested.promise).toBe(terminalClaimId);
+      expect(persistenceTestWarnings).not.toHaveBeenCalled();
+      expect(loadSessionEntry(target)?.status).toBe(status);
+      expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
+        "clear-requested",
       );
     } finally {
       releaseWriter.resolve();

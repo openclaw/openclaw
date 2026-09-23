@@ -1,5 +1,6 @@
 import { resolveConfiguredAcpBindingRecord } from "openclaw/plugin-sdk/acp-binding-resolve-runtime";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import { inspectRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   buildAgentSessionKey,
@@ -73,11 +74,8 @@ export function resolveMatrixInboundRoute(params: {
     conversationId: bindingConversationId,
     parentConversationId: bindingParentConversationId,
   };
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route: baseRoute,
-    conversation: bindingRef,
-    touchBinding: false,
-  });
+  const inspection = inspectConversationBinding(bindingRef);
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({ route: baseRoute, inspection });
   const runtimeBinding = runtimeRoute.bindingRecord;
 
   if (runtimeBinding && runtimeRoute.boundSessionKey) {
@@ -101,7 +99,7 @@ export function resolveMatrixInboundRoute(params: {
       : null;
   const configuredSessionKey = configuredBinding?.record.targetSessionKey?.trim();
 
-  const effectiveRoute =
+  const configuredFallbackRoute =
     configuredBinding && configuredSessionKey
       ? {
           ...baseRoute,
@@ -116,7 +114,10 @@ export function resolveMatrixInboundRoute(params: {
           }),
           matchedBy: "binding.channel" as const,
         }
-      : baseRoute;
+      : runtimeRoute.route;
+  const effectiveRoute = configuredBinding
+    ? inspectRuntimeConversationBindingRoute({ route: configuredFallbackRoute, inspection }).route
+    : configuredFallbackRoute;
 
   const dmSessionKey =
     params.isDirectMessage && !configuredSessionKey

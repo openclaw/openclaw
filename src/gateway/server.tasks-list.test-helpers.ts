@@ -201,11 +201,15 @@ export async function withAuthenticatedTaskGateway(
       } finally {
         admin.close();
         viewer.close();
-        resetTaskRegistryForTests({ persist: false });
       }
     });
   } finally {
-    invalidateOperatorRolePolicy(adminProfile.id);
-    invalidateOperatorRolePolicy(viewerProfile.id);
+    try {
+      // Gateway shutdown joins readers before the shared database is closed.
+      resetTaskRegistryForTests({ persist: false });
+    } finally {
+      invalidateOperatorRolePolicy(adminProfile.id);
+      invalidateOperatorRolePolicy(viewerProfile.id);
+    }
   }
 }

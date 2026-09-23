@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ses hatası"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İzinler güncellenemedi."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kurulumu değiştir"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hızlı işlemler"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mikrofon"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sohbet hâlâ Gateway durumunu kontrol ediyor."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sohbetle ilgilenilmesi gerekiyor"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw, eşleştirilmiş OpenClaw Gateway\'iniz istediğinde bu telefonda görünür olan uygulamaların adlarını, paket kimliklerini ve durumlarını toplar ve gönderir. Bu, asistanınızın soruları yanıtlamasını ve yüklü uygulamaları kullanarak işlem yapmasını sağlar."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway bağlı değil"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sonuç yok"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Politika"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s yerine geçer — son güncelleme: %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönderilen ileti onaylanırken zaman aşımına uğradı; teslimat durumunu kontrol etmek için yenileyin."</string>

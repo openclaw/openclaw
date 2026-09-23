@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Error de audio"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No se pudieron actualizar los permisos."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reemplazar configuración"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Acciones rápidas"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Micrófono"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"El chat sigue comprobando el estado del Gateway."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"El chat requiere atención"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw recopila y envía los nombres, los ID de paquete y el estado de las aplicaciones visibles en este teléfono cuando el Gateway de OpenClaw vinculado los solicita. Esto permite que tu asistente responda preguntas y realice acciones mediante las aplicaciones instaladas."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway no conectado"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sin resultado"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Política"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reemplaza a %1$s — última actualización: %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Se agotó el tiempo de espera al confirmar el mensaje enviado; actualiza para comprobar la entrega."</string>

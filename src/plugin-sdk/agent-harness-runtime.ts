@@ -136,9 +136,9 @@ export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-au
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
-  AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
-} from "../agents/harness/user-input-bridge.js";
+} from "../agents/harness/user-input-types.js";
+export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,

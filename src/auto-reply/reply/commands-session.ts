@@ -12,8 +12,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
-  setChannelConversationBindingIdleTimeoutBySessionKey,
-  setChannelConversationBindingMaxAgeBySessionKey,
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
@@ -393,8 +393,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     const conversationBindings = getChannelPlugin(bindingContext.channel)?.conversationBindings;
     const supportsLifecycleUpdate =
       action === SESSION_ACTION_IDLE
-        ? typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
-        : typeof conversationBindings?.setMaxAgeBySessionKey === "function";
+        ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
+        : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setMaxAgeBySessionKey === "function";
     if (!conversationBindings?.supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
       return sessionCommandReply(
         "⚠️ /session idle and /session max-age are currently available only on channels that support conversation binding lifecycle updates.",
@@ -404,7 +406,8 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const sessionBindingService = getSessionBindingService();
 
-  const activeBinding = sessionBindingService.resolveByConversation(bindingContext);
+  const activeBinding = await sessionBindingService.resolveByConversationAsync(bindingContext);
+  params.opts?.abortSignal?.throwIfAborted();
   if (!activeBinding) {
     return sessionCommandReply("ℹ️ This conversation is not currently bound.");
   }
@@ -477,13 +480,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const updatedBindings =
     action === SESSION_ACTION_IDLE
-      ? setChannelConversationBindingIdleTimeoutBySessionKey({
+      ? await setChannelConversationBindingIdleTimeoutBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,
           idleTimeoutMs: durationMs,
         })
-      : setChannelConversationBindingMaxAgeBySessionKey({
+      : await setChannelConversationBindingMaxAgeBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,

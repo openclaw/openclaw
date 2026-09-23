@@ -14,10 +14,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import * as internalSessionEffects from "../../internal-session-effects.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import {
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
@@ -53,7 +50,7 @@ it.each(["completed", "failed"] as const)(
     };
     previous.execution = { status: "interrupted", transcriptTarget };
     persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
 
     const cleanup = createDeferred();
     const remove = vi

@@ -24,7 +24,7 @@ extensions/amazon-bedrock/stream.runtime.ts	13
 extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
-extensions/anthropic/cli-migration.ts	2
+extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	10
 extensions/anthropic/register.runtime.ts	2
 extensions/anthropic/session-catalog-continue.ts	1
@@ -953,7 +953,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.config.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.message-observations.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
-extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts	1
 extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	1
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
@@ -1831,7 +1830,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	23
+src/agents/session-tool-result-guard.ts	11
 src/agents/session-transcript-repair.ts	6
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
@@ -1849,7 +1848,7 @@ src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
-src/agents/sessions/session-manager-entries.ts	3
+src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
@@ -2013,9 +2012,7 @@ src/auto-reply/reply/directive-handling.shared.ts	2
 src/auto-reply/reply/directives.ts	2
 src/auto-reply/reply/dispatch-acp.ts	2
 src/auto-reply/reply/dispatch-from-config.events.ts	1
-src/auto-reply/reply/dispatch-from-config.plugin-binding.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
-src/auto-reply/reply/dispatch-from-config.prepare-operation.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
@@ -2295,10 +2292,8 @@ src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
-src/commands/doctor-session-snapshots.ts	5
+src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
-src/commands/doctor-session-sqlite-migration-run.ts	4
-src/commands/doctor-session-sqlite-readers.ts	5
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	5
@@ -2453,7 +2448,6 @@ src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
@@ -2676,7 +2670,7 @@ src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
-src/gateway/server-methods/session-catalog.ts	5
+src/gateway/server-methods/session-catalog.ts	3
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2766,7 +2760,6 @@ src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
 src/gateway/worker-environments/workspace-manifest.ts	14
-src/gateway/worker-environments/workspace-path-exclusions.ts	2
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
@@ -2807,7 +2800,7 @@ src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
 src/infra/device-pairing-store.ts	4
 src/infra/diagnostic-event-listener-presence.ts	3
-src/infra/diagnostic-events.ts	13
+src/infra/diagnostic-events.ts	8
 src/infra/diagnostic-model-request.ts	1
 src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
@@ -2904,6 +2897,7 @@ src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	5
+src/infra/session-sqlite-migration-readers.ts	5
 src/infra/shell-env.ts	1
 src/infra/sqlite-coordinator.ts	2
 src/infra/sqlite-file-generation.ts	9
@@ -2914,7 +2908,6 @@ src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	7
-src/infra/sqlite-user-version.ts	1
 src/infra/sqlite-wal.ts	4
 src/infra/startup-migration-checkpoint.ts	1
 src/infra/state-migrations.acp-replay.ts	1
@@ -3046,7 +3039,7 @@ src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2
-src/node-host/node-worker-workspace.ts	3
+src/node-host/node-worker-workspace.ts	1
 src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/skills.ts	1
@@ -3126,7 +3119,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	10
+src/plugins/clawhub.ts	7
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
@@ -3305,7 +3298,6 @@ src/security/safe-regex.ts	1
 src/sessions/input-provenance.ts	3
 src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
-src/sessions/session-state-events.ts	2
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
@@ -3611,7 +3603,6 @@ ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	3
 ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	1
-ui/src/pages/agents/panels-tools-skills.ts	1
 ui/src/pages/channels/view.config.ts	1
 ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
@@ -3696,7 +3687,7 @@ ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/view.ts	3
 ui/src/pages/cron/view-runs.ts	3
-ui/src/pages/cron/view.ts	9
+ui/src/pages/cron/view.ts	6
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
@@ -3720,13 +3711,13 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
-ui/src/pages/sessions/view.ts	12
+ui/src/pages/sessions/view.ts	8
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/heatmap.ts	1
-ui/src/pages/usage/view-details.ts	6
+ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
 ui/src/pages/worktrees/worktrees-page.ts	3

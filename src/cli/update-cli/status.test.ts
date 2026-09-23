@@ -2,11 +2,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  createSessionSqliteMigrationRun,
-  updateMigrationManifestTarget,
-  writeSessionSqliteMigrationManifest,
-} from "../../commands/doctor-session-sqlite-migration-run.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -15,6 +10,11 @@ import {
   recordGatewayBootStart,
 } from "../../infra/gateway-boot-lifecycle.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
+import {
+  createSessionSqliteMigrationRun,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+} from "../../infra/session-sqlite-migration-manifest.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";

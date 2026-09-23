@@ -766,9 +766,9 @@ describe("prepared model runtime scoped refresh", () => {
   });
 
   it("recomposes configured models and retires native rows on a compatible reload", async () => {
-    const { resolveAgentEffectiveModelPrimary } =
+    const { resolveNativeModelPrimary } =
       await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
-    mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
+    mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
     const nativeStarted = createDeferredCore();
     const releaseNative = createDeferredCore();
     let holdNative = false;

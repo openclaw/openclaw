@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Erreur audio"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossible de mettre à jour les autorisations."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Remplacer la configuration"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Actions rapides"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Microphone"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"La discussion vérifie toujours l’état du Gateway."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"La discussion nécessite votre attention"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw collecte et envoie les noms, les identifiants de package et l’état des applications visibles sur ce téléphone lorsque votre Gateway OpenClaw associé les demande. Cela permet à votre assistant de répondre à des questions et d’effectuer des actions à l’aide des applications installées."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway non connecté"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aucun résultat"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Politique"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Remplace %1$s — dernière mise à jour %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Délai de confirmation du message envoyé dépassé ; actualisez pour vérifier sa livraison."</string>

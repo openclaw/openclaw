@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -7,7 +7,6 @@ import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sq
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -48,47 +47,99 @@ export function createSessionRowMaterializer(owner: {
     row: records.Row,
     agentIds: Set<string>,
     read: typeof readResidentSessionRow,
-    facts?: SessionRowDatabaseFacts,
+    facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
+  retainArchived: (row: records.MaterializedRow) => void;
 }) {
-  return (ids: readonly string[], prepared?: ReadonlyMap<string, SessionRowDatabaseFacts>) => {
+  function refresh(ids: readonly string[], accepted = false) {
     if (!owner.isActive()) {
       return;
     }
     const started = performance.now();
     const cfg = owner.prepare();
-    const configuredAgentIds = new Set(listAgentIds(cfg));
-    const readRow = createSessionRowMaterializationBatch();
-    for (const [offset, id] of ids.entries()) {
-      if (offset > 0 && performance.now() - started >= 12) {
-        break;
+    withAgentRosterFactsBatch(cfg, () => {
+      const configuredAgentIds = new Set(listAgentIds(cfg));
+      const readRow = createSessionRowMaterializationBatch();
+      for (const [offset, id] of ids.entries()) {
+        if (offset > 0 && performance.now() - started >= 12) {
+          break;
+        }
+        const current = owner.rows.get(id),
+          revision = owner.revision();
+        const databaseFacts = accepted ? current?.pendingDatabaseFacts : undefined;
+        if (accepted && !databaseFacts) {
+          continue;
+        }
+        const row =
+          current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
+        if (row && isColdArchivedSessionRow(row) && !accepted) {
+          owner.dirty.delete(id);
+          owner.forgetBackfill(id);
+          continue;
+        }
+        if (
+          row &&
+          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
+          owner.revision() === revision
+        ) {
+          row.pendingDatabaseFacts = undefined;
+          owner.dirty.delete(id);
+          // A bulk slice may finish an exact read's accepted archive row. Keep its
+          // residency under the archive owner's pins and bounded cache either way.
+          if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
+            owner.retainArchived(row);
+          }
+        }
+        if (owner.revision() !== revision) {
+          break;
+        }
       }
-      const current = owner.rows.get(id),
-        revision = owner.revision();
-      const databaseFacts = prepared?.get(id);
-      const row =
-        current &&
-        owner.acquireEntry(
-          databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
-          prepared ? databaseFacts?.entry : owner.readEntry(current),
-        );
-      if (row && isColdArchivedSessionRow(row)) {
-        owner.dirty.delete(id);
-        owner.forgetBackfill(id);
-        continue;
+    });
+  }
+  return {
+    refresh,
+    refreshPending(this: void, ids: readonly string[]) {
+      const pending = ids.filter((id) => owner.rows.get(id)?.pendingDatabaseFacts);
+      if (pending.length === 0) {
+        return false;
       }
-      if (
-        row &&
-        owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-        owner.revision() === revision
-      ) {
-        owner.dirty.delete(id);
+      refresh(pending, true);
+      return true;
+    },
+    accept(
+      ids: readonly string[],
+      facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
+      materializeArchived = false,
+    ) {
+      if (!owner.isActive()) {
+        return;
       }
-      if (owner.revision() !== revision) {
-        break;
-      }
-    }
+      const cfg = owner.prepare();
+      const revision = owner.revision();
+      withAgentRosterFactsBatch(cfg, () => {
+        for (const id of ids) {
+          const current = owner.rows.get(id);
+          const databaseFacts = facts.get(id);
+          const row =
+            current &&
+            owner.acquireEntry(
+              databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+              databaseFacts?.entry,
+            );
+          if (owner.revision() !== revision) {
+            break;
+          }
+          if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
+            owner.dirty.delete(id);
+            owner.forgetBackfill(id);
+          } else if (row) {
+            row.pendingDatabaseFacts = databaseFacts;
+          }
+        }
+      });
+      refresh(ids, true);
+    },
   };
 }
 
@@ -105,7 +156,7 @@ export function readResidentSessionRow(
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
-    databaseFacts?: SessionRowDatabaseFacts;
+    databaseFacts?: records.PreparedSessionRowDatabaseFacts;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
@@ -123,6 +174,7 @@ export function readResidentSessionRow(
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
+    preparedAcpMeta: params.databaseFacts?.acpMeta,
     configuredAgentIds: params.configuredAgentIds,
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,

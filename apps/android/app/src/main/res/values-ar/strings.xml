@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطأ في الصوت"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحديث الأذونات."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"استبدال الإعداد"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إجراءات سريعة"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الميكروفون"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا تزال الدردشة تتحقق من سلامة Gateway."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحتاج الدردشة إلى الانتباه"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يجمع OpenClaw أسماء التطبيقات الظاهرة على هذا الهاتف ومعرّفات حزمها وحالاتها ويرسلها عندما يطلبها Gateway المقترن بـ OpenClaw. يتيح ذلك لمساعدك الإجابة عن الأسئلة وتنفيذ الإجراءات باستخدام التطبيقات المثبّتة."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway غير متصل"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد نتيجة"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"السياسة"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يستبدل %1$s — آخر تحديث %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انتهت مهلة تأكيد الرسالة المرسلة؛ حدّث الصفحة للتحقق من التسليم."</string>

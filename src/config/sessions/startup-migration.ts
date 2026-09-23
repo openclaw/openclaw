@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -100,6 +99,7 @@ export function assertSessionStoreMigrationComplete(params: {
       target: { agentId: string; storePath: string; sqlitePath?: string };
       destination: string;
       retained: boolean;
+      imported: boolean;
     };
     const owners = new Map<string, SourceOwner>();
     for (const target of candidates) {
@@ -115,16 +115,27 @@ export function assertSessionStoreMigrationComplete(params: {
       const deletion =
         classifyDeletion?.(storePath, target.agentId) ??
         classifyDeletion?.(destination, target.agentId);
+      const retained = deletion !== undefined && deletion !== "unavailable";
       owners.set(`${target.agentId}\0${destination}`, {
         target: { ...target, agentId: target.agentId },
         destination,
-        retained: deletion !== undefined && deletion !== "unavailable",
+        retained,
+        imported:
+          !retained &&
+          readDeferredPluginSessionImport({
+            cfg: params.cfg,
+            target: { ...target, agentId: target.agentId },
+            sqlitePath: destination,
+            env,
+            purpose: "readiness",
+          }) !== undefined,
       });
     }
     // A shared path still needs record-level ownership even when every candidate is held.
     if (
       [...owners.values()].every(
-        ({ target, retained }) => retained && !shouldFilterLegacySessionRecordsByTarget(target),
+        ({ target, retained, imported }) =>
+          (imported || retained) && !shouldFilterLegacySessionRecordsByTarget(target),
       )
     ) {
       return false;
@@ -134,9 +145,8 @@ export function assertSessionStoreMigrationComplete(params: {
     const issues: Array<{ code: string; message: string; sessionKey?: string }> = [];
     const source = readLegacySessionStoreEntries({ storePath }, issues);
     if (issues.some((issue) => issue.code !== "entry_invalid") || !source.bytes) {
-      return true;
+      return [...owners.values()].some(({ imported, retained }) => !imported && !retained);
     }
-    const sourceSha256 = createHash("sha256").update(source.bytes).digest("hex");
     // Empty indexes may have unindexed history: retain the existing requirement
     // for every named owner's verified receipt rather than infer ownership here.
     const required = new Set<SourceOwner>(source.entries.length === 0 ? owners.values() : []);
@@ -155,35 +165,25 @@ export function assertSessionStoreMigrationComplete(params: {
       required.add(matches[0]!);
     }
     let hasUnindexedHistory: boolean | undefined;
-    return [...required].some(({ target, destination, retained }) => {
+    return [...required].some(({ target, destination, retained, imported }) => {
       if (
-        retained &&
-        (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target))
+        imported ||
+        (retained &&
+          (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target)))
       ) {
         return false;
       }
-      const receipt = readDeferredPluginSessionImport({
-        cfg: params.cfg,
-        target,
-        sqlitePath: destination,
-        env,
-        purpose: "readiness",
-      });
       // Owners without a database cannot have completed a core session import.
       // Without a receipt or unindexed history, demanding one deadlocks startup:
       // Doctor refuses to create a database just for the receipt.
-      if (!receipt && source.entries.length === 0 && !fs.existsSync(destination)) {
+      if (source.entries.length === 0 && !fs.existsSync(destination)) {
         hasUnindexedHistory ??=
           listLegacySessionTranscriptFiles(path.dirname(storePath)).length > 0;
         if (!hasUnindexedHistory) {
           return false;
         }
       }
-      return (
-        !receipt ||
-        receipt.sources.find((entry) => path.resolve(entry.path) === storePath)?.identity.sha256 !==
-          sourceSha256
-      );
+      return true;
     });
   })?.[0];
   if (legacyStore) {

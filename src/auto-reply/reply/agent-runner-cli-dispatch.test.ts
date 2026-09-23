@@ -758,6 +758,7 @@ describe("clearCliSessionInStore", () => {
 
       let open = true;
       const clear = clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         expectedCliSessionId: "stale-session",
         expectedSessionId: activeEntry.sessionId,
@@ -808,6 +809,7 @@ describe("clearCliSessionInStore", () => {
     };
 
     await clearCliSessionInStore({
+      agentId: "main",
       provider: "claude-cli",
       expectedCliSessionId: "stale-session",
       activeSessionEntry: entry,

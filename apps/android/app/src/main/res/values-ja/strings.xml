@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"音声エラー"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"権限を更新できませんでした。"</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"設定を置き換え"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"クイックアクション"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"マイク"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャットは引き続きGatewayの稼働状態を確認しています。"</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャットへの対応が必要"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClawは、ペアリング済みのOpenClaw Gatewayから要求があったときに、このスマートフォンで確認できるアプリの名前、パッケージID、ステータスを収集して送信します。 これにより、アシスタントはインストール済みのアプリを使って質問に答えたり、操作を実行したりできます。"</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayに接続されていません"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"結果なし"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ポリシー"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s を置き換えます — 最終更新 %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信済みメッセージの確認がタイムアウトしました。更新して配信状況を確認してください。"</string>

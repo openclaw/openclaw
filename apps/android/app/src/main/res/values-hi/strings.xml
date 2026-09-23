@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ऑडियो त्रुटि"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अनुमतियाँ अपडेट नहीं हो सकीं."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सेटअप बदलें"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"त्वरित कार्रवाइयाँ"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"माइक्रोफ़ोन"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट अभी भी Gateway की स्थिति जाँच रही है."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट पर ध्यान देना आवश्यक है"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जब आपका पेयर किया हुआ OpenClaw Gateway अनुरोध करता है, तो OpenClaw इस फ़ोन पर दिखाई देने वाले ऐप्स के नाम, पैकेज आईडी और स्थिति एकत्र करके भेजता है। इससे आपका सहायक इंस्टॉल किए गए ऐप्स का उपयोग करके सवालों के जवाब दे सकता है और कार्रवाइयाँ कर सकता है।"</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway कनेक्ट नहीं है"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई परिणाम नहीं"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नीति"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s की जगह लेता है — अंतिम अपडेट %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेजे गए संदेश की पुष्टि करने की समय सीमा समाप्त हो गई; संदेश पहुँचा या नहीं, यह जाँचने के लिए रीफ़्रेश करें."</string>

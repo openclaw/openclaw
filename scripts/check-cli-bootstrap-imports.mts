@@ -179,7 +179,9 @@ function listRuntimeImportSpecifiers(source: string): string[] {
           }
         }
       }
-      for (const [key, child] of Object.entries(node)) {
+      // Large worker bundles contain millions of nodes; avoid a pair allocation per property.
+      for (const key of Object.keys(node)) {
+        const child = node[key];
         if (key === "start" || key === "end" || key === "loc" || key === "range") {
           continue;
         }

@@ -98,11 +98,11 @@ function resolveStoredSessionId(params: {
   }
 }
 
-function resolveBoundAcpAbortTargetSessionKey(params: {
+async function resolveBoundAcpAbortTargetSessionKey(params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   activeSessionKey: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const bindingContext = resolveConversationBindingContextFromMessage({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -110,7 +110,7 @@ function resolveBoundAcpAbortTargetSessionKey(params: {
   if (!bindingContext) {
     return undefined;
   }
-  return resolveEffectiveResetTargetSessionKey({
+  return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
@@ -216,7 +216,7 @@ export async function executeFastAbortRequest(
     }
     const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
     const conversationBoundAcpTargetKey = commandSessionKey
-      ? resolveBoundAcpAbortTargetSessionKey({
+      ? await resolveBoundAcpAbortTargetSessionKey({
           ctx,
           cfg,
           activeSessionKey: commandSessionKey,

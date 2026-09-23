@@ -1022,6 +1022,6 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     const menu = await openNewSessionPlusMenu(currentPage);
-    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
+    expect(await menu.getByRole("menuitemcheckbox", { name: "Draft" }).count()).toBe(0);
   });
 });

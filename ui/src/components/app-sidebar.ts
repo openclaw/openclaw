@@ -1,11 +1,13 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
@@ -657,18 +659,19 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
                   ${renderAppSidebarHomeRow(this)}
-                  ${sidebarZone.entries
-                    .filter(
+                  ${repeat(
+                    sidebarZone.entries.filter(
                       (entry) => this.sidebarAgentsMode !== "roster" || entry.type !== "session",
-                    )
-                    .map((entry) =>
+                    ),
+                    serializeSidebarEntry,
+                    (entry) =>
                       renderAppSidebarZoneEntry(
                         this,
                         entry,
                         sidebarZone.sessionRows,
                         sidebarZone.pluginTabs,
                       ),
-                    )}
+                  )}
                 </div>
               </nav>
               <div class="sidebar-session-content" ?hidden=${Boolean(this.contextualSidebar)}>

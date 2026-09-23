@@ -6,6 +6,15 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  findLatestFailedSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+  type SessionSqliteMigrationTargetInput,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  resolveTargetSqliteOptions,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
@@ -30,15 +39,6 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import {
-  findLatestFailedSessionSqliteMigrationManifest,
-  resolveSessionSqliteMigrationRunsDir,
-  type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
-import {
-  resolveTargetSqliteOptions,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,

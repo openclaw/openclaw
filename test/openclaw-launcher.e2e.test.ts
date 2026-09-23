@@ -211,7 +211,7 @@ describe("openclaw launcher", () => {
 
   describe("browser native transport dispatch", () => {
     it("uses only the fixed native artifact before pending package repair or ordinary CLI startup", async () => {
-      const root = await makeLauncherFixture(fixtureRoots);
+      const root = await makeLauncherFixture(fixtures);
       const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
       await fs.mkdir(path.dirname(native), { recursive: true });
       await fs.writeFile(native, 'setTimeout(() => process.stdout.write("native-frame"), 10);');
@@ -237,7 +237,7 @@ describe("openclaw launcher", () => {
     });
 
     it("refuses an unsupported native runtime without installing or entering the CLI", async () => {
-      const root = await makeLauncherFixture(fixtureRoots);
+      const root = await makeLauncherFixture(fixtures);
       const preload = path.join(root, "unsupported-node.mjs");
       await fs.writeFile(
         preload,
@@ -271,7 +271,7 @@ describe("openclaw launcher", () => {
     it.each(["missing", "broken"])(
       "does not fall through when the native artifact is %s",
       async (kind) => {
-        const root = await makeLauncherFixture(fixtureRoots);
+        const root = await makeLauncherFixture(fixtures);
         await fs.writeFile(
           path.join(root, "dist", "entry.js"),
           'process.stdout.write("ordinary CLI");',
@@ -302,7 +302,7 @@ describe("openclaw launcher", () => {
       ["browser", "extension", "native-host-extra"],
       ["browser", "status"],
     ])("keeps sibling %j on ordinary CLI startup", async (...args) => {
-      const root = await makeLauncherFixture(fixtureRoots);
+      const root = await makeLauncherFixture(fixtures);
       await fs.writeFile(
         path.join(root, "dist", "entry.js"),
         'process.stdout.write("ordinary CLI");',

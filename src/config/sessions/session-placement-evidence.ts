@@ -61,17 +61,14 @@ export async function readPlacementSessionIdentityEvidence(
     readIncognito();
     return results;
   }
-  const prepared = prepareSessionStoreTargetInventory(
+  const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
     cfg,
     disk.map(({ probe }) => probe.agentId),
     env,
   );
   const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
   const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
-    prepared.candidates.flatMap((candidate) => [
-      candidate,
-      { ...candidate, path: candidate.physicalPath },
-    ]),
+    candidates.flatMap((candidate) => [candidate, { ...candidate, path: candidate.physicalPath }]),
     env,
   );
   const continuations: Array<{
@@ -104,7 +101,7 @@ export async function readPlacementSessionIdentityEvidence(
       return;
     }
     const pathname = resolveUnsuffixedSqliteTargetFromSessionStorePath(change.storePath).path;
-    changed ||= prepared.candidates.some(
+    changed ||= candidates.some(
       (candidate) =>
         matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
         matchesAgentDatabaseReadCandidatePath(
@@ -114,7 +111,7 @@ export async function readPlacementSessionIdentityEvidence(
     );
   });
   try {
-    await withSessionHistoryWorkerReadCandidates(prepared.candidates, async (discovery) => {
+    await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
       let inventory = await discovery.readTargetInventory({
         ...prepared,
         registeredDatabases: { status: "deferred" },
@@ -217,7 +214,7 @@ export async function readPlacementSessionIdentityEvidence(
       );
     });
     assertRegistryCurrent?.();
-    for (const candidate of prepared.candidates) {
+    for (const candidate of candidates) {
       if (
         captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
         candidate.physicalPath

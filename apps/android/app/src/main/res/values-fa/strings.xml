@@ -181,6 +181,7 @@
     <string name="native_1770865a7ea3f15c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطای صدا"</string>
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به‌روزرسانی مجوزها امکان‌پذیر نبود."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جایگزینی تنظیمات"</string>
+    <string name="native_17edda6ed6346e3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Decision Evaluation"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اقدامات سریع"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"میکروفون"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو همچنان در حال بررسی سلامت Gateway است."</string>
@@ -1419,7 +1420,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو نیاز به رسیدگی دارد"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw نام‌ها، شناسه‌های بسته و وضعیت برنامه‌های قابل مشاهده در این تلفن را زمانی که Gateway جفت‌شدهٔ OpenClaw شما درخواست کند، جمع‌آوری و ارسال می‌کند. این به دستیار شما امکان می‌دهد با استفاده از برنامه‌های نصب‌شده به پرسش‌ها پاسخ دهد و اقداماتی انجام دهد."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway متصل نیست"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدون نتیجه"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خط‌مشی"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جایگزین %1$s می‌شود — آخرین به‌روزرسانی %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مهلت تأیید پیام ارسالی تمام شد؛ برای بررسی تحویل، تازه‌سازی کنید."</string>

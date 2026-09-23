@@ -106,13 +106,29 @@ export async function runManagerTurn(params: {
     agentId,
   });
   const initialMeta = requireReadySessionMeta(initialResolution);
-  recordSessionHumanDirectMessage({
-    sessionKey,
-    entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-    actor: { actorType: input.provenance },
-    channel: "acp",
-    runId: input.requestId,
-  });
+  const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
+    input.admittedRunContext,
+    input.signal,
+  );
+  const assertSignalCurrent = () => {
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
+    input.signal?.throwIfAborted();
+    assertSignalAdmission?.();
+  };
+  await recordSessionHumanDirectMessage(
+    {
+      sessionKey,
+      agentId,
+      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+      actor: { actorType: input.provenance },
+      channel: "acp",
+      runId: input.requestId,
+    },
+    { assertCurrent: assertSignalCurrent },
+  );
+  assertSignalCurrent();
   // ACP children bypass the subagent registry; terminal outcomes are projected into
   // the signal log here so changesSince histories are not spawn-only for ACP runs.
   const spawnedByWatcher =

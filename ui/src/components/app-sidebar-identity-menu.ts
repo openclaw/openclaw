@@ -301,7 +301,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           }}
         ></openclaw-sidebar-build-chip>
         <span class="sidebar-mode-switch">
-          <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
+          <openclaw-theme-mode-toggle
+            .mode=${params.themeMode}
+            .menuItem=${true}
+          ></openclaw-theme-mode-toggle>
         </span>
       </div>
     </wa-dropdown>

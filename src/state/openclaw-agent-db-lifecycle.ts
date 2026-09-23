@@ -23,6 +23,7 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import {
   readOpenClawAgentDatabaseIdentity,
+  findOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
 } from "./openclaw-agent-db-identity.js";
 import {
@@ -248,7 +249,10 @@ export function closeCachedOpenClawAgentDatabase(
   // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
   // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
   const lease = cache.leases.get(database.path);
+  const alreadyClosed = !database.db.isOpen;
+  const priorCheckpointError = database.walMaintenance.health?.state === "error";
   let clean: { path: string; identity: string } | undefined;
+  let retainRuntimeProof: boolean;
   try {
     disposeNodeSqliteDependents(database.db);
     const checkpointed = database.walMaintenance.close(
@@ -264,6 +268,13 @@ export function closeCachedOpenClawAgentDatabase(
         clean = { path: database.path, identity };
       }
     }
+    // A reader-pinned WAL is healthy; only restart proof needs a completed checkpoint.
+    retainRuntimeProof =
+      !cache.failures.has(database.path) &&
+      (alreadyClosed
+        ? !priorCheckpointError
+        : database.walMaintenance.health?.state === "blocked" &&
+          isOpenClawAgentDatabasePathCurrent(database));
     if (database.db.isOpen) {
       database.db.close();
     }
@@ -274,7 +285,11 @@ export function closeCachedOpenClawAgentDatabase(
     throw error;
   }
   if (lease) {
-    releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env }, clean);
+    releaseOpenClawAgentDatabaseLease(
+      lease.leaseId,
+      { env: lease.env },
+      clean ?? (retainRuntimeProof ? "uncheckpointed" : undefined),
+    );
     cache.leases.delete(database.path);
   }
   releaseAgentDeletionDatabaseCleanup(database);
@@ -400,6 +415,18 @@ export function settleOpenClawAgentDatabaseWorkerClose(
     errors,
     settled: !cache.databases.get(resolvedPath)?.db.isOpen && !cache.leases.has(resolvedPath),
   };
+}
+
+/** Commit receipts invalidate every current handle of the captured physical database. */
+export function invalidateOpenClawAgentWritableProjections(
+  databaseIdentity: string,
+  invalidate: (database: DatabaseSync) => void,
+): void {
+  for (const database of cache.databases.values()) {
+    if (findOpenClawAgentDatabaseIdentity(database)?.identity === databaseIdentity) {
+      invalidate(database.db);
+    }
+  }
 }
 
 /** Close cached agent handles, optionally restricted to one runtime root. */

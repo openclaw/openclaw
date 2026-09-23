@@ -272,7 +272,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
   return renderSettingsPage(
     html`
       ${renderSettingsPageHeader({
-        title: html`<h1 class="plugins-settings-title">${t("tabs.plugins")}</h1>`,
+        title: t("tabs.plugins"),
         subtitle: t("pluginsPage.settingsDescription"),
       })}
       <div class="plugins-settings-content">

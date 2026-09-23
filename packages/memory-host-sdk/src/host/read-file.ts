@@ -21,7 +21,7 @@ import {
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
-import { getAgentWorkspaceAccess } from "./openclaw-runtime-agent.js";
+import { getAgentWorkspaceAccess } from "./openclaw-runtime-workspace.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,

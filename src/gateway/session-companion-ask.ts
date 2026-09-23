@@ -190,7 +190,14 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
-    const sessionManager = SessionManager.open(target);
+    const sessionManager = await SessionManager.openAsync(
+      target,
+      undefined,
+      undefined,
+      params.signal,
+    );
+    params.signal.throwIfAborted();
+    params.assertSourceCurrent?.();
     await withSessionManagerWrite(sessionManager, () => {
       params.signal.throwIfAborted();
       params.assertSourceCurrent?.();

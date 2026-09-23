@@ -43,7 +43,7 @@ type TasksProps = {
   onRetry: (taskId: string) => void;
   onDismiss: (taskId: string) => void;
   onCopyResult: (taskId: string) => void;
-  onViewTranscript: (taskId: string) => void;
+  onViewTranscript: (taskId: string, trigger: HTMLButtonElement) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -134,7 +134,22 @@ function renderTask(
                 >`
               : html`<span>${t("common.na")}</span>`
           }
-          ${task.hasTranscript && props.canCopy ? html`<button class="btn btn--sm" type="button" ?disabled=${!props.connected} @click=${() => props.onViewTranscript(task.id)}>${t("tasksPage.viewTranscript")}</button>` : nothing}
+          ${
+            task.hasTranscript && props.canCopy
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  ?disabled=${!props.connected}
+                  @click=${(event: MouseEvent) => {
+                    if (event.currentTarget instanceof HTMLButtonElement) {
+                      props.onViewTranscript(task.id, event.currentTarget);
+                    }
+                  }}
+                >
+                  ${t("tasksPage.viewTranscript")}
+                </button>`
+              : nothing
+          }
           ${renderSessionLink(task, props)}
         </div>
         ${

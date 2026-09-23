@@ -13,6 +13,7 @@ import {
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
 const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
+const reviewScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "review.sh");
 
 function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync(command, args, {
@@ -288,11 +289,14 @@ set -euo pipefail
 source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
+source "$OPENCLAW_PR_REVIEW_SH"
 
 pr_gh() { printf '{"headRefName":"feature"}\\n'; }
 enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
+# Preparation tests cover review admission; these fixtures isolate changelog policy.
+require_prepared_review() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
@@ -307,6 +311,7 @@ prepare_gates 123
             OPENCLAW_PR_COMMON_SH: commonScriptPath,
             OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
             OPENCLAW_PR_GATES_SH: gatesScriptPath,
+            OPENCLAW_PR_REVIEW_SH: reviewScriptPath,
             OPENCLAW_TEST_CALLS: callsPath,
             OPENCLAW_TESTBOX: "0",
           },
@@ -339,11 +344,14 @@ set -euo pipefail
 source "$OPENCLAW_PR_COMMON_SH"
 source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
+source "$OPENCLAW_PR_REVIEW_SH"
 
 pr_gh() { printf '{"headRefName":"feature"}\\n'; }
 enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
 checkout_prep_branch() { :; }
 refresh_prep_branch_for_reviewed_head() { :; }
+# Preparation tests cover review admission; these fixtures isolate changelog policy.
+require_prepared_review() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
@@ -359,6 +367,7 @@ prepare_gates 123
           OPENCLAW_PR_COMMON_SH: commonScriptPath,
           OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
           OPENCLAW_PR_GATES_SH: gatesScriptPath,
+          OPENCLAW_PR_REVIEW_SH: reviewScriptPath,
           OPENCLAW_TEST_CALLS: callsPath,
           OPENCLAW_TESTBOX: "0",
         },

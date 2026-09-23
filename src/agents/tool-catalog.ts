@@ -68,6 +68,13 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
+    id: "decision_evaluate",
+    description: "Evaluate explicit evidence with the agent's decision model",
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "ls",
     description: "List directory entries",
     sectionId: "fs",

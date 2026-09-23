@@ -202,6 +202,7 @@ export async function runReplyAgent(
   const restartRecoveryEntry =
     sessionKey && storePath
       ? (loadSessionEntry({
+          agentId: followupRun.run.agentId,
           storePath,
           sessionKey,
           clone: false,
@@ -244,6 +245,7 @@ export async function runReplyAgent(
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
     ) {
       const retired = await retireTerminalRestartRecoverySourceClaim({
+        agentId: followupRun.run.agentId,
         sessionId: restartRecoveryEntry.sessionId,
         sessionKey,
         sourceTurnId: restartRecoverySourceTurnId,
@@ -296,10 +298,11 @@ export async function runReplyAgent(
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
+      await updateSessionEntry(
+        { agentId: followupRun.run.agentId, storePath, sessionKey },
+        () => ({ updatedAt }),
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
     }
   };
 

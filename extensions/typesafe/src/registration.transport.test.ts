@@ -33,18 +33,16 @@ const response = {
   usage: { input_tokens: 12, output_tokens: 3 },
 };
 
-function registeredHandlers() {
+// Exercise the provider created by the actual plugin registration.
+function registeredProvider() {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   plugin.register({
     runtime: { config: { current: () => ({}) } },
-    registerTool,
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  const tool = registerTool.mock.calls[0]?.[0];
-  assert(provider && tool && typeof tool !== "function" && "execute" in tool);
-  return { provider, tool };
+  assert(provider);
+  return provider;
 }
 
 beforeEach(() => {
@@ -60,7 +58,7 @@ it("runs the registered provider through the HTTP transport and back to host dec
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
   );
   vi.stubGlobal("fetch", fetch);
-  const { provider } = registeredHandlers();
+  const provider = registeredProvider();
   await expect(
     provider.evaluate(batch, {
       model: "jev-agent-selected",
@@ -99,7 +97,7 @@ it("preserves reported probability rounding and a non-argmax vendor choice", asy
   const fetch = vi.fn(async () => new Response(JSON.stringify(reported)));
   vi.stubGlobal("fetch", fetch);
   await expect(
-    registeredHandlers().provider.evaluate(batch, {
+    registeredProvider().evaluate(batch, {
       model: "jev-agent-selected",
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 1000,
@@ -114,7 +112,7 @@ it("preserves reported probability rounding and a non-argmax vendor choice", asy
 it("does not dispatch when prepared credentials disappear or caller authority is canceled", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
-  const { provider } = registeredHandlers();
+  const provider = registeredProvider();
   const controller = new AbortController();
   const context = {
     model: "jev-agent-selected",
@@ -148,7 +146,7 @@ it.each<DecisionBatch>([
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
-    registeredHandlers().provider.evaluate(input, {
+    registeredProvider().evaluate(input, {
       model: "jev-agent-selected",
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 1000,
@@ -162,7 +160,7 @@ it("does not dispatch when preparation consumes the native deadline", async () =
   vi.stubGlobal("fetch", fetch);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
-    registeredHandlers().provider.evaluate(batch, {
+    registeredProvider().evaluate(batch, {
       model: "jev-agent-selected",
       signal: new AbortController().signal,
       deadlineMonotonicMs: 50,
@@ -193,7 +191,7 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
     ),
   );
   const controller = new AbortController();
-  const pending = registeredHandlers().provider.evaluate(batch, {
+  const pending = registeredProvider().evaluate(batch, {
     model: "jev-agent-selected",
     signal: controller.signal,
     deadlineMonotonicMs: 50,
@@ -213,10 +211,10 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
 });
 
 it.each(["inherited array serializer", "hidden serializer", "getter", "hidden array getter"])(
-  "rejects a %s before executing user code or dispatching the registered tool",
+  "rejects a %s before executing user code or dispatching the registered provider",
   async (kind) => {
     const hook = vi.fn(() => "synthetic replacement");
-    let state: unknown;
+    let state: DecisionBatch["state"];
     if (kind === "inherited array serializer") {
       const prototype = Object.create(Array.prototype);
       Object.defineProperty(prototype, "toJSON", { value: hook });
@@ -233,11 +231,18 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
     const fetch = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetch);
     await expect(
-      registeredHandlers().tool.execute("invalid-json", {
-        state,
-        questions: { q: { type: "noul" } },
-      }),
-    ).rejects.toMatchObject({ reason: "unsupported-input" });
+      registeredProvider().evaluate(
+        {
+          state,
+          questions: { q: { type: "boolean" } },
+        },
+        {
+          model: "jev-agent-selected",
+          signal: new AbortController().signal,
+          deadlineMonotonicMs: performance.now() + 1000,
+        },
+      ),
+    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   },

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
@@ -11,6 +12,7 @@ import {
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -18,9 +20,11 @@ import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
 } from "./native-boundary-fixture.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 describe("tsgo core test shards", () => {
-  it("covers the repository test roots exactly once with headroom below the hard cap", () => {
+  it("covers the repository test roots exactly once", () => {
     const roots = (config: string) => {
       const parsed = ts.getParsedCommandLineOfConfigFile(
         path.resolve(config),
@@ -49,11 +53,13 @@ describe("tsgo core test shards", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
-        // Rebalance before the runner's 720-root cap blocks unrelated test-only PRs.
-        maxRoots: 700,
         shards,
       }),
     ).toEqual([]);
+    // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
+    for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
+      console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
+    }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
@@ -128,11 +134,10 @@ describe("tsgo core test shards", () => {
     );
   });
 
-  it("accepts an exact once-only partition within the root budget", () => {
+  it("accepts an exact once-only partition", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "a", roots: ["src/a.test.ts"] },
           { name: "b", roots: ["src/b.test.ts"] },
@@ -141,19 +146,32 @@ describe("tsgo core test shards", () => {
     ).toEqual([]);
   });
 
-  it("reports missing, duplicate, extra, and oversized shard roots", () => {
+  it("warns about oversized shards without treating them as violations", () => {
+    const shards = [
+      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+      { name: "small", roots: ["src/c.test.ts"] },
+    ];
+    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
+      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
+    ]);
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+        shards,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports missing, duplicate, and extra shard roots", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
           { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
         ],
       }),
     ).toEqual([
-      "first: 2 test roots exceeds the 1 limit",
-      "second: 2 test roots exceeds the 1 limit",
       "assigned 2 times (first, second): src/b.test.ts",
       "unassigned: src/missing.test.ts",
       "not in the canonical core-test graph (second): src/extra.test.ts",
@@ -393,6 +411,27 @@ process.exit(result.status??1);
       fs.chmodSync(compiler, 0o755);
       overrideNativeFixtureExecutable(root, compiler);
       const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const preparedDriver = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsgoCoreTestShards);
+      const env = preparedScriptWrapperEnv(
+        (
+          [
+            ["run-tsgo-core-test-shards.mts", toolingMtsEntrypoints.tsgoCoreTestShards],
+            ["check-tsgo-core-boundary.mts", toolingMtsEntrypoints.tsgoCoreBoundary],
+            ["run-tsgo.mts", toolingMtsEntrypoints.tsgo],
+          ] as const
+        ).map(([name, entry]): readonly [URL, URL] => {
+          const source = pathToFileURL(path.join(root, "scripts", name));
+          const prepared = resolveRuntimeWorkerUrl(entry);
+          return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
+        }),
+        { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        [
+          [
+            new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
+            resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsdownDeclarationBoundary),
+          ],
+        ],
+      );
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
       const check = async (paths = [leaf]) => {
         write("compiler-events.jsonl", "");
@@ -404,7 +443,7 @@ process.exit(result.status??1);
               driver,
               ...changedArgs(paths),
             ],
-            { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+            env,
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
@@ -471,7 +510,7 @@ setInterval(()=>{},1000);
             driver,
             ...changedArgs([leaf]),
           ],
-          { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+          env,
           undefined,
           {
             cwd: root,

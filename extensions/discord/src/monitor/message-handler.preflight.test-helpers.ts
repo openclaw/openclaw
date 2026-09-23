@@ -1,5 +1,6 @@
 // Discord helper module supports message handler.preflight helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { onTestFinished } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -21,6 +22,30 @@ export function createGuildTextClient(channelId: string): DiscordClient {
       if (id === channelId) {
         return {
           id: channelId,
+          type: ChannelType.GuildText,
+          name: "general",
+        };
+      }
+      return null;
+    },
+  } as unknown as DiscordClient;
+}
+
+export function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
+  return {
+    fetchChannel: async (channelId: string) => {
+      if (channelId === params.threadId) {
+        return {
+          id: params.threadId,
+          type: ChannelType.PublicThread,
+          name: "focus",
+          parentId: params.parentId,
+          ownerId: "owner-1",
+        };
+      }
+      if (channelId === params.parentId) {
+        return {
+          id: params.parentId,
           type: ChannelType.GuildText,
           name: "general",
         };
@@ -94,7 +119,14 @@ export function createDiscordPreflightArgs(params: {
   data: DiscordMessageEvent;
   client: DiscordClient;
   botUserId?: string;
-}): Parameters<typeof preflightDiscordMessage>[0] {
+  threadBindings?: ReturnType<typeof createNoopThreadBindingManager>;
+}): Parameters<typeof preflightDiscordMessage>[0] & {
+  threadBindings: ReturnType<typeof createNoopThreadBindingManager>;
+} {
+  const threadBindings = params.threadBindings ?? createNoopThreadBindingManager("default");
+  if (!params.threadBindings) {
+    onTestFinished(() => threadBindings.stop());
+  }
   return {
     cfg: params.cfg,
     discordConfig: params.discordConfig,
@@ -112,7 +144,7 @@ export function createDiscordPreflightArgs(params: {
     dmPolicy: params.discordConfig?.dmPolicy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
-    threadBindings: createNoopThreadBindingManager("default"),
+    threadBindings,
     data: params.data,
     client: params.client,
   };

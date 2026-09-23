@@ -208,6 +208,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           }
           <video
             controls
+            aria-label=${this.label.trim() || t("chat.attachments.video")}
             preload=${this.preview ? "auto" : "metadata"}
             style=${styleMap(dimensions)}
             ${ref(this.setMedia)}

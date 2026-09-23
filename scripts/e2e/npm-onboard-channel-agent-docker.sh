@@ -17,6 +17,9 @@ TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
 ONBOARD_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
   scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs \
   "$ROOT_DIR/scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs")"
+ONBOARD_IDENTITY_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs")"
 # The assertion and its config producer are one target-owned contract; mixing
 # generations can make a valid frozen package appear to change its default model.
 ONBOARD_MOCK_OPENAI_CONFIG="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
@@ -84,6 +87,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs:ro" \
+  -v "$ONBOARD_IDENTITY_ASSERTIONS:/app/scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs:ro" \
   -v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
@@ -92,6 +96,9 @@ set -Eeuo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+export OPENCLAW_TEST_STATE_HOME
+identity_assertions=scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs
+node "$identity_assertions" clean-home
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-npm-onboard-e2e"
@@ -106,6 +113,7 @@ MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 plugin_registry_pid=""
+gateway_pid=""
 
 case "$CHANNEL" in
   telegram)
@@ -134,6 +142,7 @@ case "$CHANNEL" in
 esac
 
 cleanup() {
+  openclaw_e2e_stop_process "${gateway_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   rm -rf "$scenario_tmp"
@@ -157,6 +166,8 @@ dump_debug_logs() {
     /tmp/openclaw-agent.err \
     /tmp/openclaw-agent.json \
     /tmp/openclaw-mock-openai.log \
+    "$scenario_tmp/gateway-before.log" \
+    "$scenario_tmp/gateway-after.log" \
     "$MOCK_REQUEST_LOG" \
     "$OPENCLAW_HOME/.openclaw/openclaw.json" \
     "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
@@ -254,6 +265,9 @@ fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-mock-model-config "$MOCK_PORT"
+node "$identity_assertions" empty
+openclaw config set logging.audit.enabled true
+openclaw config set logging.audit.executionIdentity true
 
 echo "Running local agent turn against mocked OpenAI..."
 if openclaw agent --local \
@@ -272,6 +286,23 @@ if [ "$agent_status" -ne 0 ]; then
 fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
+run_id="$(node "$identity_assertions" run-id)"
+
+# The local CLI flushes its audit writer before exiting. Inspect once after that
+# boundary; polling a read-only inspector would hide lost admission writes.
+entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+export OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_GMAIL_WATCHER=1 OPENCLAW_SKIP_CANVAS_HOST=1
+gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$scenario_tmp/gateway-before.log")"
+openclaw_e2e_wait_gateway_ready "$gateway_pid" "$scenario_tmp/gateway-before.log" 300 "$PORT"
+openclaw audit --run "$run_id" --explain --json >"$scenario_tmp/identity-before.json"
+execution_id="$(node "$identity_assertions" verify "$scenario_tmp/identity-before.json")"
+openclaw_e2e_stop_process "$gateway_pid"
+gateway_pid=""
+gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$scenario_tmp/gateway-after.log")"
+openclaw_e2e_wait_gateway_ready "$gateway_pid" "$scenario_tmp/gateway-after.log" 300 "$PORT"
+openclaw audit --execution "$execution_id" --explain --json >"$scenario_tmp/identity-after.json"
+node "$identity_assertions" verify "$scenario_tmp/identity-after.json" "$scenario_tmp/identity-before.json" >/dev/null
+echo "Installed CLI execution identity survived Gateway restart with private fixture data omitted."
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF

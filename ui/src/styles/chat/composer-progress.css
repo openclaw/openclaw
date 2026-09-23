@@ -258,6 +258,7 @@
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-copy {
     grid-row: 1;
     grid-column: 2;
+    align-items: center;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-actions {
@@ -266,10 +267,10 @@
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-command-actions {
     display: flex;
-    grid-row: 4;
-    grid-column: 1 / 3;
-    flex-wrap: nowrap;
-    gap: 4px;
+    grid-row: 2;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-command-actions openclaw-tooltip {
@@ -280,9 +281,12 @@
     .agent-chat__goal-command-actions
     .agent-chat__goal-action {
     width: auto;
-    height: 30px;
+    min-height: 28px;
+    height: auto;
     gap: 4px;
-    padding: 0 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    line-height: 1.2;
     color: var(--text);
     background: color-mix(in srgb, var(--text) 7%, transparent);
     border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
@@ -308,7 +312,7 @@
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-objective {
-    grid-row: 2;
+    grid-row: 3;
     grid-column: 1 / -1;
     min-height: 0;
     max-height: min(220px, 32dvh);
@@ -349,14 +353,14 @@
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-note {
-    grid-row: 3;
+    grid-row: 4;
     grid-column: 1 / -1;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-meta {
     display: inline-flex;
-    grid-row: 4;
-    grid-column: 3;
+    grid-row: 5;
+    grid-column: 1 / -1;
     align-self: center;
     align-items: baseline;
     justify-content: flex-end;
@@ -441,7 +445,6 @@
   --chat-goal-status-color: var(--ok);
 }
 
-.agent-chat__goal--paused,
 .agent-chat__goal--blocked,
 .agent-chat__goal--budget_limited,
 .agent-chat__goal--usage_limited {
@@ -468,7 +471,6 @@
 
 .agent-chat__goal-float
   :is(
-    .agent-chat__goal--paused,
     .agent-chat__goal--blocked,
     .agent-chat__goal--budget_limited,
     .agent-chat__goal--usage_limited

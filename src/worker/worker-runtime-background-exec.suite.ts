@@ -111,7 +111,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
           'import { createRequire } from "node:module";',
           "globalThis.WORKER_DEPLOY_BUILD = true;",
           ...(sdkHost
-            ? [`process.env.OPENCLAW_DEV_SOURCE_ROOT = ${JSON.stringify(sdkHost)};`]
+            ? [
+                `process.env.OPENCLAW_DEV_SOURCE_ROOT = ${JSON.stringify(sdkHost)};`,
+                // A built checkout also carries dist/extensions; the witness proves the
+                // source policy transform against the selected host's SDK graph.
+                `process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = ${JSON.stringify(path.resolve("extensions"))};`,
+              ]
             : []),
           ...(workerProcessUrl.pathname.endsWith(".ts")
             ? [

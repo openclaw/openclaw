@@ -676,11 +676,11 @@ const enSettings = {
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
       reportOwnerRequired:
-        "Reporting requires a connected Gateway owner with administrator access.",
+        "Reporting requires a connected, identified user with administrator access.",
       reportResult: "Failure report",
       reportSubmitting: "Submitting report…",
       reportCreated: "GitHub issue created",
-      reportFallback: "GitHub CLI submission was unavailable. Use the prefilled issue link.",
+      reportFallback: "Review and submit the prefilled issue in your browser.",
       reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
       reportRetryable: "No GitHub issue submission was started. This report can be retried.",
       reportDuplicate: "This update attempt was already reported.",

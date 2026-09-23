@@ -1,4 +1,5 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { selectAcpSessionRowForRead } from "../acp/runtime/session-meta-keys.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -14,6 +15,7 @@ import {
 } from "../agents/sandbox/registry.kernel.js";
 import {
   loadSubagentRunsByRunIdsFromSqlite,
+  loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
@@ -60,6 +62,10 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import {
+  readTaskRegistryMutationSnapshotInDatabase,
+  readTaskRegistrySnapshot,
+} from "../tasks/task-registry.store.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -174,6 +180,16 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "acpSessions.metadata") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    rows: command.entries.map(
+                      (entry) => selectAcpSessionRowForRead(db, entry) ?? null,
+                    ),
+                  };
+                }
                 if (command.type === "subagents.runs") {
                   const rows =
                     command.scope.kind === "session"
@@ -268,6 +284,27 @@ serveOwnedWorkerTasks(
                   command.type === "devicePairing.bootstrapContext"
                 ) {
                   return executeDevicePairingRead(db, input.databasePath, command);
+                }
+                if (command.type === "tasks.mutationSnapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    snapshot:
+                      command.input === undefined
+                        ? readTaskRegistrySnapshot({ db, path: input.databasePath })
+                        : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "subagents.forChildSession") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    runs: loadSubagentRunsForChildSessionFromSqlite(command.childSessionKey, {
+                      db,
+                    }),
+                  };
                 }
                 if (command.type === "pluginBlob.lookup") {
                   return {
