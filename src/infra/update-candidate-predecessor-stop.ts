@@ -8,8 +8,13 @@ import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-/** Ledger step the delegated Doctor records at the native stop boundary. */
-const CANDIDATE_PREDECESSOR_STOP_STEP = "managed-service:candidate-stop";
+/**
+ * Ledger receipt the delegated Doctor records at the native stop boundary.
+ * The `finalize:` prefix keeps it through count eviction in both this codec and
+ * the published parents'; the identity lives in the key because those parents
+ * strip `detail` from retained steps under the byte limit.
+ */
+const RECEIPT_PREFIX = "finalize:predecessor-stop:";
 
 /** Identity of the service the Doctor stopped; finalization adopts only a matching service. */
 type StoppedServiceIdentity = {
@@ -32,41 +37,49 @@ function serviceIdentity(
   };
 }
 
-function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
-  const step = getUpdateRun(runId, ledger)?.steps?.find(
-    (entry) => entry.step === CANDIDATE_PREDECESSOR_STOP_STEP && entry.status === "completed",
-  );
-  if (!step?.detail) {
+function encodeReceipt(identity: StoppedServiceIdentity): string {
+  const field = (value: number | string | undefined) =>
+    value === undefined ? "-" : String(value).replaceAll(":", "_");
+  return `${RECEIPT_PREFIX}${identity.stoppedAtMs}:${field(identity.managerUid)}:${field(identity.pid)}:${field(identity.fingerprint)}`;
+}
+
+function decodeReceipt(step: string): StoppedServiceIdentity | undefined {
+  if (!step.startsWith(RECEIPT_PREFIX)) {
     return undefined;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(step.detail);
-  } catch {
+  const [stoppedAt, managerUid, pid, fingerprint] = step.slice(RECEIPT_PREFIX.length).split(":");
+  const stoppedAtMs = Number(stoppedAt);
+  if (!Number.isFinite(stoppedAtMs)) {
     return undefined;
   }
-  if (!parsed || typeof parsed !== "object") {
-    return undefined;
-  }
-  const record = parsed as Record<string, unknown>; // SAFETY: narrowed to a non-null object above
-  const optionalNumber = (value: unknown) => (typeof value === "number" ? value : undefined);
-  const stoppedAtMs = optionalNumber(record.stoppedAtMs);
-  if (stoppedAtMs === undefined) {
-    return undefined;
-  }
+  const number = (value: string | undefined) =>
+    value === undefined || value === "-" || !/^\d+$/.test(value) ? undefined : Number(value);
   const identity: StoppedServiceIdentity = { stoppedAtMs };
-  const pid = optionalNumber(record.pid);
-  const managerUid = optionalNumber(record.managerUid);
-  if (pid !== undefined) {
-    identity.pid = pid;
+  const parsedPid = number(pid);
+  const parsedUid = number(managerUid);
+  if (parsedPid !== undefined) {
+    identity.pid = parsedPid;
   }
-  if (managerUid !== undefined) {
-    identity.managerUid = managerUid;
+  if (parsedUid !== undefined) {
+    identity.managerUid = parsedUid;
   }
-  if (typeof record.fingerprint === "string") {
-    identity.fingerprint = record.fingerprint;
+  if (fingerprint && fingerprint !== "-") {
+    identity.fingerprint = fingerprint;
   }
   return identity;
+}
+
+function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
+  for (const step of getUpdateRun(runId, ledger)?.steps ?? []) {
+    if (step.status !== "completed") {
+      continue;
+    }
+    const identity = decodeReceipt(step.step);
+    if (identity) {
+      return identity;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -111,15 +124,14 @@ export async function stopSupervisedPredecessorGateway(
     recorded = true;
     const stoppedAtMs = state.stoppedAtMs ?? Date.now();
     recordUpdateRunStep(input.runId, {
-      step: CANDIDATE_PREDECESSOR_STOP_STEP,
+      step: encodeReceipt(serviceIdentity(state, stoppedAtMs)),
       status: "completed",
       endedAtMs: stoppedAtMs,
-      detail: JSON.stringify(serviceIdentity(state, stoppedAtMs)),
     });
   };
-  // The native stop reports its mutation before later checks can still throw;
-  // the ledger keeps that fact for finalization and recovery either way.
   try {
+    // The native stop reports its mutation before later checks can still throw;
+    // the ledger keeps that fact for finalization and recovery either way.
     const state = await maybeStopManagedServiceBeforeMutableUpdate({
       updateInstallKind: "package",
       root: params.root,
@@ -150,11 +162,11 @@ export async function stopSupervisedPredecessorGateway(
 }
 
 /**
- * Finalization from a legacy parent: adopt the candidate's own service
- * inspection when the parent transferred an uninspected service, so the
- * existing restart path can start the updated service after Doctor. A stop the
- * delegated Doctor performed is adopted only for the same service identity, and
- * a Gateway the candidate itself stopped is never left down under --no-restart.
+ * Finalization: adopt a stop the delegated Doctor recorded for this run, or
+ * perform the candidate's own stop when a legacy parent transferred an
+ * uninspected service. A recorded stop is adopted only after a mutation-free
+ * inspection reports the same service identity, and a Gateway the candidate
+ * itself stopped is never left down under --no-restart.
  */
 export async function adoptCandidateManagedServiceStop(params: {
   transferred: PreManagedServiceStop | undefined;
@@ -172,20 +184,67 @@ export async function adoptCandidateManagedServiceStop(params: {
   if (process.platform === "win32") {
     return unchanged;
   }
+  const startedAt = Date.now();
+  const stopStep = (advisory?: string): UpdateRunResult["steps"][number] => ({
+    name: "managed-service",
+    command: "stop managed gateway service before Doctor (candidate inspection)",
+    cwd: params.root,
+    durationMs: Date.now() - startedAt,
+    exitCode: 0,
+    ...(advisory ? { advisory: { kind: "recoverable-maintenance", message: advisory } } : {}),
+  });
+  const updateInstallKind = params.mode === "git" ? "git" : "package";
   const doctorStop = readDoctorStop(params.runId, params.ledger);
-  if (
-    !needsCandidateManagedServiceStop({
-      ...params,
-      preManagedServiceStop: params.transferred,
-      shouldRestart: params.shouldRestart || doctorStop !== undefined,
-    })
-  ) {
+  if (doctorStop) {
+    // Inspect without mutating: a service replaced after Doctor must not inherit the stop.
+    const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+      updateInstallKind,
+      root: params.root,
+      shouldRestart: true,
+      jsonMode: true,
+      timeoutMs: params.timeoutMs,
+      phase: "inspect",
+      assertCurrent: params.assertCurrent,
+    });
+    if (!inspected.inspected) {
+      return unchanged;
+    }
+    const current = serviceIdentity(inspected, doctorStop.stoppedAtMs);
+    if (
+      current.fingerprint !== doctorStop.fingerprint ||
+      current.managerUid !== doctorStop.managerUid
+    ) {
+      params.onStep({
+        ...stopStep(
+          "The Gateway service was replaced after update Doctor stopped its predecessor; the recorded stop was not adopted and the current service was left untouched.",
+        ),
+        exitCode: 1,
+      });
+      return unchanged;
+    }
+    if (inspected.running) {
+      // The same service was started again after Doctor; nothing to restore.
+      return { stopped: inspected, restartRequired: false };
+    }
+    const restartRequired = !params.shouldRestart;
+    params.onStep(
+      stopStep(
+        restartRequired
+          ? "The previous Gateway had to be stopped for update Doctor maintenance; it is restarted on the updated installation despite --no-restart."
+          : undefined,
+      ),
+    );
+    return {
+      stopped: { ...inspected, stopped: true, stoppedAtMs: doctorStop.stoppedAtMs },
+      restartRequired,
+    };
+  }
+  if (!needsCandidateManagedServiceStop({ ...params, preManagedServiceStop: params.transferred })) {
     return unchanged;
   }
-  const startedAt = Date.now();
   let stopped = params.transferred;
   const state = await maybeStopManagedServiceBeforeMutableUpdate({
-    updateInstallKind: params.mode === "git" ? "git" : "package",
+    updateInstallKind,
     root: params.root,
     shouldRestart: true,
     jsonMode: true,
@@ -199,38 +258,8 @@ export async function adoptCandidateManagedServiceStop(params: {
   if (state.inspected || state.stopped) {
     stopped = state;
   }
-  if (!stopped?.inspected) {
-    return { stopped, restartRequired: false };
+  if (stopped?.stopped) {
+    params.onStep(stopStep());
   }
-  let restartRequired = false;
-  if (!stopped.stopped && doctorStop && !stopped.running) {
-    const current = serviceIdentity(stopped, doctorStop.stoppedAtMs);
-    const sameService =
-      current.fingerprint === doctorStop.fingerprint &&
-      current.managerUid === doctorStop.managerUid;
-    if (sameService) {
-      stopped = { ...stopped, stopped: true, stoppedAtMs: doctorStop.stoppedAtMs };
-      // The candidate stopped this Gateway for Doctor; restart is restoration, not a bounce.
-      restartRequired = !params.shouldRestart;
-    }
-  }
-  if (stopped.stopped) {
-    params.onStep({
-      name: "managed-service",
-      command: "stop managed gateway service before Doctor (candidate inspection)",
-      cwd: params.root,
-      durationMs: Date.now() - startedAt,
-      exitCode: 0,
-      ...(restartRequired
-        ? {
-            advisory: {
-              kind: "recoverable-maintenance",
-              message:
-                "The previous Gateway had to be stopped for update Doctor maintenance; it is restarted on the updated installation despite --no-restart.",
-            },
-          }
-        : {}),
-    });
-  }
-  return { stopped, restartRequired };
+  return { stopped, restartRequired: false };
 }
