@@ -452,6 +452,26 @@ other asynchronous I/O. Contract tests should exercise both phases and both
 result variants through `ChannelMessageDurableFinalAdapter` from
 `openclaw/plugin-sdk/channel-outbound`.
 
+## Recovery readiness
+
+Use `message.durableFinal.getRecoveryReadiness(...)` when queued recovery must
+wait for a channel-owned transport, such as a connected account listener. The
+synchronous context contains `cfg`, `channel`, `to`, and `accountId`. Read only
+already-loaded runtime state; do not perform I/O or start a connection.
+
+Return `{ status: "ready" }` to continue or
+`{ status: "deferred", reason }` to retain the pending row without consuming a
+retry. Omitting the hook preserves existing recovery behavior. This hook applies
+only to recovery; live sends and `admitDeferredDelivery` policy rejection retain
+their existing contracts.
+
+Core checks readiness before replay and rechecks after awaited preparation and
+before the first platform dispatch. If readiness changes before that dispatch,
+the existing queue owner restores the reserved attempt. Once dispatch is admitted,
+the attempt owns its complete fanout and normal failure accounting applies.
+Readiness never proves whether an earlier send succeeded: unknown sends still
+require the adapter's reconciliation before replay.
+
 ## Compatibility dispatch
 
 Assemble inbound reply dispatch through `dispatchChannelInboundReply(...)`

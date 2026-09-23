@@ -6,6 +6,7 @@ import {
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { getActiveWebListener, resolveWebAccountId } from "./active-listener.js";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
@@ -106,6 +107,10 @@ function toWhatsAppMessageSendResult(
 export const whatsappMessageAdapter = defineChannelMessageAdapter({
   id: "whatsapp",
   durableFinal: {
+    getRecoveryReadiness: ({ cfg, accountId }) =>
+      getActiveWebListener(resolveWebAccountId({ cfg, accountId }))
+        ? { status: "ready" }
+        : { status: "deferred", reason: "WhatsApp account has no active listener" },
     capabilities: {
       text: true,
       replyTo: true,

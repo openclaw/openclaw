@@ -674,6 +674,30 @@ async function persistRecoveredPostSendState(
   );
 }
 
+function isChannelReadyForRecovery(params: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+}): boolean {
+  const { entry } = params;
+  const readiness = resolveOutboundChannelMessageAdapter({
+    channel: entry.channel,
+    cfg: params.cfg,
+    agentId: entry.session?.agentId,
+    allowBootstrap: true,
+  })?.durableFinal?.getRecoveryReadiness?.({
+    cfg: params.cfg,
+    channel: entry.channel,
+    to: entry.to,
+    accountId: entry.accountId,
+  });
+  if (readiness?.status !== "deferred") {
+    return true;
+  }
+  params.log.info(`Delivery ${entry.id} deferred until channel readiness: ${readiness.reason}`);
+  return false;
+}
+
 async function drainQueuedEntry(
   opts: {
     entry: QueuedDelivery;
@@ -687,7 +711,7 @@ async function drainQueuedEntry(
   },
   stateContext: DeliveryQueueStateContext,
   internalDeliver?: InternalRecoveryDeliver,
-): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "stopped"> {
+): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "stopped" | "deferred"> {
   const { entry } = opts;
   const deliver: DeliverFn = internalDeliver
     ? (params) => internalDeliver(params, stateContext)
@@ -803,6 +827,11 @@ async function drainQueuedEntry(
       return settleQueuedFailure({ ...opts, error: errMsg }, stateContext);
     }
   }
+  // Reconciliation and completed-owner lookup can yield. Recheck the channel
+  // before acquiring a producer claim or reserving another attempt.
+  if (!isChannelReadyForRecovery(opts)) {
+    return "deferred";
+  }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
   // Deliberately process-local: a crash may lose best-effort observers, but
   // persisting plugin callbacks must never become part of delivery custody.
@@ -877,7 +906,14 @@ async function drainQueuedEntry(
   }
   const recoverySpoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), opts.stateDir);
   let mediaRecoveryLeaseId: string | undefined;
+  let readinessDeferred = false;
   try {
+    // Claim/reservation and payload preparation can outlive a connection. Use
+    // the same fenced rollback as lifecycle closure before any platform send.
+    if (!isChannelReadyForRecovery(opts)) {
+      readinessDeferred = true;
+      throw new OutboundDeliveryAdmissionClosedError();
+    }
     // The pending row owns these artifacts until the lease exists. Fallback
     // acks may then remove replay intent without exposing active media to GC.
     mediaRecoveryLeaseId =
@@ -923,6 +959,10 @@ async function drainQueuedEntry(
           return;
         }
         if (opts.shouldContinue?.() === false) {
+          throw new OutboundDeliveryAdmissionClosedError();
+        }
+        if (!isChannelReadyForRecovery(opts)) {
+          readinessDeferred = true;
           throw new OutboundDeliveryAdmissionClosedError();
         }
         // One admitted attempt owns its complete adapter fanout. Later parts
@@ -1073,7 +1113,7 @@ async function drainQueuedEntry(
         producerClaimId,
         stateContext,
       );
-      return "stopped";
+      return readinessDeferred ? "deferred" : "stopped";
     }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
@@ -1286,6 +1326,9 @@ async function processQueuedRecovery(
     log.info(
       `${label} not ready for retry yet — backoff ${eligibility.remainingBackoffMs}ms remaining`,
     );
+    return "continue";
+  }
+  if (!isChannelReadyForRecovery(opts)) {
     return "continue";
   }
   if (

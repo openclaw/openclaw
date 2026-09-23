@@ -12,6 +12,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
@@ -453,7 +454,7 @@ describe("WhatsApp delivery recovery", () => {
     },
   );
 
-  it("keeps pre-connect recovery replayable, then sends exactly once after connect", async () => {
+  it("preserves retry budget while disconnected, then sends exactly once after connect", async () => {
     await withStateDirEnv("openclaw-whatsapp-delivery-recovery-", async ({ stateDir }) => {
       const initialResult = await sendDurableMessageBatch({
         cfg,
@@ -469,10 +470,17 @@ describe("WhatsApp delivery recovery", () => {
         },
       });
 
-      const preConnectLog = await drainDefaultWhatsAppDeliveries(stateDir);
-      expect(preConnectLog.warn).toHaveBeenCalledWith(
-        expect.stringContaining("No active WhatsApp Web listener"),
-      );
+      const [beforeRecovery] = readQueuedDeliveryEntriesForTest(stateDir);
+      expect(beforeRecovery).toBeDefined();
+      // Repeated polling must not exhaust a queued reply before sending is possible.
+      for (let pass = 0; pass < 6; pass += 1) {
+        const preConnectLog = await drainDefaultWhatsAppDeliveries(stateDir);
+        expect(readQueuedDeliveryEntriesForTest(stateDir)).toEqual([beforeRecovery]);
+        expect(preConnectLog.warn).not.toHaveBeenCalled();
+        expect(preConnectLog.info).toHaveBeenCalledWith(
+          expect.stringContaining("deferred until channel readiness"),
+        );
+      }
 
       const sendMessage = vi.fn(async () =>
         createAcceptedWhatsAppSendResult("text", "recovered-message"),
