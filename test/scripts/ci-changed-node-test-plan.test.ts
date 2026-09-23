@@ -314,9 +314,14 @@ describe("CI changed Node test plan", () => {
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
         "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-merge-admission.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
+        "test/scripts/pr-merge-receipt.test.ts",
+        "test/scripts/pr-merge-recovery.test.ts",
         "test/scripts/pr-merge-rest.test.ts",
+        "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-provision.test.ts",
       ];
       const before = createChangedNodeTestShards(targets, { runnerBackend });
