@@ -760,6 +760,29 @@ describe("cli credentials", () => {
     }
   });
 
+  it("fails closed when the native account config is not the credential root", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-native-config-"));
+    const secureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-native-secure-"));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureDir);
+    try {
+      fs.writeFileSync(
+        path.join(configDir, ".claude.json"),
+        JSON.stringify({ oauthAccount: { emailAddress: "owner@example.com" } }),
+        "utf8",
+      );
+      expect(
+        resolveNativeCliAuthIdentity({
+          backendId: "claude-cli",
+          profileId: "anthropic:claude-cli",
+        }),
+      ).toBeUndefined();
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true });
+      fs.rmSync(secureDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores native identity for backends with no native login", () => {
     expect(
       resolveNativeCliAuthIdentity({

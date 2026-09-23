@@ -202,6 +202,14 @@ export type ClaudeNativeAuthIdentity = {
 export function readClaudeNativeAuthIdentity(
   options: { homeDir?: string } = {},
 ): ClaudeNativeAuthIdentity | undefined {
+  if (
+    path.dirname(resolveClaudeCliCredentialsPath(options.homeDir)) !==
+    resolveClaudeCliConfigDir(options.homeDir)
+  ) {
+    // oauthAccount is config-scoped, so it cannot identify a credential
+    // selected from an independent secure-storage root. Fail closed.
+    return undefined;
+  }
   const accountRef = readClaudeAccountEmail(options.homeDir)?.trim();
   if (!accountRef) {
     return undefined;
