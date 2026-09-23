@@ -352,6 +352,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     });
 
     const socket = await gateway.openWs();
+    const dispatchEntered = createDeferred();
     const dispatchRelease = createDeferred();
     const runId = "real-websocket-dispatch-error-before-late-abort";
     const terminalStates = trackChatTerminalStates(socket, runId);
@@ -360,6 +361,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     try {
       await connectOk(socket);
       dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        dispatchEntered.resolve();
         await dispatchRelease.promise;
         throw new Error("dispatch rejected before a late abort");
       });
@@ -372,11 +374,8 @@ describe("gateway WebSocket chat abort ownership", () => {
       const started = await rpcReq(socket, "chat.send", sendParameters);
       expect(started.ok).toBe(true);
       expect(started.payload).toMatchObject({ runId, status: "started" });
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
-        interval: 10,
-        timeout: 2_000,
-      });
-
+      await dispatchEntered.promise;
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       admissionRelease = getSessionWorkAdmissionRelease({
         scope: storePath,
         identities: ["main", "agent:main:main", "sess-main"],
@@ -386,9 +385,12 @@ describe("gateway WebSocket chat abort ownership", () => {
       }
       dispatchRelease.resolve();
       await admissionRelease;
-      // Admission releases after error publication; this response also joins its wire delivery.
-      const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
-      expect(barrier.ok).toBe(true);
+
+      // Admission release follows error persistence/publication; the replay response
+      // follows that error event on this socket, without timing the persistence work.
+      const established = await rpcReq(socket, "chat.send", sendParameters);
+      expect(established.ok).toBe(false);
+      expect(established.payload).toMatchObject({ runId, status: "error" });
       expect(terminalStates).toEqual(["error"]);
 
       const lateAbort = await rpcReq(socket, "chat.abort", {
@@ -400,7 +402,8 @@ describe("gateway WebSocket chat abort ownership", () => {
 
       const replay = await rpcReq(socket, "chat.send", sendParameters);
       expect(replay.ok).toBe(false);
-      expect(replay.payload).toMatchObject({ runId, status: "error" });
+      expect(replay.payload).toEqual(established.payload);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       expect(terminalStates).toEqual(["error"]);
     } finally {
       dispatchRelease.resolve();
