@@ -502,6 +502,72 @@ describe("IMessageRpcClient child stream error handling", () => {
     expect(logVerboseMock).not.toHaveBeenCalled();
   });
 
+  it("keeps Apple framework failures that only share names at ERROR", async () => {
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    child.stderr.emit("data", Buffer.from("CoreData: error: Failed to load persistent store\n"));
+    child.stderr.emit("data", Buffer.from("AddressBook failed to save contact\n"));
+
+    expect(runtimeError).toHaveBeenCalledWith(
+      "imsg rpc: CoreData: error: Failed to load persistent store",
+    );
+    expect(runtimeError).toHaveBeenCalledWith("imsg rpc: AddressBook failed to save contact");
+    expect(logVerboseMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies real child stderr for the documented reconciliation line and a framework error", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-stderr-"));
+    tempDirs.push(root);
+    const wrapperPath = path.join(root, "imsg");
+    const documented =
+      "2026-08-04 00:32:38.518 imsg[88305:38969629] Could not fetch group for change type 1 with identifier 9E2F71C2:ABGroup, making it a delete change type.";
+    const frameworkError = "CoreData: error: Failed to load persistent store";
+    await fs.writeFile(
+      wrapperPath,
+      [
+        "#!/usr/bin/env node",
+        `process.stderr.write(${JSON.stringify(documented)} + "\\n");`,
+        `process.stderr.write(${JSON.stringify(frameworkError)} + "\\n");`,
+        'let buffered = "";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data", (chunk) => {',
+        "  buffered += chunk;",
+        '  let newline = buffered.indexOf("\\n");',
+        "  while (newline !== -1) {",
+        "    const line = buffered.slice(0, newline);",
+        "    buffered = buffered.slice(newline + 1);",
+        "    const request = JSON.parse(line);",
+        '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }) + "\\n");',
+        '    newline = buffered.indexOf("\\n");',
+        "  }",
+        "});",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementationOnce((command, args, options) =>
+      childProcess.spawn(command, args, options),
+    );
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: wrapperPath,
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+    await expect(client.request("ping", {}, { timeoutMs: 5_000 })).resolves.toEqual({ ok: true });
+    await client.stop();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+    expect(runtimeError).toHaveBeenCalledWith(`imsg rpc: ${frameworkError}`);
+    expect(runtimeError).not.toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+  });
+
   it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-boundary-"));
     tempDirs.push(root);

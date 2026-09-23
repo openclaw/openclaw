@@ -9,12 +9,13 @@ import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 
-// Apple framework code linked into the imsg process (AddressBook/CoreData change
-// history) writes reconciliation notes to stderr that are not imsg failures. The
-// imsg binary contains none of these strings; they come from the OS frameworks
-// running inside the child. Genuine child failures must stay at ERROR.
+// Contacts change-history reconciliation writes this specific stderr line from
+// Apple frameworks linked into the imsg process. The imsg binary contains none
+// of these strings. Match the complete documented message only; other lines that
+// merely mention AddressBook, ABGroup, or CoreData are real failures and must
+// stay at ERROR.
 const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
-  /\bCould not fetch (?:group|record) for change type\b|\bABGroup\b|\bAddressBook\b|\bCoreData\b/u;
+  /\bCould not fetch group for change type \d+ with identifier [^:]+:ABGroup, making it a delete change type\./u;
 
 type IMessageRpcError = {
   code?: number;
