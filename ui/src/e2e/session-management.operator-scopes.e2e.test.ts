@@ -163,9 +163,11 @@ suite.define(() => {
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
         const create = page.locator(".sidebar-brand__new-thread");
-        expect(await create.isDisabled()).toBe(true);
-        await create.click({ force: true });
-        expect(new URL(page.url()).pathname).not.toBe("/new");
+        expect(await create.isDisabled()).toBe(!canOrganize);
+        if (!canOrganize) {
+          await create.click({ force: true });
+          expect(new URL(page.url()).pathname).not.toBe("/new");
+        }
         const sharedRow = page.locator(`.sidebar-recent-session[data-session-key="${shared.key}"]`);
         await sharedRow.click({ button: "right" });
         await rename.waitFor();
@@ -180,14 +182,14 @@ suite.define(() => {
         await historyText.waitFor();
         expect(await composer.isEditable()).toBe(canOrganize);
         expect(await send.isDisabled()).toBe(true);
-        expect(await model.getAttribute("aria-disabled")).toBe("true");
-        expect(await permission.isDisabled()).toBe(true);
+        expect(await model.getAttribute("aria-disabled")).toBe(String(!canOrganize));
+        expect(await permission.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await send.click({ force: true });
+          await model.click({ force: true });
+          await permission.click({ force: true });
+          expect(await activePane.locator(".chat-controls__model-picker[open]").count()).toBe(0);
         }
-        await model.click({ force: true });
-        await permission.click({ force: true });
-        expect(await activePane.locator(".chat-controls__model-picker[open]").count()).toBe(0);
         const sharing = activePane.getByRole("button", { name: "Session sharing", exact: true });
         expect((await sharing.count()) > 0 && !(await sharing.isDisabled())).toBe(false);
         await ownRow.click({ button: "right" });

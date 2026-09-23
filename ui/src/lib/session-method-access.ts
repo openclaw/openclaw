@@ -82,6 +82,8 @@ export function readSessionMethodScopeAccess(
   if (
     requiredScope === "operator.sessions.write" &&
     !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
+    // Creation assigns its owner on the Gateway before a canonical row exists.
+    request.method !== "sessions.create" &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {

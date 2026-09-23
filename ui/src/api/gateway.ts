@@ -509,6 +509,9 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    // Publish this connection's identity before listeners can capture recovery intent.
+    // A legacy hello must not retain its predecessor while its digest is pending.
+    this.recovery.value = hello.auth?.recoveryScope ?? "";
     this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
