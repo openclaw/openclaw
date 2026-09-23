@@ -693,7 +693,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   return {
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
-    clearDedicatedNodeLeases: dedicatedLeases.clear,
+    clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
     createWithProfile,
     prepareIntent,
     prepareRetention,

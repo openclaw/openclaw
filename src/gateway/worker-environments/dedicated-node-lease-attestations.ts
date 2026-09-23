@@ -64,18 +64,23 @@ export function createDedicatedNodeLeaseAttestations(
     const proof = dedicatedNodeLeases.get(environmentId);
     // Delayed notifications identify an environment, not an owner. A current
     // successor proof must survive notification of its predecessor's revocation.
-    if (proof && getDedicatedNodeLeaseSignal(environmentId) !== proof.controller.signal) {
+    if (
+      proof &&
+      (!store.getCredential(environmentId) ||
+        getDedicatedNodeLeaseSignal(environmentId) !== proof.controller.signal)
+    ) {
       retireDedicatedNodeLease(environmentId);
     }
   });
 
   return {
     async reconcileSharedHost(
-      record: WorkerEnvironmentRecord,
+      initialRecord: WorkerEnvironmentRecord,
       leaseId: string,
       inspection: { sharedHost?: boolean; explicitlyDedicated: boolean },
       stopOwner: (record: WorkerEnvironmentRecord) => Promise<WorkerEnvironmentRecord>,
     ) {
+      let record = initialRecord;
       const sharedHost = inspection.sharedHost === true;
       if (record.sharedHost !== null && record.sharedHost !== sharedHost) {
         // Workspace actions capture isolation at tunnel creation. Fence the old actions before

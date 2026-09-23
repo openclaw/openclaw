@@ -99,7 +99,10 @@ export function createCoreGatewayMethodDescriptors(
       handler,
       owner: { kind: "core", area: "gateway" },
       scope: spec.scope,
-      profileAccess: isCoreGatewayMethodProfileDependent(spec.name) ? "required" : "independent",
+      profileAccess:
+        spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
+          ? "required"
+          : "independent",
       ...(spec.since ? { since: spec.since } : {}),
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),

@@ -22,7 +22,12 @@ import { crabboxState } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import { active, classProfile, mappedCatalog } from "./crabbox-worker-provider.test-support.js";
+import {
+  active,
+  classProfile,
+  inspectCases,
+  mappedCatalog,
+} from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -3366,13 +3371,8 @@ describe("Crabbox worker provider", () => {
     expect(invoked).toBe(false);
   });
 
-  it.each([
-    { state: "running", ready: true, expected: "active" },
-    { state: "running", ready: false, expected: "active" },
-    { state: "provisioning", ready: false, expected: "active" },
-    ...NON_RUNNABLE_STATES.map((state) => ({ state, ready: false, expected: "unknown" })),
-  ])(
-    "maps inspect state $state ready=$ready to $expected without renewing lost leases",
+  it.each(inspectCases(NON_RUNNABLE_STATES))(
+    "maps inspect state $state ready=$ready to $expected.status without renewing lost leases",
     async ({ state, ready, expected }) => {
       vi.useFakeTimers();
       let inspection = inspectJson();
@@ -3390,9 +3390,9 @@ describe("Crabbox worker provider", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(heartbeats).toHaveBeenCalledTimes(1);
         inspection = inspectJson({ state, ready });
-        await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: expected });
+        await expect(provider.inspect(lease)).resolves.toStrictEqual(expected);
         await vi.advanceTimersByTimeAsync(60_000);
-        expect(heartbeats).toHaveBeenCalledTimes(expected === "active" ? 2 : 1);
+        expect(heartbeats).toHaveBeenCalledTimes(expected.status === "active" ? 2 : 1);
       } finally {
         await provider.destroy(lease);
         vi.useRealTimers();

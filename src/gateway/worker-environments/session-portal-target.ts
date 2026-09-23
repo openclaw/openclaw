@@ -38,5 +38,5 @@ export function captureSessionPortalTarget(
     }
   };
   assertCurrent();
-  return { binding, signal, assertCurrent, touch: attachment.touch };
+  return { binding, signal, assertCurrent, touch: () => attachment.touch() };
 }

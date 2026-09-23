@@ -61,8 +61,12 @@ describe("worker environment service", () => {
     expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
     const epoch = restarted.get(node.environmentId)!.ownerEpoch;
     const restartedQualification = restarted.getDedicatedNodeLeaseSignal(node.environmentId)!;
+    await support.testState.store.revokeEnvironmentCredential(node.environmentId);
+    expect(restarted.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(restartedQualification);
+    expect(restartedQualification.aborted).toBe(false);
     await support.testState.store.revokeEnvironmentCredential(node.environmentId, {
       expectedOwnerEpoch: epoch,
+      fenceWorkspaceTransfers: true,
     });
     expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
     expect(restartedQualification.aborted).toBe(true);
